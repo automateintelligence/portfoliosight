@@ -526,7 +526,7 @@ def main():
     ap.add_argument("--no-cache", action="store_true", help="always re-download prices and rf")
     args = ap.parse_args()
 
-    here = Path(__file__).resolve().parent
+    here = Path(__file__).resolve().parent.parent  # repo root
     holdings_path = Path(args.holdings)
     if not holdings_path.is_absolute():
         holdings_path = here / holdings_path
