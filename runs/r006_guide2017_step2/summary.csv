@@ -1,0 +1,9 @@
+Portfolio,Expected return,Std deviation,Sharpe,Turnover,Positions >=0.5%
+Current portfolio,0.047599,0.085104,0.083413,0.000000,18
+Tangency (max Sharpe),0.206473,0.177412,0.935522,0.945197,2
+"Same risk, max return",0.113558,0.085104,0.858455,0.882103,3
+"Halfway (same risk, mid return)",0.080578,0.085104,0.470934,0.279458,13
+"Same return, min risk",0.047599,0.028452,0.249500,0.854759,4
+Min variance,0.024667,0.019472,-0.813116,0.907024,3
+Capped 25%: max Sharpe,0.099951,0.076030,0.781939,0.798094,5
+"Capped 25%: same risk, max return",0.106908,0.085104,0.780321,0.738553,5

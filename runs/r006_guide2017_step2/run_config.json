@@ -1,0 +1,22 @@
+{
+  "run_id": "r006_guide2017_step2",
+  "label": "guide2017_step2",
+  "timestamp": "2026-10-12T12:47:44",
+  "holdings_file": "C:\\Users\\jeffr\\Programming\\Python\\Finance\\holdings_guide2017_step2.csv",
+  "excluded": [],
+  "years": 5.0,
+  "end_arg": null,
+  "window_start": "2021-10-12",
+  "window_end": "2026-10-09",
+  "rf": 0.040500001907348634,
+  "rf_source": "^IRX 13-week T-bill",
+  "max_weight": 1.0,
+  "cap_alloc": 0.25,
+  "frontier_points": 60,
+  "n_tickers": 22,
+  "portfolio_value": 98900.0,
+  "price_cache": "C:\\Users\\jeffr\\Programming\\Python\\Finance\\runs\\_cache",
+  "short_history_tickers": {},
+  "return_model": "annualized mean daily total return x252; std x sqrt(252); pairwise cov -> nearest PSD",
+  "command": "efficient_frontier_portfolio.py --holdings holdings_guide2017_step2.csv --label guide2017_step2 --cap-alloc 0.25"
+}

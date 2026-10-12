@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+runs/_cache/
+.env
+*.env
+.DS_Store
+node_modules/
+web/dist/
+.wrangler/

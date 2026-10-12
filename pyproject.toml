@@ -1,0 +1,31 @@
+[project]
+name = "portfoliosight"
+version = "0.0.1"
+description = "Portfolio risk/return engine: efficient frontier, diversification surface, risk ranges"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "Jeffrey A. Daniels", email = "jeff@automateintelligence.ai" }]
+dependencies = [
+  "numpy>=1.26",
+  "pandas>=2.2",
+  "scipy>=1.13",
+  "matplotlib>=3.9",
+  "plotly>=5.24",
+  "requests>=2.32",
+  "yfinance>=0.2.50",
+]
+
+[project.optional-dependencies]
+research = ["skfolio>=0.10", "scikit-learn>=1.5", "openpyxl>=3.1"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["portfoliosight*"]
+
+[tool.ruff]
+line-length = 100
