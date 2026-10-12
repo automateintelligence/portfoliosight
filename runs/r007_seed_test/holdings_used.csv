@@ -1,0 +1,24 @@
+Account,Symbol,Description,Qty,Price,Value
+Guide2017_Step2,VTI,Domestic stocks - Vanguard Total Stock Market (27.1% domestic split 5 ways),10840,1,10840
+Guide2017_Step2,VTV,Domestic stocks - Vanguard Large-Cap Value,5420,1,5420
+Guide2017_Step2,VOE,Domestic stocks - Vanguard Mid-Cap Value,5420,1,5420
+Guide2017_Step2,VB,Domestic stocks - Vanguard Small-Cap,2710,1,2710
+Guide2017_Step2,VBR,Domestic stocks - Vanguard Small-Cap Value,2710,1,2710
+Guide2017_Step2,VEA,International stocks - Vanguard FTSE Developed (5%),2500,1,2500
+Guide2017_Step2,SCHF,International stocks - Schwab International Equity,1250,1,1250
+Guide2017_Step2,VWO,International stocks - Vanguard FTSE Emerging,1250,1,1250
+Guide2017_Step2,VNQ,Real estate - Vanguard REIT (8%),8000,1,8000
+Guide2017_Step2,VBIAX,Hybrid - Vanguard Balanced Index (5%),5000,1,5000
+Guide2017_Step2,SCHO,Short-term reserves - Schwab Short-Term Treasury (7.6%),7600,1,7600
+Guide2017_Step2,BND,Domestic bonds - Vanguard Total Bond (41.6% split),12480,1,12480
+Guide2017_Step2,AGG,Domestic bonds - iShares Core US Aggregate,8320,1,8320
+Guide2017_Step2,TIP,Domestic bonds - iShares TIPS,8320,1,8320
+Guide2017_Step2,VTIP,Domestic bonds - Vanguard Short-Term TIPS,6240,1,6240
+Guide2017_Step2,LQD,Domestic bonds - iShares Investment Grade Corporate,6240,1,6240
+Guide2017_Step2,VWOB,International bonds - Vanguard EM Government Bond (4.6%),2300,1,2300
+Guide2017_Step2,PCY,International bonds - Invesco EM Sovereign Debt,2300,1,2300
+Guide2017_Step2,FIENX,Universe only - Fidelity International Enhanced Index,0,1,0
+Guide2017_Step2,LTPZ,Universe only - PIMCO 15+ Year TIPS,0,1,0
+Guide2017_Step2,EDV,Universe only - Vanguard Extended Duration Treasury,0,1,0
+Guide2017_Step2,VGSTX,Universe only - Vanguard STAR,0,1,0
+Guide2017_Step2,DBJP,Universe only - Xtrackers MSCI Japan Hedged,0,1,0
