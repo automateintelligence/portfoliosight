@@ -15,8 +15,12 @@ Seeded 2026-10-12. Items are grouped by phase; evidence and reasoning are in
 
 - Data separation (decided): the PortfolioSight universe (ETFs, mutual funds, TSP funds,
   401(k) menus) is stored separately from, and supplemental to, the existing EODHD daily
-  download that feeds the QSE/TFT models. Same datalake root is fine, but separate files
-  and a separate refresh job, joined at read time, so nothing changes under the other models.
+  download that feeds the QSE/TFT models: a new `universes/portfoliosight.txt` fed to the
+  same `download-raw-eodhd` command with its own `--output-dir datalake_portfoliosight`,
+  joined at read time. Nothing changes under the other models.
+- Sources (see README Data): EODHD for total returns (adjusted close, dividends, splits);
+  Schwab (`qse/data/schwab.py`) for quotes and price-only history, since its candles carry no
+  dividends or adjustments; tsp.gov for TSP share prices. Never yfinance in production.
 - Robust inputs: Ledoit-Wolf covariance (option: exponentially weighted), shrunk expected
   returns with a `--mean-shrink` dial. Selectable lookback (3/5/10 years) as tensor slices.
 - Frontier plus "same risk, max return", "same return, min risk", "halfway" (min turnover)
