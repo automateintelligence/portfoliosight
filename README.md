@@ -3,7 +3,8 @@
 Free portfolio risk/return tool for AutomateIntelligence.ai. Enter the funds you can
 choose from (a 401(k) menu, the TSP funds, a brokerage account), see where your current
 mix sits against the efficient frontier, drag a risk slider, and get a better-diversified
-mix at the same risk. Domain: portfoliosight.ai.
+mix at the same risk. Domain: portfoliosight.ai. A FERS pension planner for the same
+federal-employee audience is planned alongside it (see ROADMAP.md, Phase 2b).
 
 Status: greenfield, seeded 2026-10-12 from the research tool
 `efficient_frontier_portfolio.py` (Windows `Programming/Python/Finance`). Prior work is
@@ -37,10 +38,17 @@ research only; the product must use the EODHD corpus (see Data).
 
 ## Data
 
-- Production prices come from the EODHD datalake at
-  `/mnt/d/tft-quantile-forecaster/data/tft/raw/eodhd/datalake_us_core/` via the cached client in
-  `~/programming/quant-scenario-engine/qse/experimental/tft/data/eodhd_client.py`.
-  The corpus stores raw and adjusted series; compute total returns from raw closes plus
+- Production prices come from the EODHD corpus via the cached client in
+  `~/programming/quant-scenario-engine/qse/experimental/tft/data/eodhd_client.py`
+  (`get_eod` with adjusted close, `get_dividends`, `get_splits`, `get_bulk_eod`,
+  `build_survivorship_free_universe`). The existing daily download lives at
+  `/mnt/d/tft-quantile-forecaster/data/tft/raw/eodhd/datalake_us_core/` and feeds the
+  QSE/TFT models.
+- **Keep the PortfolioSight universe separate and supplemental.** ETFs, mutual funds, TSP
+  funds and 401(k) menus go in their own files with their own refresh job (co-located under
+  the same datalake root is fine) and are joined with the main corpus at read time. Nothing
+  in the existing download changes.
+- The corpus stores raw and adjusted series; compute total returns from raw closes plus
   dividend and split records so cached histories do not drift when EODHD back-adjusts.
 - TSP funds (G, F, C, S, I and the L funds) have no tickers; tsp.gov publishes daily
   share prices for every fund, which is the source to use for the TSP page.
