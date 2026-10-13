@@ -1,0 +1,15 @@
+# Allow-list: only what the image is built from enters the build context (spec 5.3).
+# Research runs, personal holdings, virtualenvs, the front end and its build stay out.
+*
+!pyproject.toml
+!README.md
+!portfoliosight
+!data
+runs/
+.venv
+web/node_modules
+web/dist
+data/holdings/*
+!data/holdings/holdings_guide2017_step2.csv
+**/__pycache__
+**/*.pyc

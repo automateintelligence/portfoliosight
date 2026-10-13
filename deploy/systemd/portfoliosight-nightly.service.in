@@ -1,0 +1,13 @@
+# Template: scripts/deploy_ks001.sh --install-timer renders __USER__ and __HOME__ from the
+# account it runs as on the host, and installs the result as portfoliosight-nightly.service.
+[Unit]
+Description=PortfolioSight nightly refresh and preset build
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__HOME__/portfoliosight
+ExecStart=/usr/bin/docker compose -f deploy/docker-compose.yml run --rm --no-deps nightly
