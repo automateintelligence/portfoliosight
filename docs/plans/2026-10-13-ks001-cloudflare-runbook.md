@@ -141,10 +141,12 @@ ssh "$PS_KS001_SSH_HOST" 'sudo systemctl start --no-block portfoliosight-nightly
 
 Where the catch-up stands, and what happens next:
 
-- After publishing, the same run walks tier 2 (`income` first), then the tier 3 slice, at 45
-  requests an hour. About 656 requests are left (61 seeded tier 2 tails, 232 tier 2 symbols with
-  no record at 2 requests each, 130 tier 3 tails, FIENX): about 14.5 hours, so until about 02:40
-  PDT on 2026-10-14. It will have used 447 of the 450 unique symbols of the month.
+- Before publishing, the run refreshed tier 1 (one request, FIENX; the other funds were
+  current). After publishing it walks tier 2 (`income` first), then the tier 3 slice, at 45
+  requests an hour. About 655 requests were left at that point (61 seeded tier 2 tails, 232
+  tier 2 symbols with no record at 2 requests each, 130 tier 3 tails): about 14.5 hours, so
+  until about 02:40 PDT on 2026-10-14. It will have used 447 of the 450 unique symbols of the
+  month.
 - `meta/status.json` is written when the run ends; until then `/v1/health` has no nightly
   status. The catalog is rewritten after each group, so `/api/symbols` grows in three steps.
 - Do not start a second nightly or downloader while this one runs: each rewrites the whole
@@ -156,11 +158,15 @@ Where the catch-up stands, and what happens next:
   `2026-10-14-0.1.0` at 02:00 on 2026-10-15.
 - From then on a nightly run fetches about 447 symbols and takes about ten hours on Starter, so
   `meta/status.json` shows the day's run finished only around noon Pacific.
-- Names: the nightly never spends a meta request, so the seeded symbols of tier 2 (61) and of
-  the tier 3 slice (130) are listed under their ticker until one more pass is run, by hand, when
-  no nightly is running (191 requests, no new unique symbol):
-  `docker compose -f deploy/docker-compose.yml run --rm --no-deps nightly python -m portfoliosight.data.download --mode catch-up --tiers 2,3`
-  on the host. Check afterwards that no `ok` symbol in `meta/manifest.json` has `name` equal to
+- Names: a symbol the nightly fetches in full (no record yet) gets its name with it, but a tail
+  refresh is one request and no name. So the seeded symbols of tier 2 (61) and of the tier 3
+  slice (130) are listed under their ticker until one more pass is run by hand (191 requests,
+  about four and a half hours at 45 an hour, no new unique symbol), on the host:
+  `docker compose -f deploy/docker-compose.yml run --rm --no-deps nightly python -m portfoliosight.data.download --mode catch-up --tiers 2,3`.
+  Only when no nightly is running (`systemctl is-active portfoliosight-nightly.service` answers
+  `inactive`), and started early enough to end before the next 02:00; if it cannot, stop the
+  timer for that night (`sudo systemctl stop portfoliosight-nightly.timer`, and `start` it again
+  afterwards). Check afterwards that no `ok` symbol in `meta/manifest.json` has `name` equal to
   its id.
 - Run the nightly right after every deploy that changes the engine version: until a generation
   for the new version is published, custom builds answer `engine_version_mismatch`. A preset
@@ -207,8 +213,14 @@ State left:
   record …"). The zone holds the two Worker records only.
 - The rule stays in the host's file. It has no effect while the tunnel is managed remotely, and
   taking it out would have meant a second restart of a tunnel that other services use. To take
-  it out: `bash scripts/cloudflared_ingress.sh rollback /etc/cloudflared/config.yml.bak-20261013T184823Z`
-  in `~/portfoliosight` on the host (it restarts cloudflared).
+  it out later, first make sure nobody else has changed the file since:
+  `diff /etc/cloudflared/config.yml.bak-20261013T184823Z /etc/cloudflared/config.yml` on the
+  host must show the two added lines and nothing else. Only then, in `~/portfoliosight` there:
+  `bash scripts/cloudflared_ingress.sh rollback /etc/cloudflared/config.yml.bak-20261013T184823Z`.
+  It puts the whole backup back and restarts cloudflared without further checks, so run the
+  loop of (a) from the laptop before and after and compare. If the diff shows anything else, do
+  not use the backup: take the two lines out by hand in a copy, validate the copy with
+  `cloudflared tunnel --config <copy> ingress validate`, and install it the same way.
 - cloudflared is active; the other hostnames answer as in the baseline.
 
 The owner's step is under "Remaining".
@@ -412,12 +424,18 @@ Either of:
 - Cloudflare dashboard → Zero Trust → Networks → Tunnels → the tunnel
   `222b8001-009a-47b2-8a31-3ea624ce32ca` → Public Hostname → Add: subdomain `api`, domain
   `portfoliosight.ai`, service `HTTP`, URL `localhost:8010`. The dashboard creates the proxied
-  DNS record itself (none exists now, which it requires).
-- Or add `Account › Cloudflare Tunnel › Edit` to the project's API token; the run then adds the
-  hostname to the tunnel's configuration through the API and creates the record with
-  `scripts/cloudflare_dns.py ensure-cname --name api.portfoliosight.ai --target 222b8001-009a-47b2-8a31-3ea624ce32ca.cfargotunnel.com --proxied`.
+  DNS record itself (none exists now, which it requires). Leave the tunnel's other public
+  hostnames as they are.
+- Or add `Account › Cloudflare Tunnel › Edit` to the project's API token. No script for the
+  tunnel's configuration exists yet (`scripts/cloudflare_dns.py` only manages the DNS record):
+  the run would first write and review one that reads the configuration, adds this one rule
+  above the catch-all, writes it back with every other rule untouched and keeps the previous
+  version for a rollback, and then create the record with
+  `python scripts/cloudflare_dns.py ensure-cname --name api.portfoliosight.ai --target 222b8001-009a-47b2-8a31-3ea624ce32ca.cfargotunnel.com --proxied`,
+  keeping its JSON line for `rollback-cname`.
 
-Nothing has to be restarted on the host. Then check:
+Nothing has to be restarted on the host. Run the loop of step 5 (a) before and after, and
+compare: the other hostnames must answer as before. Then check:
 
 ```
 printf 'x-ps-gate: %s\n' "$PS_GATE_SECRET" | curl -sS -o /dev/null -w '%{http_code}\n' -H @- "$(printf '%s://api.portfoliosight.ai/v1/health' https)"   # 200
@@ -437,7 +455,10 @@ and, with the origin reachable:
 
 ### 2. Let the laptop account set file times on the backup drive (step 8)
 
-Mount `D:` so that its files belong to the laptop account, for example in `/etc/wsl.conf`:
+What is needed: the laptop account can set the time of a file under
+`/mnt/d/portfoliosight-data`. How `D:` is mounted now: `mount | grep /mnt/d` and
+`ls -ln /mnt/d/portfoliosight-data` (every file shows uid 0). One way is to mount the drive
+with the account as owner, for example in `/etc/wsl.conf`:
 
 ```
 [automount]
@@ -445,16 +466,22 @@ options = "metadata,uid=<the account's uid>,gid=<its gid>"
 ```
 
 followed by `wsl --shutdown` from Windows. This changes how every Windows drive is mounted,
-other projects' backups included, so it is the owner's decision. Check with
-`touch -d 2026-01-01 /mnt/d/portfoliosight-data/meta/manifest.json` (it must succeed). Then
-bring the mirror's times in line once and run the backup as scheduled:
+other projects' backups included, so it is the owner's decision and was not done by the run.
+With `metadata`, a file that already carries Linux ownership keeps it, so look at the listing
+again afterwards. The check, on a file of its own:
 
 ```
-# with the two R2 keys as AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION=auto
+f=/mnt/d/portfoliosight-data/.time-check; touch "$f" && touch -d 2026-01-01 "$f" && echo "times can be set"; rm -f "$f"
+```
+
+Then bring the mirror's times in line once and run the backup as scheduled:
+
+```
 endpoint="$(printf '%s://%s.r2.cloudflarestorage.com' https "$CLOUDFLARE_ACCOUNT_ID")"
-aws s3 sync --endpoint-url "$endpoint" s3://portfoliosight-data /mnt/d/portfoliosight-data --delete --exact-timestamps
-"$HOME/programming/portfoliosight/scripts/r2_backup.sh"; echo $?                                    # 0
-aws s3 sync --endpoint-url "$endpoint" /mnt/d/portfoliosight-data s3://portfoliosight-data --dryrun  # prints no upload
+r2() { AWS_ACCESS_KEY_ID="$CLOUDFLARE_R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$CLOUDFLARE_R2_SECRET_ACCESS_KEY" AWS_DEFAULT_REGION=auto aws s3 sync --endpoint-url "$endpoint" "$@"; }
+r2 s3://portfoliosight-data /mnt/d/portfoliosight-data --delete --exact-timestamps
+"$HOME/programming/portfoliosight/scripts/r2_backup.sh"; echo $?      # 0
+r2 /mnt/d/portfoliosight-data s3://portfoliosight-data --dryrun       # prints no upload
 ```
 
 The last line is the restore check, a dry run. `r2_backup.sh --restore` itself is only ever run
@@ -473,7 +500,8 @@ the host accepts mail for it, and note it under step 7.
 
 - Read `meta/status.json` (`finished`, `errors`, `refreshed_per_tier`, `preset_build_seconds`)
   and note the result under step 4.
-- Start the service once by hand if the 02:00 fire of 2026-10-14 was skipped (step 4).
-- Run the names pass for tiers 2 and 3 (step 4).
+- If the 02:00 fire of 2026-10-14 was skipped (step 4), start the service once by hand
+  (`sudo systemctl start --no-block portfoliosight-nightly.service`) and wait until it has ended.
+- Then, with no nightly running, the names pass for tiers 2 and 3 (step 4).
 - A-PS-57 turns green on a day when the generation is the day's, the run has ended without an
   error and `/api/health` answers: on Starter, from about noon Pacific.
