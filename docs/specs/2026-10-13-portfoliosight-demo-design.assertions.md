@@ -1551,21 +1551,24 @@ Phase 5 · prod
 - **Claim.** On the default preset, choosing `lookback-10y` loads the 10y tensor and redraws the
   frontier, the Settings exclusion list equals the set the test computes from `/api/symbols`
   `first_date` values and the §4.2 rule for that window, the same holds for a custom menu that
-  holds a served fund too young for the 10y view (which is listed with its reason), toggling
+  holds a served fund too young for the 10y view (which is listed with its reason) and FIENX as
+  a fund that is not served (which is listed too), toggling
   `ghost-1y` increments `data-ghost-count` on `chart` by one and changes sampled canvas pixels,
   toggling it off restores both, and editing `cap-max-VTI` to 10 triggers a rebuild whose tensor
   has every `frontier.w[j][VTI] ≤ 0.10 + 1e-6`.
 - **Setup.** Header-bearing Playwright; the 10y window bounds from the 5y tensor's `asof`
   (`D_G − 2520` trading days) and `first_date` per fund from `/api/symbols`. Since the owner
   decision of 2026-10-13 (spec §2) the default menu may have no excluded fund, so the test also
-  loads `/?f=…&lb=10y` with two default funds older than the window and one served fund whose
-  `first_date` is after the threshold (SGOV when it qualifies): one real build per generation.
+  loads `/?f=…&lb=10y` with two default funds older than the window, one served fund whose
+  `first_date` is after the threshold (SGOV when it qualifies) and FIENX, which is not served:
+  one real build per generation.
 - **Observation.** After `lookback-10y`: one GET to the preset's 10y URL, the frontier's sampled
   pixels differ from the 5y drawing, `lb=10y` in the address; the texts of `excluded-note` in
   Settings equal (as a set of ids) `{f : first_date(f) > start_10y + 252}` filled with the §5.6
   template; for the custom menu, the loaded 10y tensor carries the test's own universe hash, its
-  `excluded` is exactly the young fund, no weight vector carries it, and Settings lists exactly
-  that fund with the "history starts …, not enough for the … view" reason;
+  `excluded` is exactly the young fund and FIENX, no weight vector carries them, and Settings
+  lists exactly those two, the young fund with the "history starts …, not enough for the … view"
+  reason;
   `data-ghost-count` goes 0 → 1 → 0 and the 50-sample canvas mean differs at 1 from
   both 0 states, which equal each other; cap edit: one POST with `VTI max 0.10`, 202 then 200,
   the loaded tensor's VTI column of `frontier.w` and of every non-null `grid.w` is ≤ 0.10 + 1e-6

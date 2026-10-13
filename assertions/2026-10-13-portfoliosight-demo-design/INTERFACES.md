@@ -172,8 +172,9 @@ the docstring is authoritative for that test.
     FIENX at 5y resolve to a schema-valid tensor that sets exactly FIENX aside with its reason.
     Same key on every run: one real build per generation, then served as stored.
   - A-PS-63: production; besides the default menu, a custom menu loaded with `/?f=…&lb=10y` (two
-    of BND, VTI, AGG, VNQ plus a served fund too young for the 10y view, SGOV when it qualifies)
-    must list the young fund in Settings. Same key on every run: one real build per generation.
+    of BND, VTI, AGG, VNQ, a served fund too young for the 10y view, SGOV when it qualifies, and
+    FIENX as the not-served case) must list the young fund and FIENX in Settings. Same key on
+    every run: one real build per generation.
   - A-PS-29: the extra tickers outside the guide menu list FIENX where they listed EFA.
   The record of every changed leg is `docs/reviews/2026-10-13_gate-change_fienx-to-efa.md`.
 - A-PS-13: the 403 "names the missing scope" leg cannot be forced against the live bucket.

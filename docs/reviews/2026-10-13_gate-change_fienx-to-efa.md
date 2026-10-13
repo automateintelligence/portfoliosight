@@ -36,7 +36,7 @@ Ids, commands and timeouts in `manifest.yaml` are unchanged. Only claim texts ch
 | same | A-PS-43, leg 7 (added) | (the old test saw the FIENX row with two reasons in turn: the default tensor's, then the second tensor's) | With the second menu shown, `lookback-10y` loads its declared 10y tensor; the FIENX note changes to that tensor's reason, exactly; still 24 rows and one note | A row's note is read again from every served tensor, not remembered | Restores the two-reasons-on-one-row check, which the first form of this change had lost (Codex review, round 1). A fourth hollow variant, a note remembered from the first tensor seen for a ticker, passes legs 1 to 6 and fails here. Uses `chip-settings` and `lookback-10y`, both already pinned by A-PS-53 and A-PS-63. |
 | `tests/test_a_ps_56_presets_tensors_from_r2.py` | A-PS-56, default 5y tensor in production | Funds plus excluded are the 23 Step 2 funds; FIENX is in `excluded`, not in funds, with the exact reason | Funds plus excluded are the 23 Step 2 funds (kept); `excluded` is empty; funds are exactly the 23; FIENX is not a Step 2 fund and not in funds | The default tensor is built from the real menu and real data | Stricter for the default: any fund set aside now fails. |
 | same | A-PS-56, new test `test_a_menu_holding_fienx_sets_it_aside_with_the_catalog_reason` | (the three FIENX assertions lived in the default-tensor test) | POST the 23 default funds plus FIENX at 5y; accept 200 or 202; poll the tensor URL up to 200 s; that tensor is schema-valid; FIENX is in `excluded`, not in funds, with the exact reason; nothing else is set aside; funds are the 23; every frontier weight vector has 23 entries | Production sets a fund the catalog does not serve aside, with the catalog's reason from real provider data | The same three FIENX assertions, word for word, on a tensor where FIENX really is in the menu, plus three more. The schema check is repeated on this tensor because the default tensor no longer has a populated `excluded` entry for the schema to check (Codex review, round 1). Cost: one real build per generation (the key is the same on every run). |
-| `tests/test_a_ps_63_lookbacks_ghosts_caps_prod.py` | A-PS-63, 10y exclusion list, added leg | Exclusion list of the default menu equals the set computed from `/api/symbols` and the spec 4.2 rule | All of that, unchanged; then a custom menu loaded with `/?f=…&lb=10y` (two of BND, VTI, AGG, VNQ older than the window, plus a served fund whose history starts after the threshold, SGOV when it qualifies): the tensor has the test's own hash, sets exactly the young fund aside, no weight vector carries it, and Settings lists exactly that fund with the "history starts …, not enough for the … view" text | The Settings exclusion list is real | Nothing was removed. Without the added leg the computed set for the default menu is now empty in production (all 23 funds are served and older than the window), so the list check would pass with no list at all. See "A-PS-63" below. The first test's time limit went from 120 s to 300 s to allow one build; the manifest timeout (1800 s) is unchanged. |
+| `tests/test_a_ps_63_lookbacks_ghosts_caps_prod.py` | A-PS-63, 10y exclusion list, added leg | Exclusion list of the default menu equals the set computed from `/api/symbols` and the spec 4.2 rule | All of that, unchanged; then a custom menu loaded with `/?f=…&lb=10y` (two of BND, VTI, AGG, VNQ older than the window, a served fund whose history starts after the threshold, SGOV when it qualifies, and FIENX, which is not served): the tensor has the test's own hash, sets exactly the young fund and FIENX aside, no weight vector carries them, and Settings lists exactly those two, the young fund with the "history starts …, not enough for the … view" text | The Settings exclusion list is real, for both kinds of exclusion the rule has: too little history, and not served | Nothing was removed. FIENX is in the menu because the not-served case is the one the default menu used to supply (Codex review, round 1). Without the added leg the computed set for the default menu is now empty in production (all 23 funds are served and older than the window), so the list check would pass with no list at all. See "A-PS-63" below. The first test's time limit went from 120 s to 300 s to allow one build; the manifest timeout (1800 s) is unchanged. |
 | `manifest.yaml` | Claims of A-PS-43, A-PS-56, A-PS-63 | As frozen | Reworded to say the above | Claim text matches the test | Text only. |
 | `INTERFACES.md` | "Encoding decisions" | — | One entry recording this decision and the three re-anchored assertions | The contract the product is built to | Addition only. |
 
@@ -59,16 +59,19 @@ default menu that set held at least FIENX. With EFA it is empty, and an empty ex
 matched by a page that shows no exclusion list.
 
 This was measured on a local stand-in for production (the real service over the fixture store,
-the real page, a scratch proxy in place of the Worker; production was not contacted):
+the real page, a scratch proxy in place of the Worker; production was not contacted). The young
+fund of the dry run was TSP-S, whose record was shortened for it.
 
 | Page under test | Unedited A-PS-63 | Edited A-PS-63 |
 |---|---|---|
-| Settings list without the `excluded-note` test id (the run branch today) | passes | fails: expected "TSP-S", received "" |
-| Settings list with the test id (as on `feature/smoke`) | passes | passes |
+| Settings list without the `excluded-note` test id (the run branch before PR #83) | passes | fails: nothing listed (measured with the first form of the edit: expected "TSP-S", received "") |
+| Settings list that shows young funds and hides funds that are not served | not run; its expected set is empty | fails: expected "FIENX,TSP-S", received "TSP-S" |
+| Settings list as on the run branch now | passes | passes |
 
-So the edited test will be red in production until the Settings fix on `feature/smoke` is merged.
-That is the gate working. The change is its own commit, so it can be dropped without touching
-the rest if the owner prefers the narrower reading of "change only what the swap makes false".
+The Settings fix (PR #83) has since been merged into the run branch, so the first row is no
+longer an open defect; it is kept here as the reason for the change. The change is its own
+commit, so it can be reverted alone if the owner prefers the narrower reading of "change only
+what the swap makes false".
 
 ## What could not be run
 
@@ -78,12 +81,13 @@ A-PS-56 and A-PS-63 run against production and were not run there. What was done
 - The embedded A-PS-63 Playwright spec lists its three tests and type-checks under `tsc --strict`.
 - A-PS-56: all four tests pass on the local stand-in, both when the FIENX menu has to be built
   (202, then 200 after 18 s) and when it is already stored (200 at once).
-- A-PS-63: all three tests pass on the local stand-in with the Settings fix applied.
+- A-PS-63: all three tests pass on the local stand-in.
 
 The stand-in differs from production in ways these tests can see: the fixture catalog has no fund
-younger than the 10y threshold (one TSP fund's record was shortened for the dry run), reads were
-marked as R2 reads by the proxy, and the limits of the real Worker and Cloudflare rules were not
-in play.
+younger than the 10y threshold (hence the shortened TSP-S record), reads were marked as R2 reads
+by the proxy, and the limits of the real Worker and Cloudflare rules were not in play. In
+production both tests need FIENX to be in the catalog (it is a tier 2 symbol, so the nightly
+keeps an entry for it) and A-PS-56 needs its reason to read exactly as the old test required.
 
 ## Where excluded-fund handling is still tested with built data
 

@@ -499,7 +499,7 @@ assertions:
     level: spec
     kind: example
   - id: A-PS-63
-    claim: "In production lookback-10y loads the 10y tensor and redraws the frontier, the Settings exclusion list equals the set computed from /api/symbols first_date values and the 4.2 rule, for the default menu and for a custom menu holding a served fund too young for the 10y view (listed with its reason), ghost-1y moves data-ghost-count and the canvas 0 to 1 to 0, and cap-max-VTI = 10 rebuilds a tensor whose VTI weights never exceed 0.10 + 1e-6."
+    claim: "In production lookback-10y loads the 10y tensor and redraws the frontier, the Settings exclusion list equals the set computed from /api/symbols first_date values and the 4.2 rule, for the default menu and for a custom menu holding a served fund too young for the 10y view (listed with its reason) and FIENX as a fund that is not served (listed too), ghost-1y moves data-ghost-count and the canvas 0 to 1 to 0, and cap-max-VTI = 10 rebuilds a tensor whose VTI weights never exceed 0.10 + 1e-6."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_63_lookbacks_ghosts_caps_prod.py"
     setup: ""
     teardown: ""
