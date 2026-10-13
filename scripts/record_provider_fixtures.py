@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Record the provider fixtures of spec section 10, live, once.
+
+Writes raw Tiingo rows for the split windows (AAPL, NVDA, USO), the full histories (VTI, VBIAX),
+their meta objects, a TR window whose annual stock dividend and cash dividend share one ex-date
+(the days that fix the basis rule of spec 4.1), and a slice of the tsp.gov CSV. Needs
+``TIINGO_API_KEY`` in the environment; the key is never written. Cost: eleven Tiingo requests
+and one tsp.gov request.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import date
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+from portfoliosight.data.providers.tiingo import TiingoProvider  # noqa: E402
+from portfoliosight.data.providers.tsp import TspProvider  # noqa: E402
+
+FULL_HISTORY_START = date(1990, 1, 1)
+PRICE_WINDOWS: dict[str, tuple[str, date, date | None, bool]] = {
+    # file stem -> (symbol, start, end, record meta); two months around each split of spec 4.1
+    "AAPL_2020-08": ("AAPL", date(2020, 8, 1), date(2020, 9, 30), True),
+    "NVDA_2024-06": ("NVDA", date(2024, 5, 10), date(2024, 7, 10), True),
+    "USO_2020-04": ("USO", date(2020, 4, 1), date(2020, 5, 29), True),
+    "VTI": ("VTI", FULL_HISTORY_START, None, True),
+    "VBIAX": ("VBIAX", FULL_HISTORY_START, None, True),
+    # 3% stock dividend and cash dividend on one ex-date in March 2024, 2025 and 2026
+    "TR_2024-02": ("TR", date(2024, 2, 1), date(2026, 4, 30), False),
+}
+# Every one of the 16 funds is priced in this range (L 2075 started in 2025).
+TSP_SLICE = (date(2026, 1, 1), date(2026, 3, 31))
+
+
+def _tsp_slice(text: str, start: date, end: date) -> str:
+    """The header, the rows dated inside the range, and the CSV's trailing blank row if any."""
+    lines = text.splitlines()
+    kept = [lines[0]]
+    for line in lines[1:]:
+        day = line.split(",", 1)[0].strip()
+        if not day:
+            if line.strip():
+                kept.append(line)
+            continue
+        if start.isoformat() <= day <= end.isoformat():
+            kept.append(line)
+    return "\n".join(kept) + "\n"
+
+
+def _write_rows(path: Path, rows: list[dict]) -> None:
+    lines = ",\n".join(json.dumps(row, separators=(",", ":")) for row in rows)
+    path.write_text(f"[\n{lines}\n]\n", encoding="utf-8")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out", type=Path, default=REPO_ROOT / "tests" / "fixtures")
+    parser.add_argument("--skip-tiingo", action="store_true")
+    parser.add_argument("--skip-tsp", action="store_true")
+    args = parser.parse_args(argv)
+
+    if not args.skip_tiingo:
+        provider_dir = args.out / "provider"
+        provider_dir.mkdir(parents=True, exist_ok=True)
+        provider = TiingoProvider()
+        for stem, (symbol, start, end, with_meta) in PRICE_WINDOWS.items():
+            rows = provider.fetch_daily_raw(symbol, start, end)
+            if not rows:
+                print(f"{symbol}: no rows returned", file=sys.stderr)
+                return 1
+            _write_rows(provider_dir / f"{stem}.json", rows)
+            if with_meta:
+                meta = provider.fetch_meta_raw(symbol)
+                (provider_dir / f"meta_{symbol}.json").write_text(
+                    json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+                )
+            print(f"{symbol}: {len(rows)} rows {rows[0]['date'][:10]}..{rows[-1]['date'][:10]}")
+
+    if not args.skip_tsp:
+        tsp_dir = args.out / "tsp"
+        tsp_dir.mkdir(parents=True, exist_ok=True)
+        text = _tsp_slice(TspProvider().fetch_csv(*TSP_SLICE), *TSP_SLICE)
+        (tsp_dir / "tsp-fund-price-history.csv").write_text(text, encoding="utf-8")
+        print(f"tsp: {len(text.splitlines()) - 1} rows")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
