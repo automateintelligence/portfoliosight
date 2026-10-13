@@ -1,5 +1,8 @@
 """The built image: uid 10001, the package and committed data under /app, nothing personal.
 
+The build context is made as a checkout under a restrictive umask (007) leaves it, because the
+image must not depend on the modes of the host's files.
+
 Built only when a docker daemon answers; without one the ignore rules of
 ``tests/deploy/test_dockerignore.py`` stand in, as spec 10 allows.
 """
@@ -53,6 +56,8 @@ def image(tmp_path_factory: pytest.TempPathFactory):
         planted = context / name
         planted.parent.mkdir(parents=True, exist_ok=True)
         planted.write_text("planted by tests/deploy/test_image.py\n")
+    for path in context.rglob("*"):
+        path.chmod(0o770)
     tag = f"ps-unit-image:{uuid.uuid4().hex[:12]}"
     built = _docker(
         "build", "-q", "-f", str(context / "deploy" / "Dockerfile"), "-t", tag, ".", cwd=context
@@ -88,6 +93,21 @@ def test_image_runs_as_uid_10001_and_owns_only_its_cache(image):
     ]
     assert _run(image, "sh", "-c", "touch /app/portfoliosight/x").returncode != 0
     assert _run(image, "sh", "-c", "touch /app/cache/x").returncode == 0
+
+
+def test_image_files_do_not_carry_the_modes_of_the_build_host(image):
+    if image is None:
+        return
+    closed = _run(image, "find", "/app/portfoliosight", "/app/data", "!", "-perm", "-o=r")
+    assert closed.returncode == 0 and closed.stdout.strip() == "", closed.stdout[:500]
+    shut = _run(
+        image, "find", "/app/portfoliosight", "/app/data", "-type", "d", "!", "-perm", "-o=x"
+    )
+    assert shut.returncode == 0 and shut.stdout.strip() == "", shut.stdout[:500]
+    loose = _run(image, "find", "/app/portfoliosight", "/app/data", "-perm", "/go=w")
+    assert loose.returncode == 0 and loose.stdout.strip() == "", loose.stdout[:500]
+    read = _run(image, "python", "-c", "open('/app/data/presets.json').read()")
+    assert read.returncode == 0, read.stderr
 
 
 def test_image_holds_the_package_and_committed_data_and_no_planted_file(image):
