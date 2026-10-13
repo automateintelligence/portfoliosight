@@ -10,7 +10,7 @@ method are in `docs/reviews/`.
   slider with a bad and a typical six months, one diversification slider that starts at a
   suggested position, and a quiet Good / Average / Fair / Poor word. Technical names sit behind
   a details toggle.
-- Two ready-made menus, the 2017 guide portfolio (the default, with its allocation) and TSP
+- Two ready-made menus, the Example Portfolio (the default, with its allocation) and TSP
   (G, F, C, S, I), plus custom menus of 2 to 30 served funds built on request and cached by
   menu, limits and lookback.
 - Funds and amounts in shares, percent or dollars; trades from the entered mix to the selected

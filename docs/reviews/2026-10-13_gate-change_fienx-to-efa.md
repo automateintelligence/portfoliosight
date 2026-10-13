@@ -101,3 +101,51 @@ keeps an entry for it) and A-PS-56 needs its reason to read exactly as the old t
 | Build CLI | `tests/engine/test_build_cli.py::test_an_earlier_day_sets_young_funds_aside_in_the_ten_year_view` | The fixture itself on 2020-12-31: VTIP and VWOB too young for 10y, DBJP inside the allowance |
 | Service | `tests/api/test_routes.py`, `tests/jobs/test_build.py`, `tests/jobs/test_nightly.py` | The fixture store keeps FIENX as an unavailable catalog symbol; a menu holding it builds with FIENX set aside |
 | Gate | A-PS-22 (unchanged), A-PS-43, A-PS-56, A-PS-63 | As above |
+
+## Preset display name
+
+Date: 2026-10-13. Owner's instruction, verbatim: "We must change the default portfolio name to
+'Example Portfolio'".
+
+A second sanctioned edit of the frozen gate. The default preset is displayed as
+`Example Portfolio`; before, it was `The 2017 guide portfolio`. The preset id `guide2017`, the
+holdings file `data/holdings/holdings_guide2017_step2.csv`, the fixture file name
+`web/fixtures/guide2017_5y.json`, the URL value `u=guide2017` and the universe hash are unchanged.
+The gate was not re-frozen here.
+
+Product: `data/presets.json` (the `name` of `guide2017`) and `scripts/make_fixtures.py` (the
+universe name written into the fixture's metadata). Both fixtures were regenerated with the pinned
+commands, not edited. In `tests/fixtures/synthetic_23.parquet` the returns are equal to before and
+only the metadata name differs. In `web/fixtures/guide2017_5y.json` only `universe.name`,
+`built_at` and `build_seconds` differ.
+
+Ids, commands, timeouts and claim texts in `manifest.yaml` are unchanged: no claim names the
+preset.
+
+| Gate file | Assertion, leg | Before | After | Why the new form is not weaker |
+|---|---|---|---|---|
+| `tests/test_a_ps_31_presets_health_bodies.py` line 571 | A-PS-31, first preset of `GET /v1/presets` | `assert first["name"] == "The 2017 guide portfolio"` | `assert first["name"] == "Example Portfolio"` | Exact string equality before and after. The neighbouring legs (ids in order, names equal to `data/presets.json`, 23 funds, allocation) are untouched. |
+| `tests/test_a_ps_43_default_view_presets.py` line 1 | A-PS-43, module docstring (title) | "the default view is the 2017 guide portfolio with its allocation" | "the default view is the Example Portfolio with its allocation" | Text only; no assertion changed. Kept equal to the title in the assertions file. |
+| `INTERFACES.md` "Encoding decisions" | The EFA entry | "the one sanctioned change of the frozen gate in this run" | "the first sanctioned change of the frozen gate in this run" | Text only. |
+| `INTERFACES.md` "Encoding decisions" | New entry | (none) | One entry recording this decision and the A-PS-31 leg | Addition only. |
+| `docs/specs/2026-10-13-portfoliosight-demo-design.assertions.md` | A-PS-31, Observation | name `"The 2017 guide portfolio"` | name `"Example Portfolio"` | Same exact-name observation. |
+| same | A-PS-43, title (index and section heading) | "the default view is the 2017 guide portfolio with its allocation" | "the default view is the Example Portfolio with its allocation" | Text only. |
+
+### Left as they are, on purpose
+
+- A-PS-39 and A-PS-40: their mock presets body names the first preset
+  `PRESETS-MARKER The 2017 guide portfolio`. The tests look for the marker, not the name. Nothing
+  in them became false.
+- A-PS-41, 42, 43, 44, 45, 46: the mock uses `tensor.universe.name` and falls back to the old
+  name only if the fixture has none. The regenerated fixture carries `Example Portfolio`, so the
+  mock serves the new name and the fallback is not reached.
+- A-PS-47, 48, 49, 50, 51, 53: the mock presets body names the first preset
+  `The 2017 guide portfolio`. These tests compare the page with their own mock and assert nothing
+  about the name's wording. Nothing in them became false.
+- A-PS-43 line 451, the message "the 2017 guide Step 2 holdings file lists 23 funds": it names
+  the holdings file's origin, which is unchanged.
+- Every `guide2017` in the gate (ids, file names, URL values): unchanged.
+- `.frozen`: not regenerated.
+
+Production-only assertions were not run against production. A-PS-56 reads `/api/presets` there
+and does not assert the display name.

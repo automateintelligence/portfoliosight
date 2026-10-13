@@ -103,7 +103,7 @@ def test_ui_fixture_has_what_the_page_tests_need(ui):
     assert ids == list(amounts) and len(ids) == 23 and "VTI" in ids and "EFA" in ids
     assert ui["lookback"]["id"] == "5y" and ui["generation"] == "2026-10-12-0.1.0"
     assert re.fullmatch(r"[0-9a-f]{16}", ui["universe"]["hash"])
-    assert ui["universe"]["name"] == "The 2017 guide portfolio"
+    assert ui["universe"]["name"] == "Example Portfolio"
     assert ui["bounds"]["requested"] == [{"min": None, "max": None}] * 23
     assert ui["bounds"]["max"] == [0.25] * 23 and ui["bounds"]["min"] == [0.0] * 23
     closes = [fund["last_close"] for fund in ui["universe"]["funds"]]

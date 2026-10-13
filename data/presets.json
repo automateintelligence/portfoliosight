@@ -2,7 +2,7 @@
   "presets": [
     {
       "id": "guide2017",
-      "name": "The 2017 guide portfolio",
+      "name": "Example Portfolio",
       "funds": [
         "VTI", "VTV", "VOE", "VB", "VBR", "VEA", "SCHF", "VWO", "VNQ", "VBIAX", "SCHO", "BND",
         "AGG", "TIP", "VTIP", "LQD", "VWOB", "PCY", "EFA", "LTPZ", "EDV", "VGSTX", "DBJP"

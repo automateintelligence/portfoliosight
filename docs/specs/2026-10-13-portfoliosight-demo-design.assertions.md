@@ -167,7 +167,7 @@ why it is load-bearing.
 - **A-PS-41 — the first screen is the chart and its controls; sections are collapsed; no tangency
   marker.** (S1, S8, F1, F2, DoD 3)
 - **A-PS-42 — the phone layout fits and works with a thumb.** (S16, F6, DoD 4)
-- **A-PS-43 — the default view is the 2017 guide portfolio with its allocation and no fund set
+- **A-PS-43 — the default view is the Example Portfolio with its allocation and no fund set
   aside; a menu holding a fund its tensor sets aside shows the excluded-fund note; the preset menu
   is driven by `/api/presets`.** (S2, S24, DoD 5)
 - **A-PS-44 — the heatmap renders from the theme ramp under the frontier only.** (S5, DoD 7)
@@ -865,7 +865,7 @@ Phase 2 · api
   `tsp.allocation` is `null`; `GET /v1/health` returns the §6 fields.
 - **Setup.** `TestClient`, `LocalStore` with a published generation whose 12 tensors exist
   (A-PS-30's result); the CSV read independently by the test.
-- **Observation.** `presets[0].id == "guide2017"`, name `"The 2017 guide portfolio"`, 23 fund ids
+- **Observation.** `presets[0].id == "guide2017"`, name `"Example Portfolio"`, 23 fund ids
   equal to the CSV's symbols, `allocation_unit == "$"`, `allocation[s] == round(Qty × Price, 2)`
   for every held symbol (18 non-zero, 5 zero), six `lookbacks` each `{"status":"ready",
   "url":"/api/tensors/{G}/{hash}/{id}"}`; `presets[1].id == "tsp"`, name `"TSP (G, F, C, S, I)"`,
@@ -1109,7 +1109,7 @@ Phase 3 · ui ("iPhone 13" device profile; all three themes)
   under 44 px; a vertical `div-slider` at this width. Fail = any theme, any leg.
 - **Kind.** property (three themes; every interactive element).
 
-### A-PS-43 — the default view is the 2017 guide portfolio with its allocation and no fund set aside; a menu holding a fund its tensor sets aside shows the excluded-fund note; the preset menu is driven by `/api/presets`
+### A-PS-43 — the default view is the Example Portfolio with its allocation and no fund set aside; a menu holding a fund its tensor sets aside shows the excluded-fund note; the preset menu is driven by `/api/presets`
 Phase 3 · ui
 - **Claim.** With no query, the page loads the first preset from `/api/presets`, shows
   `point-current`, lists 23 `fund-row-*` in `"$"` mode with amounts equal to the presets body's

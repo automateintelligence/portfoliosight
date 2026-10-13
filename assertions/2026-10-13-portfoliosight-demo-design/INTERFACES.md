@@ -159,7 +159,7 @@ the docstring is authoritative for that test.
   - A-PS-68 sends 25 GETs and 25 POSTs, then waits 61 s so the limiters are clear.
 - A-PS-66, 67, 68: a withdrawn `Zone WAF Edit` permission fails with a `BLOCKED:` message.
 - A-PS-53: "menu of N" accepts N as the included fund count or included plus excluded.
-- Owner decision 2026-10-13 (the one sanctioned change of the frozen gate in this run): EFA holds
+- Owner decision 2026-10-13 (the first sanctioned change of the frozen gate in this run): EFA holds
   FIENX's place in the default menu, so the default 5y tensor (and `web/fixtures/guide2017_5y.json`)
   has 23 included funds and an empty `universe.excluded`. FIENX stays a tier 2 catalog symbol that
   is not served, reason `converted to an ETF; no data since 2024-10-30`; `POST /v1/tensors`
@@ -177,4 +177,8 @@ the docstring is authoritative for that test.
     every run: one real build per generation.
   - A-PS-29: the extra tickers outside the guide menu list FIENX where they listed EFA.
   The record of every changed leg is `docs/reviews/2026-10-13_gate-change_fienx-to-efa.md`.
+- Owner decision 2026-10-13 (the second sanctioned change of the frozen gate in this run): the
+  default preset is displayed as `Example Portfolio`. Its id `guide2017`, its holdings file, its
+  URL value and its universe hash are unchanged. A-PS-31 asserts `presets[0].name ==
+  "Example Portfolio"`. The record is the section "Preset display name" of the same review file.
 - A-PS-13: the 403 "names the missing scope" leg cannot be forced against the live bucket.

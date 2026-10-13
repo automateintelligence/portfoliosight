@@ -389,7 +389,7 @@ def test_entry_point_publishes_real_tensors_offline(unpublished, generation, mon
         assert tensor["generation"] == generation and tensor["asof"] == "2026-10-12"
     guide = json.loads(store.get(sorted(k for k in _expected_keys(generation) if "/5y" in k)[0]))
     names = {guide["universe"]["name"], guide["universe"]["preset_id"]}
-    assert names <= {"The 2017 guide portfolio", "guide2017", "TSP (G, F, C, S, I)", "tsp"}
+    assert names <= {"Example Portfolio", "guide2017", "TSP (G, F, C, S, I)", "tsp"}
     status = store_mod.get_json(store, "meta/status.json")
     assert status["published"] is True and status["finished"]
     assert status["preset_tensors_built"] == {"guide2017": 6, "tsp": 6}

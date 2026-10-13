@@ -140,7 +140,7 @@ def test_presets_match_appendix_a():
     presets = {preset.id: preset for preset in universe.load_presets()}
     assert list(presets) == ["guide2017", "tsp"]
     guide, tsp = presets["guide2017"], presets["tsp"]
-    assert guide.name == "The 2017 guide portfolio"
+    assert guide.name == "Example Portfolio"
     assert list(guide.funds) == _step2_symbols()
     assert guide.allocation is not None and guide.allocation_unit == "$"
     assert guide.allocation["VTI"] == 10840.0 and guide.allocation["EFA"] == 0.0
