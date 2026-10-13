@@ -22,16 +22,20 @@ from .caps import greedy_fill
 
 NX = 48
 TOL = 1e-6  # the one tolerance of spec 4.11
+SOLVER_TOLERANCE = 1e-8
 SOLVER_OPTIONS = {
-    "tol_feas": 1e-8,
-    "tol_gap_abs": 1e-8,
-    "tol_gap_rel": 1e-8,
+    "tol_feas": SOLVER_TOLERANCE,
+    "tol_gap_abs": SOLVER_TOLERANCE,
+    "tol_gap_rel": SOLVER_TOLERANCE,
     "direct_solve_method": "qdldl",  # single-threaded LDL: the same bits on every run
 }
 # Clarabel now and then stops at "almost solved" on an ordinary program. Each program is tried
 # with the plain settings first, then with two numerically different ones; an answer is taken
 # only when Clarabel calls it optimal.
 RETRY_OPTIONS = ({}, {"equilibrate_enable": False}, {"static_regularization_constant": 1e-9})
+# Where the frontier is nearly flat a 1e-8 answer can sit well inside its ceiling: the return
+# it gives up is below the tolerance. Such a node is solved again at these tolerances.
+REFINE_TOLERANCES = (1e-10, 1e-12)
 
 
 class SolveError(RuntimeError):
@@ -86,9 +90,24 @@ class MenuPrograms:
         return _solve(self._min_variance, self._w, "minimum-variance mix")
 
     def frontier_point(self, x: float) -> np.ndarray:
-        """The highest-return mix with risk at most `x`."""
+        """The highest-return mix with risk at most `x`.
+
+        Below sigma_max the risk constraint binds, so the mix sits on its ceiling. An answer
+        more than 1e-6 inside it is refined at tighter tolerances; the refinement is best
+        effort, because with exactly tied expected returns the highest return is reached
+        inside the ceiling and there is nothing to refine toward.
+        """
         self._x.value = x
-        return _solve(self._frontier, self._w, f"frontier point at risk {x!r}")
+        what = f"frontier point at risk {x!r}"
+        w = _solve(self._frontier, self._w, what)
+        for tolerance in REFINE_TOLERANCES:
+            if x - self.sigma(w) <= TOL:
+                break
+            try:
+                w = _solve(self._frontier, self._w, what, tolerance)
+            except SolveError:
+                break
+        return w
 
     def cell(self, x: float, y: float) -> np.ndarray:
         """The least concentrated mix with risk at most `x` and return at least `y`."""
@@ -101,8 +120,12 @@ def frontier(programs: MenuPrograms, nx: int = NX) -> Frontier:
     """Frontier nodes from the minimum-variance mix to the max-return greedy fill.
 
     The two ends are not solved for: under `X = sigma_min` the minimum-variance mix is the only
-    feasible one, and at `X = sigma_max` the greedy fill is the maximum by construction. A menu
-    whose two ends are within the 1e-6 tolerance in risk has one frontier mix, the greedy fill.
+    feasible one, and at `X = sigma_max` the greedy fill is the maximum by construction.
+
+    When the two ends are within the 1e-6 tolerance in risk there is no risk axis to grid: no
+    ceiling between them can be told from sigma_max, under which the greedy fill is feasible
+    and earns the most. Every column then holds the greedy fill at `X = sigma_max`. Less
+    concentrated mixes of such a menu still appear below it, as surface cells.
     """
     if nx < 2:
         raise ValueError("a frontier needs at least 2 columns")
@@ -122,14 +145,18 @@ def frontier(programs: MenuPrograms, nx: int = NX) -> Frontier:
     return Frontier(x=x, y=y, w=w, pinned=pinned)
 
 
-def _solve(problem, variable, what: str) -> np.ndarray:
+def _solve(problem, variable, what: str, tolerance: float = SOLVER_TOLERANCE) -> np.ndarray:
     """Solve with Clarabel, walking the retry ladder; only an optimal answer is returned."""
+    options = {
+        **SOLVER_OPTIONS,
+        **dict.fromkeys(("tol_feas", "tol_gap_abs", "tol_gap_rel"), tolerance),
+    }
     status = "not attempted"
     for extra in RETRY_OPTIONS:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")  # the status is read below, not the warning
-                problem.solve(solver=cp.CLARABEL, warm_start=False, **SOLVER_OPTIONS, **extra)
+                problem.solve(solver=cp.CLARABEL, warm_start=False, **options, **extra)
         except cp.SolverError as exc:
             status = f"solver error: {exc}"
             continue
