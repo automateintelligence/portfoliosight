@@ -116,14 +116,35 @@ def test_frame_shape_and_adjclose_cross_check(symbol, api_key, mock):
     assert without.tobytes() == returns.build_tr_index(frame).to_numpy().tobytes()
 
 
-def test_no_fixture_has_a_split_and_a_dividend_on_one_day():
-    """Why both basis rules pass above: the shipped rule is a convention, not a measurement."""
+def test_basis_rule_is_fixed_by_days_with_a_split_and_a_dividend():
+    """TR's stock dividend and cash dividend share an ex-date: only one rule reproduces adjClose.
+
+    The five fixtures of spec 4.1 hold no such day, so both rules pass on them; this one decides.
+    """
     for symbol in PRICE_FILES:
-        both = [
-            r for r in _rows(symbol) if float(r["splitFactor"]) != 1 and float(r["divCash"]) > 0
-        ]
-        assert both == [], symbol
+        rows = _rows(symbol)
+        assert not [r for r in rows if r["splitFactor"] != 1 and r["divCash"] > 0], symbol
+    rows = json.loads((FIXTURES / "TR_2024-02.json").read_text())
+    frame = tiingo.rows_to_frame(rows, "TR")
+    both = np.nonzero(
+        (frame["split_factor"].to_numpy()[1:] != 1.0) & (frame["div_cash"].to_numpy()[1:] > 0)
+    )[0]
+    assert [str(frame.index[i + 1])[:10] for i in both] == [
+        "2024-03-05",
+        "2025-03-05",
+        "2026-03-05",
+    ]
+    adj = frame["adj_close"].to_numpy()
+    adj_ratio = adj[1:] / adj[:-1]
+    gaps = {}
+    for rule in ("post_split", "pre_split"):
+        tr = returns.build_tr_index(frame, basis_rule=rule).to_numpy()
+        gaps[rule] = np.abs(tr[1:] / tr[:-1] - adj_ratio)
+    assert gaps["post_split"].max() <= TOL
+    assert (gaps["pre_split"][both] > TOL).all()
     assert returns.BASIS_RULE == "post_split"
+    shipped = returns.build_tr_index(frame).to_numpy()
+    assert np.abs(shipped[1:] / shipped[:-1] - adj_ratio).max() <= TOL
 
 
 def test_end_date_is_sent_and_empty_means_no_data(api_key, mock):

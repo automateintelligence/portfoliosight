@@ -13,8 +13,9 @@ import numpy as np
 import pandas as pd
 
 BasisRule = Literal["post_split", "pre_split"]
-# How the provider quotes a dividend that falls on a split day. Fixed by the recorded fixtures
-# (tests/data/test_tiingo.py keeps the adjClose cross-check, so the rule cannot silently flip).
+# How the provider quotes a dividend that falls on a split day: per post-split share. Measured on
+# the recorded TR fixture, whose stock dividend and cash dividend share an ex-date; only this rule
+# reproduces adjClose there (tests/data/test_tiingo.py keeps the check, so it cannot flip).
 BASIS_RULE: BasisRule = "post_split"
 RECORD_COLUMNS = ("date", "close", "tr_index", "div_cash", "split_factor")
 
