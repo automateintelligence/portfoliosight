@@ -509,7 +509,16 @@ alone, and turns green when the run has ended and they are gone.
 Create `portfoliosight@automateintelligence.ai` as an alias on the mail host, or confirm that
 the host accepts mail for it, and note it under step 7.
 
-### 4. After the first nightly has ended
+### 4. Redeploy the Worker
+
+The deployed Worker answers 404 to `HEAD` on a stored tensor (`GET` is fine); A-PS-57 asks for
+`HEAD` on the twelve preset tensors. Fixed on the run branch (`web/worker/index.ts`, with
+tests), not deployed yet: the Worker is redeployed once, from the run branch head, together
+with the default-menu change that is still on its own branch. From `web/`:
+`npm run build && npx wrangler deploy`, then with the header
+`curl -sI …/api/tensors/<generation>/<hash>/5y` answers 200 with `x-ps-source: r2`.
+
+### 5. After the first nightly has ended
 
 - Read `meta/status.json` (`finished`, `errors`, `refreshed_per_tier`, `preset_build_seconds`)
   and note the result under step 4.
