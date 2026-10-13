@@ -42,6 +42,7 @@ function makeEnv(overrides: Record<string, unknown> = {}, limiter: (call: Limite
     [`tensors/${G}/${HASH}/5y.json`, TENSOR],
   ]);
   const dataGets: string[] = [];
+  const dataHeads: string[] = [];
   const assetCalls: string[] = [];
   const limiterCalls: LimiterCall[] = [];
   const env = {
@@ -71,6 +72,11 @@ function makeEnv(overrides: Record<string, unknown> = {}, limiter: (call: Limite
           json: async () => JSON.parse(text) as unknown,
         };
       },
+      head: async (key: string) => {
+        dataHeads.push(key);
+        const text = objects.get(key);
+        return text === undefined ? null : { key, etag: ETAG, httpEtag: `"${ETAG}"`, size: text.length };
+      },
     },
     ASSETS: {
       fetch: async (request: Request) => {
@@ -91,7 +97,7 @@ function makeEnv(overrides: Record<string, unknown> = {}, limiter: (call: Limite
     },
     ...overrides,
   };
-  return { env, objects, dataGets, assetCalls, limiterCalls };
+  return { env, objects, dataGets, dataHeads, assetCalls, limiterCalls };
 }
 function allowAll() {
   return new Response(JSON.stringify({ allowed: true }), { headers: { "content-type": "application/json" } });
@@ -343,6 +349,40 @@ describe("worker routing", () => {
     expect(e.dataGets).toEqual([`tensors/${G}/${HASH}/5y.json`]);
   });
 
+  it("a stored tensor answers HEAD as it answers GET, without the body and without reading it", async () => {
+    const worker = await loadWorker();
+    const e = makeEnv();
+    const res = await call(worker, e.env, `${SITE}/api/tensors/${G}/${HASH}/5y`, { method: "HEAD" });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("");
+    expect(res.headers.get("etag")).toBe(`"${ETAG}"`);
+    expect(res.headers.get("cache-control")).toBe("public, max-age=86400, immutable");
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(res.headers.get("x-ps-source")).toBe("r2");
+    expect(e.dataHeads).toEqual([`tensors/${G}/${HASH}/5y.json`]);
+    expect(e.dataGets).toEqual([]);
+    expect(originCalls).toEqual([]);
+  });
+
+  it("HEAD for a tensor that is not stored asks the origin with GET and passes on its status only", async () => {
+    const worker = await loadWorker();
+    const e = makeEnv();
+    originResponse = () =>
+      new Response(JSON.stringify({ status: "building" }), { status: 202, headers: { "content-type": "application/json", "retry-after": "2" } });
+    const res = await call(worker, e.env, `${SITE}/api/tensors/${G}/aaaaaaaaaaaaaaaa/5y`, {
+      method: "HEAD",
+      headers: { "cf-connecting-ip": "203.0.113.9" },
+    });
+    expect(res.status).toBe(202);
+    expect(await res.text()).toBe("");
+    expect(res.headers.get("x-ps-source")).toBe("origin");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("retry-after")).toBe("2");
+    expect(originCalls.map((c) => [c.method, c.url])).toEqual([["GET", `${API_ORIGIN}/v1/tensors/${G}/aaaaaaaaaaaaaaaa/5y`]]);
+    expect(Object.fromEntries(originCalls[0].headers)["cf-connecting-ip"]).toBe("203.0.113.9");
+    expect(e.dataGets).toEqual([]);
+  });
+
   it("malformed tensor paths and unknown API paths touch neither storage, origin nor assets", async () => {
     const worker = await loadWorker();
     const e = makeEnv();
@@ -353,6 +393,10 @@ describe("worker routing", () => {
       ["GET", `/api/tensors/${G}/${HASH}/5y%00`, 400],
       ["GET", `/api/tensors/${G}/${HASH}`, 404],
       ["GET", `/api/tensors/${G}/${HASH}/5y/`, 404],
+      ["HEAD", `/api/tensors/${G}/${HASH}/7y`, 400],
+      ["HEAD", `/api/tensors/${G}/${HASH}`, 404],
+      ["HEAD", "/api/tensors", 404],
+      ["HEAD", "/api/health", 404],
       ["GET", "/api", 404],
       ["GET", "/api/", 404],
       ["GET", "/api/share", 404],
@@ -368,6 +412,7 @@ describe("worker routing", () => {
       if (method !== "HEAD") expect(typeof (await errorCode(res)), path).toBe("string");
     }
     expect(e.dataGets).toEqual([]);
+    expect(e.dataHeads).toEqual([]);
     expect(e.assetCalls).toEqual([]);
     expect(originCalls).toEqual([]);
   });
