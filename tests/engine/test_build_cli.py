@@ -250,3 +250,13 @@ def test_served_sgov_column_sets_the_risk_free_rate(cli, tmp_path):
     code, out = _run(cli, tmp_path, *SMALL, returns=path, lookback="1y", asof="2026-06-30")
     assert code == 0
     assert abs(json.loads(out.read_text())["rf"] - (1.00016**252 - 1.0)) <= 1e-12
+
+
+def test_last_close_is_only_known_for_the_files_last_day(cli, tmp_path):
+    """The parquet's metadata holds the close on its last day: no other day's close is known."""
+    code, out = _run(cli, tmp_path, *SMALL, lookback="1y", asof="2026-10-09", name="earlier.json")
+    earlier = json.loads(out.read_text())
+    assert code == 0 and earlier["asof"] == "2026-10-09"
+    assert [fund["last_close"] for fund in earlier["universe"]["funds"]] == [None] * 22
+    code, out = _run(cli, tmp_path, *SMALL, lookback="1y", name="last.json")
+    assert all(fund["last_close"] > 0 for fund in json.loads(out.read_text())["universe"]["funds"])
