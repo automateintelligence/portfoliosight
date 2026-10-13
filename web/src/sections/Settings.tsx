@@ -111,7 +111,7 @@ export function Settings({ tensor, lookback, ghosts, caps, unavailable, details,
             </p>
             <ul className="list-plain">
               {excluded.map((e) => (
-                <li key={e.id}>
+                <li key={e.id} data-testid="excluded-note">
                   <span className="num">{e.id}</span>: {e.reason}
                 </li>
               ))}
