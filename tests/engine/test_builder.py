@@ -28,7 +28,12 @@ from portfoliosight.engine.tensor import (
     validate_tensor,
 )
 from portfoliosight.engine.torsion import TorsionError
-from tests.engine.helpers import fixture_inputs
+from tests.engine.helpers import (
+    CONVERTED,
+    CONVERTED_REASON,
+    converted_menu_inputs,
+    fixture_inputs,
+)
 
 TOL = 1e-6
 NX, NY = 48, 32
@@ -166,15 +171,8 @@ def test_identity_block(fixture_tensor, fixture_frame):
     universe = t["universe"]
     assert universe["name"] == "The 2017 guide portfolio" and universe["preset_id"] == "guide2017"
     ids = [fund["id"] for fund in universe["funds"]]
-    assert ids == [c for c in fixture_frame.columns if c != "FIENX"] and len(ids) == 22
-    assert universe["excluded"] == [
-        {
-            "id": "FIENX",
-            "reason": "converted to an ETF; no data since 2024-10-30",
-            "last_close": None,
-        }
-    ]
-    assert sorted(ids + ["FIENX"]) == sorted(fixture_frame.columns)  # the 23 Step 2 funds
+    assert ids == list(fixture_frame.columns) and len(ids) == 23  # the 23 Step 2 funds
+    assert universe["excluded"] == []  # the default menu sets no fund aside
     for fund in universe["funds"]:
         assert set(fund) == {
             "id",
@@ -402,14 +400,41 @@ def test_interpolated_mixes_keep_the_invariants(fixture_tensor, arrays):
         assert np.array_equal(interpolate(fixture_tensor, 0.0, t), arrays.wf[0])
 
 
+def test_a_fund_the_catalog_does_not_serve_is_set_aside_with_its_reason(fixture_frame):
+    """A custom menu holding FIENX: listed with the catalog's reason, absent from the math."""
+    inputs = converted_menu_inputs("5y", **SMALL)
+    tensor = build_tensor(inputs)
+    validate_tensor(tensor)
+    universe = tensor["universe"]
+    assert universe["name"] == "Custom menu" and universe["preset_id"] is None
+    assert [fund["id"] for fund in universe["funds"]] == list(fixture_frame.columns)
+    aside = [{"id": CONVERTED, "reason": CONVERTED_REASON, "last_close": None}]
+    assert universe["excluded"] == aside
+    assert len(inputs.funds) == 24 and len(tensor["mu_s"]) == 23
+    vectors = [*tensor["frontier"]["w"], *tensor["grid"]["w_div"]]
+    vectors += [w for column in tensor["grid"]["w"] for w in column if w is not None]
+    assert {len(w) for w in vectors} == {23}  # no weight vector carries the fund
+    assert all(len(block["r"]) == 23 for block in tensor["stress"].values())
+    # the hash is the menu's, FIENX included; the numbers are the 23 funds' own
+    rows = [{"id": fund.id, "min": None, "max": None} for fund in inputs.funds]
+    plain = build_tensor(fixture_inputs("5y", **SMALL))
+    assert universe["hash"] == universe_hash(rows) != plain["universe"]["hash"]
+    for key in ("mu_s", "cov", "bounds", "frontier", "grid", "stress", "lookback"):
+        assert tensor[key] == plain[key], key
+    # with returns through the last day the catalog still decides: not served, not used
+    current = inputs.returns.assign(**{CONVERTED: inputs.returns["EFA"]})
+    served_data = build_tensor(converted_menu_inputs("5y", returns=current, **SMALL))
+    assert served_data["universe"]["excluded"] == aside
+
+
 def test_requested_caps_are_recorded_and_respected():
     requested = [
         {"id": "VTI", "min": None, "max": 0.10},
         {"id": "BND", "min": 0.05, "max": None},
-        {"id": "FIENX", "min": None, "max": 0.5},  # excluded in this window: hashed, not resolved
+        {"id": CONVERTED, "min": None, "max": 0.5},  # excluded in this window: hashed, not resolved
     ]
-    capped = build_tensor(fixture_inputs("5y", requested_bounds=requested, **SMALL))
-    plain = build_tensor(fixture_inputs("5y", **SMALL))
+    capped = build_tensor(converted_menu_inputs("5y", requested_bounds=requested, **SMALL))
+    plain = build_tensor(converted_menu_inputs("5y", **SMALL))
     a = Arrays(capped)
     vti, bnd = a.ids.index("VTI"), a.ids.index("BND")
     assert capped["bounds"]["requested"][vti] == {"min": None, "max": 0.10}
@@ -420,7 +445,8 @@ def test_requested_caps_are_recorded_and_respected():
     assert max(w[vti] for w in vectors) <= 0.10 + TOL
     assert min(w[bnd] for w in vectors) >= 0.05 - TOL
     assert capped["universe"]["hash"] != plain["universe"]["hash"]
-    rows = [{"id": f.id, "min": None, "max": None} for f in fixture_inputs().funds]
+    rows = [{"id": f.id, "min": None, "max": None} for f in converted_menu_inputs().funds]
+    assert CONVERTED in [row["id"] for row in rows] and capped["universe"]["excluded"]
     assert plain["universe"]["hash"] == universe_hash(rows) == universe_hash(rows[::-1])
     for row in rows:
         row.update(
@@ -439,8 +465,8 @@ def test_requested_caps_are_recorded_and_respected():
         ([{"id": "VTI", "max": 0.5}, {"id": "VTI", "max": 0.4}], "VTI: capped more than once"),
         ([{"max": 0.5}], "every cap entry needs a fund id"),
         ([{"id": "VTI", "min": 0.3}], "VTI"),  # above the default maximum of this window
-        ([{"id": "FIENX", "min": 2, "max": -1}], "FIENX"),  # excluded here, still validated
-        ([{"id": "FIENX", "min": 0.5, "max": 0.2}], "FIENX: min 0.5 is above max 0.2"),
+        ([{"id": CONVERTED, "min": 2, "max": -1}], CONVERTED),  # excluded here, still validated
+        ([{"id": CONVERTED, "min": 0.5, "max": 0.2}], "FIENX: min 0.5 is above max 0.2"),
         ([{"id": f, "max": 0.04} for f in ("VTI", "VTV", "VOE", "VB", "VBR", "VEA")], "sum"),
     ],
 )
@@ -448,7 +474,7 @@ def test_bad_caps_are_refused_before_anything_is_solved(requested, message):
     if message == "sum":  # caps that leave less than 100% to hold
         requested = [{"id": f.id, "max": 0.04} for f in fixture_inputs().funds]
     with pytest.raises(CapsError, match=message):
-        build_tensor(fixture_inputs("5y", requested_bounds=requested, **SMALL))
+        build_tensor(converted_menu_inputs("5y", requested_bounds=requested, **SMALL))
 
 
 def test_window_without_enough_shared_history_is_unavailable(fixture_frame):
@@ -552,7 +578,7 @@ def test_menu_defects_are_refused_or_explained(fixture_frame):
     assert {"id": "EDV", "reason": "no data", "last_close": inputs.funds[20].last_close} in (
         tensor["universe"]["excluded"]
     )
-    assert len(tensor["universe"]["funds"]) == 21 and len(tensor["mu_s"]) == 21
+    assert len(tensor["universe"]["funds"]) == 22 and len(tensor["mu_s"]) == 22
     # extra columns in the frame are not part of the menu
     wide = fixture_frame.assign(EXTRA=0.001)
     assert (

@@ -106,7 +106,8 @@ def test_symbol_info_takes_the_lowest_tier():
     assert info["SGOV"] == universe.SymbolInfo("SGOV", 2, True, None)
     assert info["TSP-G"] == universe.SymbolInfo("TSP-G", 1, False, "tsp")
     assert info["A"] == universe.SymbolInfo("A", 3, False, "stock")
-    assert info["FIENX"] == universe.SymbolInfo("FIENX", 1, False, None, "converted to an ETF")
+    assert info["EFA"] == universe.SymbolInfo("EFA", 1, False, None)
+    assert info["FIENX"] == universe.SymbolInfo("FIENX", 2, False, None, "converted to an ETF")
     assert [s for s, known in info.items() if known.note] == ["FIENX"]
 
 
@@ -142,7 +143,8 @@ def test_presets_match_appendix_a():
     assert guide.name == "The 2017 guide portfolio"
     assert list(guide.funds) == _step2_symbols()
     assert guide.allocation is not None and guide.allocation_unit == "$"
-    assert guide.allocation["VTI"] == 10840.0 and guide.allocation["FIENX"] == 0.0
+    assert guide.allocation["VTI"] == 10840.0 and guide.allocation["EFA"] == 0.0
+    assert "FIENX" not in guide.funds
     assert sum(1 for amount in guide.allocation.values() if amount > 0) == 18
     assert sum(1 for amount in guide.allocation.values() if amount == 0) == 5
     assert tsp.name == "TSP (G, F, C, S, I)"

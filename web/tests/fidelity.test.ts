@@ -17,15 +17,23 @@ const NY: number = RAW.grid.y.length;
 type Path = (string | number)[];
 type Node = Record<string | number, unknown>;
 const clone = () => structuredClone(RAW);
+// The fixture's menu sets no fund aside. The loader checks start from the fixture with the one
+// entry the service writes for a menu that holds FIENX, so every object of the schema is there.
+const ASIDE = { id: "FIENX", reason: "converted to an ETF; no data since 2024-10-30", last_close: null };
+const withAside = () => {
+  const copy = clone();
+  copy.universe.excluded = [{ ...ASIDE }];
+  return copy;
+};
 const walk = (root: unknown, at: Path) => at.reduce((node, key) => (node as Node)[key], root);
 const parent = (root: unknown, at: Path) => walk(root, at.slice(0, -1)) as Node;
 function patched(at: Path, value: unknown): unknown {
-  const copy = clone();
+  const copy = withAside();
   parent(copy, at)[at[at.length - 1]] = value;
   return copy;
 }
 function without(at: Path): unknown {
-  const copy = clone();
+  const copy = withAside();
   delete parent(copy, at)[at[at.length - 1]];
   return copy;
 }
@@ -126,8 +134,15 @@ describe("parseTensor", () => {
     const tensor = parseTensor(input);
     expect(tensor).toEqual(RAW);
     expect(input).toEqual(RAW);
-    expect(tensor.universe.funds).toHaveLength(22);
-    expect(tensor.universe.excluded.map((fund) => fund.id)).toEqual(["FIENX"]);
+    expect(tensor.universe.funds).toHaveLength(23);
+    expect(tensor.universe.excluded).toEqual([]);
+  });
+
+  it("keeps a fund the service set aside, with its reason", () => {
+    const tensor = parseTensor(withAside());
+    expect(tensor.universe.excluded).toEqual([ASIDE]);
+    expect(tensor.universe.funds).toEqual(RAW.universe.funds);
+    expect(walk(withAside(), ["universe", "excluded", 0, "reason"])).toBe(ASIDE.reason);
   });
 
   it("refuses a tensor that lacks any key the JSON Schema requires", () => {
@@ -321,16 +336,16 @@ describe("interpolate", () => {
   it("equals the Python reference on the fixture", () => {
     // sum((i + 1) * w_i) of portfoliosight.engine.surface.interpolate(tensor, s, t)
     const reference: [number, number, number][] = [
-      [0.625, 0.5, 13.047959666709144],
-      [1.0, 1.0, 13.003493629994335],
-      [3.25, 0.2, 12.455187153866397],
-      [10.5, 0.75, 12.918464223052226],
-      [12.0, 0.4, 11.874644005900263],
-      [19.25, 0.333, 10.651842024194309],
-      [30.875, 0.9, 11.18056970839158],
-      [46.5, 0.05, 5.741501477539811],
+      [0.625, 0.5, 13.168792621436776],
+      [1.0, 1.0, 13.204042868515188],
+      [3.25, 0.2, 12.657862313542706],
+      [10.5, 0.75, 13.481115919080183],
+      [12.0, 0.4, 12.49209903071043],
+      [19.25, 0.333, 11.425961559333823],
+      [30.875, 0.9, 11.87513856503161],
+      [46.5, 0.05, 6.869791047470344],
       [47.0, 0.0, 6.0],
-      [47.0, 0.6, 9.173839146135201],
+      [47.0, 0.6, 10.041322913401507],
     ];
     for (const [s, t, want] of reference) {
       const got = M.interpolate(s, t).reduce((acc, v, i) => acc + (i + 1) * v, 0);

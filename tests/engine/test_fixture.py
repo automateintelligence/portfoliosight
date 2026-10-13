@@ -16,7 +16,7 @@ STRESS = {
     "covid2020": ("2020-02-19", "2020-03-23"),
     "rates2022": ("2022-01-03", "2022-10-12"),
 }
-EQUITY = ["VTI", "VTV", "VOE", "VB", "VBR", "VEA", "SCHF", "VWO", "VNQ", "FIENX", "DBJP"]
+EQUITY = ["VTI", "VTV", "VOE", "VB", "VBR", "VEA", "SCHF", "VWO", "VNQ", "EFA", "DBJP"]
 BONDS = ["BND", "AGG", "TIP", "VTIP", "LQD", "VWOB", "PCY", "LTPZ", "EDV"]
 HYBRID = ["VBIAX", "VGSTX"]
 CASH_LIKE = ["SCHO"]
@@ -68,9 +68,8 @@ def test_partial_coverage_is_deliberate(frame):
     after_gfc_start = [c for c, day in first.items() if day > pd.Timestamp("2008-09-01")]
     inside_gfc = [c for c in after_gfc_start if first[c] <= pd.Timestamp("2009-03-09")]
     assert len(after_gfc_start) >= 5 and len(inside_gfc) == 1
-    assert len(frame.columns) - len(after_gfc_start) - 1 >= 15  # numbers on the 2008 card
-    assert last["FIENX"] == pd.Timestamp("2024-10-30")
-    assert all(day == frame.index[-1] for column, day in last.items() if column != "FIENX")
+    assert len(frame.columns) - len(after_gfc_start) >= 15  # numbers on the 2008 card
+    assert all(day == frame.index[-1] for day in last.values())  # no fund has stopped
     for column in frame.columns:  # no holes: each fund's returns are one contiguous run
         held = frame[column].loc[first[column] : last[column]]
         assert not held.isna().any(), f"{column} has a gap"
@@ -93,7 +92,8 @@ def test_moments_are_realistic(frame):
     assert sigma[HYBRID].between(0.08, 0.12).all(), sigma[HYBRID]
     assert sigma[CASH_LIKE].between(0.003, 0.008).all(), sigma[CASH_LIKE]
     assert mean.between(-0.02, 0.20).all(), mean
-    recent = frame.loc["2021-10-01":].drop(columns="FIENX").dropna()
+    recent = frame.loc["2021-10-01":]
+    assert not recent.isna().any().any()  # the five-year view uses all 23 funds
     corr = recent.corr()
     assert corr.loc["VTI", "VTV"] > 0.8 and corr.loc["BND", "AGG"] > 0.8
     assert abs(corr.loc["VTI", "BND"]) < 0.3  # separate factors, not one
@@ -119,15 +119,11 @@ def test_metadata_describes_the_guide_universe(frame):
         assert entry["kind"] in {"etf", "mutual_fund"}
         assert entry["source"] in {"seed+tiingo", "tiingo"}
         assert entry["name"] and entry["name"] != fund_id
-    unserved = {fund_id: entry for fund_id, entry in funds.items() if not entry["served"]}
-    assert list(unserved) == ["FIENX"]
-    assert unserved["FIENX"]["catalog_reason"] == "converted to an ETF; no data since 2024-10-30"
-    assert unserved["FIENX"]["adjusted_through"] == "2024-10-30"
-    assert unserved["FIENX"]["last_close"] is None
     served = [entry for entry in funds.values() if entry["served"]]
+    assert len(served) == 23  # the default menu sets no fund aside
     assert all(entry["adjusted_through"] == "2026-10-12" for entry in served)
     assert all(entry["catalog_reason"] is None for entry in served)
     closes = [entry["last_close"] for entry in served]
     assert all(isinstance(value, float) and value > 1.0 for value in closes)
     assert len(set(closes)) == len(closes)
-    assert {funds[f]["kind"] for f in ("VBIAX", "FIENX", "VGSTX")} == {"mutual_fund"}
+    assert [f for f, entry in funds.items() if entry["kind"] == "mutual_fund"] == ["VBIAX", "VGSTX"]
