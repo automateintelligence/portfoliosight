@@ -240,8 +240,10 @@ class _Ingest:
             self._full(symbol, entry)
             return
         if self.mode == "catch-up" and entry.source != "seed":
-            # Already has its history; only a meta request cut off by the budget is made up.
-            if not entry.source.startswith("seed") and self._unnamed(symbol, entry):
+            # Already has its history. What is still made up here is its meta request: the one
+            # a budget cut off, or the one a seeded symbol never had (the lake has no names; its
+            # tail refresh stays a single request, so the name comes on a later catch-up).
+            if self._unnamed(symbol, entry):
                 self._describe(symbol, entry)
             return
         if self.mode == "refresh" and is_current(entry, self.d_g):
@@ -327,7 +329,8 @@ class _Ingest:
         meta = self._fetch_meta(symbol)
         if meta is not None:
             entry.name = meta.name or symbol
-            entry.kind = self._kind(symbol, meta, entry)
+            if not entry.source.startswith("seed"):  # a seed's kind came from the universe
+                entry.kind = self._kind(symbol, meta, entry)
             if meta.first_date is not None and entry.first_date is None:
                 entry.first_date = meta.first_date
 

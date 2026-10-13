@@ -300,9 +300,22 @@ def test_catch_up_refreshes_pending_seeds_and_leaves_served_symbols(tmp_path):
     seed = store_mod.get_record(store, "SEED")
     assert np.isfinite(seed["tr_index"]).all() and str(seed["date"].iloc[-1])[:10] == "2026-02-23"
     assert seed["div_cash"].iloc[-1] == 0.0 and np.isnan(seed["div_cash"].iloc[0])
-    # A second catch-up has nothing left to do.
-    code, calls = _go("catch-up", store, provider, Clock(date(2026, 2, 24), 13), ["OKA", "SEED"])
-    assert code == 0 and calls == []
+    # A second catch-up gives the refreshed seed that has no name its one meta request, keeps
+    # the kind the seed recorded, and leaves the others alone; a third has nothing left to do.
+    again = ["OKA", "SEED", "BARE", "NEW"]
+    code, calls = _go("catch-up", store, provider, Clock(date(2026, 2, 24), 13), again)
+    assert code == 0 and calls == [("meta", "BARE", None)]
+    now = _manifest(store)
+    assert now["BARE"]["name"] == "BARE Fund" and now["BARE"]["kind"] == "stock"
+    assert _go("catch-up", store, provider, Clock(date(2026, 2, 24), 14), again) == (0, [])
+    # Refresh never spends a meta request, named or not.
+    store.put(
+        "meta/manifest.json",
+        json.dumps({"symbols": {**now, "BARE": {**now["BARE"], "name": "BARE"}}}).encode(),
+    )
+    provider.default_available = FEB26
+    code, calls = _go("refresh", store, provider, Clock(FEB27), ["BARE"])
+    assert code == 0 and [c[0] for c in calls] == ["daily"]
 
 
 def test_status_transitions_and_the_monthly_retry_of_unavailable(tmp_path):
