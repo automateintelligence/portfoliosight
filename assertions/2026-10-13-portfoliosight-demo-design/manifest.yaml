@@ -1,0 +1,548 @@
+# Done-gate manifest for docs/specs/2026-10-13-portfoliosight-demo-design.md
+# One entry per machine assertion A-PS-01 .. A-PS-68 (H-PS-01 is the owner's manual check, not in the gate).
+# Interfaces the tests assume: INTERFACES.md in this directory.
+assertions:
+  - id: A-PS-01
+    claim: "A fresh virtual environment built from the committed pyproject.toml with uv pip install -e .[api,dev] imports every runtime and dev dependency the spec names, passes the committed ruff and pyright configuration, collects tests without error, and confines yfinance to the research extra."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_01_dependency_set.py"
+    setup: ""
+    teardown: ""
+    timeout: 1200
+    level: spec
+    kind: contract
+  - id: A-PS-02
+    claim: "For every recorded provider fixture, the tr_index the adapter builds from close, divCash and splitFactor alone reproduces the provider's adjClose ratio day by day within 1e-5, and the adapter does not read adjClose to build it."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_02_tr_index_from_actions.py"
+    setup: ""
+    teardown: ""
+    timeout: 180
+    level: spec
+    kind: property
+  - id: A-PS-03
+    claim: "Splicing a provider tail fetched from adjusted_through - 7 days onto a seed-style record at adjusted_through yields a tr_index within 1e-5 of the all-provider index from the first spliced day on, updates adjusted_through to the last fetched date, and the refresh logic skips a symbol only when both its prices and its adjustments reach D_G."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_03_splice_without_seam.py"
+    setup: ""
+    teardown: ""
+    timeout: 180
+    level: spec
+    kind: property
+  - id: A-PS-04
+    claim: "scripts/seed_r2_from_lake.py converts each lake parquet to the canonical record with tr_index = adj_close / adj_close[0], refuses to upload anything when any row after --adjusted-through has adj_close != close, writes manifest entries source: seed, status: pending, adjusted_through as given, exits non-zero with a clear message when the lake path is missing or holds fewer than 1,000 files, and leaves every lake file byte-identical."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_04_seed_from_lake.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: property
+  - id: A-PS-05
+    claim: "The returns builder leaves a fund's return NaN on every day it has no price, uses the union of all funds' dates as the calendar, and a window's sample is exactly the intersection of included funds' return dates; no value is forward-filled, interpolated or back-filled."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_05_missing_stays_missing.py"
+    setup: ""
+    teardown: ""
+    timeout: 120
+    level: spec
+    kind: property
+  - id: A-PS-06
+    claim: "The downloader reads limits from meta/provider_limits.json (else the env fallbacks 45/900/450), counts requests per UTC hour and day and unique symbols per month in meta/budget.json, sleeps to the next hour when the hourly budget is spent, exits cleanly when the daily or monthly budget is spent, and resumes on the next run from where it stopped."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_06_budget_ledger.py"
+    setup: ""
+    teardown: ""
+    timeout: 180
+    level: spec
+    kind: property
+  - id: A-PS-07
+    claim: "A symbol's manifest status is ok exactly when last_date >= D - 3 and adjusted_through >= D - 3 trading days; seeded symbols are pending until their first tail refresh; a served symbol that falls behind becomes stale and recovers to ok on the next successful refresh; meta/symbols.json lists ok symbols only with tiers_served derived from them; unavailable symbols are retried on the first run of each month."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_07_served_means_current.py"
+    setup: ""
+    teardown: ""
+    timeout: 180
+    level: spec
+    kind: property
+  - id: A-PS-08
+    claim: "D_G is the most recent XNYS session whose close is at least 6 hours before the nightly's scheduled start (02:00 America/Los_Angeles on the run date), computed with exchange_calendars, independent of which funds are included."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_08_generation_date_calendar.py"
+    setup: ""
+    teardown: ""
+    timeout: 120
+    level: spec
+    kind: property
+  - id: A-PS-09
+    claim: "The TSP provider parses the CSV only when its header is exactly the 5.5 column set and order, maps each fund column to its TSP-* id with tr_index = price, div_cash = 0, split_factor = 1, adjusted_through = last_date, and rejects any other header."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_09_tsp_exact_header.py"
+    setup: ""
+    teardown: ""
+    timeout: 120
+    level: spec
+    kind: property
+  - id: A-PS-10
+    claim: "No module under portfoliosight/data, engine, api, jobs or scripts (excluding portfoliosight/frontier_cli.py and scripts/make_fixtures.py) imports yfinance, references qse.env, or contains a URL host other than api.tiingo.com, www.tsp.gov, *.r2.cloudflarestorage.com and api.mailchannels.net; and no log line emitted by the Tiingo adapter contains the API key."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_10_allowed_hosts_and_redaction.py"
+    setup: ""
+    teardown: ""
+    timeout: 120
+    level: spec
+    kind: property
+  - id: A-PS-11
+    claim: "scripts/r2_backup.sh exits 2 with the exact message 'D: drive is not mounted at /mnt/d; backup not run' and calls nothing else when mountpoint -q /mnt/d fails; when mounted it runs aws s3 sync bucket to /mnt/d/portfoliosight-data with --delete and the R2 endpoint; --restore runs the reverse sync without --delete; scripts/install_backup_cron.sh run twice leaves exactly one PortfolioSight line and every other crontab line unchanged."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_11_backup_mount_guard_and_cron.py"
+    setup: ""
+    teardown: ""
+    timeout: 60
+    level: spec
+    kind: property
+  - id: A-PS-12
+    claim: "After any build or nightly step the cache directory's total size is at most PS_CACHE_MAX_MB, eviction is by least-recent access, and a file needed by the current build is never evicted during that build."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_12_cache_cap_lru.py"
+    setup: ""
+    teardown: ""
+    timeout: 120
+    level: spec
+    kind: property
+  - id: A-PS-13
+    claim: "python -m portfoliosight.data.store --verify against the real bucket performs head_bucket, put/get/delete of meta/_probe, and a list, and exits 0."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_13_r2_store_verify_live.py"
+    setup: ""
+    teardown: ""
+    timeout: 600
+    level: spec
+    kind: example
+  - id: A-PS-14
+    claim: "Against the real API the adapter returns at least 250 rows with close, adjClose, divCash, splitFactor for VTI and for VBIAX, and download --mode measure-limits writes meta/provider_limits.json with provider, tier, req_per_hour, req_per_day, unique_symbols_per_month, measured_on, method."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_14_tiingo_live_and_measure_limits.py"
+    setup: ""
+    teardown: ""
+    timeout: 1200
+    level: spec
+    kind: example
+  - id: A-PS-15
+    claim: "min_torsion(cov) returns T with T cov T' diagonal, ENB(w) built from it satisfies the spec 4.6 identities, and the builder raises, never clips, when the diagonality or sum(p) = 1 checks fail."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_15_torsion_enb.py"
+    setup: ""
+    teardown: ""
+    timeout: 60
+    level: spec
+    kind: property
+  - id: A-PS-16
+    claim: "Through the builder's public entry point every frontier node below sigma_max sits on its ceiling within 1e-6, y_front is non-decreasing, X_0 is the minimum-variance risk under bounds, X_47 is the max-return greedy fill, and the Cholesky identity holds."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_16_frontier_nodes.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: property
+  - id: A-PS-17
+    claim: "Every weight vector the builder writes sums to one, stays inside the resolved bounds, stays under its risk ceiling and has ENB in [1, N] within 1e-6, and the builder's post-check raises on a vector violating any one of them."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_17_mix_invariants.py"
+    setup: ""
+    teardown: ""
+    timeout: 300
+    level: spec
+    kind: property
+  - id: A-PS-18
+    claim: "The optimized Herfindahl is monotone along columns and rows, a cell is null exactly when Y_k > y_front[j], Z lies in [1, N], ENB(w_div) is at least ENB(w_front) in every column, and k_div, y_div, w_div and enb_ref equal the recomputed highest-ENB candidates."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_18_surface_monotone.py"
+    setup: ""
+    teardown: ""
+    timeout: 600
+    level: spec
+    kind: property
+  - id: A-PS-19
+    claim: "For every column y_div <= y_sug <= y_front, a collapsed ladder has y_sug = y_front, and the standard-error walk uses the paired give-up and T_eff standard error and stops at the first failing candidate even if a lower one would pass."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_19_suggested_point.py"
+    setup: ""
+    teardown: ""
+    timeout: 300
+    level: spec
+    kind: property
+  - id: A-PS-20
+    claim: "Moments follow spec 4.3: annualized mean and ddof=1 deviation, LedoitWolf correlation shrinkage for fixed windows, half-life 252 weights with 0.8R + 0.2I for ew, the 1e-4 sigma floor in both paths, the menu-beta blend, and the SGOV then TSP-G then 0.04 risk-free rule."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_20_moments.py"
+    setup: ""
+    teardown: ""
+    timeout: 60
+    level: spec
+    kind: property
+  - id: A-PS-21
+    claim: "The default bound is max = clamp(3/N, 0.25, 1.0) with min = 0, validation rejects the five invalid inputs, the greedy endpoint fill allocates every minimum first, and no weight in the 23-fund fixture tensor exceeds 0.25 + 1e-6."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_21_caps.py"
+    setup: ""
+    teardown: ""
+    timeout: 300
+    level: spec
+    kind: property
+  - id: A-PS-22
+    claim: "A fund is included in a window only if it is served and its first return date is within the first 10 percent of the window, a window with fewer than 126 shared rows is unavailable, every excluded fund carries one of the five fixed reason templates, and a mix with weight in excluded funds is renormalized with the set-aside share reported."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_22_window_inclusion.py"
+    setup: ""
+    teardown: ""
+    timeout: 600
+    level: spec
+    kind: property
+  - id: A-PS-23
+    claim: "For gfc2008, covid2020 and rates2022 with the exact spec 4.10 dates the per-fund stress return is the buy-and-hold total return between the last prices on or before each endpoint, and is null whenever the fund lacks a price within 3 trading days of either endpoint."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_23_stress_windows.py"
+    setup: ""
+    teardown: ""
+    timeout: 60
+    level: spec
+    kind: property
+  - id: A-PS-24
+    claim: "The 23-fund fixture tensor is deterministic apart from built_at and build_seconds, validates against tensor.schema.json, keeps full float precision, carries the recomputed 377-point frontier_curve and the rightmost-maximum s_safe, builds in at most 90 s, and web/fixtures/guide2017_5y.json equals a fresh build."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_24_tensor_contract.py"
+    setup: ""
+    teardown: ""
+    timeout: 600
+    level: spec
+    kind: contract
+  - id: A-PS-25
+    claim: "pytest --cov=portfoliosight/engine reports 100% line coverage for every module under portfoliosight/engine/, and no module there imports requests, boto3, urllib, socket, pathlib/open for I/O, or anything from portfoliosight.data."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_25_engine_pure_covered.py"
+    setup: ""
+    teardown: ""
+    timeout: 1200
+    level: spec
+    kind: property
+  - id: A-PS-26
+    claim: "Every route under /v1/ returns 403 with the forbidden error envelope when x-ps-gate is absent or wrong, serves normally when it equals PS_GATE_SECRET, and the comparison is hmac.compare_digest."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_26_gate_secret_constant_time.py"
+    setup: ""
+    teardown: ""
+    timeout: 180
+    level: spec
+    kind: property
+  - id: A-PS-27
+    claim: "POST /v1/tensors for a new key returns 202 queued with a position and polling reaches 200 with the tensor, ETag and immutable Cache-Control; a repeated POST adds no second job; a failing job yields 409 failed with attempts, is retried up to 3 times and then returns retry false; a written tensor key is never overwritten; response URLs are public /api/ paths."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_27_custom_build_queue.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: contract
+  - id: A-PS-28
+    claim: "POST /v1/tensors returns 400 unknown_symbols listing every unknown id, 422 invalid_request for duplicates, more than 30 or fewer than 2 funds, a bad lookback or an invalid cap policy, 429 for the 6th POST per IP per minute and the 61st /v1/ request per minute, 503 busy when 20 jobs are queued, 413 or 422 for a body over 16 KB, and in every refused case the job table is unchanged."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_28_bad_requests_refused.py"
+    setup: ""
+    teardown: ""
+    timeout: 300
+    level: spec
+    kind: property
+  - id: A-PS-29
+    claim: "The universe hash is the first 16 hex of sha256 over the canonical JSON of schema 2 and the funds (id, min, max) sorted by id with null for defaults, so it is independent of input order and lookback and changes with any cap override."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_29_universe_hash_canonical.py"
+    setup: ""
+    teardown: ""
+    timeout: 60
+    level: spec
+    kind: property
+  - id: A-PS-30
+    claim: "The nightly writes meta/G/generation.json once, builds each missing preset tensor with D_G, switches meta/current.json only after all 12 keys exist, resumes an interrupted run without rewriting anything under meta/G/, skips building when current.json already points at G, deletes generations older than the previous one, and marks TSP stale (not failed) when the tsp.gov fetch breaks."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_30_generation_publish_atomic.py"
+    setup: ""
+    teardown: ""
+    timeout: 2400
+    level: spec
+    kind: property
+  - id: A-PS-31
+    claim: "GET /v1/presets returns the two presets of data/presets.json in the spec 6 shape, with guide2017.allocation equal to Qty x Price per symbol from the Step 2 holdings CSV in dollars (18 non-zero of 23) and tsp.allocation null, and GET /v1/health returns the spec 6 fields."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_31_presets_health_bodies.py"
+    setup: ""
+    teardown: ""
+    timeout: 300
+    level: spec
+    kind: contract
+  - id: A-PS-32
+    claim: "The built image holds no runs/, no holdings other than the Step 2 CSV, no .venv, web/node_modules or web/dist; neither the image nor any git-tracked file contains a secret value or the string qse.env; deploy/docker-compose.yml mounts only ps-cache at /app/cache, publishes only 127.0.0.1:8010:8000, sets cpus 2, memory 1536M, PS_CACHE_MAX_MB=300, PS_STORE=r2; and the image runs as uid 10001."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_32_image_repo_compose_hygiene.py"
+    setup: ""
+    teardown: ""
+    timeout: 1800
+    level: spec
+    kind: property
+  - id: A-PS-33
+    claim: "The FastAPI routes under /v1/ are exactly GET health, GET presets, GET symbols, POST tensors and GET tensors/{G}/{hash}/{lookback}, the G and hash path constraints are enforced before any store read, and no registered route path contains login, auth, account, signup, pay or checkout."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_33_api_surface_exact.py"
+    setup: ""
+    teardown: ""
+    timeout: 180
+    level: spec
+    kind: contract
+  - id: A-PS-34
+    claim: "stats(w) in web/src/math/portfolio.ts equals the tensor's own values at every grid node and frontier node within 1e-9 relative, interpolate(s, t) keeps the spec 4.11 invariants for 200 random positions, t = 0 reproduces w_front(s) and t = 1 the interpolated most-diversified mix, a pair of collapsed ladders is constant in t, and the recomputed frontier_curve and s_safe equal the tensor's."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_34_browser_math_fidelity.py"
+    setup: ""
+    teardown: ""
+    timeout: 300
+    level: spec
+    kind: property
+  - id: A-PS-35
+    claim: "web/src/math/amounts.ts converts shares, percent and dollars to weights that sum to 1, accepts percent input only when the total is within 100 +- 0.05, yields no allocation for tickers only, and computes trade deltas per unit and one-way turnover by the spec formulas."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_35_amounts_weights_trades.py"
+    setup: ""
+    teardown: ""
+    timeout: 300
+    level: spec
+    kind: property
+  - id: A-PS-36
+    claim: "decode(encode(state)) equals state for every reachable state of web/src/state/url.ts, unknown keys are ignored, r is clamped into the domain on load, and encode emits only the spec 8.1 keys."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_36_url_codec_roundtrip.py"
+    setup: ""
+    teardown: ""
+    timeout: 300
+    level: spec
+    kind: property
+  - id: A-PS-37
+    claim: "Slider actions dispatch no network request, a 202 is polled every 2 s until 200, a 409 gives build-retry and Retry re-POSTs the identical body, three 409s end in build-failed-final with no further POST, and a cf-mitigated challenge response makes the client write its state to the URL and reload once with no retry loop, resuming the same build key on load."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_37_client_drag_challenge_retries.py"
+    setup: ""
+    teardown: ""
+    timeout: 300
+    level: spec
+    kind: property
+  - id: A-PS-38
+    claim: "POST /api/share accepts only a valid same-origin {to, url} JSON request, sends the fixed MailChannels template carrying the re-encoded URL, refuses every invalid input without sending, enforces the per-IP minute and day caps and the global day cap (a valid x-ps-gate header lifts only the per-IP caps), sends nothing with the test key, and the dialog shows the preview notice while preview is on."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_38_share_validators_template_caps.py"
+    setup: ""
+    teardown: ""
+    timeout: 300
+    level: spec
+    kind: property
+  - id: A-PS-39
+    claim: "With PS_PRIVATE_PREVIEW = 1 a request without the x-ps-gate header or a valid ps_preview cookie gets 403 and the static preview page on every path with no data, the header or cookie passes, GET /?k=<secret> redirects to the clean URL and sets the ps_preview cookie, a wrong key gets 403 and no cookie, the comparison is constant-time and the secret appears in no response header, body or log line; with PS_PRIVATE_PREVIEW = 0 every request passes through."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_39_private_preview_gate.py"
+    setup: ""
+    teardown: ""
+    timeout: 300
+    level: spec
+    kind: property
+  - id: A-PS-40
+    claim: "The Worker redirects www to the apex, answers 404 on any other host, serves presets, symbols and tensor hits from R2 with the spec 9.3 headers, forwards a tensor miss, POST /api/tensors and GET /api/health to the origin with the four headers, handles POST /api/share itself, sends every other path to ASSETS, and exposes no other /api/ path."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_40_worker_routing_surface.py"
+    setup: ""
+    teardown: ""
+    timeout: 300
+    level: spec
+    kind: contract
+  - id: A-PS-41
+    claim: "On load with the fixture preset, in all three themes, the first viewport holds chart-canvas, both sliders, the result strip and the four chips, no table, fund row or stress card is visible, all four sections are collapsed, each chip expands its section, and the overlay markers are exactly point-selected, point-div and point-current."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_41_first_screen.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: property
+  - id: A-PS-42
+    claim: "On the iPhone 13 profile, in all three themes, the page never overflows horizontally, the chart, sliders, result strip and chips fit in 1.2 viewport heights, every interactive element has a 44 by 44 px hit area, the diversification slider is horizontal with More return left and More diversified right, the header is 48 px, and a touch drag on point-selected changes the risk position."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_42_phone_layout.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: property
+  - id: A-PS-43
+    claim: "With no query the page loads the first preset from /api/presets, shows point-current, lists 23 fund rows in dollar mode with the body's allocation (18 non-zero), shows the FIENX excluded-note with the tensor's reason string, and preset-menu lists the body's preset names and loads the second one in one click from its declared tensor URL, setting u."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_43_default_view_presets.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: example
+  - id: A-PS-44
+    claim: "In all three themes, 20 canvas samples inside feasible cells show at least 3 distinct colors that all lie on the theme's --heat-0..4 ramp, 5 samples above the frontier equal the page background, and the plain legend text is present."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_44_heatmap_theme_ramp.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: property
+  - id: A-PS-45
+    claim: "At five increasing risk-slider positions ceiling-line moves right, both readouts equal Low_front(s) and Typical_front(s) computed from frontier_curve within 0.1 pp and both change on every move, point-selected never sits right of the line, no /api request fires, an arrow key steps 1/200 of the domain, and after the diversification slider moves down the result strip differs from the readouts and is labelled Selected mix."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_45_risk_slider_readouts.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: property
+  - id: A-PS-46
+    claim: "On load div-reset is hidden and the diversification slider sits at t_auto(s); moving toward More diversified moves point-selected down and never right of ceiling-line; at t=0 the point lies on the drawn frontier; details-enb at t=1 is at least its value at t=0; at every tested (s, t) the point is drawn at the chart scales applied to stats(interpolate(s, t)) within 1 px; and where both neighbouring ladders are collapsed the slider is disabled with the note."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_46_div_slider_point.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: property
+  - id: A-PS-47
+    claim: "div-word is one of Good/Average/Fair/Poor at 14 px or less in the theme's --muted colour, the ENB number is absent until details-toggle is on and then reads as the spec template with a ratio matching the word, and the pure mapping uses the cut points 0.75, 0.50 and 0.30."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_47_diversification_word.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: property
+  - id: A-PS-48
+    claim: "With details off and every section expanded the visible text holds none of the forbidden jargon, advice or login words and every applicable plain label, with details on it holds the technical names, the footer disclaimer is verbatim and visible outside any collapsed section, the advice line sits under the result strip, and footer-cta links to the three family URLs with the same text for every preset and slider position."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_48_plain_language_disclaimer.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: property
+  - id: A-PS-49
+    claim: "theme-switch cycles ks-dark, light, hud on html[data-theme], each theme's computed tokens equal the spec 3.5 table, the canvas repaints differently for every pair of themes with the frontier stroke in --frontier, the choice survives reload through localStorage ps.theme, ?t=hud wins over storage, reduced motion yields no CSS transitions, and the repository holds no reference to the film, characters or trademarks behind the HUD look."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_49_themes_tokens_canvas.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: property
+  - id: A-PS-50
+    claim: "section-stress shows three cards with the selected mix's window return over covered funds, a coverage note whenever covered weight is below 100%, and the sentence Not enough of this mix existed then to say. instead of a number whenever covered weight is below 50%, and the pure aggregation function behaves the same for generated inputs."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_50_stress_cards_coverage.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: property
+  - id: A-PS-51
+    claim: "After changing the risk slider, the diversification slider, the theme, the unit and details, the address holds u, r, d, t, x and unit with no key outside spec 8.1, opening it in a fresh browser context reproduces the same readouts, theme, unit and details state, and share-copy places that exact URL on the clipboard."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_51_url_reproduces_view.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: example
+  - id: A-PS-52
+    claim: "web/dist after npm run build contains none of the secret values from the env file, neither the string x-ps-gate nor PS_GATE_SECRET, nor the host api.portfoliosight.ai; every API call in the bundle targets a same-origin /api/ path."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_52_bundle_no_secret.py"
+    setup: ""
+    teardown: ""
+    timeout: 600
+    level: spec
+    kind: property
+  - id: A-PS-53
+    claim: "A cap minimum above the maximum for VTI shows an inline error and sends no request, a valid VTI maximum of 10 sends one POST /api/tensors with VTI min null and max 0.10 and every other fund null/null, caps-reset restores the rule values and sends an all-null policy, and Settings states the rule in one sentence with the current N."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_53_caps_inline_validation.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: example
+  - id: A-PS-54
+    claim: "With the x-ps-gate header GET https://portfoliosight.ai/ returns 200, chart-canvas is visible within 5 s on chromium-desktop and chromium-phone, and the page's /api/presets response carries x-ps-source r2."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_54_page_loads_with_header.py"
+    setup: ""
+    teardown: ""
+    timeout: 600
+    level: spec
+    kind: example
+  - id: A-PS-55
+    claim: "GET https://api.portfoliosight.ai/v1/health returns 403 without the header and 200 JSON with generation and asof with it, www redirects 301 to the apex keeping path and query, and the Worker's workers.dev hostname does not serve the site."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_55_origin_gate_www_workers_dev.py"
+    setup: ""
+    teardown: ""
+    timeout: 120
+    level: spec
+    kind: example
+  - id: A-PS-56
+    claim: "GET /api/presets comes from R2 with both presets and six ready lookbacks, the guide2017 5y tensor is schema-valid, immutable-cached, ETagged and from R2, and a POST for the default preset returns 200 with a url whose body is byte-identical to that tensor."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_56_presets_tensors_from_r2.py"
+    setup: ""
+    teardown: ""
+    timeout: 300
+    level: spec
+    kind: example
+  - id: A-PS-57
+    claim: "The current generation's asof equals the test's own D_G for the check day, the nightly finished with zero errors, the generation holds the 12 preset tensors, the KS-001 cache is at most 300 MB, the timer is enabled, and the page's details line shows the same date."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_57_nightly_fresh.py"
+    setup: ""
+    teardown: ""
+    timeout: 600
+    level: spec
+    kind: example
+  - id: A-PS-58
+    claim: "The store verify passes against the bucket, the manifest holds at least 1,400 seeded symbols, the bucket is mirrored to /mnt/d/portfoliosight-data, a restore dry-run uploads nothing, and crontab shows exactly one PortfolioSight backup line."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_58_store_seeded_mirrored_cron.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: example
+  - id: A-PS-59
+    claim: "Every symbol in /api/symbols has manifest status ok with adjusted_through and last_date within 3 trading days of D_G, no pending or unavailable symbol is listed, tiers_served equals the tiers present, and the runbook records the dated personal-use decision."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_59_served_symbols_current.py"
+    setup: ""
+    teardown: ""
+    timeout: 300
+    level: spec
+    kind: property
+  - id: A-PS-60
+    claim: "With an idle queue a POST /api/tensors for a fresh 23-fund key reaches ready within 30 s on the 48x32 grid or the 32x24 fallback grid, and the runbook records the measured time and grid."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_60_build_benchmark.py"
+    setup: ""
+    teardown: ""
+    timeout: 300
+    level: spec
+    kind: example
+  - id: A-PS-61
+    claim: "The deployed Worker's PS_PRIVATE_PREVIEW var is 1, the committed web/wrangler.jsonc says the same, and no request lacking the gate secret receives data from /, /api/presets, /api/symbols or a tensor URL."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_61_private_preview_on_no_keyless_data.py"
+    setup: ""
+    teardown: ""
+    timeout: 600
+    level: spec
+    kind: property
+  - id: A-PS-62
+    claim: "In production the TSP preset loads a five-fund tensor in one click with 60% caps and no current mix or trades, fund-add offers TSP-L2050 for L 2050, a custom menu of four served symbols builds within 120 s with the test's own universe hash, an unknown ticker gets an inline error and a 31st fund is refused, both without a POST."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_62_tsp_and_custom_menu_prod.py"
+    setup: ""
+    teardown: ""
+    timeout: 1800
+    level: spec
+    kind: example
+  - id: A-PS-63
+    claim: "In production lookback-10y loads the 10y tensor and redraws the frontier, the Settings exclusion list equals the set computed from /api/symbols first_date values and the 4.2 rule, ghost-1y moves data-ghost-count and the canvas 0 to 1 to 0, and cap-max-VTI = 10 rebuilds a tensor whose VTI weights never exceed 0.10 + 1e-6."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_63_lookbacks_ghosts_caps_prod.py"
+    setup: ""
+    teardown: ""
+    timeout: 1800
+    level: spec
+    kind: example
+  - id: A-PS-64
+    claim: "With PS_SHARE_TEST_RECIPIENT set, the share dialog sends POST /api/share to that address only, gets 202 and reads Sent while showing the preview notice, and a malformed address and a url on another host are each refused with 400."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_64_share_email_test_recipient_only.py"
+    setup: ""
+    teardown: ""
+    timeout: 900
+    level: spec
+    kind: example
+  - id: A-PS-65
+    claim: "ruff, ruff format and pyright exit 0; pytest passes with at least 80% total line coverage and 100% on portfoliosight/engine/; npm run lint, typecheck and test exit 0 in web/; web/e2e/smoke.spec.ts defines exactly one test per DoD item 1-31 named DoD-NN; no test carries an unconditional skip, xfail, only or todo marker; README.md is at most 60 lines and names the WSL working copy as the lake and /mnt/d/portfoliosight-data as the backup; ROADMAP.md contains the Appendix B items."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_65_quality_gates_docs.py"
+    setup: ""
+    teardown: ""
+    timeout: 2400
+    level: spec
+    kind: contract
+  - id: A-PS-66
+    claim: "A headerless, cookieless request to / and to /api/presets receives HTTP 403 with cf-mitigated: challenge from the enabled rule ps-challenge-site, and the same requests with the x-ps-gate header receive neither the challenge nor the preview page."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_66_edge_challenge_site.py"
+    setup: ""
+    teardown: ""
+    timeout: 120
+    level: spec
+    kind: example
+  - id: A-PS-67
+    claim: "GET https://api.portfoliosight.ai/v1/health without the header is refused by Cloudflare's block action from the enabled rule ps-block-api-direct and never reaches FastAPI, and with the header it returns the origin's 200 JSON."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_67_edge_block_api_direct.py"
+    setup: ""
+    teardown: ""
+    timeout: 120
+    level: spec
+    kind: example
+  - id: A-PS-68
+    claim: "25 POST /api/tensors within 10 s with the header produce at least one 429 that lacks x-ps-source under the enabled rule ps-tensor-post, and 25 GETs of a preset 5y tensor URL within 10 s produce no edge 429."
+    command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_68_edge_rate_limit_tensor_post.py"
+    setup: ""
+    teardown: ""
+    timeout: 300
+    level: spec
+    kind: example
