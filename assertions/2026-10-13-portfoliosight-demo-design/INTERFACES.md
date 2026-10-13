@@ -159,4 +159,17 @@ the docstring is authoritative for that test.
   - A-PS-68 sends 25 GETs and 25 POSTs, then waits 61 s so the limiters are clear.
 - A-PS-66, 67, 68: a withdrawn `Zone WAF Edit` permission fails with a `BLOCKED:` message.
 - A-PS-53: "menu of N" accepts N as the included fund count or included plus excluded.
+- Owner decision 2026-10-13 (the one sanctioned change of the frozen gate in this run): EFA holds
+  FIENX's place in the default menu, so the default 5y tensor (and `web/fixtures/guide2017_5y.json`)
+  has 23 included funds and an empty `universe.excluded`. FIENX stays a tier 2 catalog symbol that
+  is not served, reason `converted to an ETF; no data since 2024-10-30`; `POST /v1/tensors`
+  accepts a menu holding it and the tensor lists it in `universe.excluded`. Excluded-fund handling
+  is asserted where a fund is really set aside:
+  - A-PS-43: the mock's second menu is the 23 funds plus FIENX and its tensor sets FIENX aside;
+    the default view must show no `excluded-note` on any fund row.
+  - A-PS-56: production; the default tensor sets nothing aside, and the 23 default funds plus
+    FIENX at 5y resolve to a tensor that sets exactly FIENX aside with its reason. Same key on
+    every run: one real build per generation, then served as stored.
+  - A-PS-29: the extra tickers outside the guide menu list FIENX where they listed EFA.
+  The record of every changed leg is `docs/reviews/2026-10-13_gate-change_fienx-to-efa.md`.
 - A-PS-13: the 403 "names the missing scope" leg cannot be forced against the live bucket.

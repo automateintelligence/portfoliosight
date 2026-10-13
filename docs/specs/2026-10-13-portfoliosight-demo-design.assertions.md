@@ -167,8 +167,9 @@ why it is load-bearing.
 - **A-PS-41 — the first screen is the chart and its controls; sections are collapsed; no tangency
   marker.** (S1, S8, F1, F2, DoD 3)
 - **A-PS-42 — the phone layout fits and works with a thumb.** (S16, F6, DoD 4)
-- **A-PS-43 — the default view is the 2017 guide portfolio with its allocation and the excluded-fund
-  note; the preset menu is driven by `/api/presets`.** (S2, S24, DoD 5)
+- **A-PS-43 — the default view is the 2017 guide portfolio with its allocation and no fund set
+  aside; a menu holding a fund its tensor sets aside shows the excluded-fund note; the preset menu
+  is driven by `/api/presets`.** (S2, S24, DoD 5)
 - **A-PS-44 — the heatmap renders from the theme ramp under the frontier only.** (S5, DoD 7)
 - **A-PS-45 — the risk slider's readouts are the frontier mix's truth and move together without a
   request.** (S3, F7, F8, DoD 8)
@@ -1108,26 +1109,31 @@ Phase 3 · ui ("iPhone 13" device profile; all three themes)
   under 44 px; a vertical `div-slider` at this width. Fail = any theme, any leg.
 - **Kind.** property (three themes; every interactive element).
 
-### A-PS-43 — the default view is the 2017 guide portfolio with its allocation and the excluded-fund note; the preset menu is driven by `/api/presets`
+### A-PS-43 — the default view is the 2017 guide portfolio with its allocation and no fund set aside; a menu holding a fund its tensor sets aside shows the excluded-fund note; the preset menu is driven by `/api/presets`
 Phase 3 · ui
 - **Claim.** With no query, the page loads the first preset from `/api/presets`, shows
   `point-current`, lists 23 `fund-row-*` in `"$"` mode with amounts equal to the presets body's
-  allocation (18 non-zero), shows the FIENX row's `excluded-note` with the tensor's exact reason
-  string, and `preset-menu` lists the presets' names from the body and loads the second one in
-  one click (fetching the tensor URL the body declares and setting `u=`).
+  allocation (18 non-zero) and no `excluded-note` on any of them (the default tensor uses all 23
+  funds; owner decision 2026-10-13, spec §2), and `preset-menu` lists the presets' names from the
+  body and loads the second one in one click (fetching the tensor URL the body declares and
+  setting `u=`). That second menu holds FIENX, which its tensor sets aside: the FIENX row, and no
+  other, shows an `excluded-note` with that tensor's exact reason string.
 - **Setup.** The mock presets body with the fixture allocation and a deliberately distinctive
   second-preset name (e.g. `"TSP (G, F, C, S, I) [mock-7f3]"`) and a distinctive tensor URL for
-  it that the mock serves (the same fixture tensor is acceptable for this check); the fixture
-  tensor's `excluded` array containing FIENX with `"converted to an ETF; no data since
-  2024-10-30"`.
+  it that the mock serves; the fixture tensor with 23 funds and an empty `excluded` array; the
+  second preset's funds are the same 23 plus FIENX, and its tensor is the fixture tensor with
+  FIENX added to `excluded` with a reason that exists only in the mock (`"converted to an ETF; no
+  data since 2024-10-30 [mock-7f3]"`), as the service lists any fund of a menu it cannot use.
 - **Observation.** `point-current` visible; 23 rows; `unit-toggle` reads `$`; each row's amount
   equals the body's allocation for that id (string-compare after formatting), exactly 18 are
-  non-zero; `fund-row-FIENX` contains an `excluded-note` whose text equals the tensor's reason;
+  non-zero; no fund row contains an `excluded-note` and there is no `fund-row-FIENX`;
   `preset-menu` entries' texts equal the body's names in order (so the distinctive suffix
   appears); choosing the second entry issues exactly one `GET` to the body's declared URL and
-  the address gains `u=<second id>`. **Must-not-contain:** a hard-coded preset name that
-  differs from the body (the suffix must show); a request to any tensor URL other than the
-  declared one. Fail = any.
+  the address gains `u=<second id>`; then 24 rows, `fund-row-FIENX` contains an `excluded-note`
+  whose text equals the second tensor's reason, and it is the only `excluded-note` in a fund row.
+  **Must-not-contain:** a hard-coded preset name that differs from the body (the suffix must
+  show); a request to any tensor URL other than the declared one; an `excluded-note` on a fund
+  the tensor uses; a note text that is not the served tensor's reason. Fail = any.
 - **Kind.** example (anchored to the mock body as source of truth).
 
 ### A-PS-44 — the heatmap renders from the theme ramp under the frontier only
@@ -1361,15 +1367,21 @@ Phase 4 · prod
   validates against `portfoliosight/engine/tensor.schema.json` with `Cache-Control: public,
   max-age=86400, immutable`, an `ETag` and `x-ps-source: r2`; a `POST /api/tensors` with the
   default preset's funds and all-`null` caps returns 200 with a `url` whose body is byte-identical
-  to that tensor.
+  to that tensor. The default tensor uses all 23 Step 2 funds and sets none aside; a `POST` for
+  those 23 funds plus FIENX (the catalog's converted fund, not served) resolves to a tensor that
+  sets exactly FIENX aside with the §5.1 reason (owner decision 2026-10-13, spec §2).
 - **Setup.** Header-bearing client; the schema file from the repo at the deployed SHA.
 - **Observation.** Presets: headers and shape as stated; `presets[*].lookbacks` has exactly the
   six ids, each `status == "ready"`, each `url` starting `/api/tensors/{generation}/`. Tensor:
   schema-valid; `generation` and `asof` equal the presets body's; `universe.preset_id ==
-  "guide2017"`; 23 funds minus `excluded` (FIENX present in `excluded` with the §5.1 reason).
+  "guide2017"`; `funds` are the 23 Step 2 funds and `excluded` is empty.
   POST: 200, `hash` equals the preset's `hash`, and `GET url` body bytes equal the preset
-  tensor's bytes (same `ETag`). **Must-not-contain:** a lookback not `ready`; `x-ps-source:
-  origin` on either GET; a POST that enqueues (202) for the preset key. Fail = any.
+  tensor's bytes (same `ETag`). POST for the 23 funds plus FIENX: 200 or 202, then
+  `GET /api/tensors/{G}/{hash}/5y` returns the tensor within 200 s; its `funds` are the 23 Step 2
+  funds and its `excluded` is exactly FIENX with the §5.1 reason (one real build per generation:
+  the key is the same on every run). **Must-not-contain:** a lookback not `ready`; `x-ps-source:
+  origin` on either preset GET; a POST that enqueues (202) for the preset key; FIENX among the
+  funds in use; a fund set aside in the default tensor. Fail = any.
 - **Kind.** example.
 
 ### A-PS-57 — the nightly is fresh: `asof` equals `D_G`, the run finished clean, twelve tensors exist, the cache is under its cap, and the page says which date it shows

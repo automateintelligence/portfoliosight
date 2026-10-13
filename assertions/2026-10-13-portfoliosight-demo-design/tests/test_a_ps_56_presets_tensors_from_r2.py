@@ -4,7 +4,14 @@ Claim: `GET /api/presets` carries `x-ps-source: r2`, a `generation`, and both pr
 lookbacks `ready` and `/api/...` URLs; the `guide2017` 5y URL returns a tensor that validates
 against `portfoliosight/engine/tensor.schema.json` with `Cache-Control: public, max-age=86400,
 immutable`, an `ETag` and `x-ps-source: r2`; a `POST /api/tensors` with the default preset's funds
-and all-`null` caps returns 200 with a `url` whose body is byte-identical to that tensor.
+and all-`null` caps returns 200 with a `url` whose body is byte-identical to that tensor. The
+default tensor uses all 23 Step 2 funds and sets none aside; a POST for those 23 funds plus FIENX
+(the catalog's converted fund, not served) resolves to a tensor that sets exactly FIENX aside with
+the catalog's reason.
+
+Owner decision 2026-10-13: EFA holds FIENX's place in the default menu. FIENX's exclusion with its
+reason, which this test used to read from the default tensor, is read from the tensor of the menu
+that holds FIENX. That key is the same on every run, so it costs one real build per generation.
 
 Runs from the laptop against production, inside the project virtualenv (needs `jsonschema`).
 Environment: `PS_GATE_SECRET` (never printed).
@@ -17,12 +24,17 @@ Pinned interface (the product must provide exactly this):
 - `GET https://portfoliosight.ai/api/tensors/{G}/{hash}/5y` -> 200, `Cache-Control: public,
   max-age=86400, immutable`, an `ETag`, `x-ps-source: r2`, a spec §7 tensor.
 - `portfoliosight/engine/tensor.schema.json` (JSON Schema, the contract of spec §7).
-- `data/holdings/holdings_guide2017_step2.csv` column `Symbol`: the 23 funds of the default preset;
-  FIENX is in the tensor's `universe.excluded` with reason
-  "converted to an ETF; no data since 2024-10-30".
+- `data/holdings/holdings_guide2017_step2.csv` column `Symbol`: the 23 funds of the default preset,
+  all of them in the default tensor's `universe.funds`, none in `universe.excluded`; FIENX is not
+  one of them.
 - `POST https://portfoliosight.ai/api/tensors` `{"funds": [{"id", "min": null, "max": null}...],
   "lookback": "5y"}` -> 200 `{"status": "ready", "generation", "hash", "url"}` (never 202 for the
   preset key).
+- The same POST for the 23 default funds plus `FIENX` (a catalog symbol that is not served, so the
+  menu is accepted, spec 6) -> 200 `ready` or 202 `{"status": "queued"|"building", "generation",
+  "hash"}`; `GET /api/tensors/{generation}/{hash}/5y` answers 202 while it builds and 200 with the
+  tensor within 200 s. In that tensor `universe.funds` are the 23 Step 2 funds and
+  `universe.excluded` is exactly FIENX with reason "converted to an ETF; no data since 2024-10-30".
 """
 
 from __future__ import annotations
@@ -36,6 +48,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -297,12 +310,71 @@ else:
             f"extra {sorted((set(included) | set(excluded)) - step2)}"
         )
         assert len(included) == 23 - len(excluded), "funds is not 23 minus excluded"
-        assert "FIENX" in excluded, "FIENX is not in universe.excluded"
+        assert not excluded, f"the default tensor sets funds aside: {excluded}"
+        assert set(included) == step2, "the default tensor does not use all 23 Step 2 funds"
+        assert "FIENX" not in step2, "FIENX is still a fund of the default menu"
         assert "FIENX" not in included, "FIENX is listed as an included fund"
-        assert excluded["FIENX"] == FIENX_REASON, f"FIENX reason is {excluded['FIENX']!r}"
         assert {f.get("id") for f in preset.get("funds", [])} == step2, (
             "the preset's funds in /api/presets are not the 23 Step 2 funds"
         )
+
+    def test_a_menu_holding_fienx_sets_it_aside_with_the_catalog_reason():
+        """The 23 default funds plus FIENX at 5y: one real build per generation, then stored."""
+        _, body, preset = _guide_tensor()
+        step2 = _step2_symbols()
+        fund_ids = [f.get("id") for f in preset.get("funds", []) if isinstance(f, dict)]
+        assert len(fund_ids) == 23 and set(fund_ids) == step2, (
+            "the default preset's funds are not the 23 Step 2 funds"
+        )
+        assert "FIENX" not in step2, "FIENX is still a fund of the default menu"
+        request = {
+            "funds": [{"id": i, "min": None, "max": None} for i in [*fund_ids, "FIENX"]],
+            "lookback": "5y",
+        }
+        post = _http("POST", f"{SITE}/api/tensors", payload=request)
+        assert post.status in (200, 202), (
+            f"POST /api/tensors for the default funds plus FIENX answered {post.status}; FIENX is "
+            "a catalog symbol, so the menu must be accepted and FIENX set aside"
+        )
+        answer = post.json("POST /api/tensors (default funds plus FIENX)")
+        generation = answer.get("generation")
+        key = answer.get("hash")
+        assert generation == body.get("generation"), "POST generation != presets' generation"
+        assert isinstance(key, str) and HASH_RE.match(key), f"POST hash is {key!r}"
+        assert key != preset.get("hash"), "the menu with FIENX has the default preset's hash"
+        url = f"/api/tensors/{generation}/{key}/5y"
+        if post.status == 200:
+            assert answer.get("status") == "ready", f"POST status is {answer.get('status')!r}"
+            assert answer.get("url") == url, f"POST url is {answer.get('url')!r}, expected {url}"
+        else:
+            assert answer.get("status") in ("queued", "building"), (
+                f"POST status is {answer.get('status')!r}"
+            )
+        deadline = time.monotonic() + 200.0
+        got = _http("GET", SITE + url)
+        while got.status == 202:
+            assert time.monotonic() < deadline, f"{url} was still building after 200 s"
+            time.sleep(3.0)
+            got = _http("GET", SITE + url)
+        assert got.status == 200, f"GET {url} answered {got.status}, expected the built tensor"
+
+        tensor = got.json("the tensor of the default funds plus FIENX")
+        universe = tensor.get("universe") or {}
+        assert universe.get("hash") == key, "tensor universe.hash != the POST's hash"
+        assert tensor.get("generation") == generation, "tensor generation != the POST's"
+        assert (tensor.get("lookback") or {}).get("id") == "5y", "tensor lookback.id is not 5y"
+        included = [f.get("id") for f in universe.get("funds", [])]
+        excluded = {e.get("id"): e.get("reason") for e in universe.get("excluded", [])}
+        assert "FIENX" in excluded, "FIENX is not in universe.excluded"
+        assert "FIENX" not in included, "FIENX is listed as an included fund"
+        assert excluded["FIENX"] == FIENX_REASON, f"FIENX reason is {excluded['FIENX']!r}"
+        assert set(excluded) == {"FIENX"}, f"funds set aside besides FIENX: {sorted(excluded)}"
+        assert len(included) == 23 and set(included) == step2, (
+            "the funds in use are not the 23 Step 2 funds"
+        )
+        vectors = (tensor.get("frontier") or {}).get("w") or []
+        assert len(vectors) >= 2, "the tensor has no frontier weights"
+        assert {len(w) for w in vectors} == {23}, "a frontier weight vector is not 23 funds long"
 
     def test_post_for_the_default_preset_returns_200_and_the_same_bytes():
         tensor_resp, body, preset = _guide_tensor()
