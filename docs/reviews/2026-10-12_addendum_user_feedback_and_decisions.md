@@ -35,7 +35,7 @@ Answers recorded:
 
 ## Recommendations made in reply (see chat for detail)
 
-- Develop the product in WSL at `~/programming/finance/` (renamed to the product name), as its own repo with a Python engine package plus a Cloudflare Worker, importing the EODHD client pattern from QSE. Keep `Programming/Python/Finance` as the research scratchpad.
+- Develop the product in WSL at `~/programming/portfoliosight/` (renamed to the product name), as its own repo with a Python engine package plus a Cloudflare Worker, importing the EODHD client pattern from QSE. Keep `Programming/Python/Finance` as the research scratchpad.
 - Risk slider = the 95% six-month loss floor; pick the frontier point whose 2.5th-percentile six-month return matches it; show Low/Mean/High from that point's own distribution (normal first, Student-t toggle later), not the fixed 1.65 ratio.
 - Return slider is a re-parameterization of the same one-dimensional frontier: trivial, same tensor.
 - Name shortlist with domain checks is in the chat reply.
