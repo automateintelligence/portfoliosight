@@ -86,3 +86,19 @@ def greedy_fill(mu, lo, hi, *, ascending: bool = False) -> np.ndarray:
         w[i] += add
         rest -= add
     return w
+
+
+def greedy_is_unique(mu, lo, hi, *, ascending: bool = False) -> bool:
+    """Whether the greedy fill is the only mix with its return.
+
+    Another mix earns the same exactly when two funds with the same `mu` can trade weight: one
+    holds more than its minimum, the other less than its maximum.
+    """
+    mu = np.asarray(mu, dtype=float)
+    fill = greedy_fill(mu, lo, hi, ascending=ascending)
+    gives = fill - np.asarray(lo, dtype=float) > SUM_TOL
+    takes = np.asarray(hi, dtype=float) - fill > SUM_TOL
+    for value in np.intersect1d(mu[gives], mu[takes]):
+        if np.count_nonzero((mu == value) & (gives | takes)) > 1:
+            return False
+    return True

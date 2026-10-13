@@ -6,7 +6,13 @@ import numpy as np
 import pytest
 
 from portfoliosight.engine import caps
-from portfoliosight.engine.caps import CapsError, default_max, greedy_fill, resolve_bounds
+from portfoliosight.engine.caps import (
+    CapsError,
+    default_max,
+    greedy_fill,
+    greedy_is_unique,
+    resolve_bounds,
+)
 
 
 def _ids(n: int) -> list[str]:
@@ -123,3 +129,23 @@ def test_greedy_fill_is_the_extreme_return_under_the_bounds():
             other += (1.0 - other.sum()) * (hi - other) / (hi - other).sum()
             assert (other >= lo - 1e-12).all() and (other <= hi + 1e-12).all()
             assert mu @ bottom - 1e-12 <= mu @ other <= mu @ top + 1e-12
+
+
+def test_greedy_is_unique_unless_tied_funds_can_trade_weight():
+    lo, hi = np.zeros(4), np.full(4, 0.6)
+    assert greedy_is_unique(np.array([0.08, 0.07, 0.05, 0.03]), lo, hi)
+    # the two top funds tie: 0.6/0.4 and 0.4/0.6 earn the same
+    assert not greedy_is_unique(np.array([0.08, 0.08, 0.05, 0.03]), lo, hi)
+    # a tie below the filled funds changes nothing
+    assert greedy_is_unique(np.array([0.08, 0.07, 0.05, 0.05]), lo, hi)
+    # a tie between a full fund and an empty one, with no partly filled fund between them
+    half = np.full(4, 0.5)
+    assert not greedy_is_unique(np.array([0.08, 0.07, 0.07, 0.03]), lo, half)
+    assert greedy_is_unique(np.array([0.08, 0.07, 0.06, 0.03]), lo, half)
+    # tied funds that cannot trade (both pinned) leave one mix
+    pinned = np.array([0.4, 0.3, 0.2, 0.1])
+    assert greedy_is_unique(np.full(4, 0.05), pinned, pinned)
+    assert not greedy_is_unique(np.full(3, 0.05), np.zeros(3), np.ones(3))
+    # the lowest-return fill is judged the same way
+    assert not greedy_is_unique(np.array([0.08, 0.07, 0.03, 0.03]), lo, hi, ascending=True)
+    assert greedy_is_unique(np.array([0.08, 0.08, 0.04, 0.03]), lo, hi, ascending=True)

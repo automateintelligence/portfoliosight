@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .caps import greedy_fill
+from .caps import greedy_fill, greedy_is_unique
 from .invariants import TOL
 from .optimize import Frontier, MenuPrograms
 from .stats import RANGE_Z
@@ -42,18 +42,27 @@ class Surface:
 def surface(programs: MenuPrograms, front: Frontier, basis: TorsionBasis, ny: int = NY) -> Surface:
     """Solve every feasible cell and pick each column's most diversified candidate.
 
-    Two kinds of cell are not solved for, because their answer is exact without a solve: a
-    cell with nothing but the frontier mix in it (the minimum-risk column, or a floor equal to
-    the column's frontier return) is that mix; and once a solved mix earns more than its floor
-    asks, the floor is slack, so the same mix is the answer for every lower floor of the column.
-    The second rule is what makes "ties go to the highest return" pick the top of such a run.
+    Two kinds of cell are not solved for, because their answer is exact without a solve.
+
+    A cell that can hold nothing but the frontier mix is that mix: every cell of the
+    minimum-risk column, and a cell whose floor equals its column's frontier return, provided
+    that frontier mix is the only one with that return. It is the only one below the menu's top
+    return (two such mixes would average to one strictly inside the ceiling, which could then
+    earn more), and at the top return when the greedy fill is unique; with tied expected returns
+    it is not, and the cell is solved like any other.
+
+    Once a solved mix earns more than its floor asks, the floor is slack, so the same mix is
+    the answer for every lower floor of the column. This is what makes "ties go to the highest
+    return" pick the top of such a run.
     """
     if ny < 2:
         raise ValueError("a surface needs at least 2 rows")
     mu, cov = programs.mu, programs.cov
     nx = len(front.x)
     lowest = float(mu @ greedy_fill(mu, programs.lo, programs.hi, ascending=True))
-    y = np.linspace(lowest, float(front.y.max()), ny)
+    top = float(front.y.max())
+    y = np.linspace(lowest, top, ny)
+    top_is_unique = greedy_is_unique(mu, programs.lo, programs.hi)
     w: list[list[np.ndarray | None]] = []
     z = np.full((nx, ny), np.nan)
     enb_front = np.array([enb(mix, cov, basis) for mix in front.w])
@@ -67,7 +76,9 @@ def surface(programs: MenuPrograms, front: Frontier, basis: TorsionBasis, ny: in
                 continue
             if slack_mix is not None:
                 mix = slack_mix
-            elif front.pinned[j] or y[k] == front.y[j]:
+            elif front.pinned[j] or (
+                y[k] == front.y[j] and (top_is_unique or front.y[j] < top - TOL)
+            ):
                 mix = front.w[j]
             else:
                 mix = programs.cell(float(front.x[j]), float(y[k]))

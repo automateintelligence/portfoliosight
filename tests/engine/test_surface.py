@@ -279,3 +279,34 @@ def test_a_single_mix_menu_has_a_flat_surface():
     assert s_safe(sigma, curve_mu) == 4.0  # equal to s_max: the slider is disabled
     with pytest.raises(ValueError, match="at least 2 rows"):
         surface(programs, front, torsion_basis(cov), ny=1)
+
+
+def test_tied_returns_do_not_break_the_surface():
+    """With equal expected returns the frontier mix is not the only one at its own return."""
+    mu, cov = np.full(3, 0.05), 0.04 * np.eye(3)
+    programs = MenuPrograms(mu, cov, np.zeros(3), np.ones(3))
+    front = frontier(programs, nx=8)
+    surf = surface(programs, front, torsion_basis(cov), ny=5)
+    herf = np.array([[np.nan if c is None else c @ c for c in column] for column in surf.w])
+    # every return is the same up to rounding, so rounding decides which cells exist; each one
+    # that does holds the least concentrated mix, not a copy of an arbitrary frontier mix
+    assert np.count_nonzero(~np.isnan(herf)) >= 1 and not np.isnan(herf[-1]).all()
+    assert np.nanmax(np.abs(herf - 1.0 / 3.0)) <= 1e-5
+    assert front.w[-1] @ front.w[-1] == 1.0  # while the top frontier mix is one fund
+    for k in range(5):
+        row = herf[:, k][~np.isnan(herf[:, k])]
+        assert (np.diff(row) <= TOL).all()
+
+
+def test_tied_top_funds_get_the_least_concentrated_top_mix():
+    mu = np.array([0.08, 0.08, 0.05, 0.03, 0.02])
+    cov = np.diag([0.2, 0.2, 0.1, 0.05, 0.03]) ** 2
+    lo, hi = np.zeros(5), np.full(5, 0.6)
+    programs = MenuPrograms(mu, cov, lo, hi)
+    front = frontier(programs, nx=8)
+    surf = surface(programs, front, torsion_basis(cov), ny=6)
+    assert np.array_equal(front.w[-1], [0.6, 0.4, 0.0, 0.0, 0.0])  # the greedy fill, by menu order
+    top = surf.w[-1][-1]  # the highest floor under the highest ceiling: solved, not copied
+    assert top is not None and np.abs(top - [0.5, 0.5, 0.0, 0.0, 0.0]).max() <= 1e-3
+    assert top @ top < front.w[-1] @ front.w[-1] - 1e-3
+    assert mu @ top >= surf.y[-1] - TOL and programs.sigma(top) <= front.x[-1] + TOL
