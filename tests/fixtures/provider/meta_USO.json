@@ -1,0 +1,8 @@
+{
+  "description": "Historical ETF prices for United States Oil Fund (USO). United States Oil Fund, LP (USOF) is a limited partnership. USOF is a commodity pool that issues limited partnership interests (units) traded on the NYSE Arca, Inc. (the NYSE Arca). The Company's general partner is United States Commodity Funds LLC (the General Partner) and is responsible for the management of USOF. The investment objective of USOF is for the changes in percentage terms of its units' net asset value (NAV) to reflect the changes in percentage terms of the spot price of light, sweet crude oil delivered to Cushing, Oklahoma, as measured by the changes in the price of the futures contract for light, sweet crude oil traded on the New York Mercantile Exchange (the NYMEX). USOF invests in futures contracts for light, sweet crude oil, crude oil, heating oil, gasoline, natural gas and other petroleum-based fuels that are traded the NYMEX, ICE Futures or other United States and foreign exchanges (collectively, Oil Futures Contracts) and other oil interests.",
+  "endDate": "2026-10-12",
+  "exchangeCode": "NYSE",
+  "name": "United States Oil Fund",
+  "startDate": "2006-04-10",
+  "ticker": "USO"
+}
