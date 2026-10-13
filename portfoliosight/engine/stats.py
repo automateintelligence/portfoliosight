@@ -2,7 +2,8 @@
 
 Everything leaves this module in annual units: `mu = 252 * mean(r)`, `sigma = sqrt(252) * sd(r)`.
 Correlations are shrunk, not covariances, so a fund with almost no volatility keeps its own
-variance; a floor of 0.01% a year on `sigma` keeps every covariance matrix factorable.
+variance; a floor of 0.01% a year on `sigma` keeps every covariance matrix factorable. The
+floor applies to the variances only: correlations are those of the returns as they are.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ EW_SHRINKAGE = 0.2
 RISK_FREE_SOURCES = ("SGOV", "TSP-G")
 RISK_FREE_FALLBACK = 0.04
 RANGE_Z = 1.96
+ROUNDING_NOISE = 1e3 * np.finfo(float).eps  # a deviation this small, relative to the returns
 
 
 @dataclass(frozen=True)
@@ -54,12 +56,12 @@ def estimate_moments(returns, omega=None) -> Moments:
         raise ValueError("returns must be a T x N array with T >= 2 and N >= 1")
     if not np.isfinite(r).all():
         raise ValueError("returns hold missing or non-finite values")
-    floor_daily = SIGMA_FLOOR / np.sqrt(TRADING_DAYS)
     if omega is None:
         mean = r.mean(axis=0)
         daily_sd = r.std(axis=0, ddof=1)
         t_eff = float(len(r))
-        shrunk = LedoitWolf(store_precision=False).fit(r / np.maximum(daily_sd, floor_daily))
+        scale = _live_scale(r, daily_sd)
+        shrunk = LedoitWolf(store_precision=False).fit(r / np.where(scale > 0, scale, 1.0))
         corr = _as_correlation(shrunk.covariance_, np.sqrt(np.diag(shrunk.covariance_)))
     else:
         weights = _observation_weights(omega, len(r))
@@ -69,7 +71,7 @@ def estimate_moments(returns, omega=None) -> Moments:
         scatter = (centered * weights[:, None]).T @ centered / (1.0 - concentration)
         daily_sd = np.sqrt(np.diag(scatter))
         t_eff = 1.0 / concentration
-        raw = _as_correlation(scatter, np.maximum(daily_sd, floor_daily))
+        raw = _as_correlation(scatter, _live_scale(r, daily_sd))
         corr = (1.0 - EW_SHRINKAGE) * raw + EW_SHRINKAGE * np.eye(r.shape[1])
     sigma = np.maximum(np.sqrt(TRADING_DAYS) * daily_sd, SIGMA_FLOOR)
     return Moments(
@@ -129,6 +131,16 @@ def _observation_weights(omega, rows: int) -> np.ndarray:
     if float(weights @ weights) >= 1.0:
         raise ValueError("omega must put weight on more than one row")
     return weights
+
+
+def _live_scale(r: np.ndarray, daily_sd: np.ndarray) -> np.ndarray:
+    """Each fund's own daily deviation, or 0 for a fund whose returns do not vary.
+
+    The floor on `sigma` changes a fund's variance, never its correlations: those come from
+    the deviation the returns actually show. Only a series that is constant up to rounding has
+    none to show; it is marked with a zero scale and treated as uncorrelated.
+    """
+    return np.where(daily_sd > ROUNDING_NOISE * np.abs(r).max(axis=0), daily_sd, 0.0)
 
 
 def _as_correlation(matrix: np.ndarray, scale: np.ndarray) -> np.ndarray:

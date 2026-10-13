@@ -110,6 +110,27 @@ def test_floor_applies_before_factorization_in_both_paths():
         assert np.abs(paths[name].sigma[[0, 2, 3, 5]] - own_sd[[0, 2, 3, 5]]).max() <= 1e-12
 
 
+def test_floor_changes_the_variance_never_the_correlation():
+    """A fund below the floor that still moves keeps the correlations its returns show."""
+    rng = np.random.default_rng(3204)
+    base = rng.normal(0.0, 1.0, 500)
+    other = rng.normal(0.0, 0.01, 500)
+    r = np.column_stack([1e-6 * base, 0.01 * base, other])  # the first two move together
+    assert np.sqrt(252.0) * r[:, 0].std(ddof=1) < stats.SIGMA_FLOOR
+    weighted = stats.estimate_moments(r, omega=stats.ew_weights(500))
+    corr = weighted.cov / np.outer(weighted.sigma, weighted.sigma)
+    assert weighted.sigma[0] == 1e-4 and abs(corr[0, 1] - 0.8) <= 1e-12  # 0.8 R + 0.2 I, R = 1
+    assert abs(corr[0, 2] - corr[1, 2]) <= 1e-12
+    fixed = stats.estimate_moments(r)
+    corr = fixed.cov / np.outer(fixed.sigma, fixed.sigma)
+    assert fixed.sigma[0] == 1e-4 and corr[0, 1] > 0.98 and abs(corr[0, 2] - corr[1, 2]) <= 1e-12
+    # the same matrix as for the fund scaled up above the floor: only its variance differs
+    scaled = stats.estimate_moments(r * np.array([1e4, 1.0, 1.0]))
+    assert np.abs(scaled.cov / np.outer(scaled.sigma, scaled.sigma) - corr).max() <= 1e-9
+    np.linalg.cholesky(fixed.cov)
+    np.linalg.cholesky(weighted.cov)
+
+
 def test_as_correlation_treats_a_zero_scale_as_uncorrelated():
     matrix = np.array([[4.0, 0.0, 1.0], [0.0, 0.0, 0.0], [1.0, 0.0, 1.0]])
     corr = stats._as_correlation(matrix, np.sqrt(np.diag(matrix)))
