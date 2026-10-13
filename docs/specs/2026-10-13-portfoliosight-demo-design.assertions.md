@@ -1379,7 +1379,7 @@ Phase 4 · prod (run at or after 08:00 PT)
   `/api/health.nightly` shows that run finished with zero errors, the generation holds the 12
   preset tensors, the KS-001 cache volume is ≤ 300 MB, the timer is enabled, and the page's
   details line "prices through {asof}" shows the same date.
-- **Setup.** Header-bearing client; `exchange_calendars` locally; ssh to `KS-001-jeff`; Playwright
+- **Setup.** Header-bearing client; `exchange_calendars` locally; ssh to `$PS_KS001_SSH_HOST`; Playwright
   with details toggled on.
 - **Observation.** `health.asof == D_G(today)`; `health.asof_trading_days_behind == 0`;
   `health.nightly.finished` is today's date in PT, `errors` is empty or 0, and its `D_G` equals
