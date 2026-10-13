@@ -9,7 +9,16 @@ Live laptop check, inside the project virtualenv (needs `boto3`; also the AWS CL
 Environment: `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_R2_ACCESS_KEY_ID`,
 `CLOUDFLARE_R2_SECRET_ACCESS_KEY` (never printed). The R2 reads use the test's own boto3 client.
 
+Repeat-safe by construction (the gate runs many times a day, the nightly rewrites `prices/`
+objects for hours, and the cron backup runs once a day): the mirror legs first run the product's
+own `scripts/r2_backup.sh` once (exit 0 required; it is idempotent and only downloads what
+changed), then compare. Objects whose bucket `LastModified` is at or after that backup's start
+(minus 5 s) were written while or after it ran and are left out of the size sample and tolerated
+in the restore dry-run; every other object must be mirrored exactly.
+
 Pinned interface (the product must provide exactly this):
+- `scripts/r2_backup.sh` run from the repo root with the caller's environment exits 0 when
+  `/mnt/d` is mounted and leaves `/mnt/d/portfoliosight-data` equal to the bucket.
 - `python -m portfoliosight.data.store --verify` (with `PS_STORE=r2`, `PS_R2_BUCKET=portfoliosight-data`)
   exits 0, names the bucket `portfoliosight-data` in its output, prints no secret value, and
   leaves no `meta/_probe` object behind.
@@ -31,7 +40,7 @@ import os
 import random
 import subprocess
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -158,25 +167,56 @@ CRON_LINE = (
 )
 
 
-def _require_mirror() -> None:
+def _require_mirror_drive() -> None:
     if not os.path.ismount("/mnt/d"):
         pytest.fail("A-PS-58 red: D: drive is not mounted at /mnt/d; the mirror cannot be checked")
+
+
+def _require_mirror() -> None:
+    _require_mirror_drive()
     if not MIRROR.is_dir():
         pytest.fail(f"A-PS-58 red: the mirror directory {MIRROR} does not exist (backup never ran)")
 
 
-def _list_price_objects(client) -> dict[str, int]:
-    """{key: size} of every object under prices/ in the bucket."""
-    sizes: dict[str, int] = {}
+_BACKUP: dict = {}
+
+
+def _backup_started() -> datetime:
+    """Run the product's backup once per test session; return the UTC instant it started."""
+    if "started" in _BACKUP:
+        return _BACKUP["started"]
+    _require_mirror_drive()
+    script = ROOT / "scripts" / "r2_backup.sh"
+    if not script.is_file():
+        pytest.fail("A-PS-58 red: scripts/r2_backup.sh does not exist")
+    env = dict(os.environ)
+    env.pop("PYTEST_DISABLE_PLUGIN_AUTOLOAD", None)
+    started = datetime.now(timezone.utc)
     try:
-        for page in client.get_paginator("list_objects_v2").paginate(
-            Bucket=BUCKET, Prefix="prices/"
-        ):
+        proc = subprocess.run(
+            [str(script)], cwd=ROOT, env=env, capture_output=True, text=True, timeout=1500
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("A-PS-58 red: scripts/r2_backup.sh ran over 1500 s")
+    except OSError as exc:
+        pytest.fail(f"A-PS-58 red: scripts/r2_backup.sh could not be run: {type(exc).__name__}")
+    assert proc.returncode == 0, (
+        f"scripts/r2_backup.sh exited {proc.returncode}: {_scrub(proc.stdout + proc.stderr)[-400:]}"
+    )
+    _BACKUP["started"] = started
+    return started
+
+
+def _list_objects(client, prefix: str) -> dict[str, tuple[int, datetime]]:
+    """{key: (size, last modified UTC)} of every object under `prefix` in the bucket."""
+    sizes: dict[str, tuple[int, datetime]] = {}
+    try:
+        for page in client.get_paginator("list_objects_v2").paginate(Bucket=BUCKET, Prefix=prefix):
             for item in page.get("Contents", []):
-                sizes[item["Key"]] = int(item["Size"])
+                sizes[item["Key"]] = (int(item["Size"]), item["LastModified"])
     except Exception as exc:  # botocore ClientError / connection errors
         pytest.fail(
-            f"A-PS-58 red: cannot list s3://{BUCKET}/prices/ in R2: "
+            f"A-PS-58 red: cannot list s3://{BUCKET}/{prefix} in R2: "
             f"{type(exc).__name__}: {_scrub(str(exc))[:300]}"
         )
     return sizes
@@ -281,11 +321,20 @@ else:
         )
 
     def test_sampled_price_files_are_mirrored_with_the_same_size():
+        started = _backup_started()
         _require_mirror()
-        sizes = _list_price_objects(_r2_client())
-        keys = [k for k in sizes if k.endswith(".parquet")]
-        assert len(keys) >= MIN_SEEDED, (
-            f"the bucket holds {len(keys)} prices/*.parquet, expected >= {MIN_SEEDED}"
+        cutoff = started - timedelta(seconds=5)
+        listing = _list_objects(_r2_client(), "prices/")
+        every = [k for k in listing if k.endswith(".parquet")]
+        assert len(every) >= MIN_SEEDED, (
+            f"the bucket holds {len(every)} prices/*.parquet, expected >= {MIN_SEEDED}"
+        )
+        sizes = {k: listing[k][0] for k in every if listing[k][1] < cutoff}
+        keys = list(sizes)
+        print(f"A-PS-58: {len(every) - len(keys)} objects written since the backup started")
+        assert len(keys) >= 1000, (
+            f"only {len(keys)} of {len(every)} price objects predate the backup this test just "
+            "ran: too few settled objects to sample"
         )
         seed = f"A-PS-58:{datetime.now(timezone.utc):%Y-%m-%d}"
         chosen = _sample(keys, SAMPLE, seed)
@@ -309,6 +358,7 @@ else:
         )
 
     def test_restore_dry_run_would_upload_nothing():
+        started = _backup_started()
         _require_mirror()
         endpoint = _r2_endpoint()
         mirrored = (
@@ -347,7 +397,16 @@ else:
         assert proc.returncode == 0, (
             f"`aws s3 sync --dryrun` (restore direction) exited {proc.returncode}: {_scrub(proc.stderr)[-400:]}"
         )
-        uploads = [line for line in proc.stdout.splitlines() if "upload:" in line]
+        cutoff = started - timedelta(seconds=5)
+        listing = _list_objects(_r2_client(), "")
+        uploads = []
+        for line in proc.stdout.splitlines():
+            if "upload:" not in line:
+                continue
+            key = line.rsplit(f"s3://{BUCKET}/", 1)[-1].strip()
+            fresh = key in listing and listing[key][1] >= cutoff
+            if not fresh:  # only an object rewritten since the backup started may differ
+                uploads.append(line)
         assert not uploads, (
             f"the restore dry-run would upload {len(uploads)} files, e.g. {_scrub(uploads[0])[:200]}"
         )

@@ -111,7 +111,7 @@ assertions:
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_14_tiingo_live_and_measure_limits.py"
     setup: ""
     teardown: ""
-    timeout: 1200
+    timeout: 300
     level: spec
     kind: example
   - id: A-PS-15
@@ -463,7 +463,7 @@ assertions:
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_58_store_seeded_mirrored_cron.py"
     setup: ""
     teardown: ""
-    timeout: 900
+    timeout: 2400
     level: spec
     kind: example
   - id: A-PS-59

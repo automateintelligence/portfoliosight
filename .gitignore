@@ -17,3 +17,6 @@ data/holdings/holdings_2026-*.csv
 runs/
 .worktrees/
 .conductor/
+
+# conductor gate run results (rewritten on every assert run)
+assertions/2026-10-13-portfoliosight-demo-design/run/

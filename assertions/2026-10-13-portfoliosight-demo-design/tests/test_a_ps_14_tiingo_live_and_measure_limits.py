@@ -12,12 +12,17 @@ Pinned interface (the product must provide exactly this):
   frame is in the provider format of spec 5.1: tz-naive `DatetimeIndex` named `date`, columns
   `close`, `adj_close`, `div_cash`, `split_factor` (Tiingo's close, adjClose, divCash,
   splitFactor).
-- `python -m portfoliosight.data.download --mode measure-limits`, run from the repo root with
-  `PS_STORE=local`, `PS_LOCAL_STORE_DIR=<dir>`, `PS_LIVE_TESTS=1` and `TIINGO_API_KEY`; exit 0,
-  and the key `meta/provider_limits.json` readable through
-  `portfoliosight.data.store.LocalStore(<dir>).get(...)`: a JSON object with the seven keys;
-  `provider` is "tiingo", `measured_on` an ISO date (today, local or UTC), `method` "probe" or
-  "documented". Neither the command's output nor the file contains the API key.
+- The limits recorded by `python -m portfoliosight.data.download --mode measure-limits` are READ,
+  not re-measured: the gate runs many times a day and a probe spends up to 60 requests and can
+  trip the provider's hourly limit. The file is `meta/provider_limits.json` in the store the
+  caller's environment names: `PS_STORE=local` with `PS_LOCAL_STORE_DIR` (read through
+  `portfoliosight.data.store.LocalStore`), otherwise the R2 bucket `portfoliosight-data` (read
+  with the test's own boto3 client from `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_R2_ACCESS_KEY_ID`,
+  `CLOUDFLARE_R2_SECRET_ACCESS_KEY`). It is a JSON object with the seven keys; `provider` is
+  "tiingo", `measured_on` an ISO date from 2026-10-13 up to today, `method` "probe" or
+  "documented". The file does not contain the API key. The probe's own behaviour is A-PS-06.
+
+Live cost per run: two Tiingo price requests (VTI and VBIAX, one each) and one store read.
 """
 
 from __future__ import annotations
@@ -180,46 +185,45 @@ else:
             frame.loc[shared, "close"].to_numpy() == vti.loc[shared, "close"].to_numpy()
         ).all(), "VBIAX and VTI came back with identical closes"
 
-    def test_measure_limits_writes_provider_limits(tmp_path):
-        key = _key()
-        store_mod = _need("portfoliosight.data.store")
-        _need("portfoliosight.data.download")
-        local_store = getattr(store_mod, "LocalStore", None)
-        assert local_store is not None, "portfoliosight.data.store.LocalStore is missing"
-        store_dir = tmp_path / "store"
-        store_dir.mkdir()
-        env = dict(
-            os.environ,
-            PS_STORE="local",
-            PS_LOCAL_STORE_DIR=str(store_dir),
-            PS_LIVE_TESTS="1",
-        )
-        env.pop("PS_GATE_INNER", None)
-        env.pop("PYTEST_DISABLE_PLUGIN_AUTOLOAD", None)
-        today_before = {date.today(), datetime.now(timezone.utc).date()}
-        try:
-            proc = subprocess.run(
-                [sys.executable, "-m", "portfoliosight.data.download", "--mode", "measure-limits"],
-                cwd=ROOT,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=900,
+    def _recorded_limits() -> bytes:
+        """meta/provider_limits.json from the store the caller's environment names."""
+        if os.environ.get("PS_STORE") == "local" and os.environ.get("PS_LOCAL_STORE_DIR"):
+            store_mod = _need("portfoliosight.data.store")
+            local_store = getattr(store_mod, "LocalStore", None)
+            assert local_store is not None, "portfoliosight.data.store.LocalStore is missing"
+            store = local_store(os.environ["PS_LOCAL_STORE_DIR"])
+            assert store.exists("meta/provider_limits.json"), (
+                "meta/provider_limits.json is not in the local store: run "
+                "`python -m portfoliosight.data.download --mode measure-limits` once"
             )
-        except subprocess.TimeoutExpired:
-            pytest.fail("A-PS-14 red: download --mode measure-limits did not finish in 900 s")
-        output = proc.stdout + "\n" + proc.stderr
-        shown = _scrub(output, key)[-3000:]
-        code = proc.returncode  # plain values only: pytest prints what an assert compares
-        assert code == 0, f"measure-limits exited {code}:\n{shown}"
-        key_in_output = key in output
-        assert not key_in_output, "the measure-limits output contains the Tiingo API key"
-
-        store = local_store(store_dir)
-        assert store.exists("meta/provider_limits.json"), (
-            f"meta/provider_limits.json was not written to the local store:\n{shown}"
+            return store.get("meta/provider_limits.json")
+        names = (
+            "CLOUDFLARE_ACCOUNT_ID",
+            "CLOUDFLARE_R2_ACCESS_KEY_ID",
+            "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
         )
-        raw = store.get("meta/provider_limits.json")
+        unset = [name for name in names if not os.environ.get(name)]
+        assert not unset, f"A-PS-14 red: environment variable(s) not set: {unset}"
+        boto3 = _need("boto3")
+        client = boto3.client(
+            "s3",
+            endpoint_url=f"https://{os.environ[names[0]]}.r2.cloudflarestorage.com",
+            region_name="auto",
+            aws_access_key_id=os.environ[names[1]],
+            aws_secret_access_key=os.environ[names[2]],
+        )
+        try:
+            body = client.get_object(Bucket="portfoliosight-data", Key="meta/provider_limits.json")
+            return body["Body"].read()
+        except Exception as exc:
+            pytest.fail(
+                "A-PS-14 red: cannot read meta/provider_limits.json from portfoliosight-data "
+                f"({type(exc).__name__}); run `download --mode measure-limits` once against R2"
+            )
+
+    def test_recorded_provider_limits():
+        key = _key()
+        raw = _recorded_limits()
         key_in_file = key.encode() in raw
         assert not key_in_file, "meta/provider_limits.json contains the Tiingo API key"
         limits = json.loads(raw)
@@ -236,8 +240,11 @@ else:
             assert type(value) is int, f"{name} is {value!r}, not an integer"
             assert value > 0, f"{name} is {value}, not positive"
         assert limits["req_per_hour"] <= limits["req_per_day"], "hourly limit above the daily one"
-        today_after = {date.today(), datetime.now(timezone.utc).date()}
-        allowed = {d.isoformat() for d in today_before | today_after}
-        assert limits["measured_on"] in allowed, (
-            f"measured_on is {limits['measured_on']!r}, expected today ({sorted(allowed)})"
+        try:
+            measured = date.fromisoformat(str(limits["measured_on"]))
+        except ValueError:
+            pytest.fail(f"A-PS-14 red: measured_on is {limits['measured_on']!r}, not an ISO date")
+        latest = max(date.today(), datetime.now(timezone.utc).date())
+        assert date(2026, 10, 13) <= measured <= latest, (
+            f"measured_on {measured} is outside 2026-10-13 .. {latest}"
         )

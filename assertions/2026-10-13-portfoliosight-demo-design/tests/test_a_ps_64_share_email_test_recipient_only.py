@@ -18,6 +18,15 @@ Requests carrying a valid `x-ps-gate` header are exempt from the per-IP share ca
 decision; the global daily cap still applies), so this test does not depend on any per-IP
 allowance: a 429 on the real send is a failure, and no per-IP cap is asserted here.
 
+At most one real email per UTC day. The gate runs many times a day and every send counts
+against the global cap of 50 a day and the sender domain's reputation, so after a run in which the
+send leg passed (202 and "Sent") the pytest side writes an empty marker file
+`${XDG_STATE_HOME:-~/.local/state}/portfoliosight/gate-share-sent-YYYY-MM-DD` (UTC date; outside
+the repository). While today's marker exists the send leg still opens the dialog, checks the
+preview notice and fills the recipient, but does not click Send and requires that no share request
+was issued; the two refusal legs run every time. The marker is local state that this test cannot
+authenticate: a hand-made marker would let the send leg pass without a send that day.
+
 Pinned interface (the product must provide exactly this), beyond the spec 10 test ids:
 - `share-open` opens an element with ARIA role `dialog` (a native <dialog> qualifies) holding
   `share-email` (an input, or a wrapper of one), `share-send` and `share-status`;
@@ -150,6 +159,14 @@ test("the dialog sends to the test recipient only and reads Sent", async ({ page
   const input = tag === "INPUT" ? field : field.locator("input").first();
   await input.fill(RECIPIENT);
   expect(shares.length, "share requests before Send").toBe(0);
+  await expect(dialog.getByTestId("share-send")).toBeVisible();
+  await expect(dialog.getByTestId("share-status")).not.toHaveText("Sent");
+  if (process.env.PS_GATE_SHARE_SEND !== "1") {
+    // Already sent once today (see the module docstring): no second email.
+    await page.waitForTimeout(1_000);
+    expect(shares.length, "share requests without clicking Send").toBe(0);
+    return;
+  }
   await dialog.getByTestId("share-send").click();
 
   await expect.poll(() => shares.length, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
@@ -373,11 +390,33 @@ def _playwright(
     return output
 
 
+def _sent_marker() -> Path:
+    """Today's (UTC) marker of a send leg that passed; outside the repository."""
+    state = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return (
+        Path(state)
+        / "portfoliosight"
+        / f"gate-share-sent-{time.strftime('%Y-%m-%d', time.gmtime())}"
+    )
+
+
 def test_a_ps_64_playwright():
     secret = _env("PS_GATE_SECRET")
     recipient = _env("PS_SHARE_TEST_RECIPIENT", blocked=True)
     bare = re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", recipient) is not None
     assert bare, "PS_SHARE_TEST_RECIPIENT is not one bare address (value not shown)"
-    output = _playwright("a_ps_64", SPEC_TS, EXPECTED_TITLES, timeout=600)
+    marker = _sent_marker()
+    send = not marker.exists()
+    print("A-PS-64: real send this run" if send else f"A-PS-64: already sent today ({marker.name})")
+    output = _playwright(
+        "a_ps_64",
+        SPEC_TS,
+        EXPECTED_TITLES,
+        extra_env={"PS_GATE_SHARE_SEND": "1" if send else "0"},
+        timeout=600,
+    )
     leaked = secret in output or recipient in output
     assert not leaked, "the gate secret or the test recipient reached the test output"
+    if send:  # reached only when the send leg passed: 202 and "Sent"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()

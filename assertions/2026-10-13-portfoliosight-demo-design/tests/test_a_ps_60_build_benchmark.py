@@ -7,9 +7,12 @@ or the spec §4.12 fallback grid 32 x 24, and the runbook records the measured t
 Runs from the laptop against production (standard library only, no virtualenv needed).
 Environment: `PS_GATE_SECRET` (never printed).
 
-Fresh key on every run: the first fund's override starts at `max = 0.24`; when that key is already
-cached (first response 200) the test walks down in steps of 0.0001 (0.2399, 0.2398, ...) for up to
-five candidates until a 202 is seen. Five cached candidates fail the assertion.
+Fresh key on every run (the gate runs many times per generation): the first fund's override is
+`max = 0.24 - k * 1e-6` with `k` the current second of the UTC day, so it lies in (0.1536, 0.24]
+and two runs collide only when they start in the same second. If that key is already cached (first
+response 200) the next four values of `k` are tried; five cached candidates fail the assertion.
+Each green run costs one real build on KS-001 and one tensor object in R2 (deleted with its
+generation).
 
 Pinned interface (the product must provide exactly this):
 - `GET https://portfoliosight.ai/api/health` -> 200 `{"queue": {"depth": int, "building": bool}}`.
@@ -41,7 +44,17 @@ RUNBOOK = ROOT / "docs" / "plans" / "2026-10-13-ks001-cloudflare-runbook.md"
 SITE = "https://portfoliosight.ai"
 BENCHMARK_S = 30.0
 ALLOWED_GRIDS = {(48, 32), (32, 24)}
-CANDIDATES = tuple(round(0.24 - step * 0.0001, 4) for step in range(5))
+CANDIDATE_COUNT = 5
+
+
+def _candidates() -> tuple[float, ...]:
+    """Cap overrides for this run: 0.24 - k * 1e-6, k = second of the UTC day, then k+1 .. k+4."""
+    second = int(time.time()) % 86_400
+    return tuple(
+        round(0.24 - ((second + step) % 86_400) * 1e-6, 6) for step in range(CANDIDATE_COUNT)
+    )
+
+
 HASH_RE = re.compile(r"^[0-9a-f]{16}$")
 SECONDS_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)\s*(?:seconds|second|secs|sec|s)\b", re.I)
 GRID_RE = re.compile(
@@ -191,7 +204,7 @@ def test_fresh_23_fund_build_reaches_ready_within_30_seconds():
 
     accepted = None
     cached = []
-    for cap in CANDIDATES:
+    for cap in _candidates():
         body = {
             "funds": [{"id": i, "min": None, "max": cap if i == first else None} for i in fund_ids],
             "lookback": "5y",
@@ -207,7 +220,7 @@ def test_fresh_23_fund_build_reaches_ready_within_30_seconds():
         accepted = (cap, started, resp.json("POST /api/tensors"))
         break
     assert accepted is not None, (
-        f"all {len(CANDIDATES)} cap candidates {cached} were already cached (first response 200): "
+        f"all {CANDIDATE_COUNT} cap candidates {cached} were already cached (first response 200): "
         "no fresh key left to measure in this generation"
     )
     cap, started, queued = accepted

@@ -145,8 +145,18 @@ the docstring is authoritative for that test.
 - A-PS-65: "on main" is read as "on the checked-out revision the gate runs on" (the run branch
   head during a conductor run). The test never looks at the branch name.
 - A-PS-64: an absent `PS_SHARE_TEST_RECIPIENT` is a failure, not a skip.
-- A-PS-60: the cap override starts at `max = 0.24` and walks down by 0.0001 until a 202 is seen,
-  so the test can be re-run within one generation.
+- Repeat safety (the worker runs the whole gate many times a day):
+  - A-PS-14 spends two Tiingo price requests per run (VTI, VBIAX) and READS the recorded
+    `meta/provider_limits.json` (from the R2 bucket, or from `PS_LOCAL_STORE_DIR` when
+    `PS_STORE=local`); it never re-runs `measure-limits`. Run `download --mode measure-limits`
+    once against the store the gate reads.
+  - A-PS-58 runs `scripts/r2_backup.sh` itself before comparing, and ignores objects written
+    since that backup started, so the nightly refresh cannot turn it red.
+  - A-PS-60 takes its cap override from the second of the UTC day (`0.24 - k * 1e-6`), so each
+    run has a fresh key. Each green run is one real build on KS-001 and one tensor in R2.
+  - A-PS-64 sends one real email per UTC day; later runs that day do everything except click
+    Send. The marker is `${XDG_STATE_HOME:-~/.local/state}/portfoliosight/gate-share-sent-<date>`.
+  - A-PS-68 sends 25 GETs and 25 POSTs, then waits 61 s so the limiters are clear.
 - A-PS-66, 67, 68: a withdrawn `Zone WAF Edit` permission fails with a `BLOCKED:` message.
 - A-PS-53: "menu of N" accepts N as the included fund count or included plus excluded.
 - A-PS-13: the 403 "names the missing scope" leg cannot be forced against the live bucket.
