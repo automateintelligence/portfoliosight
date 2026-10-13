@@ -1,0 +1,11 @@
+# Every day at 02:00 host time (America/Los_Angeles on KS-001); a missed run starts at boot.
+[Unit]
+Description=PortfolioSight nightly refresh, daily at 02:00
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+Unit=portfoliosight-nightly.service
+
+[Install]
+WantedBy=timers.target

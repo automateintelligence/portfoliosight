@@ -22,3 +22,7 @@ runs/
 assertions/2026-10-13-portfoliosight-demo-design/run/
 .bubo/
 .coverage
+
+# written by scripts/deploy_ks001.sh on the host; the local container run's fixture store
+deploy/.env
+deploy/.local-store/

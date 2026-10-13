@@ -1,0 +1,86 @@
+# A local, offline run of the same image (plan task 4.8). Standalone on purpose: it is never
+# layered on docker-compose.yml, reads no env file, and every value below is a dummy. The store
+# is the fixture store written by scripts/make_local_store.py; the nightly has no network and
+# replays the recorded provider files under tests/fixtures.
+#
+#   python scripts/make_local_store.py deploy/.local-store
+#   docker compose -f deploy/docker-compose.local.yml build
+#   docker compose -f deploy/docker-compose.local.yml run --rm --no-deps nightly
+#   docker compose -f deploy/docker-compose.local.yml up -d api
+#   docker compose -f deploy/docker-compose.local.yml down -v
+
+name: portfoliosight-local
+
+services:
+  api:
+    image: portfoliosight:local
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "127.0.0.1:8010:8000"
+    environment:
+      PS_STORE: local
+      PS_LOCAL_STORE_DIR: /fixture
+      PS_CACHE_DIR: /app/cache
+      PS_CACHE_MAX_MB: "300"
+      PS_GATE_SECRET: local-dev-secret
+      TIINGO_API_KEY: dummy
+      CLOUDFLARE_ACCOUNT_ID: dummy
+      CLOUDFLARE_R2_ACCESS_KEY_ID: dummy
+      CLOUDFLARE_R2_SECRET_ACCESS_KEY: dummy
+    volumes:
+      - ./.local-store:/fixture
+      - ps-cache-local:/app/cache
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1536M
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "python", "-m", "portfoliosight.api.healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  nightly:
+    image: portfoliosight:local
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    profiles: ["jobs"]
+    network_mode: "none"
+    command: python -m portfoliosight.jobs.nightly
+    environment:
+      PS_STORE: local
+      PS_LOCAL_STORE_DIR: /fixture
+      PS_CACHE_DIR: /app/cache
+      PS_CACHE_MAX_MB: "300"
+      PS_GATE_SECRET: local-dev-secret
+      TIINGO_API_KEY: dummy
+      CLOUDFLARE_ACCOUNT_ID: dummy
+      CLOUDFLARE_R2_ACCESS_KEY_ID: dummy
+      CLOUDFLARE_R2_SECRET_ACCESS_KEY: dummy
+      PS_NIGHTLY_PROVIDERS: fixture
+      PS_FIXTURE_DIR: /fixtures
+      PS_FIXED_NOW: "2026-10-13T02:00:00-07:00"
+      # The recorded files cost nothing: a budget that never makes the offline run wait.
+      PS_PROVIDER_REQ_PER_HOUR: "9000"
+      PS_PROVIDER_REQ_PER_DAY: "90000"
+      PS_PROVIDER_SYMBOLS_PER_MONTH: "100000"
+    volumes:
+      - ./.local-store:/fixture
+      - ../tests/fixtures:/fixtures:ro
+      - ps-cache-local:/app/cache
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1536M
+
+volumes:
+  ps-cache-local:
