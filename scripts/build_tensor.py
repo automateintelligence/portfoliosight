@@ -9,9 +9,10 @@ simple returns, NaN where the fund has no return. Its schema metadata may carry,
 `portfoliosight`, the universe name and per-fund catalog facts (as `scripts/make_fixtures.py`
 writes them). The metadata's `last_close` is the close on the file's last day, so it is used
 only when `--asof` is that day; for any other day the close is not known. A file without that
-metadata still builds: a fund is taken as served when its last return is no more than three
-XNYS sessions before `--asof` (spec 5.2) and described as an ETF from the seed, verified through
-its own last return, with no last close.
+metadata still builds: every fund is taken as served and described as an ETF from the seed,
+verified through its own last return, with no last close. Whether a fund is served is the
+catalog's to say (spec 5.2); without one, a fund whose returns have stopped stays in the menu
+and the window ends where the shared history does, or is unavailable.
 
 `--caps` is a JSON list of {"id", "min", "max"} with null for the default rule. `--nx/--ny`
 select the grid (48 x 32; the one fallback of spec 4.12 is 32 x 24).
@@ -25,9 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import timedelta
 from pathlib import Path
-from typing import cast
 
 import pandas as pd
 import pyarrow.parquet as pq
@@ -49,37 +48,6 @@ from portfoliosight.engine.tensor import (  # noqa: E402
 METADATA_KEY = b"portfoliosight"
 LOOKBACKS = ("1y", "2y", "3y", "5y", "10y", "ew")
 DEFAULT_UNIVERSE = {"name": "Custom menu", "preset_id": None}
-SERVED_WITHIN_SESSIONS = 3  # spec 5.2: verified through D - 3 trading days or later
-CALENDAR_SPAN = timedelta(days=366)  # more than enough days to hold four sessions
-
-
-def served_floor(asof: pd.Timestamp) -> pd.Timestamp:
-    """The XNYS session three sessions before the last session on or before `asof`."""
-    import exchange_calendars  # deferred: only a fund without catalog facts needs it
-
-    end = asof.date()
-    calendar = exchange_calendars.get_calendar(
-        "XNYS", start=(end - CALENDAR_SPAN).isoformat(), end=end.isoformat()
-    )
-    sessions = pd.DatetimeIndex(calendar.sessions.tz_localize(None))
-    return cast(pd.Timestamp, sessions[-(SERVED_WITHIN_SESSIONS + 1)])
-
-
-def as_day(asof: str) -> pd.Timestamp:
-    """`--asof` as a day; `ValueError` when it does not name one."""
-    stamp = pd.Timestamp(asof)
-    if not isinstance(stamp, pd.Timestamp):
-        raise ValueError(f"asof must be a date, got {asof!r}")
-    return stamp.normalize()
-
-
-def default_status(last: pd.Timestamp | None, floor: pd.Timestamp) -> tuple[bool, str | None]:
-    """Served or not, with the reason, for a fund the metadata says nothing about."""
-    if last is None:
-        return False, "no data"
-    if last < floor:
-        return False, f"no data since {last.date().isoformat()}"
-    return True, None
 
 
 def read_inputs(
@@ -90,20 +58,13 @@ def read_inputs(
     raw = (pq.read_schema(returns).metadata or {}).get(METADATA_KEY)
     metadata = json.loads(raw) if raw else {}
     catalog = metadata.get("funds", {})
-    day = as_day(asof)
-    history = frame.loc[frame.index <= day]
-    close_is_known = len(frame) > 0 and day == frame.index.max()
-    floor: pd.Timestamp | None = None  # looked up for the first fund that needs it
+    history = frame.loc[frame.index <= pd.Timestamp(asof)]
+    close_is_known = len(frame) > 0 and pd.Timestamp(asof) == frame.index.max()
     funds = []
     for fund in frame.columns:
         last = history[fund].last_valid_index()
         verified = asof if last is None else last.date().isoformat()
         entry = catalog.get(fund, {})
-        if "served" in entry:
-            served, reason = entry["served"], entry.get("catalog_reason")
-        else:
-            floor = served_floor(day) if floor is None else floor
-            served, reason = default_status(last, floor)
         adjusted_through = entry.get("adjusted_through", verified)
         funds.append(
             FundInput(
@@ -114,8 +75,8 @@ def read_inputs(
                 adjusted_through=adjusted_through,
                 fetched_at=entry.get("fetched_at", f"{adjusted_through}T00:00:00Z"),
                 last_close=entry.get("last_close") if close_is_known else None,
-                served=served,
-                catalog_reason=reason,
+                served=entry.get("served", True),
+                catalog_reason=entry.get("catalog_reason"),
             )
         )
     served = {fund.id for fund in funds if fund.served}
