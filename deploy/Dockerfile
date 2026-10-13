@@ -18,7 +18,10 @@ COPY --from=build /install /usr/local
 WORKDIR /app
 COPY portfoliosight ./portfoliosight
 COPY data ./data
-RUN mkdir -p /app/cache && chown app:app /app/cache
+# COPY keeps the modes of the build host, and a checkout made under a restrictive umask is closed
+# to others: the modes are set here, so the `app` user can read the code whatever the host's are.
+RUN chmod -R u=rwX,go=rX /app/portfoliosight /app/data \
+    && mkdir -p /app/cache && chown app:app /app/cache
 ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
