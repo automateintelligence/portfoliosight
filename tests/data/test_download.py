@@ -280,12 +280,11 @@ def test_catch_up_refreshes_pending_seeds_and_leaves_served_symbols(tmp_path):
         "catch-up", store, provider, Clock(date(2026, 2, 24)), ["OKA", "SEED", "BARE", "NEW"]
     )
     assert code == 0
-    # A seeded tail is one request from adjusted_through - 7 days; a seed without a name also
-    # gets its meta once; a symbol without a record costs history + meta; OKA is not touched.
+    # A seeded tail is exactly one request from adjusted_through - 7 days, named or not; a
+    # symbol without a record costs history + meta; OKA is not touched.
     assert calls == [
         ("daily", "SEED", date(2026, 1, 23)),
         ("daily", "BARE", date(2026, 1, 23)),
-        ("meta", "BARE", None),
         ("daily", "NEW", download.FULL_HISTORY_START),
         ("meta", "NEW", None),
     ]
@@ -293,7 +292,8 @@ def test_catch_up_refreshes_pending_seeds_and_leaves_served_symbols(tmp_path):
     assert now["SEED"]["status"] == "ok" and now["SEED"]["source"] == "seed+tiingo"
     assert now["SEED"]["adjusted_through"] == now["SEED"]["last_date"] == "2026-02-23"
     assert now["SEED"]["name"] == "Seeded Co" and now["SEED"]["kind"] == "stock"
-    assert now["BARE"]["name"] == "BARE Fund" and now["BARE"]["kind"] == "stock"
+    assert now["BARE"]["name"] == "BARE" and now["BARE"]["kind"] == "stock"
+    assert now["BARE"]["source"] == "seed+tiingo" and now["BARE"]["status"] == "ok"
     assert now["NEW"]["source"] == "tiingo" and now["NEW"]["tier"] == 3
     assert now["NEW"]["name"] == "NEW Fund" and now["NEW"]["kind"] == "etf"
     assert now["OKA"]["adjusted_through"] == "2026-02-20" and now["OKA"]["status"] == "ok"
@@ -512,6 +512,13 @@ def test_meta_request_stopped_by_the_budget_keeps_the_record(tmp_path, monkeypat
     assert code == 0 and calls == [("daily", "NEW", download.FULL_HISTORY_START)]
     entry = _manifest(store)["NEW"]
     assert entry["name"] == "NEW" and entry["status"] == "ok" and store.exists("prices/NEW.parquet")
+    # The next catch-up makes up the missing meta request, and only that.
+    provider.kind = "mutual_fund"
+    code, calls = _go("catch-up", store, provider, Clock(date(2026, 2, 25)), ["NEW"])
+    assert code == 0 and calls == [("meta", "NEW", None)]
+    entry = _manifest(store)["NEW"]
+    assert entry["name"] == "NEW Fund" and entry["kind"] == "mutual_fund"
+    assert _go("catch-up", store, provider, Clock(date(2026, 2, 26)), ["NEW"])[1] == []
 
 
 def test_default_set_is_the_universe_priority_order(tmp_path):

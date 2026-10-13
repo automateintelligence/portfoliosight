@@ -12,7 +12,8 @@ mkdir -p "${HOME}/.local/state/portfoliosight"
 current="$(crontab -l 2>/dev/null || true)"
 {
   if [ -n "${current}" ]; then
-    printf '%s\n' "${current}" | grep -v 'r2_backup\.sh' || true
+    # Only PortfolioSight's own entry is replaced; another project's r2_backup.sh line stays.
+    printf '%s\n' "${current}" | grep -vF 'portfoliosight/scripts/r2_backup.sh' || true
   fi
   printf '%s\n' "${CRON_LINE}"
 } | crontab -

@@ -30,9 +30,13 @@ def _growth(frame: pd.DataFrame, basis_rule: BasisRule) -> np.ndarray:
         bad = days[int(np.argmax(np.isnan(close) | (close <= 0)))]
         raise ValueError(f"provider row dated {bad} has no positive close")
     split = frame["split_factor"].to_numpy(dtype=float)
-    split = np.where(np.isnan(split), 1.0, split)
     div = frame["div_cash"].to_numpy(dtype=float)
-    div = np.where(np.isnan(div), 0.0, div)
+    # A missing action is not "no action": assuming one would invent a return.
+    unknown = ~np.isfinite(split) | ~np.isfinite(div) | (split <= 0) | (div < 0)
+    if unknown.any():
+        days = pd.DatetimeIndex(frame.index).strftime("%Y-%m-%d")
+        bad = days[int(np.argmax(unknown))]
+        raise ValueError(f"provider row dated {bad} has no usable div_cash or split_factor")
     basis = split if basis_rule == "post_split" else np.ones_like(split)
     growth = np.ones(len(close))
     growth[1:] = (close[1:] * split[1:] + div[1:] * basis[1:]) / close[:-1]

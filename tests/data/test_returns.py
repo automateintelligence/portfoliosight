@@ -70,17 +70,27 @@ def test_tr_index_ignores_adj_close_and_sorts_rows():
     pd.testing.assert_frame_equal(shuffled, returns.provider_rows_to_record(frame))
 
 
-def test_missing_actions_count_as_none_and_bad_rows_are_refused():
-    frame = _provider_frame(HAND_ROWS[:2])
-    frame.loc[frame.index[1], ["div_cash", "split_factor"]] = np.nan
-    tr = returns.build_tr_index(frame)
-    assert tr.iloc[1] == pytest.approx(1.02)
+def test_missing_actions_and_bad_rows_are_refused():
+    frame = _provider_frame(HAND_ROWS[:3])
     assert returns.build_tr_index(frame.iloc[:0]).empty
     with pytest.raises(ValueError, match="unknown basis rule"):
         returns.build_tr_index(frame, basis_rule="sideways")  # type: ignore[arg-type]
     bad = _provider_frame([("2024-01-02", 100.0, 0.0, 1.0), ("2024-01-03", 0.0, 0.0, 1.0)])
-    with pytest.raises(ValueError, match="2024-01-03"):
+    with pytest.raises(ValueError, match="2024-01-03 has no positive close"):
         returns.build_tr_index(bad)
+    # A missing split on the 4:1 day must not become "no split" (a 75% crash that never was).
+    for column, value in (
+        ("split_factor", np.nan),
+        ("div_cash", np.nan),
+        ("split_factor", 0.0),
+        ("div_cash", -1.0),
+    ):
+        broken = frame.copy()
+        broken.loc[broken.index[2], column] = value
+        with pytest.raises(ValueError, match="2024-01-04 has no usable div_cash or split_factor"):
+            returns.build_tr_index(broken)
+        with pytest.raises(ValueError, match="2024-01-04"):
+            returns.provider_rows_to_record(broken)
 
 
 def _record(days, level) -> pd.DataFrame:

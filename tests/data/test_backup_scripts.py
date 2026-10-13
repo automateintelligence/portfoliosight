@@ -173,6 +173,8 @@ def test_cron_installer_is_idempotent_and_keeps_other_lines(box):
 def test_cron_installer_starts_an_empty_crontab_and_replaces_an_old_line(box):
     assert box.run(INSTALLER).returncode == 0
     assert box.crontab.read_text() == CRON_LINE + "\n"
-    box.crontab.write_text("0 1 * * * /old/path/r2_backup.sh\n" + SEEDED[1] + "\n")
+    old = "0 1 * * * $HOME/programming/portfoliosight/scripts/r2_backup.sh >> /dev/null"
+    other = "0 2 * * * /opt/another-project/r2_backup.sh"
+    box.crontab.write_text("\n".join([old, other, SEEDED[1]]) + "\n")
     assert box.run(INSTALLER).returncode == 0
-    assert box.crontab.read_text() == "\n".join([SEEDED[1], CRON_LINE]) + "\n"
+    assert box.crontab.read_text() == "\n".join([other, SEEDED[1], CRON_LINE]) + "\n"

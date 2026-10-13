@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import logging
 import os
 import sys
 import uuid
@@ -22,6 +23,8 @@ import pandas as pd
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
+from portfoliosight.data.secrets import install_redaction
+
 DEFAULT_BUCKET = "portfoliosight-data"
 PROBE_KEY = "meta/_probe"
 RECORD_COLUMNS = ("date", "close", "tr_index", "div_cash", "split_factor")
@@ -31,6 +34,7 @@ SCOPE_HINT = (
     "CLOUDFLARE_R2_ACCESS_KEY_ID and CLOUDFLARE_R2_SECRET_ACCESS_KEY."
 )
 _MISSING_CODES = {"404", "NoSuchKey", "NotFound"}
+_CLIENT_LOGGERS = ("boto3", "botocore", "s3transfer", "urllib3")
 
 
 @runtime_checkable
@@ -139,6 +143,7 @@ class R2Store:
                 read_timeout=60,
             ),
         )
+        _redact_client_logs([os.environ[names[1]], os.environ[names[2]]])
         return cls(os.environ.get("PS_R2_BUCKET") or DEFAULT_BUCKET, client)
 
     def describe(self) -> str:
@@ -180,6 +185,19 @@ class R2Store:
 
     def delete(self, key: str) -> None:
         self._client.delete_object(Bucket=self.bucket, Key=_check_key(key))
+
+
+def _redact_client_logs(values: list[str]) -> None:
+    """Keep the R2 keys out of the S3 client's own log lines.
+
+    At DEBUG level botocore logs the signed request, whose Authorization header carries the
+    access key id. A logger's filter only sees that logger's records, so every client logger
+    that exists gets one.
+    """
+    names = [
+        name for name in logging.root.manager.loggerDict if name.split(".")[0] in _CLIENT_LOGGERS
+    ]
+    install_redaction([*_CLIENT_LOGGERS, *names], values=values)
 
 
 def store_from_env() -> Store:

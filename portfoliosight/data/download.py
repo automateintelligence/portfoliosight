@@ -240,6 +240,9 @@ class _Ingest:
             self._full(symbol, entry)
             return
         if self.mode == "catch-up" and entry.source != "seed":
+            # Already has its history; only a meta request cut off by the budget is made up.
+            if not entry.source.startswith("seed") and self._unnamed(symbol, entry):
+                self._describe(symbol, entry)
             return
         if self.mode == "refresh" and is_current(entry, self.d_g):
             return
@@ -272,6 +275,8 @@ class _Ingest:
         entry.first_date = _day(record["date"].iloc[0])
         entry.last_date = entry.adjusted_through = _day(record["date"].iloc[-1])
         self._settle(symbol, entry)
+        if self._unnamed(symbol, entry):
+            self._describe(symbol, entry)
 
     def _tail(self, symbol: str, entry: ManifestEntry) -> None:
         """A symbol with a record: its tail from ``adjusted_through - 7 days`` (one request)."""
@@ -304,11 +309,16 @@ class _Ingest:
         self._settle(symbol, entry)
 
     def _settle(self, symbol: str, entry: ManifestEntry) -> None:
-        """Status against ``D_G``; and the name and kind, once, for an entry that has none."""
+        """The entry's status and reason against ``D_G``."""
         entry.status = manifest_mod.status_for(entry, self.d_g)
         entry.reason = manifest_mod.reason_for(entry, entry.status, self.d_g, self._note(symbol))
-        if entry.name and entry.name != symbol:
-            return
+
+    @staticmethod
+    def _unnamed(symbol: str, entry: ManifestEntry) -> bool:
+        return not entry.name or entry.name == symbol
+
+    def _describe(self, symbol: str, entry: ManifestEntry) -> None:
+        """The second request of a full fetch: the symbol's name and kind from its meta."""
         meta = self._fetch_meta(symbol)
         if meta is not None:
             entry.name = meta.name or symbol
@@ -326,8 +336,6 @@ class _Ingest:
             return known.kind
         if is_tsp(symbol):
             return "tsp"
-        if entry is not None and entry.source.startswith("seed") and entry.kind:
-            return entry.kind
         if meta is not None:
             return meta.kind
         return entry.kind if entry is not None else "etf"

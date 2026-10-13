@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 
 import boto3
 import numpy as np
@@ -111,6 +112,29 @@ def test_r2_from_env(monkeypatch):
     assert client.meta.config.retries == {"total_max_attempts": 4, "mode": "standard"}
     monkeypatch.setenv("PS_R2_BUCKET", "other-bucket")
     assert store_mod.R2Store.from_env().bucket == "other-bucket"
+
+
+def test_r2_client_logs_never_carry_the_keys(monkeypatch, caplog):
+    key_id, secret = "UNIT-TEST-R2-ACCESS-KEY-ID", "UNIT-TEST-R2-SECRET-ACCESS-KEY"
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct123")
+    monkeypatch.setenv("CLOUDFLARE_R2_ACCESS_KEY_ID", key_id)
+    monkeypatch.setenv("CLOUDFLARE_R2_SECRET_ACCESS_KEY", secret)
+    store = store_mod.R2Store.from_env()
+
+    class Blocked(Exception):
+        pass
+
+    def no_network(*args, **kwargs):
+        raise Blocked
+
+    monkeypatch.setattr(store._client._endpoint.http_session, "send", no_network)
+    with caplog.at_level(logging.DEBUG):
+        for call in (store.check, lambda: store.put("meta/x", b"1"), lambda: store.list("meta/")):
+            with pytest.raises(Blocked):
+                call()
+    text = caplog.text
+    assert "Sending http request" in text and "[redacted]" in text
+    assert key_id not in text and secret not in text
 
 
 def test_store_from_env(monkeypatch, tmp_path):
