@@ -271,6 +271,33 @@ describe("store: transitions", () => {
     expect((location.reload as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
   });
 
+  it("percentages at the edge of the 100% rule give a mix, as the Funds table says they do", () => {
+    const rows = [
+      { id: IDS[0], name: "a", amount: 49.98 },
+      { id: IDS[1], name: "b", amount: 49.97 },
+    ];
+    expect(currentMix({ rows, unit: "pct" }, TENSOR).status).toBe("ok");
+    expect(currentMix({ rows: [rows[0], { ...rows[1], amount: 49.9 }], unit: "pct" }, TENSOR).status).toBe("invalid_total");
+  });
+
+  it("a window the presets body declares unavailable settles the build status even mid-load", async () => {
+    const body = presetsBody();
+    (body.presets[0].lookbacks as Record<string, { status: string; url?: string }>)["10y"] = { status: "unavailable" };
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string, init?: RequestInit) => (input === "/api/presets" ? json(200, body) : realFetch(input, init)));
+    const store = await boot("");
+    tensorRoute = (call) => (call.method === "GET" ? json(202, { status: "building", generation: G, hash: H1, position: 0, eta_s: 5 }) : json(500, {}));
+    store.dispatch({ type: "setLookback", lookback: "1y" });
+    await flush();
+    expect(store.getState().build.status).toBe("building");
+    store.dispatch({ type: "setLookback", lookback: "10y" });
+    await flush();
+    await advance(5000);
+    expect(store.getState().build.status).toBe("ready");
+    expect(store.getState().unavailable["10y"]).toBe("not enough shared history");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("before the first generation the store reports that data is not loaded yet", async () => {
     vi.stubGlobal("fetch", async (input: string) =>
       input === "/api/health"

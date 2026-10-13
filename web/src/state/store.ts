@@ -16,7 +16,7 @@ import {
   type TensorAnswer,
 } from "../api/http";
 import type { Tensor } from "../api/tensor";
-import { amountsToWeights } from "../math/amounts";
+import { amountsToWeights, percentTotal } from "../math/amounts";
 import { portfolioMath } from "../math/portfolio";
 import { positionOfCeiling } from "../math/view";
 import { decode, encode, type UrlState } from "./url";
@@ -146,8 +146,8 @@ export function currentMix(state: Pick<State, "rows" | "unit">, tensor: Tensor):
   const outside = state.rows.filter((r) => !includedIds.has(r.id) && (r.amount ?? 0) > 0);
   if (state.rows.every((r) => r.amount === null)) return { weights: null, status: "empty", setAside: null };
   if (state.unit === "pct") {
-    const total = state.rows.reduce((acc, r) => acc + (r.amount ?? 0), 0);
-    if (Math.abs(total - 100) > 0.05) return { weights: null, status: "invalid_total", setAside: null };
+    // The same rule as the running total in the Funds table, float noise included.
+    if (!percentTotal(state.rows.map((r) => r.amount)).ok) return { weights: null, status: "invalid_total", setAside: null };
   }
   const outsideAmount = outside.reduce((acc, r) => acc + (r.amount ?? 0), 0);
   const insideAmount = included.reduce((acc: number, a) => acc + (a ?? 0), 0);
@@ -360,9 +360,11 @@ export function createStore(init: { search: string }): Store {
     clearPoll();
     const req = requestFor(lookback, opts.fresh === true);
     if ("unavailable" in req) {
+      // Any load this one replaced is cancelled, so the build status must settle here too.
       set({
         unavailable: { ...state.unavailable, [lookback]: req.unavailable },
         lookback: opts.previous ?? state.tensorLookback ?? lookback,
+        build: { status: state.tensor ? "ready" : "idle", error: null, position: null },
       });
       return;
     }
