@@ -183,7 +183,7 @@
     "A-PS-31": {
       "entry": "37f8953ee3e55dc351ebdb3395e04fa8c0b7f6f65dc2e4c7bb505c10ff3ba810",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_31_presets_health_bodies.py": "25d7c395850c73da0e63e723d0a863bdade4e8ef8d6b72b8702c2a6e9e83d6ca"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_31_presets_health_bodies.py": "7bca606f48f42b36295cb65b9356bbf2979248846b7354ebfb10c5c580939031"
       }
     },
     "A-PS-32": {
@@ -255,7 +255,7 @@
     "A-PS-43": {
       "entry": "4c03bea2a0ec96e3d2947ce2def3e1f62a05893d20370a2a3a07352c2cc36852",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_43_default_view_presets.py": "3b6a034a2d8c7df9f19a74299cf8a8db19e1040a02029dd8669607c8884b3c1a"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_43_default_view_presets.py": "2f8adc4d2f4bd8d005be2125254e2e2b89c647a96fb475fb972ad0d2b5ddf3e4"
       }
     },
     "A-PS-44": {
@@ -410,7 +410,7 @@
     }
   },
   "sources": {
-    "docs/specs/2026-10-13-portfoliosight-demo-design.assertions.md": "df47fdee99304cf1cc7f262c01ed970226af08e882d85ef591fc347872208d5b"
+    "docs/specs/2026-10-13-portfoliosight-demo-design.assertions.md": "7d25724784fd8600468526d891084e8fc88cb152b581fcb6c1d4b65c9198e370"
   },
   "sources_via": "gate",
   "version": 1
