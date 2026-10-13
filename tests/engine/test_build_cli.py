@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from portfoliosight.data.calendar import session_back
 from portfoliosight.engine.tensor import canonical_json, validate_tensor
 from tests.engine.helpers import FIXTURE, FIXTURE_ASOF, HOLDINGS, ROOT, UI_FIXTURE, load_script
 
@@ -194,7 +195,7 @@ def test_caps_file_changes_the_requested_bounds_and_the_weights(cli, tmp_path):
 
 def test_unavailable_window_reports_and_writes_nothing(cli, tmp_path, capsys):
     path, frame = _bare_parquet(tmp_path)
-    frame.iloc[-152:, 2] = np.nan  # CCC stops: 100 shared rows in the one-year window
+    frame.iloc[-200:-48, 2] = np.nan  # a gap in CCC: 100 shared rows in the one-year window
     frame.to_parquet(path)
     code, out = _run(cli, tmp_path, returns=path, lookback="1y", asof="2026-06-30")
     printed = capsys.readouterr()
@@ -223,7 +224,7 @@ def test_invalid_caps_exit_with_the_reason(cli, tmp_path, capsys):
 
 def test_parquet_without_metadata_gets_plain_catalog_facts(cli, tmp_path):
     path, frame = _bare_parquet(tmp_path)
-    frame.iloc[-5:, 1] = np.nan  # BBB's last return is five rows before asof
+    frame.iloc[-3:, 1] = np.nan  # BBB's last return is three sessions before asof: still served
     frame.to_parquet(path)
     code, out = _run(cli, tmp_path, *SMALL, returns=path, lookback="1y", asof="2026-06-30")
     tensor = json.loads(out.read_text())
@@ -240,7 +241,58 @@ def test_parquet_without_metadata_gets_plain_catalog_facts(cli, tmp_path):
         expected = last_bbb if fund["id"] == "BBB" else "2026-06-30"
         assert fund["adjusted_through"] == expected
         assert fund["fetched_at"] == f"{expected}T00:00:00Z"
-    assert tensor["lookback"]["rows"] == 252 - 5
+    assert last_bbb == "2026-06-25" and tensor["lookback"]["rows"] == 252 - 3
+
+
+def test_parquet_without_metadata_applies_the_served_rule(cli, tmp_path):
+    """Spec 5.2: served means a last return no more than three sessions before asof."""
+    path, frame = _bare_parquet(tmp_path, columns=("AAA", "BBB", "CCC", "DDD"))
+    frame.iloc[-4:, 1] = np.nan  # BBB's last return is four sessions before asof
+    frame["DDD"] = np.nan  # never priced
+    frame.to_parquet(path)
+    code, out = _run(cli, tmp_path, *SMALL, returns=path, lookback="1y", asof="2026-06-30")
+    tensor = json.loads(out.read_text())
+    assert code == 0
+    validate_tensor(tensor)
+    assert [fund["id"] for fund in tensor["universe"]["funds"]] == ["AAA", "CCC"]
+    assert tensor["universe"]["excluded"] == [
+        {"id": "BBB", "last_close": None, "reason": "no data since 2026-06-24"},
+        {"id": "DDD", "last_close": None, "reason": "no data"},
+    ]
+    assert tensor["lookback"]["rows"] == 252
+
+
+def test_served_rule_counts_sessions_back_from_asof(cli, tmp_path):
+    """The same file: a fund current for a Sunday asof has fallen behind two sessions later."""
+    path, frame = _bare_parquet(tmp_path)
+    frame.iloc[-5:, 1] = np.nan  # BBB's last return is Tuesday 2026-06-23
+    frame.to_parquet(path)
+    code, out = _run(cli, tmp_path, *SMALL, returns=path, lookback="1y", asof="2026-06-28")
+    sunday = json.loads(out.read_text())
+    assert code == 0 and sunday["universe"]["excluded"] == []
+    assert [fund["id"] for fund in sunday["universe"]["funds"]] == ["AAA", "BBB", "CCC"]
+    code, out = _run(cli, tmp_path, *SMALL, returns=path, lookback="1y", asof="2026-06-30")
+    tuesday = json.loads(out.read_text())
+    assert code == 0
+    assert tuesday["universe"]["excluded"] == [
+        {"id": "BBB", "last_close": None, "reason": "no data since 2026-06-23"}
+    ]
+
+
+def test_served_floor_is_the_session_three_back_as_the_data_layer_counts_it(cli):
+    days = ("2025-11-28", "2025-12-26", "2026-01-02", "2026-06-28", "2026-06-30", "2026-07-06")
+    for day in days:
+        floor = cli.served_floor(pd.Timestamp(day))
+        assert floor.date() == session_back(pd.Timestamp(day).date(), 3), day
+    assert cli.served_floor(pd.Timestamp("2026-06-30")) == pd.Timestamp("2026-06-25")
+    # any date, not only the years the default calendar spans (Presidents' Day, 2005-02-21)
+    assert cli.served_floor(pd.Timestamp("2005-02-24")) == pd.Timestamp("2005-02-18")
+
+
+def test_asof_must_name_a_day(cli, tmp_path):
+    assert cli.as_day("2026-06-30T17:00") == pd.Timestamp("2026-06-30")
+    with pytest.raises(ValueError, match="asof must be a date, got 'NaT'"):
+        _run(cli, tmp_path, asof="NaT")
 
 
 def test_served_sgov_column_sets_the_risk_free_rate(cli, tmp_path):
