@@ -293,7 +293,10 @@ def test_ingress_install_inserts_the_rule_above_the_catch_all(tmp_path):
     assert box.config.read_text() == EXPECTED
     assert box.config.stat().st_mode & 0o777 == 0o640
     # validated the staged file beside the destination, before anything was replaced
-    assert box.lines("cloudflared.args") == [f"tunnel --config {box.config}.new ingress validate"]
+    (validate,) = box.lines("cloudflared.args")
+    assert re.fullmatch(
+        rf"tunnel --config {re.escape(str(box.config))}\.new\.\w+ ingress validate", validate
+    )
     assert (box.log / "validated.yml").read_text() == EXPECTED
     assert box.lines("systemctl.args") == ["restart cloudflared"]
     assert (box.log / "config-at-restart-1.yml").read_text() == EXPECTED
@@ -366,6 +369,76 @@ def test_ingress_explicit_rollback_restores_and_names_the_backup(tmp_path):
     assert box.lines("systemctl.args") == ["restart cloudflared"] * 2
     assert backup.read_text() == FIXTURE
     assert box.leftovers() == []
+
+
+# A real `cp`/`mv` that fails on its Nth call, to break a restore half way.
+FAKE_FAILING = (
+    "#!/bin/sh\n"
+    'echo x >> "$LOG/{name}.calls"\n'
+    'n=$(wc -l < "$LOG/{name}.calls" | tr -d " ")\n'
+    '[ "$n" = "${{{var}:-0}}" ] && exit 1\n'
+    'exec /bin/{name} "$@"\n'
+)
+
+
+@pytest.mark.parametrize(("tool", "var"), [("cp", "CP_FAIL_ON"), ("mv", "MV_FAIL_ON")])
+def test_ingress_rollback_that_cannot_put_the_file_back_says_so(tmp_path, tool, var):
+    box = IngressBox(tmp_path)
+    assert box.run("install").returncode == 0
+    (backup,) = box.backups()
+    _write_exe(box.bin / tool, FAKE_FAILING.format(name=tool, var=var))
+    done = box.run("rollback", str(backup), **{var: "1"})
+    assert done.returncode != 0
+    assert "could NOT be put back" in done.stderr
+    assert "restored" not in done.stdout
+    assert box.config.read_text() == EXPECTED
+    assert box.lines("systemctl.args") == ["restart cloudflared"]
+    assert box.leftovers() == []
+
+
+def test_ingress_failed_restore_after_a_failed_restart_is_reported_as_such(tmp_path):
+    box = IngressBox(tmp_path)
+    # install: mv #1 puts the candidate live; the restart fails; mv #2 (the restore) fails too
+    _write_exe(box.bin / "mv", FAKE_FAILING.format(name="mv", var="MV_FAIL_ON"))
+    done = box.run("install", SYSTEMCTL_FAIL_ON="1", MV_FAIL_ON="2")
+    assert done.returncode != 0
+    assert "could NOT be put back" in done.stderr
+    assert "previous config is back" not in done.stderr
+    assert box.lines("systemctl.args") == ["restart cloudflared"]
+    assert box.leftovers() == []
+
+
+def test_ingress_never_removes_a_staged_file_it_did_not_create(tmp_path):
+    box = IngressBox(tmp_path)
+    foreign = box.etc / "config.yml.new"
+    foreign.write_text("someone else's staged file\n")
+    assert box.run("install").returncode == 0
+    assert box.run("install").returncode == 0  # the "already installed" path
+    assert box.run(
+        "install", CLOUDFLARED_EXIT="1", PS_API_HOSTNAME="x.portfoliosight.ai"
+    ).returncode
+    assert foreign.read_text() == "someone else's staged file\n"
+    assert box.leftovers() == ["config.yml.new"]
+
+
+def test_ingress_refuses_to_run_beside_another_run(tmp_path):
+    box = IngressBox(tmp_path)
+    holder = subprocess.Popen(
+        ["flock", str(box.etc), "sh", "-c", "echo held; read _"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None and holder.stdout.readline().strip() == "held"
+        done = box.run("install")
+    finally:
+        holder.communicate("\n")
+    assert done.returncode != 0
+    assert "lock" in done.stderr
+    assert box.config.read_text() == FIXTURE
+    assert box.lines("systemctl.args") == [] and box.lines("curl.urls") == []
+    assert box.run("install").returncode == 0
 
 
 def test_ingress_rollback_refuses_a_file_that_is_not_a_backup_of_this_config(tmp_path):

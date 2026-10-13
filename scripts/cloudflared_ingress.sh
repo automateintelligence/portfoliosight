@@ -7,8 +7,8 @@
 #
 # install:
 #   1. reads the live config and notes the HTTPS status of every hostname already in it;
-#   2. writes a candidate BESIDE the live file (<config>.new) with one new rule above the
-#      catch-all; every existing line is carried over unchanged;
+#   2. writes a candidate BESIDE the live file (<config>.new.XXXXXX, a name of its own) with
+#      one new rule above the catch-all; every existing line is carried over unchanged;
 #   3. validates the candidate with cloudflared; a refusal ends here, the live file untouched;
 #   4. copies the live file to <config>.bak-<UTC time>, renames the candidate over the live
 #      file (mv, same directory) and restarts cloudflared;
@@ -27,6 +27,8 @@
 #   PS_INGRESS_CHECK_ATTEMPTS  tries per hostname after the restart (default 12)
 #   PS_INGRESS_CHECK_SLEEP     seconds between tries (default 5)
 # When the config or its directory is not writable the script runs itself again under sudo.
+# One run at a time: a lock is held on the config's directory, and the only file a run ever
+# removes is the candidate it created itself.
 set -euo pipefail
 
 CONFIG="${PS_CLOUDFLARED_CONFIG:-/etc/cloudflared/config.yml}"
@@ -35,7 +37,7 @@ SERVICE_URL="${PS_API_SERVICE_URL:-}"
 UNIT="${PS_CLOUDFLARED_UNIT:-cloudflared}"
 ATTEMPTS="${PS_INGRESS_CHECK_ATTEMPTS:-12}"
 PAUSE="${PS_INGRESS_CHECK_SLEEP:-5}"
-CANDIDATE="${CONFIG}.new"
+CANDIDATE=""
 
 usage() {
   echo "usage: cloudflared_ingress.sh install | rollback <backup file>" >&2
@@ -95,11 +97,29 @@ status_of() {
   curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${url}" || true
 }
 
+# A file of this run's own beside the live file, removed when the run ends.
+make_candidate() {
+  CANDIDATE="$(mktemp "${CONFIG}.new.XXXXXX")" || fail "cannot stage a file beside ${CONFIG}"
+  trap 'rm -f "${CANDIDATE}"' EXIT
+}
+
 # Copies a backup beside the live file and renames it over the live file, then restarts.
+# Returns 2 when the file could not be put back (no restart is attempted), 3 when it was put
+# back but the restart failed. Written with explicit checks: callers test its status, which
+# switches errexit off inside it.
 restore() {
-  cp -p "$1" "${CANDIDATE}"
-  mv -f "${CANDIDATE}" "${CONFIG}"
-  systemctl restart "${UNIT}"
+  [ -n "${CANDIDATE}" ] || make_candidate
+  cp -p "$1" "${CANDIDATE}" || return 2
+  mv -f "${CANDIDATE}" "${CONFIG}" || return 2
+  systemctl restart "${UNIT}" || return 3
+}
+
+# Says what a failed restore left behind, and exits.
+restore_failed() {
+  if [ "$1" = 2 ]; then
+    fail "$2 could NOT be put back; ${CONFIG} is as it was before this restore and ${UNIT} was not restarted: act now"
+  fi
+  fail "$2 is back in place but ${UNIT} did not restart: act now"
 }
 
 [ "$#" -ge 1 ] || usage
@@ -126,7 +146,8 @@ if [ "$(id -u)" -ne 0 ] && { [ ! -w "${CONFIG}" ] || [ ! -w "$(dirname "${CONFIG
     bash "$0" "$@"
 fi
 
-trap 'rm -f "${CANDIDATE}"' EXIT
+exec 9< "$(dirname "${CONFIG}")"
+flock -n 9 || fail "another run holds the lock on $(dirname "${CONFIG}"); nothing changed"
 
 if [ "${command}" = rollback ]; then
   backup="$2"
@@ -135,7 +156,7 @@ if [ "${command}" = rollback ]; then
     *) fail "not a backup of ${CONFIG}: nothing changed" ;;
   esac
   [ -f "${backup}" ] || fail "${backup} does not exist; nothing changed"
-  restore "${backup}" || fail "restored ${backup} but ${UNIT} did not restart"
+  restore "${backup}" || restore_failed "$?" "${backup}"
   echo "restored ${backup} and restarted ${UNIT}"
   exit 0
 fi
@@ -168,6 +189,7 @@ while IFS= read -r existing; do
 done < <(printf '%s\n' "${scan}" | sed -n 's/^HOST //p')
 
 # The candidate starts as a copy so that it has the live file's owner and mode.
+make_candidate
 cp -p "${CONFIG}" "${CANDIDATE}"
 awk -v at="${catch_line}" -v indent="${indent}" -v host="${NEW_HOST}" -v service="${SERVICE_URL}" '
   NR == at { print indent "- hostname: " host; print indent "  service: " service }
@@ -184,7 +206,7 @@ mv -f "${CANDIDATE}" "${CONFIG}"
 
 undo() {
   echo "cloudflared_ingress: $1; restoring ${backup}" >&2
-  restore "${backup}" || fail "restored ${backup} but ${UNIT} did not restart: act now"
+  restore "${backup}" || restore_failed "$?" "${backup}"
   fail "the previous config is back in place and ${UNIT} was restarted"
 }
 
