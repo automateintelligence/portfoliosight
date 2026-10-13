@@ -1117,20 +1117,24 @@ Phase 3 · ui
   funds; owner decision 2026-10-13, spec §2), and `preset-menu` lists the presets' names from the
   body and loads the second one in one click (fetching the tensor URL the body declares and
   setting `u=`). That second menu holds FIENX, which its tensor sets aside: the FIENX row, and no
-  other, shows an `excluded-note` with that tensor's exact reason string.
+  other, shows an `excluded-note` with that tensor's exact reason string, and the note changes
+  to the 10y tensor's reason when `lookback-10y` is chosen.
 - **Setup.** The mock presets body with the fixture allocation and a deliberately distinctive
   second-preset name (e.g. `"TSP (G, F, C, S, I) [mock-7f3]"`) and a distinctive tensor URL for
   it that the mock serves; the fixture tensor with 23 funds and an empty `excluded` array; the
   second preset's funds are the same 23 plus FIENX, and its tensor is the fixture tensor with
   FIENX added to `excluded` with a reason that exists only in the mock (`"converted to an ETF; no
-  data since 2024-10-30 [mock-7f3]"`), as the service lists any fund of a menu it cannot use.
+  data since 2024-10-30 [mock-7f3]"`, with `" [10y]"` appended in the 10y tensor), as the service
+  lists any fund of a menu it cannot use.
 - **Observation.** `point-current` visible; 23 rows; `unit-toggle` reads `$`; each row's amount
   equals the body's allocation for that id (string-compare after formatting), exactly 18 are
   non-zero; no fund row contains an `excluded-note` and there is no `fund-row-FIENX`;
   `preset-menu` entries' texts equal the body's names in order (so the distinctive suffix
   appears); choosing the second entry issues exactly one `GET` to the body's declared URL and
   the address gains `u=<second id>`; then 24 rows, `fund-row-FIENX` contains an `excluded-note`
-  whose text equals the second tensor's reason, and it is the only `excluded-note` in a fund row.
+  whose text equals the second tensor's reason, and it is the only `excluded-note` in a fund row;
+  after `lookback-10y` (one `GET` to the declared 10y URL) the same row's note equals the 10y
+  tensor's reason.
   **Must-not-contain:** a hard-coded preset name that differs from the body (the suffix must
   show); a request to any tensor URL other than the declared one; an `excluded-note` on a fund
   the tensor uses; a note text that is not the served tensor's reason. Fail = any.
@@ -1377,9 +1381,9 @@ Phase 4 · prod
   "guide2017"`; `funds` are the 23 Step 2 funds and `excluded` is empty.
   POST: 200, `hash` equals the preset's `hash`, and `GET url` body bytes equal the preset
   tensor's bytes (same `ETag`). POST for the 23 funds plus FIENX: 200 or 202, then
-  `GET /api/tensors/{G}/{hash}/5y` returns the tensor within 200 s; its `funds` are the 23 Step 2
-  funds and its `excluded` is exactly FIENX with the §5.1 reason (one real build per generation:
-  the key is the same on every run). **Must-not-contain:** a lookback not `ready`; `x-ps-source:
+  `GET /api/tensors/{G}/{hash}/5y` returns the tensor within 200 s; it is schema-valid, its
+  `funds` are the 23 Step 2 funds and its `excluded` is exactly FIENX with the §5.1 reason (one
+  real build per generation: the key is the same on every run). **Must-not-contain:** a lookback not `ready`; `x-ps-source:
   origin` on either preset GET; a POST that enqueues (202) for the preset key; FIENX among the
   funds in use; a fund set aside in the default tensor. Fail = any.
 - **Kind.** example.

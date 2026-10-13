@@ -15,9 +15,10 @@ data/holdings/holdings_guide2017_step2.csv in "$", and tsp named "TSP (G, F, C, 
 with a distinct hash, allocation null and the same 23 funds plus FIENX; six ready lookbacks each),
 GET /api/tensors/{G}/{hash}/{lb} (web/fixtures/guide2017_5y.json with lookback.id patched; for the
 second hash also universe.hash, preset_id and name patched, and FIENX added to universe.excluded
-with the reason "converted to an ETF; no data since 2024-10-30 [mock-7f3]"), GET /api/symbols,
-GET /api/health, POST /api/tensors, POST /api/share, anything else 404. Every /api/ request is
-logged.
+with the reason "converted to an ETF; no data since 2024-10-30 [mock-7f3]", followed by " [{lb}]"
+for every lookback but 5y, so two tensors of that menu give FIENX two different reasons),
+GET /api/symbols, GET /api/health, POST /api/tensors, POST /api/share, anything else 404. Every
+/api/ request is logged.
 
 Pinned interface (beyond the shared pins of the gate contract):
 - web/ builds with `npm run build` and serves with `vite preview`; web/fixtures/guide2017_5y.json.
@@ -25,7 +26,9 @@ Pinned interface (beyond the shared pins of the gate contract):
   (debounced) after every change, with at least six decimals.
 - test ids: chart-canvas, point-selected, point-current, chip-funds, section-funds (aria-expanded),
   fund-row-{ID} (one row per fund of the menu, excluded ones included: 23 for the default menu,
-  24 for the second), unit-toggle, excluded-note, preset-menu.
+  24 for the second), unit-toggle, excluded-note, preset-menu, chip-settings, section-settings
+  (aria-expanded), lookback-10y (a click selects the 10y view and loads the menu's declared 10y
+  tensor URL).
 - each fund row holds its amount in its first non-checkbox <input>; accepted formatting: optional
   "$", digits with optional thousands separators, up to two decimals; blank reads as 0.
 - unit-toggle marks its active option with aria-checked / aria-pressed / aria-selected = "true"
@@ -176,7 +179,7 @@ function tensorBody(mock: Mock, hash: string, lb: string): any {
     copy.universe.preset_id = "tsp";
     copy.universe.name = SECOND_NAME;
     for (const ex of copy.universe.excluded || []) ex.reason = ex.reason + SECOND_REASON_SUFFIX;
-    copy.universe.excluded = [...(copy.universe.excluded || []), { id: SET_ASIDE.id, reason: FIENX_REASON + SECOND_REASON_SUFFIX, last_close: null }];
+    copy.universe.excluded = [...(copy.universe.excluded || []), { id: SET_ASIDE.id, reason: FIENX_REASON + SECOND_REASON_SUFFIX + (lb === "5y" ? "" : ` [${lb}]`), last_close: null }];
   }
   return copy;
 }
@@ -537,6 +540,24 @@ test("default view is the first preset with its allocation; preset menu is drive
   const tensorCalls = after.filter((c) => c.path.startsWith("/api/tensors"));
   expect(tensorCalls.map((c) => `${c.method} ${c.path}`), "choosing the second preset must issue exactly one GET to the declared tensor URL and no other tensor request").toEqual([`GET ${declaredSecond}`]);
   expect(tensorCalls.filter((c) => c.path !== declaredSecond).length).toBe(0);
+
+  // Leg 7 (anchor, same row): the 10y tensor of the same menu gives FIENX another reason. The
+  // note on the FIENX row must change to it: a reason remembered from the first tensor fails.
+  const declaredTen = secondPreset.lookbacks["10y"].url;
+  const tenTensor = tensorBody(mock, mock.hash2, "10y");
+  const fienxTen = tenTensor.universe.excluded.find((e: any) => e.id === SET_ASIDE.id);
+  expect(tenTensor.universe.excluded, "the second menu's 10y tensor sets exactly FIENX aside").toHaveLength(1);
+  expect(fienxTen.reason, "the 10y tensor's FIENX reason differs from the 5y one").toBe(fienx.reason + " [10y]");
+  if ((await page.getByTestId("section-settings").getAttribute("aria-expanded")) !== "true") await page.getByTestId("chip-settings").click();
+  await expect(page.getByTestId("section-settings")).toHaveAttribute("aria-expanded", "true");
+  const beforeTen = mock.log.length;
+  await page.getByTestId("lookback-10y").click();
+  await expect.poll(() => mock.log.slice(beforeTen).filter((c) => c.method === "GET" && c.path === declaredTen).length, { message: `one GET to ${declaredTen}` }).toBeGreaterThanOrEqual(1);
+  await openFunds(page);
+  await expect(rows, "still 24 fund rows in the 10y view").toHaveCount(24);
+  await expect.poll(noteText, { message: "after the lookback switch the FIENX note must show the 10y tensor's reason string" }).toContain(fienxTen.reason);
+  expect([fienxTen.reason, `${fienxTen.reason}: not used`], "excluded-note text must be the 10y tensor's reason (optionally followed by ': not used')").toContain(await noteText());
+  await expect(rows.getByTestId("excluded-note"), "only the fund the tensor sets aside carries an excluded-note").toHaveCount(1);
 });
 """
 EXPECTED_TITLES = {

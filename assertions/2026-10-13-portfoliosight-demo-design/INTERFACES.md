@@ -165,11 +165,12 @@ the docstring is authoritative for that test.
   is not served, reason `converted to an ETF; no data since 2024-10-30`; `POST /v1/tensors`
   accepts a menu holding it and the tensor lists it in `universe.excluded`. Excluded-fund handling
   is asserted where a fund is really set aside:
-  - A-PS-43: the mock's second menu is the 23 funds plus FIENX and its tensor sets FIENX aside;
+  - A-PS-43: the mock's second menu is the 23 funds plus FIENX and its tensors set FIENX aside,
+    with a different reason at 5y and at 10y (reached with `chip-settings` and `lookback-10y`);
     the default view must show no `excluded-note` on any fund row.
   - A-PS-56: production; the default tensor sets nothing aside, and the 23 default funds plus
-    FIENX at 5y resolve to a tensor that sets exactly FIENX aside with its reason. Same key on
-    every run: one real build per generation, then served as stored.
+    FIENX at 5y resolve to a schema-valid tensor that sets exactly FIENX aside with its reason.
+    Same key on every run: one real build per generation, then served as stored.
   - A-PS-63: production; besides the default menu, a custom menu loaded with `/?f=…&lb=10y` (two
     of BND, VTI, AGG, VNQ plus a served fund too young for the 10y view, SGOV when it qualifies)
     must list the young fund in Settings. Same key on every run: one real build per generation.

@@ -33,8 +33,9 @@ Pinned interface (the product must provide exactly this):
 - The same POST for the 23 default funds plus `FIENX` (a catalog symbol that is not served, so the
   menu is accepted, spec 6) -> 200 `ready` or 202 `{"status": "queued"|"building", "generation",
   "hash"}`; `GET /api/tensors/{generation}/{hash}/5y` answers 202 while it builds and 200 with the
-  tensor within 200 s. In that tensor `universe.funds` are the 23 Step 2 funds and
-  `universe.excluded` is exactly FIENX with reason "converted to an ETF; no data since 2024-10-30".
+  tensor within 200 s. That tensor validates against the same schema; its `universe.funds` are the
+  23 Step 2 funds and its `universe.excluded` is exactly FIENX with reason
+  "converted to an ETF; no data since 2024-10-30".
 """
 
 from __future__ import annotations
@@ -182,6 +183,23 @@ def _guide_tensor() -> tuple[_Resp, dict, dict]:
     resp = _http("GET", SITE + url)
     assert resp.status == 200, f"GET {url} answered {resp.status}"
     return resp, body, preset
+
+
+def _assert_schema_valid(tensor, what: str) -> None:
+    """The same schema check as the default-tensor test, for the tensor of the menu with FIENX."""
+    jsonschema = _need("jsonschema")
+    if not SCHEMA.is_file():
+        pytest.fail(f"A-PS-56 red: {SCHEMA.relative_to(ROOT)} is missing")
+    schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    validator_cls = jsonschema.validators.validator_for(schema)
+    validator_cls.check_schema(schema)
+    assert schema.get("required") or schema.get("properties"), (
+        "tensor.schema.json constrains nothing (no required keys, no properties)"
+    )
+    errors = sorted(validator_cls(schema).iter_errors(tensor), key=lambda e: list(e.absolute_path))
+    assert not errors, f"{what} fails tensor.schema.json: " + "; ".join(
+        f"{'/'.join(map(str, e.absolute_path))}: {e.message[:120]}" for e in errors[:5]
+    )
 
 
 def _step2_symbols() -> set[str]:
@@ -359,6 +377,7 @@ else:
         assert got.status == 200, f"GET {url} answered {got.status}, expected the built tensor"
 
         tensor = got.json("the tensor of the default funds plus FIENX")
+        _assert_schema_valid(tensor, "the tensor of the default funds plus FIENX")
         universe = tensor.get("universe") or {}
         assert universe.get("hash") == key, "tensor universe.hash != the POST's hash"
         assert tensor.get("generation") == generation, "tensor generation != the POST's"
