@@ -118,7 +118,8 @@ def frontier(programs: MenuPrograms, nx: int = NX) -> Frontier:
         inner = [programs.frontier_point(float(ceiling)) for ceiling in x[1:-1]]
         w = np.vstack([lowest, *inner, top])
         pinned = np.arange(nx) == 0
-    return Frontier(x=x, y=w @ programs.mu, w=w, pinned=pinned)
+    y = np.array([float(programs.mu @ mix) for mix in w])  # one dot per mix, as everywhere
+    return Frontier(x=x, y=y, w=w, pinned=pinned)
 
 
 def _solve(problem, variable, what: str) -> np.ndarray:

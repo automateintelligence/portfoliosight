@@ -81,7 +81,7 @@ def test_frontier_on_random_menus(n, seed):
     sigma = np.array([_sigma(w, cov) for w in front.w])
     assert (sigma <= front.x + TOL).all()
     assert np.abs(sigma - front.x)[:-1].max() <= TOL  # every node below sigma_max is on its ceiling
-    assert np.abs(front.y - front.w @ mu).max() <= 1e-15
+    assert front.y.tolist() == [float(mu @ w) for w in front.w]
     assert (np.diff(front.y) >= -1e-9).all() and front.y[-1] - front.y[0] > 1e-6
     assert all(_feasible(w, lo, hi) for w in front.w)
     # no feasible mix under a ceiling earns more than the node on it
