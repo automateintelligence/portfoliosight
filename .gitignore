@@ -22,3 +22,8 @@ runs/
 assertions/2026-10-13-portfoliosight-demo-design/run/
 .bubo/
 .coverage
+
+# web: local Playwright output and the gate's run-time files
+web/e2e/artifacts/
+web/tests/__gate__/
+web/e2e/__gate__/
