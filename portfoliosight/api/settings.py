@@ -11,10 +11,10 @@ import os
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from portfoliosight.api.gate import GATE_SECRET_ENV
 from portfoliosight.engine.optimize import NX
 from portfoliosight.engine.surface import NY
 
-GATE_SECRET_ENV = "PS_GATE_SECRET"
 GRID_NX_ENV = "PS_GRID_NX"
 GRID_NY_ENV = "PS_GRID_NY"
 MIN_GATE_SECRET_LENGTH = 16

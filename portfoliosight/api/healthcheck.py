@@ -3,7 +3,8 @@
     python -m portfoliosight.api.healthcheck
 
 Asks the service in this container for ``/v1/health`` with the gate secret from the
-environment; exit status 0 only for HTTP 200. The secret is never printed.
+environment; exit status 0 only for HTTP 200. The secret is never printed. Docker runs this
+every 30 seconds, so it imports nothing of the engine.
 """
 
 from __future__ import annotations
@@ -12,8 +13,7 @@ import http.client
 import os
 import sys
 
-from portfoliosight.api.gate import GATE_HEADER
-from portfoliosight.api.settings import GATE_SECRET_ENV
+from portfoliosight.api.gate import GATE_HEADER, GATE_SECRET_ENV
 
 HOST = "127.0.0.1"
 PORT = 8000

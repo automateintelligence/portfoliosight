@@ -83,3 +83,17 @@ def test_install_redaction_is_idempotent(caplog):
     with caplog.at_level(logging.INFO, logger=name):
         logger.info("a first-value b second-value c Token xyz")
     assert caplog.messages == ["a [redacted] b [redacted] c Token [redacted]"]
+
+
+def test_redacted_traceback_keeps_the_trace_and_drops_the_secret(monkeypatch):
+    monkeypatch.setenv("TIINGO_API_KEY", "tiingo-key-abcdef123456")
+
+    def failing():
+        raise RuntimeError("GET failed with Authorization: Token tiingo-key-abcdef123456")
+
+    with pytest.raises(RuntimeError) as caught:
+        failing()
+    text = secrets.redacted_traceback(caught.value)
+    assert text.startswith("Traceback (most recent call last):")
+    assert "in failing" in text and text.endswith("Token [redacted]")
+    assert "tiingo-key-abcdef123456" not in text

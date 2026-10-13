@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import re
+from typing import cast
 
 import pytest
 
+from portfoliosight.data.store import Store
 from tests.api.conftest import headers
 
 GOOD_HASH = "0123456789abcdef"
@@ -97,20 +99,37 @@ def test_a_well_formed_unknown_address_is_unknown_tensor(make_client, generation
     assert response.headers["cache-control"] == "no-store"
 
 
-def test_an_unexpected_error_is_an_envelope_without_internals(make_client, store):
+def test_an_unexpected_error_is_an_envelope_and_a_redacted_log_line(
+    api_env, store, monkeypatch, caplog
+):
+    """The failure is answered and logged here; it never leaves the app for the server to print."""
+    from fastapi.testclient import TestClient
+
+    from portfoliosight.api.app import create_app
+
+    monkeypatch.setenv("CLOUDFLARE_R2_SECRET_ACCESS_KEY", "r2-secret-value-0123456789")
+
     class Broken:
         def __getattr__(self, name):
             return getattr(store, name)
 
         def get(self, key):
-            raise OSError("connection reset by peer at 10.0.0.9 with key AKIAEXAMPLE")
+            raise OSError("signature mismatch for key r2-secret-value-0123456789")
 
-    client = make_client(start_worker=False, store=Broken())
-    response = client.get("/v1/symbols", headers=headers())
-    assert response.status_code == 500
-    assert response.json()["error"] == {
-        "code": "internal_error",
-        "message": "The service could not answer.",
-        "details": None,
-    }
-    assert "AKIAEXAMPLE" not in response.text
+    app = create_app(store=cast(Store, Broken()), start_worker=False)
+    # raise_server_exceptions=True: an exception that escaped the app would raise right here.
+    with TestClient(app, raise_server_exceptions=True) as client, caplog.at_level("ERROR"):
+        response = client.get("/v1/symbols", headers=headers())
+        health = client.get("/v1/health", headers=headers())
+    for answer in (response, health):
+        assert answer.status_code == 500
+        assert answer.json()["error"] == {
+            "code": "internal_error",
+            "message": "The service could not answer.",
+            "details": None,
+        }
+        assert answer.headers["cache-control"] == "no-store"
+        assert "r2-secret-value" not in answer.text
+    assert "unhandled error" in caplog.text and "OSError: signature mismatch" in caplog.text
+    assert "Traceback" in caplog.text and "[redacted]" in caplog.text
+    assert "r2-secret-value-0123456789" not in caplog.text

@@ -29,6 +29,7 @@ from portfoliosight.api.errors import (
     error_response,
     forbidden,
     install_handlers,
+    unexpected_error,
 )
 from portfoliosight.api.gate import GATE_HEADER, gate_open
 from portfoliosight.api.hashing import universe_hash
@@ -187,7 +188,10 @@ def create_app(
             return forbidden()
         if not requests_limiter.admit(_client_ip(request)):
             return _rate_limited()
-        return await call_next(request)
+        try:
+            return await call_next(request)
+        except Exception as exc:
+            return unexpected_error(exc)
 
     @app.get("/v1/health")
     def health() -> JSONResponse:

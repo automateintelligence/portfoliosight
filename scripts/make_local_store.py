@@ -24,6 +24,7 @@ READ_WRITE_ALL = (
     stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH | stat.S_IWOTH
 )
 SEARCH_ALL = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+MARKER = ".fixture-store"  # written here and nowhere else: a real store never has it
 
 
 def open_to_any_uid(directory: Path) -> None:
@@ -37,13 +38,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Write the local fixture store.")
     parser.add_argument("directory", type=Path, help="where to write it, e.g. deploy/.local-store")
     args = parser.parse_args(argv)
-    if args.directory.exists():
-        shutil.rmtree(args.directory)
-    write_fixture_store(args.directory)
+    target: Path = args.directory
+    if target.exists():
+        # Only an earlier store of this script is replaced; any other directory, a real local
+        # store included, is left alone.
+        if not target.is_dir() or (any(target.iterdir()) and not (target / MARKER).is_file()):
+            print(f"{target} exists and is not a fixture store; nothing written", file=sys.stderr)
+            return 2
+        shutil.rmtree(target)
+    write_fixture_store(target)
+    (target / MARKER).write_text("written by scripts/make_local_store.py\n", encoding="utf-8")
     # LocalStore writes through this folder; it must exist and be writable for the container.
-    (args.directory / ".tmp").mkdir(exist_ok=True)
-    open_to_any_uid(args.directory)
-    print(f"fixture store written to {args.directory}")
+    (target / ".tmp").mkdir(exist_ok=True)
+    open_to_any_uid(target)
+    print(f"fixture store written to {target}")
     return 0
 
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hmac
 
 GATE_HEADER = "x-ps-gate"
+GATE_SECRET_ENV = "PS_GATE_SECRET"
 
 
 def gate_open(presented: str | None, secret: str) -> bool:

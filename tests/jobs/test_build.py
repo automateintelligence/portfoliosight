@@ -128,7 +128,13 @@ def test_rows_after_d_g_change_nothing(store, generation, d_g, tmp_path):
     assert after["universe"]["funds"][0]["adjusted_through"] == later.isoformat()
 
 
-def test_a_cached_record_is_dropped_when_the_catalog_says_it_was_refetched(
+def _refetched(store, symbol: str, at: str) -> None:
+    catalog = manifest_mod.load_manifest(store)
+    catalog.symbols[symbol].fetched_at = at
+    manifest_mod.write_catalog(store, catalog, datetime(2026, 10, 14, tzinfo=UTC))
+
+
+def test_a_cached_record_is_used_until_the_catalog_says_it_was_refetched(
     store, generation, d_g, tmp_path
 ):
     first = _build(store, generation, tmp_path, ids=MENU[:3])
@@ -139,11 +145,48 @@ def test_a_cached_record_is_dropped_when_the_catalog_says_it_was_refetched(
     assert (
         cached["universe"]["funds"][0]["last_close"] == first["universe"]["funds"][0]["last_close"]
     )
-    catalog = manifest_mod.load_manifest(store)
-    catalog.symbols["VTI"].fetched_at = "2026-10-14T09:00:00+00:00"
-    manifest_mod.write_catalog(store, catalog, datetime(2026, 10, 14, tzinfo=UTC))
+    folder = tmp_path / "cache" / "prices" / "VTI"
+    before = list(folder.iterdir())
+    assert len(before) == 1
+    _refetched(store, "VTI", "2026-10-14T09:00:00+00:00")
     fresh = _build(store, generation, tmp_path, ids=MENU[:3])
     assert fresh["universe"]["funds"][0]["last_close"] == 1234.5
+    after = list(folder.iterdir())
+    assert len(after) == 1 and after != before  # the old version is dropped, not kept beside
+
+
+def test_a_file_cached_under_an_old_version_never_serves_a_newer_catalog(
+    store, generation, tmp_path, monkeypatch
+):
+    """Two processes share the cache: one still holds yesterday's catalog and yesterday's bytes.
+
+    Whatever it writes lands under yesterday's version, so a build that reads today's catalog
+    cannot pick it up, in any interleaving.
+    """
+    from portfoliosight.data import cache as cache_mod
+
+    old_bytes = store.get("prices/VTI.parquet")
+    record = store_mod.get_record(store, "VTI")
+    record.loc[record.index[-1], "close"] = 1234.5
+    store_mod.put_record(store, "VTI", record)
+    _refetched(store, "VTI", "2026-10-14T09:00:00+00:00")
+    real_fetch = cache_mod.fetch_into_cache
+    late_writes: list = []
+
+    def fetch_while_the_other_process_writes(store_, key, *, cache_dir):
+        if key.startswith("prices/VTI/") and not late_writes:
+            # The slow process finishes now: yesterday's bytes under yesterday's version.
+            stale = cache_mod.cached_path(cache_dir, "prices/VTI/0000000000000000.parquet")
+            stale.parent.mkdir(parents=True, exist_ok=True)
+            stale.write_bytes(old_bytes)
+            late_writes.append(stale)
+        return real_fetch(store_, key, cache_dir=cache_dir)
+
+    monkeypatch.setattr(cache_mod, "fetch_into_cache", fetch_while_the_other_process_writes)
+    tensor = _build(store, generation, tmp_path, ids=MENU[:3])
+    assert late_writes and tensor["universe"]["funds"][0]["last_close"] == 1234.5
+    again = _build(store, generation, tmp_path, ids=MENU[:3])
+    assert again["universe"]["funds"][0]["last_close"] == 1234.5
 
 
 def test_a_fund_without_a_price_on_d_g_has_no_last_close(store, generation, tmp_path):
@@ -237,7 +280,7 @@ def test_a_record_evicted_between_fetch_and_read_is_read_from_the_store(
 
     def fetch_then_lose(store_, key, *, cache_dir):
         path = real_fetch(store_, key, cache_dir=cache_dir)
-        if key == "prices/VTI.parquet":
+        if key.startswith("prices/VTI/"):
             path.unlink()
         return path
 
@@ -255,9 +298,9 @@ def test_a_record_deleted_from_the_store_mid_build_is_no_data(
 
     def fetch_then_delete_everywhere(store_, key, *, cache_dir):
         path = real_fetch(store_, key, cache_dir=cache_dir)
-        if key == "prices/VNQ.parquet":
+        if key.startswith("prices/VNQ/"):
             path.unlink()
-            store_.delete(key)
+            store.delete("prices/VNQ.parquet")
         return path
 
     monkeypatch.setattr(cache_mod, "fetch_into_cache", fetch_then_delete_everywhere)

@@ -96,8 +96,10 @@ def _expected_keys(generation: str) -> set[str]:
     }
 
 
-def _old_generation(store, generation: str) -> None:
+def _old_generation(store, generation: str, *, complete: bool = True) -> None:
     store_mod.put_json(store, f"meta/{generation}/generation.json", {"generation": generation})
+    if complete:
+        store_mod.put_json(store, f"meta/{generation}/presets.json", {"generation": generation})
     store.put(f"tensors/{generation}/{'ab' * 8}/5y.json", b"{}")
 
 
@@ -160,7 +162,12 @@ def test_interrupted_run_publishes_nothing_and_the_rerun_resumes(unpublished, ge
     )
     # The generation before the previous one is gone; the previous one is whole.
     assert store.list(f"meta/{old}/") == [] and store.list(f"tensors/{old}/") == []
-    assert len(store.list(f"meta/{previous}/") + store.list(f"tensors/{previous}/")) == 2
+    assert len(store.list(f"meta/{previous}/") + store.list(f"tensors/{previous}/")) == 3
+    assert store_mod.get_json(store, "meta/previous.json") == {
+        "current": generation,
+        "previous": previous,
+    }
+    assert store.puts.index("meta/previous.json") < switch
     assert status["published"] is True and status["pruned"] == [old]
     assert status == store_mod.get_json(store, "meta/status.json")
     assert status["D_G"] == d_g.isoformat() and status["generation"] == generation
@@ -284,6 +291,9 @@ def test_generations_are_ordered_by_date_then_version(tmp_path):
         "2026-10-12-0.2.0",
         "2026-10-12-0.10.0",
     ]
+    store_mod.put_json(
+        store, "meta/previous.json", {"current": "2026-10-12-0.10.0", "previous": names[1]}
+    )
     assert nightly.prune_generations(store, "2026-10-12-0.10.0") == [
         "2026-10-08-0.1.0",
         "2026-10-09-0.1.0",
@@ -291,7 +301,74 @@ def test_generations_are_ordered_by_date_then_version(tmp_path):
     assert nightly.stored_generations(store) == ["2026-10-12-0.2.0", "2026-10-12-0.10.0"]
     assert store.exists("meta/manifest.json")
     assert store.exists("tensors/not-a-generation/x/1y.json")
-    assert nightly.prune_generations(store, "2026-10-12-0.2.0") == []
+
+
+def test_nothing_is_pruned_without_a_record_of_the_previous_generation(tmp_path):
+    store = store_mod.LocalStore(tmp_path)
+    for name in ("2026-10-08-0.1.0", "2026-10-09-0.1.0", "2026-10-12-0.1.0"):
+        _old_generation(store, name)
+    current = "2026-10-12-0.1.0"
+    assert nightly.previous_generation(store, current) == (False, None)
+    assert nightly.prune_generations(store, current) == []
+    # A record written for a switch that never happened says nothing about this pointer.
+    store_mod.put_json(
+        store, "meta/previous.json", {"current": "2026-10-13-0.1.0", "previous": current}
+    )
+    assert nightly.prune_generations(store, current) == []
+    store.put("meta/previous.json", b"[]")
+    assert nightly.prune_generations(store, current) == []
+    assert len(nightly.stored_generations(store)) == 3
+    # The first generation ever has no previous one: everything older is left-over.
+    store_mod.put_json(store, "meta/previous.json", {"current": current, "previous": None})
+    assert nightly.previous_generation(store, current) == (True, None)
+    assert nightly.prune_generations(store, current) == ["2026-10-08-0.1.0", "2026-10-09-0.1.0"]
+
+
+def test_an_abandoned_generation_is_not_mistaken_for_the_previous_one(unpublished, generation):
+    """Published G1, a G2 that died half-built, then G3: visitors hold G1, so G1 is kept."""
+    store = unpublished
+    g1, g2 = "2026-10-08-0.1.0", "2026-10-09-0.1.0"
+    _old_generation(store, g1)
+    _old_generation(store, g2, complete=False)
+    store_mod.put_json(store, "meta/current.json", {"generation": g1})
+    status = nightly.run(store=store, now=NOW, providers=_providers(), build_fn=_FastBuild())
+    assert status["published"] is True and status["pruned"] == [g2]
+    assert nightly.stored_generations(store) == [g1, generation]
+    assert store.exists(f"tensors/{g1}/{'ab' * 8}/5y.json")
+    # Later runs of the same day leave the previous generation where it is.
+    again = nightly.run(store=store, now=NOW, providers=_providers(), build_fn=_FastBuild())
+    assert again["pruned"] == [] and nightly.stored_generations(store) == [g1, generation]
+
+
+def test_first_publication_has_no_previous_generation(unpublished, generation):
+    nightly.run(store=unpublished, now=NOW, providers=_providers(), build_fn=_FastBuild())
+    assert store_mod.get_json(unpublished, "meta/previous.json") == {
+        "current": generation,
+        "previous": None,
+    }
+
+
+def test_entry_point_logs_a_failed_run_redacted_and_exits_1(
+    unpublished, monkeypatch, caplog, capsys
+):
+    monkeypatch.setenv("PS_STORE", "local")
+    monkeypatch.setenv("PS_LOCAL_STORE_DIR", str(unpublished.root))
+    monkeypatch.setenv("PS_NIGHTLY_PROVIDERS", "fixture")
+    monkeypatch.setenv("PS_FIXTURE_DIR", str(FIXTURES))
+    monkeypatch.setenv("CLOUDFLARE_R2_SECRET_ACCESS_KEY", "r2-secret-value-0123456789")
+
+    def broken(*args, **kwargs):
+        raise OSError("request signed with r2-secret-value-0123456789 was refused")
+
+    monkeypatch.setattr(download, "run", broken)
+    with caplog.at_level("ERROR"):
+        assert nightly.main() == 1
+    printed = capsys.readouterr()
+    logged = caplog.text + printed.err + printed.out
+    assert "nightly failed" in logged and "Traceback" in logged and "[redacted]" in logged
+    assert "r2-secret-value-0123456789" not in logged
+    stored = unpublished.get("meta/status.json").decode()
+    assert "r2-secret-value-0123456789" not in stored and "[redacted]" in stored
 
 
 def test_entry_point_publishes_real_tensors_offline(unpublished, generation, monkeypatch):

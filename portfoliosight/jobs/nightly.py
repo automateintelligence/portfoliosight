@@ -6,9 +6,13 @@ Steps: (1) ``D_G`` and ``G``; a generation already published skips to step 4. (2
 tier 1. (3) Write ``meta/{G}/generation.json`` if absent, build every preset tensor whose key is
 missing, and only when all twelve exist write ``meta/{G}/presets.json`` and switch
 ``meta/current.json``. (4) Refresh tiers 2 and 3 within the provider budget. (5) Delete every
-generation older than the one before the current. (6) Write ``meta/status.json``. (7) Evict the
-scratch cache. A rerun after an interruption resumes at the first missing tensor; nothing under
+generation older than the previous one. (6) Write ``meta/status.json``. (7) Evict the scratch
+cache. A rerun after an interruption resumes at the first missing tensor; nothing under
 ``meta/{G}/`` is ever rewritten.
+
+"The previous one" is the generation ``meta/current.json`` pointed at before the last switch,
+which visitors may still hold. ``meta/previous.json`` records it just before each switch;
+a generation that was started and never published is not it.
 """
 
 from __future__ import annotations
@@ -35,7 +39,7 @@ from portfoliosight.data import cache as cache_mod
 from portfoliosight.data import download
 from portfoliosight.data import store as store_mod
 from portfoliosight.data.calendar import generation_date, generation_id
-from portfoliosight.data.secrets import RedactingFilter, install_redaction
+from portfoliosight.data.secrets import RedactingFilter, install_redaction, redacted_traceback
 from portfoliosight.engine import ENGINE_VERSION
 from portfoliosight.engine.caps import RULE
 from portfoliosight.engine.stats import EW_HALFLIFE_DAYS
@@ -47,6 +51,7 @@ install_redaction([logger.name])
 
 CURRENT_KEY = "meta/current.json"
 STATUS_KEY = "meta/status.json"
+PREVIOUS_KEY = "meta/previous.json"
 PROVIDERS_ENV = "PS_NIGHTLY_PROVIDERS"
 FIXTURE_DIR_ENV = "PS_FIXTURE_DIR"
 FIXED_NOW_ENV = "PS_FIXED_NOW"
@@ -85,10 +90,36 @@ def stored_generations(store: store_mod.Store) -> list[str]:
     return sorted(found, key=_order)
 
 
+def previous_generation(store: store_mod.Store, current: str) -> tuple[bool, str | None]:
+    """``(known, previous)``: the generation published before ``current``, when it is recorded.
+
+    ``known`` is False when ``meta/previous.json`` is absent or was written for another switch
+    (a run that died between writing it and switching the pointer); nothing may be pruned then.
+    """
+    try:
+        record = store_mod.get_json(store, PREVIOUS_KEY)
+    except KeyError:
+        return False, None
+    if not isinstance(record, dict) or record.get("current") != current:
+        return False, None
+    previous = record.get("previous")
+    return True, previous if isinstance(previous, str) else None
+
+
 def prune_generations(store: store_mod.Store, current: str) -> list[str]:
-    """Delete every generation older than the one before ``current``; returns those deleted."""
-    older = [g for g in stored_generations(store) if _order(g) < _order(current)]
-    doomed = older[:-1]
+    """Delete every generation older than the previous one; returns those deleted.
+
+    Kept: ``current``, the generation published before it, and anything newer than ``current``
+    (a generation being built). Without a record of the previous generation nothing is deleted.
+    """
+    known, previous = previous_generation(store, current)
+    if not known:
+        return []
+    doomed = [
+        generation
+        for generation in stored_generations(store)
+        if _order(generation) < _order(current) and generation != previous
+    ]
     for generation in doomed:
         for key in store.list(f"meta/{generation}/") + store.list(f"tensors/{generation}/"):
             store.delete(key)
@@ -240,6 +271,9 @@ def run(
                 if not store.exists(presets_key(generation)):
                     body = presets_body(generation, d_g.isoformat(), store)
                     store_mod.put_json(store, presets_key(generation), body)
+                # Recorded before the switch: once the pointer moves, what it left is known.
+                outgoing = {"current": generation, "previous": _current(store)}
+                store_mod.put_json(store, PREVIOUS_KEY, outgoing)
                 pointer = {"generation": generation, "published_at": clock().isoformat()}
                 store_mod.put_json(store, CURRENT_KEY, pointer)
                 status["published"] = True
@@ -300,7 +334,13 @@ def main() -> int:
     except (store_mod.StoreConfigError, download.ProviderError, ValueError, OSError) as exc:
         print(f"nightly not run: {exc}", file=sys.stderr)
         return 2
-    status = run(store=store, now=now, providers=providers)
+    try:
+        status = run(store=store, now=now, providers=providers)
+    except Exception as exc:
+        # Logged here, redacted: the interpreter's own traceback would print an error text,
+        # and any credential in it, as it is.
+        logger.error("nightly failed\n%s", redacted_traceback(exc))
+        return 1
     return 0 if status["published"] else 1
 
 

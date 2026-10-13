@@ -10,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from portfoliosight.data.secrets import install_redaction
+from portfoliosight.data.secrets import install_redaction, redacted_traceback
 
 logger = logging.getLogger(__name__)
 install_redaction([logger.name])
@@ -63,7 +63,12 @@ def install_handlers(app: FastAPI) -> None:
         ]
         return error_response(422, "invalid_request", "The request is not valid.", problems)
 
-    @app.exception_handler(Exception)
-    async def _unexpected(_: Request, exc: Exception) -> JSONResponse:
-        logger.error("unhandled %s: %s", type(exc).__name__, exc)
-        return error_response(500, "internal_error", "The service could not answer.")
+
+def unexpected_error(exc: Exception) -> JSONResponse:
+    """The answer to a failure nothing else handled: logged here, redacted, and not re-raised.
+
+    An exception that left the application would be printed by the server with its message and
+    traceback as they are; this keeps a credential an error text may carry out of the log.
+    """
+    logger.error("unhandled error\n%s", redacted_traceback(exc))
+    return error_response(500, "internal_error", "The service could not answer.")

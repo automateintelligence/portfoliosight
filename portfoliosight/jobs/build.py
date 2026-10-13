@@ -6,11 +6,12 @@ price records it needs, uses rows up to ``D_G``, and never writes over a tensor 
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
@@ -33,7 +34,6 @@ from portfoliosight.engine.tensor import (
 )
 
 CUSTOM_MENU_NAME = "Custom menu"
-_VERSION_SUFFIX = ".version"
 
 
 class BuildRefused(Exception):
@@ -67,26 +67,34 @@ def put_tensor(store: store_mod.Store, key: str, tensor: Mapping[str, Any]) -> N
     store.put(key, canonical_json(tensor).encode("utf-8"))
 
 
+class _RecordSource:
+    """A store that answers any key with one record: lets a versioned cache path be filled."""
+
+    def __init__(self, store: store_mod.Store, key: str):
+        self._store, self._key = store, key
+
+    def get(self, key: str) -> bytes:
+        return self._store.get(self._key)
+
+
 def _cached_record(
     store: store_mod.Store, cache_dir: Path, symbol: str, version: str
 ) -> pd.DataFrame | None:
     """A symbol's record through the scratch cache; ``None`` when the store has none.
 
-    Records change every night, so a cached file is used only while the catalog's ``fetched_at``
-    (``version``) is the one it was cached under. The label is written after the file, so it is
-    never newer than the content.
+    Records change every night, so the cached file's own path carries the catalog's
+    ``fetched_at`` (``version``) it was fetched under: ``prices/{SYMBOL}/{digest}.parquet``.
+    The catalog is written after the record, so a file is never older than its name says,
+    whatever other process fills the cache at the same time. Other versions are dropped.
     """
     key = store_mod.record_key(symbol)
-    path = cache_mod.cached_path(cache_dir, key)
-    label = path.with_name(path.name + _VERSION_SUFFIX)
+    digest = hashlib.sha256(version.encode("utf-8")).hexdigest()[:16]
+    cache_key = f"prices/{symbol}/{digest}.parquet"
+    path = cache_mod.cached_path(cache_dir, cache_key)
+    new = not path.is_file()
     try:
-        current = label.read_text(encoding="utf-8") == version
-    except FileNotFoundError:
-        current = False
-    if not current:
-        path.unlink(missing_ok=True)
-    try:
-        cached = cache_mod.fetch_into_cache(store, key, cache_dir=cache_dir)
+        source = cast(store_mod.Store, _RecordSource(store, key))
+        cached = cache_mod.fetch_into_cache(source, cache_key, cache_dir=cache_dir)
     except KeyError:
         return None
     try:
@@ -96,10 +104,10 @@ def _cached_record(
             data = store.get(key)
         except KeyError:
             return None
-    if not current:
-        tmp = label.with_name(f".tmp-{os.getpid()}-{label.name}")
-        tmp.write_text(version, encoding="utf-8")
-        os.replace(tmp, label)
+    if new:
+        for other in path.parent.glob("*.parquet"):
+            if other != path:
+                other.unlink(missing_ok=True)
     return store_mod.record_from_bytes(data)
 
 

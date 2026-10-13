@@ -15,13 +15,38 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "make_local_store.py"
 
 
-def test_store_is_seeded_unpublished_and_open_to_the_container_uid(tmp_path):
-    target = tmp_path / "local-store"
-    target.mkdir()
-    (target / "left-over").write_text("from an earlier run")
-    done = subprocess.run(
+def _run(target: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
         [sys.executable, str(SCRIPT), str(target)], cwd=ROOT, capture_output=True, text=True
     )
+
+
+def test_a_directory_that_is_not_a_fixture_store_is_never_replaced(tmp_path):
+    precious = tmp_path / "documents"
+    precious.mkdir()
+    (precious / "thesis.txt").write_text("years of work")
+    done = _run(precious)
+    assert done.returncode == 2 and "is not a fixture store" in done.stderr
+    assert (precious / "thesis.txt").read_text() == "years of work"
+    a_file = tmp_path / "file"
+    a_file.write_text("x")
+    assert _run(a_file).returncode == 2 and a_file.read_text() == "x"
+    # A real local store has a catalog too; only this script's own marker allows replacing.
+    real = tmp_path / "real-store"
+    (real / "meta").mkdir(parents=True)
+    (real / "meta" / "manifest.json").write_text('{"symbols": {}}')
+    assert _run(real).returncode == 2
+    assert (real / "meta" / "manifest.json").read_text() == '{"symbols": {}}'
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert _run(empty).returncode == 0 and (empty / ".fixture-store").is_file()
+
+
+def test_store_is_seeded_unpublished_and_open_to_the_container_uid(tmp_path):
+    target = tmp_path / "local-store"
+    assert _run(target).returncode == 0
+    (target / "left-over").write_text("from an earlier run")
+    done = _run(target)  # an earlier store of this script is replaced whole
     assert done.returncode == 0, done.stderr
     assert not (target / "left-over").exists()
     store = LocalStore(target)
