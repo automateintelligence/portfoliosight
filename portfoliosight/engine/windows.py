@@ -34,8 +34,9 @@ START_SLACK = (1, 10)  # a fund may start up to 1/10 of the window after the win
 UNAVAILABLE_MESSAGE = "not enough shared history"
 
 _DATE = r"\d{4}-\d{2}-\d{2}"
-_CATALOG_REASON = re.compile(
+_CATALOG_REASON = re.compile(  # the templates a catalog can state; they are kept verbatim
     rf"no data|no data since {_DATE}|converted to an ETF; no data since {_DATE}"
+    rf"|corporate actions not yet verified after {_DATE}"
 )
 
 

@@ -163,9 +163,15 @@ def test_unserved_funds_are_excluded_with_a_catalog_reason():
     }
     catalog["ODD"] = {"status": "unavailable", "reason": 404, "last_date": pd.NaT}
     catalog["NEW"] = {"status": "pending", "reason": None, "last_date": "2026-06-29"}
+    catalog["AAA"] = {  # the catalog's own sentence is kept as it is, date included
+        "status": "pending",
+        "reason": "corporate actions not yet verified after 2026-02-27",
+        "adjusted_through": "2026-03-15",
+    }
     selection = select_window(frame, "5y", ASOF, catalog)
-    assert selection.status == "ready" and selection.funds == ["AAA", "BBB"]
+    assert selection.status == "unavailable" and selection.funds == ["BBB"]
     assert _reasons(selection) == {
+        "AAA": "corporate actions not yet verified after 2026-02-27",
         "ETF": "converted to an ETF; no data since 2024-10-30",
         "GONE": "no data since 2025-01-15",
         "NONE": "no data",
@@ -176,11 +182,12 @@ def test_unserved_funds_are_excluded_with_a_catalog_reason():
         "NEW": "no data since 2026-06-29",
         "MISSING": "no data",
     }
-    assert [entry["id"] for entry in selection.excluded] == ids[2:]  # menu order
+    assert [entry["id"] for entry in selection.excluded] == ["AAA", *ids[2:]]  # menu order
     # an unserved fund does not cut the sample, whatever its returns look like
-    assert selection.rows == 1260
+    catalog["AAA"] = dict(OK)
+    assert select_window(frame, "5y", ASOF, catalog).rows == 1260
     catalog["STALE"] = dict(OK)
-    assert "STALE" in select_window(frame, "5y", ASOF, catalog).funds
+    assert select_window(frame, "5y", ASOF, catalog).funds == ["AAA", "BBB", "STALE"]
 
 
 def test_a_fund_without_any_return_has_no_data():
