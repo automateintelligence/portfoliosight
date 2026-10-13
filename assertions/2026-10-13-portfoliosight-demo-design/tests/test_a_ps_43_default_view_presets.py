@@ -1,4 +1,4 @@
-"""A-PS-43 - the default view is the 2017 guide portfolio with its allocation and no fund set
+"""A-PS-43 - the default view is the Example Portfolio with its allocation and no fund set
 aside; a menu holding a fund its tensor sets aside shows the excluded-fund note with the tensor's
 reason; the preset menu is driven by /api/presets.
 
