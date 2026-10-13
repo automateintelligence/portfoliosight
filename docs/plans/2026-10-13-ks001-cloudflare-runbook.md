@@ -407,6 +407,69 @@ ln -s "$HOME/.local/share/portfoliosight/bin/r2_backup.sh" "$HOME/programming/po
   Until the drive is fixed the 05:30 run downloads the whole bucket each night (150 MB now,
   about 300 MB when the catch-up is complete) and adds about 1 MB of progress lines to the log.
 
+## Second attempt on 2026-10-13 (22:30 UTC): tunnel route and backup drive
+
+Both owner steps of issue #86 were tried again from the laptop. Neither is done; nothing was
+changed at Cloudflare, on the host, or on the drive.
+
+Tunnel route (step 5), after the owner added "Zero Trust Write" to the project's API token:
+
+- `GET /accounts/{account}/cfd_tunnel` now answers 200, with an empty list (`total_count: 0`,
+  the same with `is_deleted=true`). The token sees one account, the one in `CLOUDFLARE_ACCOUNT_ID`.
+- `GET /accounts/{account}/cfd_tunnel/222b8001-009a-47b2-8a31-3ea624ce32ca` and
+  `GET …/cfd_tunnel/222b8001-009a-47b2-8a31-3ea624ce32ca/configurations` answer 401,
+  `{"code": 1001, "message": "Not authorized"}`.
+- Reading: the token may list tunnels in the project's account and that account holds none, so
+  the tunnel on KS-001 most likely belongs to another Cloudflare account. Not confirmed: that
+  would take the tunnel's own credentials, which the run does not read. If it is so, no
+  permission on this token can reach it; the hostname has to be added in the account that owns
+  the tunnel (dashboard path under "Remaining", item 1), or a token of that account is needed.
+  If the tunnel is in the project's account after all, the permission Cloudflare's API
+  reference names for these calls is one of `Cloudflare One Connector: cloudflared Write`,
+  `Cloudflare One Connectors Write` or `Cloudflare Tunnel Write` (Account level).
+- Stopped there: no configuration was read, so none was written, and no DNS record was created.
+  `api.portfoliosight.ai` does not resolve; `/api/health` on the site answers 530 with the header.
+  The two error bodies are kept in `~/.local/state/portfoliosight/` (`tunnel-list-…`,
+  `tunnel-config-GET-401-…`, mode 600).
+
+Backup drive (step 8):
+
+- `/mnt/d` is a 9p drvfs mount without `uid`/`gid` (every file shows root, mode 777), and it is
+  mounted twice, one mount on top of the other. `/mnt/c` carries `uid=1000;gid=1000` and no
+  `metadata`. Measured on a scratch file on each drive: a file's time can be set on `C:` and
+  not on `D:` ("Operation not permitted"). So the owner options alone are enough; `metadata` is
+  not needed, and `D:` would then behave as `C:` does today.
+- `/etc/wsl.conf` has no `[automount]` section and `/etc/fstab` is empty. No process of the
+  laptop account held a file open under `/mnt/d` when checked. Two cron jobs of another project
+  write there: every 15 minutes, and at 05:00.
+- Not changed: mounting needs root, and `sudo` asks for a password in this session. The owner's
+  commands, to run in a WSL shell just after a quarter-hour job has ended (for example at :03)
+  and not near 05:00 or 05:30:
+
+```
+cd ~
+sudo umount /mnt/d && sudo umount /mnt/d            # twice: the mount is stacked; "target is busy" means stop and retry later, do not force
+sudo mount -t drvfs D: /mnt/d -o uid=$(id -u),gid=$(id -g)
+mount | grep -c ' /mnt/d '                          # 1
+f=/mnt/d/portfoliosight-data/.time-check; touch "$f" && touch -d 2026-01-01 "$f" && echo "times can be set"; rm -f "$f"
+```
+
+  This lasts until WSL restarts or the drive is plugged in again. To keep it across a WSL
+  restart, one line in `/etc/fstab` (used at start when the drive is present; after a re-plug
+  the `mount` line above is needed again):
+
+```
+D: /mnt/d drvfs uid=<the account's uid>,gid=<its gid> 0 0
+```
+
+  Then the three commands of "Remaining", item 2 (align the times once, run the backup, restore
+  dry run). `r2_backup.sh` has no dry-run mode of its own; the dry run is the `aws s3 sync
+  --dryrun` line there.
+
+Gate, same hour: A-PS-55 red (2 of 4: `api.portfoliosight.ai` does not resolve), A-PS-67 red
+(2 of 3, same cause), A-PS-58 red (the backup exits 2 on this drive, so the mirror and
+restore-dry-run legs fail, and the crontab leg counts the conductor's two lines as well).
+
 ## Measured
 
 - Provider tier and limits: Tiingo Starter; 45 requests per hour, 900 per day, 450 unique symbols
