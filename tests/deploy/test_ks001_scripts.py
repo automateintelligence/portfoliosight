@@ -357,6 +357,38 @@ def test_ingress_hostname_failure_restores_the_backup_and_restarts_again(tmp_pat
     assert box.leftovers() == []
 
 
+def test_ingress_hostname_that_stops_answering_restores_the_backup(tmp_path):
+    box = IngressBox(tmp_path)
+    (box.log / "status-after" / "one.example.com").write_text("000")
+    done = box.run("install")
+    assert done.returncode != 0
+    assert "one.example.com" in done.stderr
+    assert box.config.read_text() == FIXTURE
+    assert box.lines("systemctl.args") == ["restart cloudflared"] * 2
+
+
+@pytest.mark.parametrize("answer", ["000", ""])
+def test_ingress_stops_when_an_existing_hostname_gives_no_answer_beforehand(tmp_path, answer):
+    box = IngressBox(tmp_path)
+    (box.log / "status-before" / "two.example.com").write_text(answer)
+    done = box.run("install")
+    assert done.returncode != 0
+    assert "two.example.com" in done.stderr
+    assert box.config.read_text() == FIXTURE
+    assert box.lines("systemctl.args") == [] and box.lines("cloudflared.args") == []
+    assert box.backups() == [] and box.leftovers() == []
+
+
+def test_ingress_can_leave_out_a_hostname_that_never_answered(tmp_path):
+    box = IngressBox(tmp_path)
+    (box.log / "status-before" / "two.example.com").write_text("000")
+    done = box.run("install", PS_INGRESS_ALLOW_UNREACHABLE="1")
+    assert done.returncode == 0, done.stderr
+    assert box.config.read_text() == EXPECTED
+    hosts = [re.sub(r"^[a-z]+://|/$", "", url) for url in box.lines("curl.urls")]
+    assert hosts == ["one.example.com", "two.example.com", "one.example.com"]
+
+
 def test_ingress_explicit_rollback_restores_and_names_the_backup(tmp_path):
     box = IngressBox(tmp_path)
     assert box.run("install").returncode == 0

@@ -80,7 +80,10 @@ Checked 2026-10-13 with `curl` from the laptop (browser-like user agent, no cook
 
 If the gate secret is ever changed: change it in the laptop env file, run
 `python scripts/cloudflare_rules.py --apply` (the two WAF rules are updated in place), set the
-Worker secret again (step 7) and copy the secrets to KS-001 again (step 4).
+Worker secret again (step 7), copy the secrets to KS-001 again (`scripts/ks001_secrets.sh`) and
+recreate the API container so that it reads the new file
+(`docker compose -f deploy/docker-compose.yml up -d --force-recreate api` on the host; a plain
+restart keeps the old value). Until all four hold the same value the page gets no data.
 
 Not checked yet (they need the API host of step 5 and data): the block on
 `api.portfoliosight.ai`, and the rate limit in action.
@@ -250,26 +253,36 @@ Each step's rollback covers everything before it.
 
 ```
 # (a) baseline, from the laptop: every hostname already in the ingress and its HTTPS status
-ssh "$PS_KS001_SSH_HOST" "sudo grep -E '^\s*-?\s*hostname:' /etc/cloudflared/config.yml"
+state="$HOME/.local/state/portfoliosight"; mkdir -p "$state"; stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+ssh "$PS_KS001_SSH_HOST" "sudo sed -n 's/^[[:space:]-]*hostname:[[:space:]]*//p' /etc/cloudflared/config.yml" \
+  | tr -d '"'"'" | sed 's/[[:space:]]*#.*$//' > "$state/ingress-hosts-$stamp.txt"
+while read -r h; do
+  printf '%s %s\n' "$h" "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$(printf '%s://%s/' https "$h")")"
+done < "$state/ingress-hosts-$stamp.txt" | tee "$state/ingress-baseline-$stamp.txt"
 # (b) install on the host; prints "installed ...; backup: <file>" (keep the backup name)
 ssh "$PS_KS001_SSH_HOST" "cd ~/portfoliosight && PS_API_SERVICE_URL='$PS_API_SERVICE_URL' bash scripts/cloudflared_ingress.sh install"
 # (c) DNS; keep the JSON line it prints
+dns_result="$state/dns-result-$stamp.json"       # one receipt per attempt, never overwritten
 python scripts/cloudflare_dns.py ensure-cname --name api.portfoliosight.ai \
-  --target 222b8001-009a-47b2-8a31-3ea624ce32ca.cfargotunnel.com --proxied | tee "$HOME/.local/state/portfoliosight/dns-result.json"
+  --target 222b8001-009a-47b2-8a31-3ea624ce32ca.cfargotunnel.com --proxied > "$dns_result" \
+  && cat "$dns_result" || { echo "ensure-cname failed: stop, roll back (b)"; rm -f "$dns_result"; }
 # (d) the new endpoint (allow two minutes for DNS)
 printf 'x-ps-gate: %s\n' "$PS_GATE_SECRET" | curl -sS -o /dev/null -w '%{http_code}\n' -H @- "$(printf '%s://api.portfoliosight.ai/v1/health' https)"   # 200
 curl -sS -o /dev/null -w '%{http_code}\n' "$(printf '%s://api.portfoliosight.ai/v1/health' https)"                                                    # 403
 ```
 
 - (b) re-checks every pre-existing hostname itself and restores the previous file if one
-  answers differently. Confirm from the laptop as well that each answers as in (a).
+  answers differently. It stops before changing anything when a hostname gives no HTTP answer
+  at all beforehand; look at that hostname first, and only if it is known to be dead run (b)
+  again with `PS_INGRESS_ALLOW_UNREACHABLE=1` in front. After (b), run the loop of (a) again
+  and compare with the saved baseline.
 - The script validates with `cloudflared tunnel --config <candidate> ingress validate`. This
   form has not been run against the host's cloudflared (2026.1.2) yet. If cloudflared refuses
   the command line itself, the script stops before touching the live file; fix the form in the
   script, do not bypass the validation.
 - Because the WAF rule `ps-block-api-direct` already exists, the 403 without the header is
   Cloudflare's block page, not the application's JSON.
-- If (d) fails: `python scripts/cloudflare_dns.py rollback-cname --result "$HOME/.local/state/portfoliosight/dns-result.json"`
+- If (d) fails: `python scripts/cloudflare_dns.py rollback-cname --result "$dns_result"`
   (deletes the record only if this attempt created it), then
   `ssh "$PS_KS001_SSH_HOST" "cd ~/portfoliosight && bash scripts/cloudflared_ingress.sh rollback <backup>"`,
   re-check (a), record the failure here, fix, retry.

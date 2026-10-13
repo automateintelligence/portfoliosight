@@ -26,6 +26,9 @@
 #   PS_CLOUDFLARED_UNIT        the systemd unit (default cloudflared)
 #   PS_INGRESS_CHECK_ATTEMPTS  tries per hostname after the restart (default 12)
 #   PS_INGRESS_CHECK_SLEEP     seconds between tries (default 5)
+#   PS_INGRESS_ALLOW_UNREACHABLE  set to 1 to go on when a hostname already in the config gives
+#                              no HTTP answer at all before the change (it is then not checked
+#                              afterwards); by default such a hostname stops the install
 # When the config or its directory is not writable the script runs itself again under sudo.
 # One run at a time: a lock is held on the config's directory, and the only file a run ever
 # removes is the candidate it created itself.
@@ -37,6 +40,7 @@ SERVICE_URL="${PS_API_SERVICE_URL:-}"
 UNIT="${PS_CLOUDFLARED_UNIT:-cloudflared}"
 ATTEMPTS="${PS_INGRESS_CHECK_ATTEMPTS:-12}"
 PAUSE="${PS_INGRESS_CHECK_SLEEP:-5}"
+ALLOW_UNREACHABLE="${PS_INGRESS_ALLOW_UNREACHABLE:-0}"
 CANDIDATE=""
 
 usage() {
@@ -91,10 +95,13 @@ scan_ingress() {
   ' "$1"
 }
 
+# The HTTP status of a hostname, or "none" when there was no HTTP answer at all.
 status_of() {
-  local url
+  local url code
   url="$(printf '%s://%s/' https "$1")"
-  curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${url}" || true
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${url}")" || code="none"
+  [[ "${code}" =~ ^[1-5][0-9][0-9]$ ]] || code="none"
+  printf '%s' "${code}"
 }
 
 # A file of this run's own beside the live file, removed when the run ends.
@@ -143,6 +150,7 @@ if [ "$(id -u)" -ne 0 ] && { [ ! -w "${CONFIG}" ] || [ ! -w "$(dirname "${CONFIG
     "PS_CLOUDFLARED_CONFIG=${CONFIG}" "PS_API_HOSTNAME=${NEW_HOST}" \
     "PS_CLOUDFLARED_UNIT=${UNIT}" "PS_INGRESS_CHECK_ATTEMPTS=${ATTEMPTS}" \
     "PS_INGRESS_CHECK_SLEEP=${PAUSE}" "PS_API_SERVICE_URL=${SERVICE_URL}" \
+    "PS_INGRESS_ALLOW_UNREACHABLE=${ALLOW_UNREACHABLE}" \
     bash "$0" "$@"
 fi
 
@@ -183,9 +191,17 @@ hosts=()
 baseline=()
 while IFS= read -r existing; do
   case "${existing}" in '' | *'*'*) continue ;; esac
+  before="$(status_of "${existing}")"
+  if [ "${before}" = none ]; then
+    # Without an answer now there is nothing to compare with afterwards.
+    [ "${ALLOW_UNREACHABLE}" = 1 ] \
+      || fail "${existing} gives no HTTP answer now, so the change could not be checked; nothing changed (PS_INGRESS_ALLOW_UNREACHABLE=1 leaves it out)"
+    echo "before: ${existing} gives no HTTP answer; left out of the check"
+    continue
+  fi
   hosts+=("${existing}")
-  baseline+=("$(status_of "${existing}")")
-  echo "before: ${existing} answers ${baseline[-1]}"
+  baseline+=("${before}")
+  echo "before: ${existing} answers ${before}"
 done < <(printf '%s\n' "${scan}" | sed -n 's/^HOST //p')
 
 # The candidate starts as a copy so that it has the live file's owner and mode.
