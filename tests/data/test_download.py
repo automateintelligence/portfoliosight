@@ -728,3 +728,110 @@ def test_cli(tmp_path, monkeypatch, capsys):
     assert "download not run" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         download.main(["--mode", "sideways"])
+
+
+class _Raising(FakeProvider):
+    """A provider whose every call raises something that is not a ``ProviderError``."""
+
+    def __init__(self, name: str, error: Exception):
+        super().__init__(default_available=date(2026, 3, 13))
+        self.name, self.error = name, error
+
+    def fetch_daily(self, symbol, start, end=None):
+        self.calls.append(("daily", symbol, start))
+        raise self.error
+
+    def fetch_meta(self, symbol):
+        self.calls.append(("meta", symbol, None))
+        raise self.error
+
+
+def test_report_lists_refreshed_tiers_and_failed_symbols(tmp_path):
+    behind = date(2026, 3, 6)
+    store = _seed_store(
+        tmp_path,
+        {
+            "BAD": _entry("tiingo", "stale", behind, behind),
+            "GOOD": _entry("tiingo", "stale", behind, behind, tier=1),
+        },
+        {"BAD": (behind, behind), "GOOD": (behind, behind)},
+    )
+    provider = FakeProvider(default_available=date(2026, 3, 13))
+    provider.fail["BAD"] = ProviderError("Tiingo answered 500 for BAD")
+    report = download.RunReport()
+    code, _ = _go(
+        "refresh", store, provider, Clock(date(2026, 3, 14)), ["BAD", "GOOD", "NEW"], report=report
+    )
+    assert code == 1 and report.exit_code == 1 and report.stopped is None
+    assert report.refreshed == {1: 1, 3: 1}
+    assert report.errors == [
+        {
+            "symbol": "BAD",
+            "provider": "tiingo",
+            "error": "ProviderError: Tiingo answered 500 for BAD",
+        }
+    ]
+
+
+def test_any_exception_from_a_provider_is_a_failed_fetch_of_that_symbol(tmp_path, caplog):
+    recent = date(2026, 3, 12)
+    store = _seed_store(
+        tmp_path,
+        {"VTI": _entry("tiingo", "ok", recent, recent)},
+        {"VTI": (recent, recent)},
+    )
+    provider = _Raising("tiingo", RuntimeError("connection dropped"))
+    report = download.RunReport()
+    code, calls = _go("refresh", store, provider, Clock(date(2026, 3, 14)), ["VTI", "NEW"])
+    assert code == 1 and [call[1] for call in calls] == ["VTI", "NEW"]
+    _go("refresh", store, provider, Clock(date(2026, 3, 14)), ["VTI"], report=report)
+    assert report.errors[0]["error"] == (
+        "ProviderError: tiingo fetch failed: RuntimeError: connection dropped"
+    )
+    # A Tiingo failure leaves the status to the dates: one session behind is still served.
+    assert _manifest(store)["VTI"]["status"] == "ok" and "NEW" not in _manifest(store)
+
+
+def test_failed_tsp_fetch_marks_due_funds_stale_until_a_fetch_succeeds(tmp_path):
+    recent, d_g = date(2026, 3, 12), date(2026, 3, 13)
+    entries = {
+        "TSP-G": _entry("tsp", "ok", recent, recent, kind="tsp", tier=1),
+        "TSP-C": _entry("tsp", "ok", d_g, d_g, kind="tsp", tier=1),
+        "VTI": _entry("tiingo", "ok", recent, recent),
+    }
+    store = _seed_store(
+        tmp_path,
+        entries,
+        {s: (e_last, e_last) for s, e_last in (("TSP-G", recent), ("TSP-C", d_g), ("VTI", recent))},
+    )
+    clock = Clock(date(2026, 3, 14))
+    broken = {"tsp": _Raising("tsp", RuntimeError("tsp.gov answered 503"))}
+    tiingo_ok = FakeProvider(default_available=d_g)
+    report = download.RunReport()
+    code, _ = _go(
+        "refresh",
+        store,
+        tiingo_ok,
+        clock,
+        ["TSP-G", "TSP-C", "TSP-L2030", "VTI"],
+        more_providers=broken,
+        report=report,
+    )
+    now = _manifest(store)
+    assert code == 1
+    assert now["TSP-G"]["status"] == "stale"
+    assert now["TSP-G"]["reason"] == "corporate actions not yet verified after 2026-03-12"
+    assert now["TSP-C"]["status"] == "ok"  # current at D_G: no fetch was due, none failed
+    assert now["VTI"]["status"] == "ok" and "TSP-L2030" not in now
+    assert [error["symbol"] for error in report.errors] == ["TSP-G", "TSP-L2030"]
+    assert "TSP-G" not in _listed(store)
+    # A later pass over other symbols rewrites the catalog and keeps the mark.
+    _go("refresh", store, tiingo_ok, clock, ["VTI"])
+    assert _manifest(store)["TSP-G"]["status"] == "stale"
+    # The fetch that succeeds restores it.
+    working = FakeProvider(default_available=d_g)
+    working.name = "tsp"
+    _go("refresh", store, tiingo_ok, clock, ["TSP-G"], more_providers={"tsp": working})
+    restored = _manifest(store)["TSP-G"]
+    assert restored["status"] == "ok" and restored["reason"] is None
+    assert restored["last_date"] == d_g.isoformat()

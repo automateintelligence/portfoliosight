@@ -140,15 +140,18 @@ class TiingoProvider:
 
     def fetch_meta(self, symbol: str) -> SymbolMeta | None:
         payload = self.fetch_meta_raw(symbol)
-        if payload is None:
-            return None
-        exchange = str(payload.get("exchangeCode") or "").upper()
-        return SymbolMeta(
-            name=str(payload.get("name") or symbol),
-            first_date=_iso_date(payload.get("startDate")),
-            last_date=_iso_date(payload.get("endDate")),
-            kind="mutual_fund" if exchange in MUTUAL_FUND_EXCHANGES else "etf",
-        )
+        return None if payload is None else meta_from_payload(payload, symbol)
+
+
+def meta_from_payload(payload: dict, symbol: str) -> SymbolMeta:
+    """Tiingo's meta object as a ``SymbolMeta``; a mutual-fund exchange code decides the kind."""
+    exchange = str(payload.get("exchangeCode") or "").upper()
+    return SymbolMeta(
+        name=str(payload.get("name") or symbol),
+        first_date=_iso_date(payload.get("startDate")),
+        last_date=_iso_date(payload.get("endDate")),
+        kind="mutual_fund" if exchange in MUTUAL_FUND_EXCHANGES else "etf",
+    )
 
 
 def rows_to_frame(rows: list[dict], symbol: str = "") -> pd.DataFrame:

@@ -99,12 +99,26 @@ def reason_for(entry: ManifestEntry, status: str, d_g: date, note: str | None = 
 
 
 def restatus(manifest: Manifest, d_g: date) -> None:
-    """Recompute every entry's status against ``d_g``; ``unavailable`` entries are kept as is."""
+    """Recompute every entry's status against ``d_g``; ``unavailable`` entries are kept as is.
+
+    A ``stale`` entry whose dates are inside the served rule was marked after a failed fetch
+    (``mark_fetch_failed``); it stays ``stale`` until a fetch that succeeds settles it.
+    """
     for entry in manifest.symbols.values():
         if entry.status == "unavailable":
             continue
-        entry.status = status_for(entry, d_g)
+        status = status_for(entry, d_g)
+        if entry.status == "stale" and status == "ok":
+            continue
+        entry.status = status
         entry.reason = reason_for(entry, entry.status, d_g)
+
+
+def mark_fetch_failed(entry: ManifestEntry, d_g: date, note: str | None = None) -> None:
+    """A served entry whose due refresh failed is ``stale``, not served, until a fetch succeeds."""
+    if entry.status == "ok":
+        entry.status = "stale"
+        entry.reason = reason_for(entry, "stale", d_g, note)
 
 
 def symbols_view(manifest: Manifest, catalog_at: datetime) -> dict[str, Any]:
