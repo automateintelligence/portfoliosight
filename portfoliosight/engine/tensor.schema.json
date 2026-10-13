@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:portfoliosight:tensor:2",
+  "title": "PortfolioSight tensor (spec section 7)",
+  "description": "One document per (generation, universe hash, lookback). Fund order is universe.funds everywhere. JSON Schema cannot tie array lengths to n, nx and ny; the builder guarantees them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "engine_version", "generation", "built_at", "build_seconds", "asof",
+    "frontier_curve", "universe", "lookback", "rf", "mu_s", "mu_sample", "sigma", "cov",
+    "torsion", "torsion_inv_t", "torsion_lambda", "bounds", "frontier", "grid", "enb_ref",
+    "stress", "notes"
+  ],
+  "properties": {
+    "schema": {"const": 2},
+    "engine_version": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$"},
+    "generation": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}-[0-9.]+$"},
+    "built_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"},
+    "build_seconds": {"type": "number", "minimum": 0},
+    "asof": {"$ref": "#/$defs/date"},
+    "frontier_curve": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sigma", "mu"],
+      "properties": {"sigma": {"$ref": "#/$defs/vector"}, "mu": {"$ref": "#/$defs/vector"}}
+    },
+    "universe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hash", "name", "preset_id", "funds", "excluded"],
+      "properties": {
+        "hash": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+        "name": {"type": "string", "minLength": 1},
+        "preset_id": {"type": ["string", "null"]},
+        "funds": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id", "name", "kind", "source", "adjusted_through", "fetched_at", "last_close"
+            ],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "name": {"type": "string", "minLength": 1},
+              "kind": {"enum": ["etf", "mutual_fund", "stock", "tsp"]},
+              "source": {"enum": ["seed", "tiingo", "tsp", "seed+tiingo"]},
+              "adjusted_through": {"$ref": "#/$defs/date"},
+              "fetched_at": {"type": "string", "minLength": 1},
+              "last_close": {"type": ["number", "null"]}
+            }
+          }
+        },
+        "excluded": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "reason", "last_close"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "reason": {"type": "string", "minLength": 1},
+              "last_close": {"type": ["number", "null"]}
+            }
+          }
+        }
+      }
+    },
+    "lookback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "start", "end", "rows", "t_eff", "ew_halflife_days"],
+      "properties": {
+        "id": {"enum": ["1y", "2y", "3y", "5y", "10y", "ew"]},
+        "start": {"$ref": "#/$defs/date"},
+        "end": {"$ref": "#/$defs/date"},
+        "rows": {"type": "integer", "minimum": 126},
+        "t_eff": {"type": "number", "exclusiveMinimum": 0},
+        "ew_halflife_days": {"type": ["integer", "null"]}
+      }
+    },
+    "rf": {"type": "number"},
+    "mu_s": {"$ref": "#/$defs/vector"},
+    "mu_sample": {"$ref": "#/$defs/vector"},
+    "sigma": {"$ref": "#/$defs/vector"},
+    "cov": {"$ref": "#/$defs/matrix"},
+    "torsion": {"$ref": "#/$defs/matrix"},
+    "torsion_inv_t": {"$ref": "#/$defs/matrix"},
+    "torsion_lambda": {"$ref": "#/$defs/vector"},
+    "bounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested", "min", "max", "rule"],
+      "properties": {
+        "requested": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["min", "max"],
+            "properties": {
+              "min": {"type": ["number", "null"]},
+              "max": {"type": ["number", "null"]}
+            }
+          }
+        },
+        "min": {"$ref": "#/$defs/vector"},
+        "max": {"$ref": "#/$defs/vector"},
+        "rule": {"const": "max(0.25, 3/N)"}
+      }
+    },
+    "frontier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "w", "s_safe"],
+      "properties": {
+        "x": {"$ref": "#/$defs/vector"},
+        "y": {"$ref": "#/$defs/vector"},
+        "w": {"$ref": "#/$defs/matrix"},
+        "s_safe": {"type": "number", "minimum": 0}
+      }
+    },
+    "grid": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["y", "z", "w", "k_div", "y_div", "w_div", "y_sug"],
+      "properties": {
+        "y": {"$ref": "#/$defs/vector"},
+        "z": {
+          "type": "array",
+          "minItems": 2,
+          "items": {"type": "array", "minItems": 2, "items": {"type": ["number", "null"]}}
+        },
+        "w": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "items": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/vector"}]}
+          }
+        },
+        "k_div": {"type": "array", "minItems": 2, "items": {"type": "integer", "minimum": -1}},
+        "y_div": {"$ref": "#/$defs/vector"},
+        "w_div": {"$ref": "#/$defs/matrix"},
+        "y_sug": {"$ref": "#/$defs/vector"}
+      }
+    },
+    "enb_ref": {"type": "number", "minimum": 1},
+    "stress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gfc2008", "covid2020", "rates2022"],
+      "properties": {
+        "gfc2008": {"$ref": "#/$defs/stress_window"},
+        "covid2020": {"$ref": "#/$defs/stress_window"},
+        "rates2022": {"$ref": "#/$defs/stress_window"}
+      }
+    },
+    "notes": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  },
+  "$defs": {
+    "date": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+    "vector": {"type": "array", "minItems": 2, "items": {"type": "number"}},
+    "matrix": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/vector"}},
+    "stress_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "start", "end", "r"],
+      "properties": {
+        "label": {"type": "string", "minLength": 1},
+        "start": {"$ref": "#/$defs/date"},
+        "end": {"$ref": "#/$defs/date"},
+        "r": {"type": "array", "minItems": 2, "items": {"type": ["number", "null"]}}
+      }
+    }
+  }
+}
