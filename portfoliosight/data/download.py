@@ -255,6 +255,9 @@ class _Ingest:
         # Rows are converted before anything is recorded: a frame that is refused (an unusable
         # price or action) leaves the catalog as it was, so the next run asks again.
         record = None if frame.empty else provider_rows_to_record(frame)
+        if record is not None:
+            # Stored before the catalog names it: a failed upload leaves no entry behind.
+            store_mod.put_record(self.store, symbol, record)
         tier, income = self._tier_income(symbol)
         if entry is None:
             entry = ManifestEntry(
@@ -264,6 +267,7 @@ class _Ingest:
                 income=income,
                 source=provider_name,
                 status="unavailable",
+                reason=manifest_mod.REASON_NO_DATA,
             )
             self.manifest.symbols[symbol] = entry
         entry.fetched_at = self.clock().astimezone(UTC).isoformat()
@@ -272,7 +276,6 @@ class _Ingest:
             entry.reason = manifest_mod.REASON_NO_DATA
             logger.info("%s: no data from %s", symbol, provider_name)
             return
-        store_mod.put_record(self.store, symbol, record)
         entry.source = provider_name
         entry.first_date = _day(record["date"].iloc[0])
         entry.last_date = entry.adjusted_through = _day(record["date"].iloc[-1])

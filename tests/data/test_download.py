@@ -518,6 +518,29 @@ def test_refused_rows_record_nothing_and_are_asked_for_again(tmp_path):
     assert _manifest(store)["NEW"]["adjusted_through"] == "2026-02-23"
 
 
+def test_failed_upload_leaves_no_entry_and_the_next_run_retries(tmp_path):
+    inner = LocalStore(tmp_path / "store")
+
+    class Flaky(LocalStore):
+        failing = True
+
+        def put(self, key: str, data: bytes) -> None:
+            if self.failing and key.startswith("prices/"):
+                raise OSError("upload failed")
+            super().put(key, data)
+
+    store = Flaky(inner.root)
+    provider = FakeProvider(default_available=FEB23)
+    with pytest.raises(OSError, match="upload failed"):
+        _go("catch-up", store, provider, Clock(date(2026, 2, 24)), ["NEW"])
+    # The catalog was still written on the way out, and it does not name the symbol.
+    assert _manifest(store) == {} and _listed(store) == []
+    store.failing = False
+    code, calls = _go("catch-up", store, provider, Clock(date(2026, 2, 25)), ["NEW"])
+    assert code == 0 and [c[0] for c in calls] == ["daily", "meta"]
+    assert _manifest(store)["NEW"]["status"] == "ok" and store.exists("prices/NEW.parquet")
+
+
 def test_persistent_rate_limit_stops_the_run_cleanly(tmp_path, caplog):
     behind = date(2026, 3, 6)
     symbols = ["S1", "S2", "S3"]
