@@ -31,10 +31,10 @@ from portfoliosight.data.manifest import Manifest, ManifestEntry
 from portfoliosight.data.providers.base import ProviderError, RateLimited, SymbolMeta
 from portfoliosight.data.refresh import is_current, plan_refresh, tail_start
 from portfoliosight.data.returns import provider_rows_to_record, splice_tail
-from portfoliosight.data.secrets import install_redaction
+from portfoliosight.data.secrets import RedactingFilter, install_redaction
 from portfoliosight.data.universe import SymbolInfo, is_tsp, load_tiers, priority_order
 
-__all__ = ["MODES", "main", "plan_refresh", "run"]
+__all__ = ["MODES", "RunReport", "main", "plan_refresh", "run"]
 
 logger = logging.getLogger(__name__)
 install_redaction([logger.name])
@@ -45,9 +45,23 @@ DEFAULT_PROBE_SYMBOL = "VTI"
 BUDGETED_PROVIDER = "tiingo"
 TSP_PROVIDER = "tsp"
 DEFAULT_TIER = 3
+# A failed fetch from these providers marks the symbol stale at once (spec 13: the tsp.gov CSV
+# is one download for all TSP funds and may change format); elsewhere the dates decide.
+STALE_ON_FAILED_FETCH = frozenset({TSP_PROVIDER})
+MAX_ERROR_CHARS = 300
 
 Clock = Callable[[], datetime]
 Sleep = Callable[[float], None]
+
+
+@dataclass
+class RunReport:
+    """What one catch-up or refresh run did, for a caller that records it (the nightly)."""
+
+    exit_code: int = 0
+    refreshed: dict[int, int] = field(default_factory=dict)  # tier -> records written
+    errors: list[dict[str, str]] = field(default_factory=list)  # symbol, provider, error
+    stopped: str | None = None  # why the walk ended early, when it did
 
 
 def run(
@@ -59,8 +73,11 @@ def run(
     sleep: Sleep,
     symbols: Iterable[str] | None = None,
     tiers: Iterable[int] | None = None,
+    report: RunReport | None = None,
 ) -> int:
     """One downloader run; returns the exit code (0 also when a budget stopped it cleanly).
+
+    ``report``, when given, is filled with what a catch-up or refresh run did.
 
     ``providers`` maps ``"tiingo"`` (every id not starting with ``TSP-``) and ``"tsp"`` to
     provider objects. ``clock()`` is the only source of time and ``sleep(seconds)`` the only
@@ -78,9 +95,19 @@ def run(
         info = universe.info()
     else:
         order = list(symbols or [])
-    return _execute(
-        mode, store=store, providers=providers, clock=clock, sleep=sleep, order=order, info=info
+    code = _execute(
+        mode,
+        store=store,
+        providers=providers,
+        clock=clock,
+        sleep=sleep,
+        order=order,
+        info=info,
+        report=report,
     )
+    if report is not None:
+        report.exit_code = code
+    return code
 
 
 def _execute(
@@ -92,6 +119,7 @@ def _execute(
     sleep: Sleep,
     order: list[str],
     info: Mapping[str, SymbolInfo],
+    report: RunReport | None = None,
 ) -> int:
     ledger = BudgetLedger(store, clock, sleep, load_limits(store))
     budgeted: Any = providers.get(BUDGETED_PROVIDER)
@@ -127,6 +155,7 @@ def _execute(
             ledger=ledger,
             info=info,
             account=not hooked,
+            report=report if report is not None else RunReport(),
         )
         return ingest.walk(order)
     finally:
@@ -145,6 +174,7 @@ class _Ingest:
     ledger: BudgetLedger
     info: Mapping[str, SymbolInfo]
     account: bool
+    report: RunReport = field(default_factory=RunReport)
     manifest: Manifest = field(init=False)
     d_g: date = field(init=False)
     retry_unavailable: bool = field(init=False)
@@ -179,13 +209,16 @@ class _Ingest:
                             month_spent_logged = True
                         continue
                     logger.info("daily budget spent: stopping at %s, resuming next run", symbol)
+                    self.report.stopped = "daily budget spent"
                     break
                 except RateLimited:
                     logger.warning("provider rate limit persists: stopping at %s", symbol)
+                    self.report.stopped = "provider rate limit"
                     break
                 except (ProviderError, ValueError) as exc:
                     self.errors += 1
                     logger.error("%s: %s: %s", symbol, type(exc).__name__, exc)
+                    self._fetch_failed(symbol, exc)
         finally:
             self._write_catalog()
         return 1 if self.errors else 0
@@ -217,17 +250,39 @@ class _Ingest:
             raise ProviderError(f"no {name!r} provider was given for {symbol}")
         return name, provider
 
-    def _fetch_daily(self, symbol: str, start: date) -> pd.DataFrame:
+    def _fetch_failed(self, symbol: str, exc: Exception) -> None:
+        """Record a failed symbol; a served one of a ``STALE_ON_FAILED_FETCH`` provider is stale."""
+        name = TSP_PROVIDER if is_tsp(symbol) else BUDGETED_PROVIDER
+        text = RedactingFilter().redact(f"{type(exc).__name__}: {exc}")[:MAX_ERROR_CHARS]
+        self.report.errors.append({"symbol": symbol, "provider": name, "error": text})
+        entry = self.manifest.symbols.get(symbol)
+        if entry is not None and name in STALE_ON_FAILED_FETCH:
+            manifest_mod.mark_fetch_failed(entry, self.d_g, self._note(symbol))
+
+    def _refreshed(self, symbol: str) -> None:
+        tier, _ = self._tier_income(symbol)
+        self.report.refreshed[tier] = self.report.refreshed.get(tier, 0) + 1
+
+    def _ask(self, symbol: str, call: Callable[[Any], Any]) -> Any:
+        """One provider call. Whatever a provider raises is a failed fetch of that symbol;
+
+        a spent budget and a rate limit keep their own types, since they steer the walk.
+        """
         name, provider = self._provider(symbol)
         if name == BUDGETED_PROVIDER and self.account:
             self.ledger.before_request(symbol)
-        return provider.fetch_daily(symbol, start, None)
+        try:
+            return call(provider)
+        except (ProviderError, BudgetSpent, ValueError):
+            raise
+        except Exception as exc:
+            raise ProviderError(f"{name} fetch failed: {type(exc).__name__}: {exc}") from exc
+
+    def _fetch_daily(self, symbol: str, start: date) -> pd.DataFrame:
+        return self._ask(symbol, lambda provider: provider.fetch_daily(symbol, start, None))
 
     def _fetch_meta(self, symbol: str) -> SymbolMeta | None:
-        name, provider = self._provider(symbol)
-        if name == BUDGETED_PROVIDER and self.account:
-            self.ledger.before_request(symbol)
-        return provider.fetch_meta(symbol)
+        return self._ask(symbol, lambda provider: provider.fetch_meta(symbol))
 
     def _visit(self, symbol: str) -> None:
         entry = self.manifest.symbols.get(symbol)
@@ -260,6 +315,7 @@ class _Ingest:
         if record is not None:
             # Stored before the catalog names it: a failed upload leaves no entry behind.
             store_mod.put_record(self.store, symbol, record)
+            self._refreshed(symbol)
         tier, income = self._tier_income(symbol)
         if entry is None:
             entry = ManifestEntry(
@@ -310,6 +366,7 @@ class _Ingest:
         spliced, adjusted_through = splice_tail(record, frame, anchor)
         if adjusted_through != anchor:
             store_mod.put_record(self.store, symbol, spliced)
+            self._refreshed(symbol)
             entry.last_date = entry.adjusted_through = adjusted_through
         if entry.source == "seed":
             entry.source = f"seed+{provider_name}"

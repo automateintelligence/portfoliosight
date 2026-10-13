@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import traceback
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -87,3 +88,12 @@ def install_redaction(logger_names: Iterable[str], values: Iterable[str] = ()) -
             logger.addFilter(RedactingFilter(values))
         else:
             existing.add_values(values)
+
+
+def redacted_traceback(exc: BaseException) -> str:
+    """The exception's traceback as text, with secret values and token headers rewritten.
+
+    For a failure that would otherwise reach the interpreter's or the server's own traceback
+    printer, which redacts nothing.
+    """
+    return RedactingFilter().redact("".join(traceback.format_exception(exc))).rstrip()
