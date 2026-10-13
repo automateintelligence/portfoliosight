@@ -265,7 +265,14 @@ ssh "$PS_KS001_SSH_HOST" "cd ~/portfoliosight && PS_API_SERVICE_URL='$PS_API_SER
 dns_result="$state/dns-result-$stamp.json"       # one receipt per attempt, never overwritten
 python scripts/cloudflare_dns.py ensure-cname --name api.portfoliosight.ai \
   --target 222b8001-009a-47b2-8a31-3ea624ce32ca.cfargotunnel.com --proxied > "$dns_result" \
-  && cat "$dns_result" || { echo "ensure-cname failed: stop, roll back (b)"; rm -f "$dns_result"; }
+  && cat "$dns_result" || { echo "ensure-cname FAILED: do not go on to (d)"; rm -f "$dns_result"; false; }
+```
+
+Run the three steps above one at a time. If (c) failed there is no DNS record of this attempt:
+roll back (b) now with `cloudflared_ingress.sh rollback <backup>` (command below), re-check (a),
+and stop. Only when (c) printed its JSON line:
+
+```
 # (d) the new endpoint (allow two minutes for DNS)
 printf 'x-ps-gate: %s\n' "$PS_GATE_SECRET" | curl -sS -o /dev/null -w '%{http_code}\n' -H @- "$(printf '%s://api.portfoliosight.ai/v1/health' https)"   # 200
 curl -sS -o /dev/null -w '%{http_code}\n' "$(printf '%s://api.portfoliosight.ai/v1/health' https)"                                                    # 403
