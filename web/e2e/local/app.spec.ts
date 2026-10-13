@@ -36,7 +36,7 @@ test("the first screen needs nothing entered and shows no table", async ({ page 
 });
 
 test("a window without enough shared history is disabled with its note and the view carries on", async ({ page, request }) => {
-  await request.post("/__mock/config", { data: { lb422: "10y" } });
+  await request.post("/__mock/config", { data: { unavailable: "10y" } });
   await open(page, "f=SGOV:50,VTIP:50&unit=pct");
   const before = await page.getByTestId("risk-readout-bad").textContent();
   await section(page, "settings");
@@ -49,6 +49,15 @@ test("a window without enough shared history is disabled with its note and the v
   await expect.poll(() => new URL(page.url()).searchParams.get("lb")).toBe("1y");
   await expect(page.getByTestId("lookback-1y")).toBeChecked();
   expect((await posts(page)).map((p) => p.lookback)).toEqual(["5y", "10y", "1y"]);
+});
+
+test("a shared link to a window the menu cannot fill offers the other windows", async ({ page, request }) => {
+  await request.post("/__mock/config", { data: { unavailable: "10y" } });
+  await page.goto("/?f=SGOV:50,VTIP:50&unit=pct&lb=10y");
+  await expect(page.getByTestId("chart")).toContainText("does not have enough shared history for the 10 years view");
+  await page.getByTestId("chart").getByRole("button", { name: "1 year" }).click();
+  await expect(page.getByTestId("chart-canvas")).toBeVisible();
+  await expect.poll(() => new URL(page.url()).searchParams.get("lb")).toBe("1y");
 });
 
 test("a stopped nightly shows the dated notice without details", async ({ page, request }) => {
@@ -79,7 +88,7 @@ test("a failed build offers Retry, and Retry sends the same request", async ({ p
   await page.goto("/?f=SGOV:50,VTIP:50&unit=pct");
   await expect(page.getByTestId("build-retry")).toBeVisible();
   await expect(page.getByTestId("building-notice")).toContainText("We couldn't compute this menu");
-  await expect(page.getByTestId("building-notice")).toContainText("solver_failed");
+  await expect(page.getByTestId("building-notice")).toContainText("build_failed");
   await page.getByTestId("build-retry").click();
   await expect(page.getByTestId("chart-canvas")).toBeVisible();
   const sent = await posts(page);
@@ -118,6 +127,13 @@ test("the picker offers served funds, and percentages must add up before the men
   await expect(page.getByTestId("use-menu")).toBeEnabled();
   await expect(page.getByTestId("point-current")).toBeVisible();
   await expect(page.getByTestId("chip-trades")).toBeVisible();
+});
+
+test("before the first data load the page says so plainly", async ({ page, request }) => {
+  await request.post("/__mock/config", { data: { noGeneration: true } });
+  await page.goto("/");
+  await expect(page.getByTestId("chart")).toContainText("price data is not loaded yet");
+  await expect(page.getByTestId("build-retry")).toHaveCount(0);
 });
 
 test("the share dialog says the link is for invited testers while preview is on", async ({ page }) => {

@@ -13,6 +13,7 @@ type Props = {
   unavailable: Partial<Record<LookbackId, string>>;
   details: boolean;
   busy: boolean;
+  problem: string | null;
   onLookback: (lookback: LookbackId) => void;
   onGhost: (lookback: LookbackId) => void;
   onCaps: (caps: Cap[]) => void;
@@ -53,7 +54,7 @@ export function validateCaps(ids: string[], draft: Draft, defaultMaxPct: number)
   return errors;
 }
 
-export function Settings({ tensor, lookback, ghosts, caps, unavailable, details, busy, onLookback, onGhost, onCaps, onShare }: Props) {
+export function Settings({ tensor, lookback, ghosts, caps, unavailable, details, busy, problem, onLookback, onGhost, onCaps, onShare }: Props) {
   const uid = useId();
   const funds = tensor.universe.funds;
   const ids = funds.map((f) => f.id);
@@ -145,6 +146,11 @@ export function Settings({ tensor, lookback, ghosts, caps, unavailable, details,
           {capsRule(pctPlain(defMax), funds.length)}. A small menu gets a higher ceiling, so it stays usable; change any limit below.
           {details ? ` ${technical.caps}.` : ""}
         </p>
+        {problem && (
+          <p className="err" role="alert">
+            {problem}
+          </p>
+        )}
         {errors[""] && (
           <p className="err" role="alert">
             {errors[""]}

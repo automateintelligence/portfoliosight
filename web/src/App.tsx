@@ -8,14 +8,14 @@ import { ResultStrip } from "./controls/ResultStrip";
 import { RiskSlider } from "./controls/RiskSlider";
 import { ShareDialog } from "./controls/ShareDialog";
 import { ThemeSwitch } from "./controls/ThemeSwitch";
-import { disclaimer, family, plain } from "./copy";
+import { disclaimer, family, lookbackNames, plain } from "./copy";
 import { portfolioMath } from "./math/portfolio";
 import { ceilingAt, deriveView, positionOfCeiling } from "./math/view";
 import { Funds } from "./sections/Funds";
 import { Settings } from "./sections/Settings";
 import { Stress } from "./sections/Stress";
 import { Trades } from "./sections/Trades";
-import { createStore, currentMix, type LookbackId } from "./state/store";
+import { createStore, currentMix, LOOKBACKS, type LookbackId } from "./state/store";
 import { applyTheme, useMediaQuery, useThemeEpoch } from "./theme/useTheme";
 
 type SectionId = "funds" | "trades" | "stress" | "settings";
@@ -132,13 +132,16 @@ export default function App() {
   const xOf = useCallback((s: number) => (scales && tensor ? scales.x(ceilingAt(tensor, s)) : 0), [scales, tensor]);
   const sOf = useCallback((px: number) => (scales && tensor ? positionOfCeiling(tensor, scales.x.invert(px)) : 0), [scales, tensor]);
   const onRiskPixel = useCallback((px: number) => setS(clampS(sOf(px))), [setS, clampS, sOf]);
-  const onDivPixel = useCallback(
-    (py: number) => {
+  // A vertical drag moves the diversification position by the distance travelled, measured against
+  // the on-screen height of the column's ladder, starting from where the slider was.
+  const dragT0 = useRef(0);
+  const onDivDrag = useCallback(
+    (dy: number, start: boolean) => {
       if (!scales || !view || view.disabled) return;
-      const top = scales.y(view.front.mu);
-      const bottom = scales.y(view.mostDiversified.mu);
-      if (bottom - top < 3) return;
-      setT(Math.min(1, Math.max(0, (py - top) / (bottom - top))));
+      if (start) dragT0.current = view.t;
+      const span = scales.y(view.mostDiversified.mu) - scales.y(view.front.mu);
+      if (span < 3 || start) return;
+      setT(Math.min(1, Math.max(0, dragT0.current + dy / span)));
     },
     [scales, view, setT],
   );
@@ -213,9 +216,24 @@ export default function App() {
         </div>
       </div>
     );
+  } else if (!tensor && state.unavailable[state.lookback]) {
+    notice = (
+      <div className="notice" role="status">
+        <div className="notice-card">
+          <p>{`This menu does not have enough shared history for the ${lookbackNames[state.lookback].toLowerCase()} view. Try another:`}</p>
+          <div className="notice-presets">
+            {LOOKBACKS.filter((id) => !state.unavailable[id]).map((id) => (
+              <button key={id} type="button" className="btn" onClick={() => dispatch({ type: "setLookback", lookback: id })}>
+                {lookbackNames[id]}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
   } else if (state.loadError && !tensor) {
     notice = (
-      <div className="notice" role="alert">
+      <div className="notice" role="status">
         <div className="notice-card">
           <p>{state.loadError}</p>
         </div>
@@ -260,7 +278,7 @@ export default function App() {
             reveal={reveal}
             notice={notice}
             onRiskPixel={onRiskPixel}
-            onDivPixel={onDivPixel}
+            onDivDrag={onDivDrag}
             onNudge={onNudge}
           />
           {view && phone && <MarkKeys hasCurrent={currentStats !== null} hasGhosts={ghostCurves.length > 0} />}
@@ -380,6 +398,7 @@ export default function App() {
               unavailable={state.unavailable}
               details={state.details}
               busy={busy}
+              problem={state.menuError}
               onLookback={(lookback: LookbackId) => dispatch({ type: "setLookback", lookback })}
               onGhost={(lookback: LookbackId) => dispatch({ type: "toggleGhost", lookback })}
               onCaps={(caps) => dispatch({ type: "setCaps", caps })}

@@ -4,6 +4,7 @@
 // functions, never at import time.
 import {
   ChallengeError,
+  NoGenerationError,
   fetchHealth,
   fetchPresets,
   fetchSymbols,
@@ -31,6 +32,8 @@ export const LOOKBACKS: LookbackId[] = ["1y", "2y", "3y", "5y", "10y", "ew"];
 export const MAX_FUNDS = 30;
 export const MIN_FUNDS = 2;
 export const NOT_ENOUGH_HISTORY = "not enough shared history";
+export const NOT_LOADED_YET = "PortfolioSight's price data is not loaded yet. Please check back in a little while.";
+export const CAPS_INFEASIBLE = "These limits cannot all be met at once. Loosen one of them, or reset to the default rule.";
 const POLL_MS = 2000;
 const URL_DEBOUNCE_MS = 250;
 const MAX_FAILURES = 3;
@@ -197,6 +200,7 @@ export function createStore(init: { search: string }): Store {
   let started = false;
   let urlTimer: ReturnType<typeof setTimeout> | null = null;
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  const ghostTimers = new Set<ReturnType<typeof setTimeout>>();
   let loadSeq = 0;
   let failures = 0;
   let lastPost: { key: string; body: string } | null = null;
@@ -235,6 +239,8 @@ export function createStore(init: { search: string }): Store {
     if (halted) return;
     halted = true;
     clearPoll();
+    ghostTimers.forEach((timer) => clearTimeout(timer));
+    ghostTimers.clear();
     if (urlTimer !== null) clearTimeout(urlTimer);
     urlTimer = null;
     writeUrl();
@@ -249,7 +255,6 @@ export function createStore(init: { search: string }): Store {
   };
 
   const activePreset = (): Preset | null => state.presets?.presets.find((p) => p.id === state.preset) ?? null;
-  const served = (id: string) => state.symbols === null || state.symbols.some((sym) => sym.id === id);
 
   /** How to ask for this menu's tensor at `lookback`: the preset's declared URL, or a POST body. */
   function requestFor(lookback: LookbackId, post = false): { get: string } | { post: string } | { unavailable: string } {
@@ -260,8 +265,9 @@ export function createStore(init: { search: string }): Store {
       if (entry && entry.status === "unavailable") return { unavailable: NOT_ENOUGH_HISTORY };
     }
     const capOf = new Map(state.caps.map((c) => [c.id, c]));
-    // Funds without verified current data are set aside here; the table says so (expectation S24).
-    const ids = state.rows.map((r) => r.id).filter(served);
+    // Every fund of the menu is sent: the service sets aside the ones it cannot use and says why
+    // in the tensor's `excluded` list (expectation S24); a ticker it does not know is a 400.
+    const ids = state.rows.map((r) => r.id);
     const funds = ids.map((id) => {
       const cap = capOf.get(id);
       return { id, min: cap && cap.min !== null ? cap.min / 100 : null, max: cap && cap.max !== null ? cap.max / 100 : null };
@@ -308,16 +314,22 @@ export function createStore(init: { search: string }): Store {
     set({ build: { status: final ? "build-failed-final" : "build-retry", error, position: null } }, false);
   }
 
+  /** Spec 4.2 / expectation S24: say so in one sentence and carry on with the rest. */
+  function windowUnavailable(lookback: LookbackId, previous: LookbackId | null) {
+    clearPoll();
+    set({
+      unavailable: { ...state.unavailable, [lookback]: NOT_ENOUGH_HISTORY },
+      lookback: previous ?? state.tensorLookback ?? lookback,
+      build: { status: state.tensor ? "ready" : "idle", error: null, position: null },
+    });
+  }
+
   function refused(answer: Extract<TensorAnswer, { kind: "refused" }>, lookback: LookbackId, previous: LookbackId | null) {
     clearPoll();
     const reason = typeof answer.details?.reason === "string" ? answer.details.reason : "";
-    if (answer.status === 422 && reason === NOT_ENOUGH_HISTORY) {
-      // Spec 4.2 / expectation S24: say so in one sentence and carry on with the rest.
-      set({
-        unavailable: { ...state.unavailable, [lookback]: NOT_ENOUGH_HISTORY },
-        lookback: previous ?? state.tensorLookback ?? lookback,
-        build: { status: state.tensor ? "ready" : "idle", error: null, position: null },
-      });
+    if (answer.status === 422 && reason === NOT_ENOUGH_HISTORY) return windowUnavailable(lookback, previous);
+    if (answer.code === "no_generation") {
+      set({ loadError: NOT_LOADED_YET, build: { status: state.tensor ? "ready" : "idle", error: null, position: null } }, false);
       return;
     }
     if (answer.code === "unknown_symbols") {
@@ -377,7 +389,13 @@ export function createStore(init: { search: string }): Store {
           void step(() => getTensor(pollUrl, lookback));
         }, POLL_MS);
       } else if (answer.kind === "failed") {
-        fail(answer.error, answer.retry);
+        // The service answers an unusable window and unmeetable limits as failed builds that are
+        // not retried; neither is a breakdown, so the view stays and says what happened.
+        if (answer.error === "window_unavailable") windowUnavailable(lookback, opts.previous ?? null);
+        else if (answer.error === "caps_infeasible") {
+          clearPoll();
+          set({ menuError: CAPS_INFEASIBLE, build: { status: state.tensor ? "ready" : "idle", error: null, position: null } }, false);
+        } else fail(answer.error, answer.retry);
       } else {
         refused(answer, lookback, opts.previous ?? null);
       }
@@ -423,8 +441,23 @@ export function createStore(init: { search: string }): Store {
       let answer = "get" in req ? await getTensor(req.get, lookback) : await postTensor(req.post, lookback);
       // A ghost is a faint extra: follow a ready URL once, but do not queue builds for it.
       if (answer.kind === "ready") answer = await getTensor(answer.url, lookback);
+      // A ghost that is still being built is polled like the main view, for as long as it stays
+      // switched on for this menu (at most two minutes).
+      for (let tries = 0; answer.kind === "pending" && answer.pollUrl && tries < 60; tries++) {
+        const pollUrl: string = answer.pollUrl;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(() => {
+            ghostTimers.delete(timer);
+            resolve();
+          }, POLL_MS);
+          ghostTimers.add(timer);
+        });
+        if (halted || !state.ghosts.includes(lookback) || !sameMenu()) return;
+        answer = await getTensor(pollUrl, lookback);
+      }
       if (answer.kind === "tensor") return done(answer.tensor);
       if (answer.kind === "refused" && answer.details?.reason === NOT_ENOUGH_HISTORY) return drop(NOT_ENOUGH_HISTORY);
+      if (answer.kind === "failed" && answer.error === "window_unavailable") return drop(NOT_ENOUGH_HISTORY);
       drop(null);
     } catch (err) {
       if (guard(err)) return;
@@ -472,7 +505,9 @@ export function createStore(init: { search: string }): Store {
     const presetsJob = fetchPresets().then(
       ({ body, previewOn }) => set({ presets: body, previewOn }, false),
       (err) => {
-        if (!guard(err) && !custom) set({ loadError: "The ready-made portfolios could not be loaded. Reload to try again." }, false);
+        if (guard(err)) return;
+        if (err instanceof NoGenerationError) set({ loadError: NOT_LOADED_YET }, false);
+        else if (!custom) set({ loadError: "The ready-made portfolios could not be loaded. Reload to try again." }, false);
       },
     );
     void fetchHealth().then(
@@ -572,9 +607,14 @@ export function createStore(init: { search: string }): Store {
       case "loadSymbols":
         void ensureSymbols();
         return;
-      case "setUnit":
-        set({ unit: action.unit });
+      case "setUnit": {
+        // The address omits `unit=pct` (spec 8.1), so a preset that arrives in another unit could
+        // not reopen in percent: in that one case the menu is written out as a custom one.
+        const own = activePreset();
+        const lost = own !== null && action.unit === "pct" && (unitOfPreset(own) ?? "pct") !== "pct";
+        set(lost ? { unit: action.unit, preset: null } : { unit: action.unit });
         return;
+      }
       case "setAmount": {
         // Amounts describe "the mix you entered" only; the tensor depends on the funds and caps,
         // so no request follows. An edited preset becomes a custom menu in the URL (spec 8.1).

@@ -6,7 +6,8 @@
 //   POST /api/tensors            (bodies are recorded)
 //   POST /api/share              (always 202; nothing is sent)
 //   GET  /__mock/posts           recorded POST /api/tensors bodies
-//   POST /__mock/config          {"stale": 3, "lb422": "10y", "challenge": 1, "build409": 2}
+//   POST /__mock/config          {"stale": 3, "unavailable": "10y", "challenge": 1, "build409": 2,
+//                                 "noGeneration": true}
 //   POST /__mock/reset           clears the switches and the recorded bodies
 import fs from "node:fs";
 import http from "node:http";
@@ -187,7 +188,11 @@ function tensorFor(hash, lookback) {
   return copy;
 }
 
-let config = { stale: 0, lb422: null, challenge: 0, build409: 0 };
+const DEFAULTS = { stale: 0, unavailable: null, challenge: 0, build409: 0, noGeneration: false };
+let config = { ...DEFAULTS };
+// As the service does: an unusable window is a failed build that is not retried (409).
+const windowUnavailable = (lookback) => ({ status: "failed", error: "window_unavailable", attempts: 1, retry: false, details: { lookback, reason: "not enough shared history", rows: 61 } });
+const noGeneration = { error: { code: "no_generation", message: "No generation has been published yet.", details: null } };
 let posts = [];
 
 const send = (res, status, body, headers = {}) => {
@@ -210,7 +215,7 @@ const server = http.createServer(async (req, res) => {
 
   if (where === "/__mock/posts" && method === "GET") return send(res, 200, posts);
   if (where === "/__mock/reset" && method === "POST") {
-    config = { stale: 0, lb422: null, challenge: 0, build409: 0 };
+    config = { ...DEFAULTS };
     posts = [];
     return send(res, 200, { ok: true });
   }
@@ -225,6 +230,10 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(403, { "content-type": "text/html", "cf-mitigated": "challenge" });
     return res.end("<!doctype html><title>Just a moment...</title>");
   }
+  if (config.noGeneration && where === "/api/health") {
+    return send(res, 200, { status: "initializing", version: fixture.engine_version, generation: null, asof: null, asof_trading_days_behind: null, queue: { depth: 0, building: false }, nightly: null });
+  }
+  if (config.noGeneration && (where === "/api/presets" || where === "/api/tensors")) return send(res, 503, noGeneration);
   if (method === "GET" && where === "/api/presets") return send(res, 200, presets, { "x-ps-source": "r2" });
   if (method === "GET" && where === "/api/symbols") return send(res, 200, symbols, { "x-ps-source": "r2" });
   if (method === "GET" && where === "/api/health") {
@@ -234,6 +243,7 @@ const server = http.createServer(async (req, res) => {
     });
   }
   const hit = where.match(/^\/api\/tensors\/([^/]+)\/([0-9a-f]{16})\/(1y|2y|3y|5y|10y|ew)$/);
+  if (method === "GET" && hit && hit[1] === G && config.unavailable === hit[3] && hit[2] === H3) return send(res, 409, windowUnavailable(hit[3]));
   if (method === "GET" && hit && hit[1] === G) return send(res, 200, tensorFor(hit[2], hit[3]), { "x-ps-source": "r2" });
   if (method === "POST" && where === "/api/tensors") {
     const raw = await readBody(req);
@@ -249,14 +259,15 @@ const server = http.createServer(async (req, res) => {
     const known = new Set(symbols.symbols.map((s) => s.id).concat(guideFunds.map((f) => f.id)));
     const unknown = ids.filter((id) => !known.has(id));
     if (unknown.length > 0) return send(res, 400, { error: { code: "unknown_symbols", message: "unknown symbols", details: { symbols: unknown } } });
-    if (config.lb422 && lookback === config.lb422) {
-      return send(res, 422, { error: { code: "invalid_request", message: "not enough shared history", details: { reason: "not enough shared history" } } });
+    const hash = ids.join(",") === "SGOV,VTIP" ? H3 : H1;
+    if (config.unavailable && lookback === config.unavailable) {
+      // first answer is "queued"; the poll (and a repeat POST) reports the failed, unretried build
+      return send(res, 202, { status: "queued", generation: G, hash, position: 1, eta_s: 30 });
     }
     if (config.build409 > 0) {
       config.build409 -= 1;
-      return send(res, 409, { status: "failed", error: "solver_failed", attempts: 1, retry: true });
+      return send(res, 409, { status: "failed", error: "build_failed", attempts: 1, retry: true, details: null });
     }
-    const hash = ids.join(",") === "SGOV,VTIP" ? H3 : H1;
     return send(res, 200, { status: "ready", generation: G, hash, url: `/api/tensors/${G}/${hash}/${lookback}` });
   }
   if (method === "POST" && where === "/api/share") return send(res, 202, { ok: true });

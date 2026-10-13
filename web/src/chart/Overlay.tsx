@@ -16,11 +16,13 @@ type Props = {
   /** Fund dots with ticker labels: details only. */
   funds: (Mark & { id: string })[] | null;
   selectedLabel: string;
+  /** The risk position and its domain, for the point's slider semantics. */
+  position: { s: number; min: number; max: number };
   tooltip: ReactNode;
   /** Horizontal drag: the pixel x the ceiling should move to. */
   onRiskPixel: (px: number) => void;
-  /** Vertical drag: the pixel y the point should move to. */
-  onDivPixel: (py: number) => void;
+  /** Vertical drag: pixels moved down since the drag began (`start` is true on its first call). */
+  onDivDrag: (dy: number, start: boolean) => void;
   /** Keyboard on the point: arrows step the two sliders. */
   onNudge: (ds: number, dt: number) => void;
 };
@@ -33,11 +35,11 @@ const AXIS_LOCK = 6; // px of travel before a drag commits to one direction
  * SVG layer over the canvas: axes (d3-axis ticks), the dashed risk-ceiling line and the markers,
  * each drawn at its mix's actual risk and return. Updates on every slider tick.
  */
-export function Overlay({ scales, phone, ceiling, selected, mostDiversified, current, funds, selectedLabel, tooltip, onRiskPixel, onDivPixel, onNudge }: Props) {
+export function Overlay({ scales, phone, ceiling, selected, mostDiversified, current, funds, selectedLabel, position, tooltip, onRiskPixel, onDivDrag, onNudge }: Props) {
   const xAxisRef = useRef<SVGGElement>(null);
   const yAxisRef = useRef<SVGGElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
-  const drag = useRef<{ x0: number; y0: number; grabDx: number; grabDy: number; axis: "x" | "y" | null } | null>(null);
+  const drag = useRef<{ x0: number; y0: number; grabDx: number; axis: "x" | "y" | null } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [tip, setTip] = useState(false);
   const { x, y, plot } = scales;
@@ -63,7 +65,7 @@ export function Overlay({ scales, phone, ceiling, selected, mostDiversified, cur
     if (e.pointerType === "mouse" && e.button !== 0) return;
     const p = local(e);
     // Remember where the pointer grabbed, so the ceiling and the point do not jump under it.
-    drag.current = { x0: p.px, y0: p.py, grabDx: cx - p.px, grabDy: sy - p.py, axis: null };
+    drag.current = { x0: p.px, y0: p.py, grabDx: cx - p.px, axis: null };
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
@@ -81,9 +83,14 @@ export function Overlay({ scales, phone, ceiling, selected, mostDiversified, cur
       const dy = Math.abs(p.py - d.y0);
       if (Math.max(dx, dy) < AXIS_LOCK) return;
       d.axis = dx >= dy ? "x" : "y";
+      if (d.axis === "y") {
+        // Movement is measured from here, so the point leaves from where it is without a jump.
+        d.y0 = p.py;
+        onDivDrag(0, true);
+      }
     }
     if (d.axis === "x") onRiskPixel(p.px + d.grabDx);
-    else onDivPixel(p.py + d.grabDy);
+    else onDivDrag(p.py - d.y0, false);
   };
   const endDrag = () => {
     drag.current = null;
@@ -124,8 +131,13 @@ export function Overlay({ scales, phone, ceiling, selected, mostDiversified, cur
           data-testid="point-selected"
           transform={`translate(${sx},${sy})`}
           tabIndex={0}
-          role="img"
+          role="slider"
           aria-label={selectedLabel}
+          aria-orientation="horizontal"
+          aria-valuemin={Number(position.min.toFixed(4))}
+          aria-valuemax={Number(position.max.toFixed(4))}
+          aria-valuenow={Number(position.s.toFixed(4))}
+          aria-valuetext={selectedLabel}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}

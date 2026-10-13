@@ -20,7 +20,7 @@ type Props = {
   reveal: boolean;
   notice: ReactNode;
   onRiskPixel: (px: number) => void;
-  onDivPixel: (py: number) => void;
+  onDivDrag: (dy: number, start: boolean) => void;
   onNudge: (ds: number, dt: number) => void;
 };
 
@@ -83,7 +83,7 @@ function Legend({ scales, phone, details, hasCurrent, hasGhosts }: { scales: Cha
 
 /** The chart: canvas heatmap and frontier, SVG markers, DOM labels. */
 export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
-  { tensor, view, scales, ghosts, frontierEnb, current, details, phone, themeEpoch, reveal, notice, onRiskPixel, onDivPixel, onNudge },
+  { tensor, view, scales, ghosts, frontierEnb, current, details, phone, themeEpoch, reveal, notice, onRiskPixel, onDivDrag, onNudge },
   ref,
 ) {
   const funds = useMemo(
@@ -140,7 +140,7 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
             mostDiversified={view.mostDiversified}
             current={current}
             funds={funds}
-            selectedLabel={`${plain.selectedMix}: ${plain.rangeLow} ${signedPct(view.range.low)}, ${plain.rangeTypical} ${signedPct(view.range.typical)}, ${plain.rangeHigh} ${signedPct(view.range.high)} ${plain.resultStripSuffix}. Drag sideways to change risk, up or down to trade return for diversification.`}
+            selectedLabel={`${plain.selectedMix}: ${plain.rangeLow} ${signedPct(view.range.low)}, ${plain.rangeTypical} ${signedPct(view.range.typical)}, ${plain.rangeHigh} ${signedPct(view.range.high)} ${plain.resultStripSuffix}. Left and right arrows change risk; up and down arrows move between more return and more diversified.`}
             tooltip={
               <>
                 <h3>{plain.selectedMix}</h3>
@@ -173,7 +173,8 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
               </>
             }
             onRiskPixel={onRiskPixel}
-            onDivPixel={onDivPixel}
+            onDivDrag={onDivDrag}
+            position={{ s: view.s, min: view.domain.s_safe, max: view.domain.s_max }}
             onNudge={onNudge}
           />
         </>

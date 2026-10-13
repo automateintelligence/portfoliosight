@@ -11,6 +11,14 @@ export class ChallengeError extends Error {
   }
 }
 
+/** Thrown when the service has not published its first generation yet (`503 no_generation`). */
+export class NoGenerationError extends Error {
+  constructor() {
+    super("no_generation");
+    this.name = "NoGenerationError";
+  }
+}
+
 const lookbackEntry = z.object({ status: z.string(), url: z.string().optional() }).passthrough();
 
 const presetSchema = z
@@ -44,7 +52,7 @@ export type TensorAnswer =
   | { kind: "tensor"; tensor: Tensor }
   | { kind: "ready"; url: string }
   | { kind: "pending"; pollUrl: string | null; position: number | null; etaS: number | null }
-  | { kind: "failed"; error: string; retry: boolean }
+  | { kind: "failed"; error: string; retry: boolean; details: Record<string, unknown> | null }
   | { kind: "refused"; status: number; code: string; message: string; details: Record<string, unknown> | null };
 
 async function call(path: string, init?: RequestInit): Promise<Response> {
@@ -66,6 +74,10 @@ const asRecord = (v: unknown): Record<string, unknown> => (v !== null && typeof 
 /** `GET /api/presets`; `previewOn` comes from the Worker's `x-ps-preview` header (spec 9.6). */
 export async function fetchPresets(): Promise<{ body: PresetsBody; previewOn: boolean }> {
   const res = await call("/api/presets");
+  if (res.status === 503) {
+    const code = asRecord(asRecord(await jsonOf(res)).error).code;
+    if (code === "no_generation") throw new NoGenerationError();
+  }
   if (!res.ok) throw new Error(`presets ${res.status}`);
   return { body: presetsSchema.parse(await res.json()), previewOn: res.headers.get("x-ps-preview") === "1" };
 }
@@ -99,7 +111,8 @@ async function tensorAnswer(res: Response, lookback: string): Promise<TensorAnsw
     };
   }
   if (res.status === 409) {
-    return { kind: "failed", error: typeof body.error === "string" ? body.error : "failed", retry: body.retry !== false };
+    const info = body.details !== null && typeof body.details === "object" ? (body.details as Record<string, unknown>) : null;
+    return { kind: "failed", error: typeof body.error === "string" ? body.error : "failed", retry: body.retry !== false, details: info };
   }
   const err = asRecord(body.error);
   const details = err.details !== null && typeof err.details === "object" ? (err.details as Record<string, unknown>) : null;

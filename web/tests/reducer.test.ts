@@ -200,10 +200,59 @@ describe("store: transitions", () => {
     expect(store.getState().tensor).toBeNull();
   });
 
-  it("funds without verified current data are left out of the request", async () => {
+  it("every fund of the menu is sent; the service decides which it cannot use", async () => {
     await boot("?f=" + [IDS[0], IDS[1], "FIENX"].join(","));
     const body = JSON.parse(calls.find((c) => c.method === "POST")!.body as string);
-    expect(body.funds.map((f: { id: string }) => f.id)).toEqual([IDS[0], IDS[1]]);
+    expect(body.funds.map((f: { id: string }) => f.id)).toEqual([IDS[0], IDS[1], "FIENX"]);
+  });
+
+  it("a window the service reports as unavailable (409 on the poll) is disabled and the view carries on", async () => {
+    const store = await boot("?f=" + IDS.slice(0, 3).join(","));
+    const before = store.getState().tensor;
+    const gone = { status: "failed", error: "window_unavailable", attempts: 1, retry: false, details: { lookback: "10y", reason: "not enough shared history", rows: 40 } };
+    tensorRoute = (call) => {
+      const lb = call.method === "POST" ? JSON.parse(call.body as string).lookback : (call.path.split("/").pop() as string);
+      if (lb !== "10y") return call.method === "POST" ? json(200, { status: "ready", url: `/api/tensors/${G}/${H1}/${lb}` }) : json(200, tensorFor(lb));
+      return call.method === "POST" ? json(202, { status: "queued", generation: G, hash: H1, position: 1, eta_s: 30 }) : json(409, gone);
+    };
+    store.dispatch({ type: "setLookback", lookback: "10y" });
+    await flush();
+    expect(store.getState().build.status).toBe("building");
+    await advance(2500);
+    const s = store.getState();
+    expect(s.unavailable).toEqual({ "10y": "not enough shared history" });
+    expect(s.lookback).toBe("5y");
+    expect(s.tensor).toBe(before);
+    expect(s.build.status).toBe("ready");
+    expect(vi.getTimerCount(), "no poll is left running").toBe(0);
+    store.dispatch({ type: "setLookback", lookback: "2y" });
+    await flush();
+    await advance(500);
+    expect(store.getState().tensor!.lookback.id).toBe("2y");
+  });
+
+  it("limits that cannot be met keep the view and say so, without a retry prompt", async () => {
+    const store = await boot("");
+    const before = store.getState().tensor;
+    tensorRoute = () => json(409, { status: "failed", error: "caps_infeasible", attempts: 1, retry: false, details: null });
+    store.dispatch({ type: "setCaps", caps: [{ id: IDS[0], min: 90, max: null }] });
+    await flush();
+    await advance(500);
+    expect(store.getState().build.status).toBe("ready");
+    expect(store.getState().menuError).toContain("limits");
+    expect(store.getState().tensor).toBe(before);
+  });
+
+  it("before the first generation the store reports that data is not loaded yet", async () => {
+    vi.stubGlobal("fetch", async (input: string) =>
+      input === "/api/health"
+        ? json(200, { status: "initializing", generation: null, asof: null, asof_trading_days_behind: null })
+        : json(503, { error: { code: "no_generation", message: "No generation has been published yet.", details: null } }),
+    );
+    const store = await boot("");
+    expect(store.getState().loadError).toContain("not loaded yet");
+    expect(store.getState().build.status).toBe("idle");
+    expect(store.getState().staleness).toBeNull();
   });
 
   it("a cap edit posts the policy as fractions, and a reset posts the all-default policy", async () => {
@@ -213,7 +262,6 @@ describe("store: transitions", () => {
     await advance(500);
     let post = JSON.parse(calls.filter((c) => c.method === "POST").pop()!.body as string);
     expect(post.funds.find((f: { id: string }) => f.id === IDS[0])).toEqual({ id: IDS[0], min: null, max: 0.1 });
-    expect(post.funds.some((f: { id: string }) => f.id === "FIENX")).toBe(false);
     store.dispatch({ type: "setCaps", caps: [] });
     await flush();
     await advance(500);
@@ -243,6 +291,38 @@ describe("store: transitions", () => {
     expect(store.getState().ghosts).toEqual([]);
     store.dispatch({ type: "toggleGhost", lookback: "5y" });
     expect(store.getState().ghosts).toEqual([]);
+  });
+
+  it("a ghost that is still building is polled until its tensor arrives", async () => {
+    const store = await boot("?f=" + IDS.slice(0, 3).join(","));
+    let polls = 0;
+    tensorRoute = (call) => {
+      if (call.method === "POST") return json(202, { status: "queued", generation: G, hash: H1, position: 1, eta_s: 4 });
+      polls += 1;
+      return polls < 2 ? json(202, { status: "building", generation: G, hash: H1, position: 0, eta_s: 2 }) : json(200, tensorFor("1y"));
+    };
+    store.dispatch({ type: "toggleGhost", lookback: "1y" });
+    await flush();
+    expect(store.getState().ghosts).toEqual(["1y"]);
+    expect(store.getState().ghostTensors["1y"]).toBeUndefined();
+    await advance(4500);
+    expect(polls).toBe(2);
+    expect(store.getState().ghostTensors["1y"]?.lookback.id).toBe("1y");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("switching a dollar preset to percent stays percent after a reload of its address", async () => {
+    const store = await boot("");
+    store.dispatch({ type: "setUnit", unit: "pct" });
+    await advance(500);
+    const search = new URL(replaced[replaced.length - 1], "https://portfoliosight.ai").search;
+    const again = await boot(search);
+    expect(again.getState().unit).toBe("pct");
+    expect(again.getState().rows.find((r) => r.id === IDS[0])?.amount).toBe(1000);
+    // shares survive as a preset, because the address carries unit=shares
+    const shares = await boot("");
+    shares.dispatch({ type: "setUnit", unit: "shares" });
+    expect(shares.getState().preset).toBe("guide2017");
   });
 
   it("theme and details are kept and stored", async () => {
