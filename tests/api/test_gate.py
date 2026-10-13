@@ -87,3 +87,18 @@ def test_grid_settings(monkeypatch):
     monkeypatch.setenv("PS_GRID_NX", "1")
     with pytest.raises(SettingsError):
         settings_mod.GridSettings.from_env()
+
+
+def test_module_app_is_built_from_the_environment_on_first_use(monkeypatch, store):
+    import portfoliosight.api.app as app_module
+
+    monkeypatch.delitem(vars(app_module), "app", raising=False)
+    monkeypatch.setenv("PS_GATE_SECRET", GATE)
+    monkeypatch.setenv("PS_STORE", "local")
+    monkeypatch.setenv("PS_LOCAL_STORE_DIR", str(store.root))
+    application = app_module.app
+    assert application is app_module.app  # created once
+    assert {route.path for route in application.routes} >= {"/v1/health", "/v1/tensors"}
+    with pytest.raises(AttributeError):
+        _ = app_module.no_such_name
+    monkeypatch.delitem(vars(app_module), "app", raising=False)

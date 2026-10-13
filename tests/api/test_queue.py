@@ -265,3 +265,23 @@ def test_default_build_job_keeps_the_cache_under_its_cap(
     build_job(store, generation, universe_hash(funds), "1y", funds)
     cached = [path for path in (tmp_path / "cache").rglob("*") if path.is_file()]
     assert sum(path.stat().st_size for path in cached) <= 50_000
+
+
+def test_default_build_job_keeps_a_tensor_another_builder_wrote_first(
+    store, generation, api_env, monkeypatch
+):
+    funds = [{"id": fund, "min": None, "max": None} for fund in ("VTI", "BND", "VNQ")]
+    uhash = universe_hash(funds)
+    key = tensor_key(generation, uhash, "1y")
+    from portfoliosight.api import queue as queue_mod
+
+    real_build = queue_mod.build_from_store
+
+    def build_while_another_writes(store_, **kwargs):
+        tensor = real_build(store_, **kwargs)
+        store_.put(key, b'{"first":true}')
+        return tensor
+
+    monkeypatch.setattr(queue_mod, "build_from_store", build_while_another_writes)
+    build_job(store, generation, uhash, "1y", funds)
+    assert store.get(key) == b'{"first":true}'

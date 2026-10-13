@@ -226,3 +226,40 @@ def test_put_tensor_never_overwrites(store, generation, tmp_path):
     with pytest.raises(KeyExists):
         put_tensor(store, key, {**tensor, "rf": 0.5})
     assert store.get(key) == stored
+
+
+def test_a_record_evicted_between_fetch_and_read_is_read_from_the_store(
+    store, generation, tmp_path, monkeypatch
+):
+    from portfoliosight.data import cache as cache_mod
+
+    real_fetch = cache_mod.fetch_into_cache
+
+    def fetch_then_lose(store_, key, *, cache_dir):
+        path = real_fetch(store_, key, cache_dir=cache_dir)
+        if key == "prices/VTI.parquet":
+            path.unlink()
+        return path
+
+    monkeypatch.setattr(cache_mod, "fetch_into_cache", fetch_then_lose)
+    tensor = _build(store, generation, tmp_path, ids=MENU[:3])
+    assert [fund["id"] for fund in tensor["universe"]["funds"]] == MENU[:3]
+
+
+def test_a_record_deleted_from_the_store_mid_build_is_no_data(
+    store, generation, tmp_path, monkeypatch
+):
+    from portfoliosight.data import cache as cache_mod
+
+    real_fetch = cache_mod.fetch_into_cache
+
+    def fetch_then_delete_everywhere(store_, key, *, cache_dir):
+        path = real_fetch(store_, key, cache_dir=cache_dir)
+        if key == "prices/VNQ.parquet":
+            path.unlink()
+            store_.delete(key)
+        return path
+
+    monkeypatch.setattr(cache_mod, "fetch_into_cache", fetch_then_delete_everywhere)
+    tensor = _build(store, generation, tmp_path, ids=["VTI", "BND", "VNQ"])
+    assert [fund["id"] for fund in tensor["universe"]["funds"]] == ["VTI", "BND"]
