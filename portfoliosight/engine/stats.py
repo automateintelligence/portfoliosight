@@ -60,9 +60,7 @@ def estimate_moments(returns, omega=None) -> Moments:
         mean = r.mean(axis=0)
         daily_sd = r.std(axis=0, ddof=1)
         t_eff = float(len(r))
-        scale = _live_scale(r, daily_sd)
-        shrunk = LedoitWolf(store_precision=False).fit(r / np.where(scale > 0, scale, 1.0))
-        corr = _as_correlation(shrunk.covariance_, np.sqrt(np.diag(shrunk.covariance_)))
+        corr = _shrunk_correlation(r, _live_scale(r, daily_sd))
     else:
         weights = _observation_weights(omega, len(r))
         concentration = float(weights @ weights)
@@ -141,6 +139,20 @@ def _live_scale(r: np.ndarray, daily_sd: np.ndarray) -> np.ndarray:
     none to show; it is marked with a zero scale and treated as uncorrelated.
     """
     return np.where(daily_sd > ROUNDING_NOISE * np.abs(r).max(axis=0), daily_sd, 0.0)
+
+
+def _shrunk_correlation(r: np.ndarray, scale: np.ndarray) -> np.ndarray:
+    """`LedoitWolf` on the returns standardized by `scale`, renormalized to a correlation.
+
+    A fund with a zero scale has nothing to standardize by: it takes no part in the shrinkage
+    and is uncorrelated with every other fund, another such fund included.
+    """
+    live = scale > 0
+    corr = np.eye(len(scale))
+    if live.any():
+        shrunk = LedoitWolf(store_precision=False).fit(r[:, live] / scale[live]).covariance_
+        corr[np.ix_(live, live)] = _as_correlation(shrunk, np.sqrt(np.diag(shrunk)))
+    return corr
 
 
 def _as_correlation(matrix: np.ndarray, scale: np.ndarray) -> np.ndarray:

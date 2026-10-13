@@ -137,6 +137,31 @@ def test_as_correlation_treats_a_zero_scale_as_uncorrelated():
     assert np.array_equal(corr, np.array([[1.0, 0.0, 0.5], [0.0, 1.0, 0.0], [0.5, 0.0, 1.0]]))
 
 
+def test_funds_that_do_not_vary_are_uncorrelated_with_each_other():
+    """Two constant series have no correlation to estimate; rounding must not invent one."""
+    r = np.tile([0.0001, 0.0003], (252, 1))
+    for name, omega in (("fixed", None), ("ew", stats.ew_weights(252))):
+        m = stats.estimate_moments(r, omega)
+        assert np.array_equal(m.sigma, [1e-4, 1e-4]), name
+        assert np.array_equal(m.cov, 1e-8 * np.eye(2)), name
+        assert np.full(2, 0.5) @ m.cov @ np.full(2, 0.5) == pytest.approx(0.5e-8, rel=1e-12), name
+        np.linalg.cholesky(m.cov)
+
+
+def test_funds_that_do_not_vary_take_no_part_in_the_shrinkage():
+    """The other funds keep the correlations they have in a menu without the constant ones."""
+    r = _returns()
+    still = np.column_stack([r[:, 0], np.full(len(r), 0.0001), r[:, 1:], np.full(len(r), 0.0003)])
+    moving = [0, 2, 3, 4, 5, 6]
+    for name, omega in (("fixed", None), ("ew", stats.ew_weights(len(r)))):
+        alone = stats.estimate_moments(r, omega)
+        m = stats.estimate_moments(still, omega)
+        assert np.abs(m.cov[np.ix_(moving, moving)] - alone.cov).max() <= 1e-15, name
+        rest = np.delete(m.cov, moving, axis=0)
+        assert np.array_equal(rest, 1e-8 * np.eye(8)[[1, 7]]), name
+        np.linalg.cholesky(m.cov)
+
+
 @pytest.mark.parametrize(
     ("returns", "omega", "message"),
     [
