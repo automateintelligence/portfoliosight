@@ -14,7 +14,6 @@ from portfoliosight.engine import ENGINE_VERSION
 from portfoliosight.jobs.fixture_store import fixture_asof, write_fixture_store
 
 LIVE_ENV = "PS_LIVE_TESTS"
-LIVE_SKIP_REASON = "PS_LIVE_TESTS=1 required"
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -24,7 +23,7 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     if os.environ.get(LIVE_ENV) == "1":
         return
-    skip_live = pytest.mark.skip(reason=LIVE_SKIP_REASON)
+    skip_live = pytest.mark.skip(reason="PS_LIVE_TESTS=1 required")
     for item in items:
         if "live" in item.keywords:
             item.add_marker(skip_live)
