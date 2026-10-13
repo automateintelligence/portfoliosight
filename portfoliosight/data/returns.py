@@ -25,10 +25,11 @@ def _growth(frame: pd.DataFrame, basis_rule: BasisRule) -> np.ndarray:
     if basis_rule not in ("post_split", "pre_split"):
         raise ValueError(f"unknown basis rule {basis_rule!r}")
     close = frame["close"].to_numpy(dtype=float)
-    if np.isnan(close).any() or (close <= 0).any():
+    unpriced = ~np.isfinite(close) | (close <= 0)
+    if unpriced.any():
         days = pd.DatetimeIndex(frame.index).strftime("%Y-%m-%d")
-        bad = days[int(np.argmax(np.isnan(close) | (close <= 0)))]
-        raise ValueError(f"provider row dated {bad} has no positive close")
+        bad = days[int(np.argmax(unpriced))]
+        raise ValueError(f"provider row dated {bad} has no positive, finite close")
     split = frame["split_factor"].to_numpy(dtype=float)
     div = frame["div_cash"].to_numpy(dtype=float)
     # A missing action is not "no action": assuming one would invent a return.

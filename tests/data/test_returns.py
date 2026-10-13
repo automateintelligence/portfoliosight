@@ -75,9 +75,10 @@ def test_missing_actions_and_bad_rows_are_refused():
     assert returns.build_tr_index(frame.iloc[:0]).empty
     with pytest.raises(ValueError, match="unknown basis rule"):
         returns.build_tr_index(frame, basis_rule="sideways")  # type: ignore[arg-type]
-    bad = _provider_frame([("2024-01-02", 100.0, 0.0, 1.0), ("2024-01-03", 0.0, 0.0, 1.0)])
-    with pytest.raises(ValueError, match="2024-01-03 has no positive close"):
-        returns.build_tr_index(bad)
+    for close in (0.0, -5.0, np.nan, np.inf):
+        bad = _provider_frame([("2024-01-02", 100.0, 0.0, 1.0), ("2024-01-03", close, 0.0, 1.0)])
+        with pytest.raises(ValueError, match="2024-01-03 has no positive, finite close"):
+            returns.build_tr_index(bad)
     # A missing split on the 4:1 day must not become "no split" (a 75% crash that never was).
     for column, value in (
         ("split_factor", np.nan),

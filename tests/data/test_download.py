@@ -487,6 +487,37 @@ def test_provider_errors_are_counted_and_the_run_goes_on(tmp_path, caplog):
     assert "TSP-G" not in now
 
 
+def test_refused_rows_record_nothing_and_are_asked_for_again(tmp_path):
+    store = LocalStore(tmp_path / "store")
+
+    class Corrupt(FakeProvider):
+        broken = True
+        row = 3
+
+        def fetch_daily(self, symbol, start, end=None):
+            frame = super().fetch_daily(symbol, start, end)
+            if self.broken:
+                frame.iloc[self.row, frame.columns.get_loc("close")] = float("inf")
+            return frame
+
+    provider = Corrupt(default_available=FEB23)
+    code, calls = _go("catch-up", store, provider, Clock(date(2026, 2, 24)), ["NEW"])
+    assert code == 1 and len(calls) == 1
+    assert _manifest(store) == {} and store.list("prices/") == [] and _listed(store) == []
+    # Not the 1st of a month: the symbol is still asked for, and served once its rows are sound.
+    provider.broken = False
+    code, calls = _go("catch-up", store, provider, Clock(date(2026, 2, 25)), ["NEW"])
+    assert code == 0 and [c[0] for c in calls] == ["daily", "meta"]
+    assert _manifest(store)["NEW"]["status"] == "ok"
+    # The same corruption in a tail leaves the stored record and its dates untouched.
+    provider.broken, provider.row = True, -1
+    provider.default_available = FEB27
+    before = store.get("prices/NEW.parquet")
+    code, _ = _go("refresh", store, provider, Clock(date(2026, 2, 28)), ["NEW"])
+    assert code == 1 and store.get("prices/NEW.parquet") == before
+    assert _manifest(store)["NEW"]["adjusted_through"] == "2026-02-23"
+
+
 def test_persistent_rate_limit_stops_the_run_cleanly(tmp_path, caplog):
     behind = date(2026, 3, 6)
     symbols = ["S1", "S2", "S3"]

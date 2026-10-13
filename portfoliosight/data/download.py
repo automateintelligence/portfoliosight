@@ -252,6 +252,9 @@ class _Ingest:
         """A symbol without a record: the full history, then its meta (two requests)."""
         provider_name, _ = self._provider(symbol)
         frame = self._fetch_daily(symbol, FULL_HISTORY_START)
+        # Rows are converted before anything is recorded: a frame that is refused (an unusable
+        # price or action) leaves the catalog as it was, so the next run asks again.
+        record = None if frame.empty else provider_rows_to_record(frame)
         tier, income = self._tier_income(symbol)
         if entry is None:
             entry = ManifestEntry(
@@ -264,12 +267,11 @@ class _Ingest:
             )
             self.manifest.symbols[symbol] = entry
         entry.fetched_at = self.clock().astimezone(UTC).isoformat()
-        if frame.empty:
+        if record is None:
             entry.status = "unavailable"
             entry.reason = manifest_mod.REASON_NO_DATA
             logger.info("%s: no data from %s", symbol, provider_name)
             return
-        record = provider_rows_to_record(frame)
         store_mod.put_record(self.store, symbol, record)
         entry.source = provider_name
         entry.first_date = _day(record["date"].iloc[0])
