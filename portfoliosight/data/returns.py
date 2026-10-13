@@ -70,6 +70,64 @@ def provider_rows_to_record(
     )
 
 
+def splice_tail(
+    record: pd.DataFrame,
+    tail: pd.DataFrame,
+    adjusted_through: date,
+    *,
+    basis_rule: BasisRule = BASIS_RULE,
+) -> tuple[pd.DataFrame, date]:
+    """Splice a provider tail onto a stored record at ``adjusted_through`` (spec 5.1).
+
+    The stored index is kept up to the anchor (the last row dated ``<= adjusted_through`` that has
+    an index value); every tail row after it continues the index,
+    ``tr_t = tr_anchor * prod(1 + r_s)``. Rows the record held after the anchor (price-only) are
+    replaced by the tail's. Returns the new record and the new ``adjusted_through`` (the tail's
+    last date). A tail with no row after the anchor changes nothing.
+    """
+    stored = record.sort_values("date").reset_index(drop=True)
+    stored_dates = pd.DatetimeIndex(pd.to_datetime(stored["date"]))
+    tr = stored["tr_index"].to_numpy(dtype=float)
+    usable = np.nonzero(np.asarray(stored_dates <= pd.Timestamp(adjusted_through)) & ~np.isnan(tr))[
+        0
+    ]
+    if len(usable) == 0:
+        raise ValueError(
+            f"record has no index value on or before adjusted_through {adjusted_through}"
+        )
+    anchor = int(usable[-1])
+    anchor_date = stored_dates[anchor]
+    ordered = tail.sort_index()
+    fresh = ordered.loc[ordered.index > anchor_date]
+    if fresh.empty:
+        return stored, adjusted_through
+
+    # The return of the first new day needs the anchor day's raw close: the tail's own when it
+    # carries that day (it starts a week earlier), else the stored one.
+    if anchor_date in ordered.index:
+        anchor_close = float(ordered["close"].loc[anchor_date])
+    else:
+        anchor_close = float(stored["close"].iloc[anchor])
+    seam = pd.DataFrame(
+        {"close": [anchor_close], "div_cash": [0.0], "split_factor": [1.0]},
+        index=pd.DatetimeIndex([anchor_date], name="date"),
+    )
+    chain = pd.concat([seam, fresh[["close", "div_cash", "split_factor"]]])
+    growth = _growth(chain, basis_rule)[1:]
+    spliced = pd.DataFrame(
+        {
+            "date": pd.DatetimeIndex(fresh.index).tz_localize(None).to_numpy(),
+            "close": fresh["close"].to_numpy(dtype=float),
+            "tr_index": tr[anchor] * np.cumprod(growth),
+            "div_cash": fresh["div_cash"].to_numpy(dtype=float),
+            "split_factor": fresh["split_factor"].to_numpy(dtype=float),
+        }
+    )
+    head = stored.iloc[: anchor + 1][list(RECORD_COLUMNS)]
+    out = pd.concat([head, spliced], ignore_index=True)
+    return out, date.fromisoformat(str(fresh.index[-1])[:10])
+
+
 def build_returns(records: dict[str, pd.DataFrame]) -> pd.DataFrame:
     """Daily returns on the union calendar of all records; NaN wherever a fund has no return.
 
