@@ -21,3 +21,4 @@ runs/
 # conductor gate run results (rewritten on every assert run)
 assertions/2026-10-13-portfoliosight-demo-design/run/
 .bubo/
+.coverage
