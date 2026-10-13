@@ -46,7 +46,7 @@ const presets = {
   generation: G,
   asof: fixture.asof,
   presets: [
-    { id: "guide2017", name: "The 2017 guide portfolio", hash: H1, funds: guideFunds, allocation, allocation_unit: "$", lookbacks: lookbacks(H1) },
+    { id: "guide2017", name: "Example Portfolio", hash: H1, funds: guideFunds, allocation, allocation_unit: "$", lookbacks: lookbacks(H1) },
     { id: "tsp", name: SECOND_NAME, hash: H2, funds: guideFunds, allocation: null, allocation_unit: null, lookbacks: lookbacks(H2) },
   ],
 };

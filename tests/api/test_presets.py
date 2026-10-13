@@ -23,7 +23,7 @@ def test_definitions_come_from_the_presets_file_and_the_holdings_csv():
     with HOLDINGS.open(newline="") as handle:
         rows = list(csv.DictReader(handle))
     expected = {row["Symbol"]: round(float(row["Qty"]) * float(row["Price"]), 2) for row in rows}
-    assert guide.id == "guide2017" and guide.name == "The 2017 guide portfolio"
+    assert guide.id == "guide2017" and guide.name == "Example Portfolio"
     assert len(guide.funds) == 23 and guide.allocation == expected
     assert sum(1 for amount in expected.values() if amount != 0) == 18
     assert guide.allocation_unit == "$"

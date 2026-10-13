@@ -101,7 +101,7 @@ def test_moments_are_realistic(frame):
 
 def test_metadata_describes_the_guide_universe(frame):
     meta = fixture_metadata()
-    assert meta["universe"] == {"name": "The 2017 guide portfolio", "preset_id": "guide2017"}
+    assert meta["universe"] == {"name": "Example Portfolio", "preset_id": "guide2017"}
     funds = meta["funds"]
     assert sorted(funds) == sorted(frame.columns)  # fund order is the frame's column order
     keys = {

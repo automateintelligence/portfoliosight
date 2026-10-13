@@ -1,11 +1,11 @@
 """Generate the synthetic 23-fund returns fixture, `tests/fixtures/synthetic_23.parquet`.
 
-Daily simple returns for the 23 funds of the 2017 guide portfolio (Step 2) on XNYS sessions from
-2005-01-03 to 2026-10-12, drawn once from a seeded three-factor model (equity, interest rates,
-international). Nothing here is market data: the tickers only name the columns. Coverage is
-partial on purpose, so the stress windows have something to show: six funds start after
-2008-09-01 (one of them inside the 2008 window). Every fund runs to the last session and is
-served, so no view of this menu sets a fund aside.
+Daily simple returns for the 23 funds of the Example Portfolio (the 2017 guide's Step 2 menu) on
+XNYS sessions from 2005-01-03 to 2026-10-12, drawn once from a seeded three-factor model (equity,
+interest rates, international). Nothing here is market data: the tickers only name the columns.
+Coverage is partial on purpose, so the stress windows have something to show: six funds start after
+2008-09-01 (one of them inside the 2008 window). Every fund runs to the last session and is served,
+so no view of this menu sets a fund aside.
 
 The file is the returns parquet of the tensor build CLI (`DatetimeIndex` named `date`, one float
 column per fund, NaN where the fund has no return). Its schema metadata carries, under the key
@@ -35,7 +35,7 @@ DEFAULT_OUT = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "synt
 METADATA_KEY = b"portfoliosight"
 TRADING_DAYS = 252
 FETCHED_AT = "2026-10-13T09:05:11Z"
-UNIVERSE = {"name": "The 2017 guide portfolio", "preset_id": "guide2017"}
+UNIVERSE = {"name": "Example Portfolio", "preset_id": "guide2017"}
 
 # Annual factor premia and volatilities: equity, interest rates, international.
 FACTOR_MEAN = np.array([0.055, 0.010, 0.010])

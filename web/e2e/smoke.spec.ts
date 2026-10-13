@@ -15,7 +15,7 @@ import {
   universeHash, walkableColumn, watchApi, wordFor, ROADMAP_ITEMS, type TensorLike,
 } from "./helpers";
 
-const GUIDE_NAME = "The 2017 guide portfolio";
+const GUIDE_NAME = "Example Portfolio";
 const TSP_NAME = "TSP (G, F, C, S, I)";
 const TSP_IDS = ["TSP-C", "TSP-F", "TSP-G", "TSP-I", "TSP-S"];
 const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
@@ -221,7 +221,7 @@ test("DoD-04 phone first screen fits: no sideways scroll, thumb-sized targets, a
   expect(size.scroll, "no horizontal scroll after the tap").toBeLessThanOrEqual(size.inner);
 });
 
-test("DoD-05 default view: the 2017 guide portfolio with its allocation; TSP loads in one click", async ({ page }) => {
+test("DoD-05 default view: the Example Portfolio with its allocation; TSP loads in one click", async ({ page }) => {
   const api = watchApi(page);
   await openApp(page);
   const tensor = await shownTensor(api);

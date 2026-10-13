@@ -169,7 +169,7 @@ def test_identity_block(fixture_tensor, fixture_frame):
     assert t["schema"] == 2 and t["engine_version"] == ENGINE_VERSION == "0.1.0"
     assert t["asof"] == "2026-10-12" and t["generation"] == "2026-10-12-0.1.0"
     universe = t["universe"]
-    assert universe["name"] == "The 2017 guide portfolio" and universe["preset_id"] == "guide2017"
+    assert universe["name"] == "Example Portfolio" and universe["preset_id"] == "guide2017"
     ids = [fund["id"] for fund in universe["funds"]]
     assert ids == list(fixture_frame.columns) and len(ids) == 23  # the 23 Step 2 funds
     assert universe["excluded"] == []  # the default menu sets no fund aside
