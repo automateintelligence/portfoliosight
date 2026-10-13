@@ -14,7 +14,17 @@ import pandas as pd
 import pytest
 
 from portfoliosight.engine.tensor import canonical_json, validate_tensor
-from tests.engine.helpers import FIXTURE, FIXTURE_ASOF, HOLDINGS, ROOT, UI_FIXTURE, load_script
+from tests.engine.helpers import (
+    CONVERTED,
+    CONVERTED_REASON,
+    FIXTURE,
+    FIXTURE_ASOF,
+    HOLDINGS,
+    ROOT,
+    UI_FIXTURE,
+    load_script,
+    write_converted_menu_parquet,
+)
 
 TELEMETRY = ("built_at", "build_seconds")
 SMALL = ["--nx", "6", "--ny", "5"]
@@ -89,14 +99,13 @@ def test_ui_fixture_has_what_the_page_tests_need(ui):
     with HOLDINGS.open(newline="") as handle:
         amounts = {r["Symbol"]: float(r["Qty"]) * float(r["Price"]) for r in csv.DictReader(handle)}
     excluded = ui["universe"]["excluded"]
-    assert [entry["id"] for entry in excluded] == ["FIENX"]
-    assert excluded[0]["reason"] == "converted to an ETF; no data since 2024-10-30"
-    assert sorted(ids + ["FIENX"]) == sorted(amounts) and len(ids) == 22 and "VTI" in ids
+    assert excluded == []  # the default view uses all 23 funds of the guide menu
+    assert ids == list(amounts) and len(ids) == 23 and "VTI" in ids and "EFA" in ids
     assert ui["lookback"]["id"] == "5y" and ui["generation"] == "2026-10-12-0.1.0"
     assert re.fullmatch(r"[0-9a-f]{16}", ui["universe"]["hash"])
     assert ui["universe"]["name"] == "The 2017 guide portfolio"
-    assert ui["bounds"]["requested"] == [{"min": None, "max": None}] * 22
-    assert ui["bounds"]["max"] == [0.25] * 22 and ui["bounds"]["min"] == [0.0] * 22
+    assert ui["bounds"]["requested"] == [{"min": None, "max": None}] * 23
+    assert ui["bounds"]["max"] == [0.25] * 23 and ui["bounds"]["min"] == [0.0] * 23
     closes = [fund["last_close"] for fund in ui["universe"]["funds"]]
     assert all(isinstance(c, float) and c > 0 for c in closes) and closes[0] != closes[1]
 
@@ -141,7 +150,7 @@ def test_ui_fixture_has_what_the_page_tests_need(ui):
     assert y_front.max() - y_front[10] > 0.2 * (y_front.max() - ui["grid"]["y"][0])
     # mixes in the slider domain hold partly, mostly and fully pre-2008 funds
     covered = [
-        sum(w[i] for i in range(22) if gfc[i] is not None) / w.sum()
+        sum(w[i] for i in range(23) if gfc[i] is not None) / w.sum()
         for c in domain
         for w in (w_front[c], w_div[c])
     ]
@@ -155,16 +164,60 @@ def test_ui_fixture_has_what_the_page_tests_need(ui):
         assert not [text for text in printed if re.search(rf"\b{word}\b", text, re.IGNORECASE)]
 
 
-def test_other_lookbacks_build_and_the_ten_year_view_excludes_fienx(cli, tmp_path):
+def test_other_lookbacks_build_with_every_fund_of_the_menu(cli, tmp_path):
     for lookback, rows in (("ew", 1260), ("10y", 2520), ("1y", 252)):
         code, out = _run(cli, tmp_path, *SMALL, lookback=lookback, name=f"{lookback}.json")
         assert code == 0
         tensor = json.loads(out.read_text())
         validate_tensor(tensor)
         assert tensor["lookback"]["id"] == lookback and tensor["lookback"]["rows"] == rows
-        assert [e["id"] for e in tensor["universe"]["excluded"]] == ["FIENX"]
+        assert tensor["universe"]["excluded"] == [] and len(tensor["universe"]["funds"]) == 23
         assert len(tensor["frontier"]["x"]) == 6 and len(tensor["grid"]["y"]) == 5
     assert tensor["lookback"]["ew_halflife_days"] is None
+
+
+def test_a_menu_with_the_converted_fund_sets_it_aside_in_every_view(cli, tmp_path):
+    """A custom menu holding FIENX: the catalog's reason reaches the tensor, the fund is unused."""
+    returns = write_converted_menu_parquet(tmp_path / "menu.parquet")
+    assert pd.read_parquet(returns).shape[1] == 24
+    aside = [{"id": CONVERTED, "reason": CONVERTED_REASON, "last_close": None}]
+    for lookback in ("5y", "ew", "10y", "1y"):
+        code, out = _run(cli, tmp_path, *SMALL, returns=returns, lookback=lookback)
+        tensor = json.loads(out.read_text())
+        assert code == 0
+        validate_tensor(tensor)
+        assert tensor["universe"]["excluded"] == aside
+        included = [fund["id"] for fund in tensor["universe"]["funds"]]
+        assert len(included) == 23 and CONVERTED not in included
+        assert tensor["universe"]["name"] == "Custom menu"
+        assert {len(w) for w in tensor["frontier"]["w"]} == {23}
+    _, plain = _run(cli, tmp_path, *SMALL, lookback="1y", name="plain.json")
+    assert tensor["frontier"] == json.loads(plain.read_text())["frontier"]  # the same 23 funds
+
+
+def test_an_earlier_day_sets_young_funds_aside_in_the_ten_year_view(cli, tmp_path):
+    """Spec 4.2 on the fixture itself: on 2020-12-31 two funds were too young for ten years."""
+    code, out = _run(cli, tmp_path, *SMALL, lookback="10y", asof="2020-12-31")
+    tensor = json.loads(out.read_text())
+    assert code == 0 and tensor["asof"] == "2020-12-31"
+    validate_tensor(tensor)
+    assert tensor["universe"]["excluded"] == [
+        {
+            "id": "VTIP",
+            "reason": "history starts 2012-10-16, not enough for the 10-year view",
+            "last_close": None,
+        },
+        {
+            "id": "VWOB",
+            "reason": "history starts 2013-06-04, not enough for the 10-year view",
+            "last_close": None,
+        },
+    ]
+    included = [fund["id"] for fund in tensor["universe"]["funds"]]
+    assert len(included) == 21 and "DBJP" in included  # 2011-06-09 is inside the allowance
+    assert tensor["lookback"]["start"] <= "2011-06-09" and tensor["lookback"]["rows"] < 2520
+    code, out = _run(cli, tmp_path, *SMALL, lookback="5y", asof="2020-12-31", name="five.json")
+    assert code == 0 and json.loads(out.read_text())["universe"]["excluded"] == []
 
 
 def test_fallback_grid_builds(cli, tmp_path):
@@ -257,6 +310,6 @@ def test_last_close_is_only_known_for_the_files_last_day(cli, tmp_path):
     code, out = _run(cli, tmp_path, *SMALL, lookback="1y", asof="2026-10-09", name="earlier.json")
     earlier = json.loads(out.read_text())
     assert code == 0 and earlier["asof"] == "2026-10-09"
-    assert [fund["last_close"] for fund in earlier["universe"]["funds"]] == [None] * 22
+    assert [fund["last_close"] for fund in earlier["universe"]["funds"]] == [None] * 23
     code, out = _run(cli, tmp_path, *SMALL, lookback="1y", name="last.json")
     assert all(fund["last_close"] > 0 for fund in json.loads(out.read_text())["universe"]["funds"])

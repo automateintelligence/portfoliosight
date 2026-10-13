@@ -5,7 +5,7 @@
       "name": "The 2017 guide portfolio",
       "funds": [
         "VTI", "VTV", "VOE", "VB", "VBR", "VEA", "SCHF", "VWO", "VNQ", "VBIAX", "SCHO", "BND",
-        "AGG", "TIP", "VTIP", "LQD", "VWOB", "PCY", "FIENX", "LTPZ", "EDV", "VGSTX", "DBJP"
+        "AGG", "TIP", "VTIP", "LQD", "VWOB", "PCY", "EFA", "LTPZ", "EDV", "VGSTX", "DBJP"
       ],
       "allocation_source": "data/holdings/holdings_guide2017_step2.csv",
       "allocation": null

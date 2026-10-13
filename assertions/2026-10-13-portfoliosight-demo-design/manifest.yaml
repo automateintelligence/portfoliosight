@@ -339,7 +339,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-43
-    claim: "With no query the page loads the first preset from /api/presets, shows point-current, lists 23 fund rows in dollar mode with the body's allocation (18 non-zero), shows the FIENX excluded-note with the tensor's reason string, and preset-menu lists the body's preset names and loads the second one in one click from its declared tensor URL, setting u."
+    claim: "With no query the page loads the first preset from /api/presets, shows point-current, lists 23 fund rows in dollar mode with the body's allocation (18 non-zero) and no excluded-note (the default tensor uses all 23 funds), and preset-menu lists the body's preset names and loads the second one in one click from its declared tensor URL, setting u; that second menu holds FIENX, which its tensor sets aside, and the FIENX row alone shows the excluded-note with that tensor's reason string, which changes to the 10y tensor's reason when lookback-10y is chosen."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_43_default_view_presets.py"
     setup: ""
     teardown: ""
@@ -443,7 +443,7 @@ assertions:
     level: spec
     kind: example
   - id: A-PS-56
-    claim: "GET /api/presets comes from R2 with both presets and six ready lookbacks, the guide2017 5y tensor is schema-valid, immutable-cached, ETagged and from R2, and a POST for the default preset returns 200 with a url whose body is byte-identical to that tensor."
+    claim: "GET /api/presets comes from R2 with both presets and six ready lookbacks, the guide2017 5y tensor is schema-valid, immutable-cached, ETagged and from R2, and a POST for the default preset returns 200 with a url whose body is byte-identical to that tensor; the default tensor uses all 23 Step 2 funds and sets none aside, and a POST for those funds plus FIENX resolves to a schema-valid tensor that sets exactly FIENX aside with the reason converted to an ETF; no data since 2024-10-30."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_56_presets_tensors_from_r2.py"
     setup: ""
     teardown: ""
@@ -499,7 +499,7 @@ assertions:
     level: spec
     kind: example
   - id: A-PS-63
-    claim: "In production lookback-10y loads the 10y tensor and redraws the frontier, the Settings exclusion list equals the set computed from /api/symbols first_date values and the 4.2 rule, ghost-1y moves data-ghost-count and the canvas 0 to 1 to 0, and cap-max-VTI = 10 rebuilds a tensor whose VTI weights never exceed 0.10 + 1e-6."
+    claim: "In production lookback-10y loads the 10y tensor and redraws the frontier, the Settings exclusion list equals the set computed from /api/symbols first_date values and the 4.2 rule, for the default menu and for a custom menu holding a served fund too young for the 10y view (listed with its reason) and FIENX as a fund that is not served (listed too), ghost-1y moves data-ghost-count and the canvas 0 to 1 to 0, and cap-max-VTI = 10 rebuilds a tensor whose VTI weights never exceed 0.10 + 1e-6."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_63_lookbacks_ghosts_caps_prod.py"
     setup: ""
     teardown: ""

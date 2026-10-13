@@ -31,7 +31,7 @@ const presetsBody = () => ({
   generation: G,
   asof: presetsAsof,
   presets: [
-    { id: "guide2017", name: "The 2017 guide portfolio", hash: H1, funds: [...RAW.universe.funds, { id: "FIENX", name: "FIENX" }].map((f) => ({ id: f.id, name: f.name })), allocation, allocation_unit: "$", lookbacks: lookbacks(H1) },
+    { id: "guide2017", name: "The 2017 guide portfolio", hash: H1, funds: RAW.universe.funds.map((f: { id: string; name: string }) => ({ id: f.id, name: f.name })), allocation, allocation_unit: "$", lookbacks: lookbacks(H1) },
     { id: "tsp", name: "TSP (G, F, C, S, I)", hash: H2, funds: RAW.universe.funds.slice(0, 5).map((f: { id: string; name: string }) => ({ id: f.id, name: f.name })), allocation: null, allocation_unit: null, lookbacks: lookbacks(H2) },
   ],
 });
@@ -95,7 +95,7 @@ describe("store: default view", () => {
     expect(s.build.status).toBe("ready");
     expect(s.preset).toBe("guide2017");
     expect(s.unit).toBe("usd");
-    expect(s.rows.length).toBe(IDS.length + 1);
+    expect(s.rows.length).toBe(IDS.length);
     expect(tensorCalls().map((c) => `${c.method} ${c.path}`)).toEqual([`GET /api/tensors/${G}/${H1}/5y`]);
     expect(s.previewOn).toBe(true);
   });

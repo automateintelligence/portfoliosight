@@ -591,7 +591,6 @@ def test_meta_request_stopped_by_the_budget_keeps_the_record(tmp_path, monkeypat
 def test_default_set_is_the_universe_priority_order(tmp_path):
     store = LocalStore(tmp_path / "store")
     provider = FakeProvider(default_available=FEB23)
-    provider.available["FIENX"] = date(2025, 12, 30)  # its data ended; the universe says why
     tsp_provider = FakeProvider(default_available=FEB20, kind="tsp")
     tsp_provider.name = "tsp"
     clock = Clock(date(2026, 2, 24))
@@ -610,12 +609,39 @@ def test_default_set_is_the_universe_priority_order(tmp_path):
     assert [c[1] for c in tsp_provider.calls if c[0] == "daily"] == list(universe.tier1[23:])
     now = _manifest(store)
     assert len(now) == 39 and now["BND"]["income"] is True and now["BND"]["tier"] == 1
-    assert now["FIENX"]["status"] == "stale" and now["TSP-G"]["source"] == "tsp"
-    assert now["FIENX"]["reason"] == "converted to an ETF; no data since 2025-12-30"
+    assert now["EFA"]["status"] == "ok" and now["TSP-G"]["source"] == "tsp"
     assert now["TSP-G"]["kind"] == "tsp" and now["VTI"]["kind"] == "etf"
     # 23 funds cost two requests each; the 16 TSP funds are not budgeted.
     assert json.loads(store.get("meta/budget.json"))["days"] == {"2026-02-24": 46}
-    assert len(_listed(store)) == 38
+    assert len(_listed(store)) == 39  # every tier 1 fund is served
+    assert {entry["reason"] for entry in now.values()} == {None}
+
+
+def test_a_fund_whose_data_ended_is_not_served_and_the_universe_says_why(tmp_path, monkeypatch):
+    """FIENX (tier 2) was converted to an ETF: the catalog keeps it with the reason, unserved."""
+    for name, value in zip(ENV_NAMES, ("2000", "5000", "1000"), strict=True):
+        monkeypatch.setenv(name, value)  # room for the whole of tier 2 in one run
+    universe = load_tiers()
+    assert "FIENX" in universe.tier2 and "FIENX" not in universe.tier1
+    store = LocalStore(tmp_path / "store")
+    provider = FakeProvider(default_available=FEB23)
+    provider.available["FIENX"] = date(2025, 12, 30)  # its data ended; the universe says why
+    clock = Clock(date(2026, 2, 24))
+    code = download.run(
+        "catch-up",
+        store=store,
+        providers={"tiingo": provider},
+        clock=clock,
+        sleep=clock.sleep,
+        tiers=(2,),
+    )
+    assert code == 0 and clock.slept == []
+    now = _manifest(store)
+    assert set(now) == set(universe.tier2) - set(universe.tier1) and len(now) == 317 - 23
+    assert now["FIENX"]["status"] == "stale" and now["FIENX"]["tier"] == 2
+    assert now["FIENX"]["reason"] == "converted to an ETF; no data since 2025-12-30"
+    assert [symbol for symbol, entry in now.items() if entry["status"] != "ok"] == ["FIENX"]
+    assert sorted(_listed(store)) == sorted(set(now) - {"FIENX"})
     # A later refresh with an explicit set (no universe at hand) keeps the note.
     code = download.run(
         "refresh",

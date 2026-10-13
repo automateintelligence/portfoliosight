@@ -3,9 +3,9 @@
 Daily simple returns for the 23 funds of the 2017 guide portfolio (Step 2) on XNYS sessions from
 2005-01-03 to 2026-10-12, drawn once from a seeded three-factor model (equity, interest rates,
 international). Nothing here is market data: the tickers only name the columns. Coverage is
-partial on purpose, so the stress windows and the exclusion notes have something to show:
-six funds start after 2008-09-01 (one of them inside the 2008 window) and FIENX stops on
-2024-10-30 and is marked as not served.
+partial on purpose, so the stress windows have something to show: six funds start after
+2008-09-01 (one of them inside the 2008 window). Every fund runs to the last session and is
+served, so no view of this menu sets a fund aside.
 
 The file is the returns parquet of the tensor build CLI (`DatetimeIndex` named `date`, one float
 column per fund, NaN where the fund has no return). Its schema metadata carries, under the key
@@ -51,12 +51,6 @@ class Fund:
     betas: tuple[float, float, float]
     idio: float  # annual idiosyncratic volatility
     start: str = FIRST_SESSION
-    end: str = LAST_SESSION
-    catalog_reason: str | None = None
-
-    @property
-    def served(self) -> bool:
-        return self.catalog_reason is None
 
 
 FUNDS = (
@@ -124,15 +118,7 @@ FUNDS = (
         (0.18, 1.30, 0.35),
         0.030,
     ),
-    Fund(
-        "FIENX",
-        "Fidelity International Enhanced Index Fund",
-        "mutual_fund",
-        (0.85, 0.00, 0.60),
-        0.050,
-        end="2024-10-30",
-        catalog_reason="converted to an ETF; no data since 2024-10-30",
-    ),
+    Fund("EFA", "iShares MSCI EAFE ETF", "etf", (0.85, 0.00, 0.60), 0.050),
     Fund(
         "LTPZ",
         "PIMCO 15+ Year U.S. TIPS Index ETF",
@@ -175,8 +161,7 @@ def build_frame() -> pd.DataFrame:
             + factors @ np.array(fund.betas)
             + noise[:, position] * fund.idio / np.sqrt(TRADING_DAYS)
         )
-        held = (index >= pd.Timestamp(fund.start)) & (index <= pd.Timestamp(fund.end))
-        columns[fund.id] = np.where(held, series, np.nan)
+        columns[fund.id] = np.where(index >= pd.Timestamp(fund.start), series, np.nan)
     return pd.DataFrame(columns, index=index, dtype="float64")
 
 
@@ -189,11 +174,11 @@ def build_metadata(frame: pd.DataFrame) -> dict:
             "name": fund.name,
             "kind": fund.kind,
             "source": "tiingo" if fund.kind == "mutual_fund" else "seed+tiingo",
-            "adjusted_through": fund.end,
+            "adjusted_through": LAST_SESSION,
             "fetched_at": FETCHED_AT,
-            "last_close": round(25.0 * growth, 2) if fund.served else None,
-            "served": fund.served,
-            "catalog_reason": fund.catalog_reason,
+            "last_close": round(25.0 * growth, 2),
+            "served": True,
+            "catalog_reason": None,
         }
     return {"universe": UNIVERSE, "funds": funds}
 

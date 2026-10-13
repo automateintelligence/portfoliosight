@@ -52,13 +52,13 @@ def test_store_is_seeded_unpublished_and_open_to_the_container_uid(tmp_path):
     store = LocalStore(target)
     assert not store.exists("meta/current.json") and store.list("tensors/") == []
     catalog = manifest_mod.load_manifest(store).symbols
-    assert len(catalog) == 28 and set(TSP_CORE) <= set(catalog)
+    assert len(catalog) == 29 and set(TSP_CORE) <= set(catalog)
     served = [symbol for symbol, entry in catalog.items() if entry.status == "ok"]
-    assert len(served) == 27 and catalog["FIENX"].status == "unavailable"
+    assert len(served) == 28 and catalog["FIENX"].status == "unavailable"
     assert {entry.last_date for symbol, entry in catalog.items() if symbol != "FIENX"} == {
         fixture_asof()
     }
-    assert len(store.list("prices/")) == 28
+    assert len(store.list("prices/")) == 29
     for path in (target, target / ".tmp", target / "prices", target / "meta"):
         assert stat.S_IMODE(path.stat().st_mode) & 0o777 == 0o777, path
     for path in (target / "prices" / "VTI.parquet", target / "meta" / "manifest.json"):

@@ -1,30 +1,42 @@
-"""A-PS-43 - the default view is the 2017 guide portfolio with its allocation and the excluded-fund
-note; the preset menu is driven by /api/presets.
+"""A-PS-43 - the default view is the 2017 guide portfolio with its allocation and no fund set
+aside; a menu holding a fund its tensor sets aside shows the excluded-fund note with the tensor's
+reason; the preset menu is driven by /api/presets.
+
+Owner decision 2026-10-13: EFA holds FIENX's place in the default menu, so the fixture tensor has
+23 included funds and an empty `excluded` list. The excluded-fund note is asserted on the second
+menu of the mock, which holds FIENX (the catalog's converted fund) and whose tensor lists it in
+`excluded`, as the service does for any menu holding a fund it cannot use.
 
 Playwright (desktop) run from pytest; stdlib only.
 
 Mock (built by the embedded spec, no product mock server): page.route on /api/** serving
 GET /api/presets (two presets: guide2017 with the allocation from
 data/holdings/holdings_guide2017_step2.csv in "$", and tsp named "TSP (G, F, C, S, I) [mock-7f3]"
-with a distinct hash and allocation null; six ready lookbacks each), GET /api/tensors/{G}/{hash}/{lb}
-(web/fixtures/guide2017_5y.json with lookback.id patched; for the second hash also universe.hash,
-preset_id, name and the excluded reasons patched), GET /api/symbols, GET /api/health,
-POST /api/tensors, POST /api/share, anything else 404. Every /api/ request is logged.
+with a distinct hash, allocation null and the same 23 funds plus FIENX; six ready lookbacks each),
+GET /api/tensors/{G}/{hash}/{lb} (web/fixtures/guide2017_5y.json with lookback.id patched; for the
+second hash also universe.hash, preset_id and name patched, and FIENX added to universe.excluded
+with the reason "converted to an ETF; no data since 2024-10-30 [mock-7f3]", followed by " [{lb}]"
+for every lookback but 5y, so two tensors of that menu give FIENX two different reasons),
+GET /api/symbols, GET /api/health, POST /api/tensors, POST /api/share, anything else 404. Every
+/api/ request is logged.
 
 Pinned interface (beyond the shared pins of the gate contract):
 - web/ builds with `npm run build` and serves with `vite preview`; web/fixtures/guide2017_5y.json.
 - html[data-theme], URL keys u, lb, r, d, t, x (spec 8.1); r and d are written to the address
   (debounced) after every change, with at least six decimals.
 - test ids: chart-canvas, point-selected, point-current, chip-funds, section-funds (aria-expanded),
-  fund-row-{ID} (23 rows: the preset's funds, excluded ones included), unit-toggle, excluded-note,
-  preset-menu.
+  fund-row-{ID} (one row per fund of the menu, excluded ones included: 23 for the default menu,
+  24 for the second), unit-toggle, excluded-note, preset-menu, chip-settings, section-settings
+  (aria-expanded), lookback-10y (a click selects the 10y view and loads the menu's declared 10y
+  tensor URL).
 - each fund row holds its amount in its first non-checkbox <input>; accepted formatting: optional
   "$", digits with optional thousands separators, up to two decimals; blank reads as 0.
 - unit-toggle marks its active option with aria-checked / aria-pressed / aria-selected = "true"
   (or a checked input / selected option); its text is "$".
 - preset-menu is a <select> (or contains one), or a button that opens entries with role=option /
   menuitem / menuitemradio; the first two entries are the presets in body order, then "Custom...".
-- excluded-note text is the tensor's reason string (optionally followed by ": not used").
+- excluded-note text is the tensor's reason string (optionally followed by ": not used"); a fund
+  row carries one exactly when the tensor lists that fund in universe.excluded.
 """
 
 # ruff: noqa: E501
@@ -93,6 +105,7 @@ const TSP: [string, string][] = [
 const SECOND_NAME = "TSP (G, F, C, S, I) [mock-7f3]";
 const SECOND_REASON_SUFFIX = " [mock-7f3]";
 const FIENX_REASON = "converted to an ETF; no data since 2024-10-30";
+const SET_ASIDE = { id: "FIENX", name: "Fidelity International Enhanced Index Fund" };
 
 type ApiCall = { method: string; path: string; body: string | null };
 type Rgb = [number, number, number];
@@ -138,7 +151,7 @@ function buildMock(tensor: any) {
     asof: tensor.asof,
     presets: [
       { id: "guide2017", name: tensor.universe.name || "The 2017 guide portfolio", hash: hash1, funds, allocation, allocation_unit: "$", lookbacks: lookbacks(hash1) },
-      { id: "tsp", name: SECOND_NAME, hash: hash2, funds, allocation: null, allocation_unit: null, lookbacks: lookbacks(hash2) },
+      { id: "tsp", name: SECOND_NAME, hash: hash2, funds: [...funds, SET_ASIDE], allocation: null, allocation_unit: null, lookbacks: lookbacks(hash2) },
     ],
   };
   const symbols = {
@@ -166,6 +179,7 @@ function tensorBody(mock: Mock, hash: string, lb: string): any {
     copy.universe.preset_id = "tsp";
     copy.universe.name = SECOND_NAME;
     for (const ex of copy.universe.excluded || []) ex.reason = ex.reason + SECOND_REASON_SUFFIX;
+    copy.universe.excluded = [...(copy.universe.excluded || []), { id: SET_ASIDE.id, reason: FIENX_REASON + SECOND_REASON_SUFFIX + (lb === "5y" ? "" : ` [${lb}]`), last_close: null }];
   }
   return copy;
 }
@@ -434,13 +448,21 @@ test("default view is the first preset with its allocation; preset menu is drive
   const tensor = readFixture();
   const mock = buildMock(tensor);
   const [firstPreset, secondPreset] = mock.presets.presets;
-  const fienx = (tensor.universe.excluded || []).find((e: any) => e.id === "FIENX");
-  expect(fienx, "the fixture tensor's universe.excluded must contain FIENX").toBeTruthy();
-  expect(fienx.reason, "the fixture's FIENX reason string").toBe(FIENX_REASON);
   expect(firstPreset.funds.length, "the 2017 guide Step 2 holdings file lists 23 funds").toBe(23);
   const universeIds = [...tensor.universe.funds.map((f: any) => f.id), ...tensor.universe.excluded.map((e: any) => e.id)].sort();
   expect(universeIds, "the fixture's funds plus excluded funds must be the 23 Step 2 funds").toEqual(firstPreset.funds.map((f) => f.id).sort());
+  expect(tensor.universe.excluded, "the fixture tensor must set no fund aside: its 23 funds are all used").toEqual([]);
+  expect(tensor.universe.funds.length, "the fixture tensor must use all 23 Step 2 funds").toBe(23);
+  expect(firstPreset.funds.map((f) => f.id), "FIENX must not be a fund of the default menu").not.toContain(SET_ASIDE.id);
   expect(secondPreset.name.endsWith("[mock-7f3]")).toBe(true);
+  // The second menu of the mock: the same 23 funds plus FIENX, which its tensor sets aside.
+  expect(secondPreset.funds.map((f) => f.id), "the mock's second menu is the 23 funds plus FIENX").toEqual([...firstPreset.funds.map((f) => f.id), SET_ASIDE.id]);
+  const secondTensor = tensorBody(mock, mock.hash2, "5y");
+  expect(secondTensor.universe.funds.map((f: any) => f.id), "the second tensor uses the same 23 funds").toEqual(tensor.universe.funds.map((f: any) => f.id));
+  expect(secondTensor.universe.excluded, "the second tensor sets exactly FIENX aside").toHaveLength(1);
+  const fienx = secondTensor.universe.excluded.find((e: any) => e.id === SET_ASIDE.id);
+  expect(fienx, "the second tensor's universe.excluded must contain FIENX").toBeTruthy();
+  expect(fienx.reason, "the second tensor's FIENX reason string").toBe(FIENX_REASON + SECOND_REASON_SUFFIX);
 
   await installMock(page, mock);
   await openApp(page, mock, "");
@@ -478,10 +500,10 @@ test("default view is the first preset with its allocation; preset menu is drive
   expect(compared).toBe(23);
   expect(nonZero, "exactly 18 non-zero amounts").toBe(18);
 
-  // Leg 3: the FIENX row carries the tensor's exact reason string.
-  const noteText = async () => ((await page.getByTestId("fund-row-FIENX").getByTestId("excluded-note").first().textContent()) || "").replace(/\s+/g, " ").trim();
-  await expect(page.getByTestId("fund-row-FIENX").getByTestId("excluded-note"), "fund-row-FIENX must contain an excluded-note").toHaveCount(1);
-  expect([fienx.reason, `${fienx.reason}: not used`], "excluded-note text must be the tensor's reason (optionally followed by ': not used' as in spec 3.3)").toContain(await noteText());
+  // Leg 3: the default tensor sets no fund aside, so no fund row carries an excluded-note and
+  // there is no row for FIENX.
+  await expect(rows.getByTestId("excluded-note"), "the default view uses all 23 funds: no fund row may carry an excluded-note").toHaveCount(0);
+  await expect(page.getByTestId("fund-row-FIENX"), "FIENX is not a fund of the default menu").toHaveCount(0);
 
   // Leg 4: the preset menu lists the body's names, in order.
   const entries = await menuEntries(page);
@@ -501,15 +523,41 @@ test("default view is the first preset with its allocation; preset menu is drive
   await waitParam(page, "u", (v) => v === secondPreset.id, `the address must gain u=${secondPreset.id}`);
   await expect(page.getByTestId("point-current"), "the second preset has no allocation, so no current-mix marker").toHaveCount(0);
 
-  // Leg 6 (anchor): the note follows the tensor that was just served, not a constant.
+  // Leg 6 (anchor): the second menu holds FIENX and its tensor sets FIENX aside. The FIENX row
+  // carries the exact reason string of the tensor that was just served (it exists only in this
+  // mock, so it cannot be a constant), and no other row carries a note.
   await openFunds(page);
-  await expect.poll(noteText, { message: "after the switch the FIENX note must show the second tensor's reason string" }).toContain(fienx.reason + SECOND_REASON_SUFFIX);
+  await expect(rows, "24 fund rows: the 23 funds and FIENX").toHaveCount(24);
+  const note = page.getByTestId("fund-row-FIENX").getByTestId("excluded-note");
+  await expect(note, "fund-row-FIENX must contain an excluded-note").toHaveCount(1);
+  const noteText = async () => ((await note.first().textContent()) || "").replace(/\s+/g, " ").trim();
+  await expect.poll(noteText, { message: "after the switch the FIENX note must show the second tensor's reason string" }).toContain(fienx.reason);
+  expect([fienx.reason, `${fienx.reason}: not used`], "excluded-note text must be the tensor's reason (optionally followed by ': not used' as in spec 3.3)").toContain(await noteText());
+  await expect(rows.getByTestId("excluded-note"), "only the fund the tensor sets aside carries an excluded-note").toHaveCount(1);
 
   await page.waitForLoadState("networkidle");
   const after = mock.log.slice(before);
   const tensorCalls = after.filter((c) => c.path.startsWith("/api/tensors"));
   expect(tensorCalls.map((c) => `${c.method} ${c.path}`), "choosing the second preset must issue exactly one GET to the declared tensor URL and no other tensor request").toEqual([`GET ${declaredSecond}`]);
   expect(tensorCalls.filter((c) => c.path !== declaredSecond).length).toBe(0);
+
+  // Leg 7 (anchor, same row): the 10y tensor of the same menu gives FIENX another reason. The
+  // note on the FIENX row must change to it: a reason remembered from the first tensor fails.
+  const declaredTen = secondPreset.lookbacks["10y"].url;
+  const tenTensor = tensorBody(mock, mock.hash2, "10y");
+  const fienxTen = tenTensor.universe.excluded.find((e: any) => e.id === SET_ASIDE.id);
+  expect(tenTensor.universe.excluded, "the second menu's 10y tensor sets exactly FIENX aside").toHaveLength(1);
+  expect(fienxTen.reason, "the 10y tensor's FIENX reason differs from the 5y one").toBe(fienx.reason + " [10y]");
+  if ((await page.getByTestId("section-settings").getAttribute("aria-expanded")) !== "true") await page.getByTestId("chip-settings").click();
+  await expect(page.getByTestId("section-settings")).toHaveAttribute("aria-expanded", "true");
+  const beforeTen = mock.log.length;
+  await page.getByTestId("lookback-10y").click();
+  await expect.poll(() => mock.log.slice(beforeTen).filter((c) => c.method === "GET" && c.path === declaredTen).length, { message: `one GET to ${declaredTen}` }).toBeGreaterThanOrEqual(1);
+  await openFunds(page);
+  await expect(rows, "still 24 fund rows in the 10y view").toHaveCount(24);
+  await expect.poll(noteText, { message: "after the lookback switch the FIENX note must show the 10y tensor's reason string" }).toContain(fienxTen.reason);
+  expect([fienxTen.reason, `${fienxTen.reason}: not used`], "excluded-note text must be the 10y tensor's reason (optionally followed by ': not used')").toContain(await noteText());
+  await expect(rows.getByTestId("excluded-note"), "only the fund the tensor sets aside carries an excluded-note").toHaveCount(1);
 });
 """
 EXPECTED_TITLES = {
