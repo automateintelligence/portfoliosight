@@ -59,18 +59,18 @@ def surface(programs: MenuPrograms, front: Frontier, basis: TorsionBasis, ny: in
         raise ValueError("a surface needs at least 2 rows")
     mu, cov = programs.mu, programs.cov
     nx = len(front.x)
-    lowest = float(mu @ greedy_fill(mu, programs.lo, programs.hi, ascending=True))
     top = float(front.y.max())
+    lowest = min(float(mu @ greedy_fill(mu, programs.lo, programs.hi, ascending=True)), top)
     y = np.linspace(lowest, top, ny)
     top_is_unique = greedy_is_unique(mu, programs.lo, programs.hi)
     w: list[list[np.ndarray | None]] = []
     z = np.full((nx, ny), np.nan)
     enb_front = np.array([enb(mix, cov, basis) for mix in front.w])
+    enb_best = enb_front.copy()  # per column: the highest ENB among its candidates
     k_div = np.full(nx, -1, dtype=int)
     for j in range(nx):
         column: list[np.ndarray | None] = [None] * ny
         slack_mix = None
-        best = enb_front[j]
         for k in range(ny - 1, -1, -1):
             if y[k] > front.y[j]:
                 continue
@@ -86,17 +86,23 @@ def surface(programs: MenuPrograms, front: Frontier, basis: TorsionBasis, ny: in
                     slack_mix = mix
             column[k] = mix
             z[j, k] = enb(mix, cov, basis)
-            if z[j, k] > best:  # strictly: a tie stays with the higher return
-                best, k_div[j] = z[j, k], k
+            if z[j, k] > enb_best[j]:  # strictly: a tie stays with the higher return
+                enb_best[j], k_div[j] = z[j, k], k
         w.append(column)
     collapsed = k_div < 0
     y_div = np.where(collapsed, front.y, y[k_div])
     w_div = np.array(
         [front.w[j] if collapsed[j] else w[j][k_div[j]] for j in range(nx)], dtype=float
     )
-    enb_ref = float(max(enb_front.max(), np.nanmax(z)))
     return Surface(
-        y=y, w=w, z=z, enb_front=enb_front, k_div=k_div, y_div=y_div, w_div=w_div, enb_ref=enb_ref
+        y=y,
+        w=w,
+        z=z,
+        enb_front=enb_front,
+        k_div=k_div,
+        y_div=y_div,
+        w_div=w_div,
+        enb_ref=float(enb_best.max()),
     )
 
 
@@ -129,8 +135,9 @@ def interpolate(tensor: Mapping, s: float, t: float) -> np.ndarray:
 
     `tensor` needs `frontier.w`, `frontier.y`, `grid.w`, `grid.y` and `grid.k_div` in the
     tensor's own layout. `s` is the column position in `[0, nx - 1]`; `t` runs from 0 (the
-    frontier mix) to 1 (the most diversified mix) along each neighbouring column's ladder.
-    Nothing is clipped or renormalized: the result is a convex combination of computed mixes.
+    frontier mix) to 1 (the most diversified mix) along each neighbouring column's ladder, and
+    reaches both ends exactly. Nothing is clipped or renormalized: the result is a convex
+    combination of computed mixes.
     """
     columns = len(tensor["frontier"]["w"])
     if not (0.0 <= s <= columns - 1 and 0.0 <= t <= 1.0):
@@ -141,7 +148,13 @@ def interpolate(tensor: Mapping, s: float, t: float) -> np.ndarray:
 
 
 def _ladder_mix(tensor: Mapping, j: int, t: float) -> np.ndarray:
-    """Column `j`'s mix at fraction `t` of its ladder's return span."""
+    """Column `j`'s mix at fraction `t` of its ladder's return span.
+
+    The ladder is the frontier mix, then the feasible cells from the top down to the most
+    diversified one, each at its return floor. A ladder with no return span (a collapsed one,
+    or one whose most diversified mix costs no return) has nothing to walk by return: `t`
+    blends its two ends directly.
+    """
     mixes = [np.asarray(tensor["frontier"]["w"][j], dtype=float)]
     returns = [float(tensor["frontier"]["y"][j])]
     k_div = int(tensor["grid"]["k_div"][j])
@@ -152,9 +165,14 @@ def _ladder_mix(tensor: Mapping, j: int, t: float) -> np.ndarray:
             if cell is not None:
                 mixes.append(np.asarray(cell, dtype=float))
                 returns.append(min(returns[-1], float(floors[k])))
-    target = returns[0] - t * (returns[0] - returns[-1])
+    if len(mixes) == 1:
+        return mixes[0]
+    if returns[0] <= returns[-1]:
+        return (1.0 - t) * mixes[0] + t * mixes[-1]
+    # written so that t = 0 and t = 1 land on the two ends exactly, whatever the rounding
+    target = max((1.0 - t) * returns[0] + t * returns[-1], returns[-1])
     lower = next(i for i, value in enumerate(returns) if value <= target)
-    if lower == 0:  # t = 0, or a ladder with no span: the frontier mix
+    if lower == 0:
         return mixes[0]
     share = (returns[lower - 1] - target) / (returns[lower - 1] - returns[lower])
     return (1.0 - share) * mixes[lower - 1] + share * mixes[lower]

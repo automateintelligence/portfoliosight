@@ -310,3 +310,49 @@ def test_tied_top_funds_get_the_least_concentrated_top_mix():
     assert top is not None and np.abs(top - [0.5, 0.5, 0.0, 0.0, 0.0]).max() <= 1e-3
     assert top @ top < front.w[-1] @ front.w[-1] - 1e-3
     assert mu @ top >= surf.y[-1] - TOL and programs.sigma(top) <= front.x[-1] + TOL
+
+
+def _tensor_view(front, surf) -> dict:
+    return {
+        "frontier": {"w": front.w.tolist(), "y": front.y.tolist()},
+        "grid": {
+            "w": [[None if c is None else c.tolist() for c in column] for column in surf.w],
+            "y": surf.y.tolist(),
+            "k_div": surf.k_div.tolist(),
+        },
+    }
+
+
+def test_t_equal_one_is_the_most_diversified_mix_whatever_the_rounding():
+    """`y_front - 1 * (y_front - y_div)` need not round to `y_div`; the end must still be exact."""
+    mu, cov = np.array([0.10, -0.12]), 0.01 * np.eye(2)
+    programs = MenuPrograms(mu, cov, np.zeros(2), np.ones(2))
+    front = frontier(programs)
+    surf = surface(programs, front, torsion_basis(cov))
+    tensor = _tensor_view(front, surf)
+    rounding_cases = 0
+    for j in range(48):
+        assert np.array_equal(interpolate(tensor, float(j), 1.0), surf.w_div[j])
+        assert np.array_equal(interpolate(tensor, float(j), 0.0), front.w[j])
+        rounding_cases += front.y[j] - 1.0 * (front.y[j] - surf.y_div[j]) != surf.y_div[j]
+    assert rounding_cases > 0  # the menu really exercises the rounding
+    rng = np.random.default_rng(3813)
+    for _ in range(300):  # and nothing in between leaves the ladder
+        mix = interpolate(tensor, float(rng.uniform(0, 47)), float(rng.uniform()))
+        assert abs(mix.sum() - 1.0) <= TOL and (mix >= -TOL).all()
+
+
+def test_a_ladder_without_return_span_blends_its_two_ends():
+    """Tied returns: the most diversified mix costs no return, so `t` blends the ends directly."""
+    mu, cov = np.array([0.04, 0.04]), 0.01 * np.eye(2)
+    programs = MenuPrograms(mu, cov, np.zeros(2), np.ones(2))
+    front = frontier(programs)
+    surf = surface(programs, front, torsion_basis(cov))
+    tensor = _tensor_view(front, surf)
+    j = 47
+    assert surf.k_div[j] >= 0 and surf.y_div[j] == front.y[j]  # a ladder with no span
+    assert np.array_equal(front.w[j], [1.0, 0.0]) and np.abs(surf.w_div[j] - 0.5).max() <= 1e-4
+    assert np.array_equal(interpolate(tensor, float(j), 0.0), front.w[j])
+    assert np.array_equal(interpolate(tensor, float(j), 1.0), surf.w_div[j])
+    halfway = interpolate(tensor, float(j), 0.5)
+    assert np.abs(halfway - 0.5 * (front.w[j] + surf.w_div[j])).max() <= 1e-15
