@@ -166,12 +166,6 @@ def test_solver_settings_and_the_retry_ladder():
     for call, extra in zip(flaky.calls, optimize.RETRY_OPTIONS, strict=True):
         base = {"solver": cp.CLARABEL, "warm_start": False}
         assert call == {**base, **optimize.SOLVER_OPTIONS, **extra}
-    tight = _FlakyProblem(["optimal"])
-    optimize._solve(tight, _Value(), "a test program", 1e-10)
-    assert tight.calls[0]["tol_feas"] == tight.calls[0]["tol_gap_abs"] == 1e-10
-    assert (
-        tight.calls[0]["tol_gap_rel"] == 1e-10 and tight.calls[0]["direct_solve_method"] == "qdldl"
-    )
     never = _FlakyProblem([cp.SolverError("x"), "optimal_inaccurate", "user_limit"])
     with pytest.raises(SolveError, match="a test program: no optimal solution .* user_limit"):
         optimize._solve(never, _Value(), "a test program")
@@ -190,46 +184,56 @@ def _inside(front, cov) -> np.ndarray:
     return (front.x - np.array([_sigma(w, cov) for w in front.w]))[:-1]
 
 
-def test_nodes_on_a_nearly_flat_frontier_are_refined_onto_their_ceilings(monkeypatch):
-    mu, cov, lo, hi = _near_tied_menu(1e-7)
-    front = frontier(MenuPrograms(mu, cov, lo, hi))
+@pytest.mark.parametrize("gap", [1e-5, 1e-7, 1e-10, 0.0])
+def test_nodes_sit_on_their_ceilings_however_flat_the_frontier(gap):
+    """At 1e-8 a node on a flat stretch is found inside its ceiling; it is moved onto it."""
+    mu, cov, lo, hi = _near_tied_menu(gap)
+    programs = MenuPrograms(mu, cov, lo, hi)
+    front = frontier(programs)
     assert np.abs(_inside(front, cov)).max() <= TOL
-    assert (np.diff(front.y) >= -1e-9).all() and all(_feasible(w, lo, hi) for w in front.w)
-    # at 1e-8 alone the same nodes sit well inside: the return they give up is below tolerance
-    assert optimize.REFINE_TOLERANCES == (1e-10, 1e-12)
-    monkeypatch.setattr(optimize, "REFINE_TOLERANCES", ())
-    plain = frontier(MenuPrograms(mu, cov, lo, hi))
-    assert _inside(plain, cov).max() > 20 * TOL
-    assert np.abs(plain.y - front.y).max() <= 1e-8  # the same frontier in return terms
+    assert (np.diff(front.y)[:-1] >= 0.0).all() and (np.diff(front.y) >= -1e-9).all()
+    assert all(_feasible(w, lo, hi) for w in front.w)
+    assert np.array_equal(front.w[-1], greedy_fill(mu, lo, hi))
+    solved = [programs.frontier_point(float(x)) for x in front.x[1:-1]]
+    inside = front.x[1:-1] - np.array([_sigma(w, cov) for w in solved])
+    if 0.0 < gap <= 1e-7:  # the plain answers really were inside: by up to points of volatility
+        assert inside.max() > 20 * TOL
+    for node_return, plain in zip(front.y[1:-1], solved, strict=True):
+        assert node_return >= mu @ plain - 1e-15  # moving a node never costs return
 
 
-def test_refinement_is_best_effort(monkeypatch):
-    mu, cov, lo, hi = _near_tied_menu(1e-7)
-    real = optimize._solve
+def test_onto_ceiling_moves_toward_the_top_mix_until_risk_binds():
+    rng = np.random.default_rng(3640)
+    for _ in range(50):
+        n = int(rng.integers(2, 12))
+        a = rng.normal(size=(n, n))
+        cov = (a @ a.T / n + 0.1 * np.eye(n)) * 0.04
+        inside, top = rng.dirichlet(np.ones(n)), rng.dirichlet(np.ones(n))
+        if _sigma(inside, cov) > _sigma(top, cov):
+            inside, top = top, inside
+        ceiling = rng.uniform(_sigma(inside, cov), _sigma(top, cov))
+        moved = optimize._onto_ceiling(inside, top, ceiling, cov)
+        assert abs(_sigma(moved, cov) - ceiling) <= 1e-12
+        share = (moved - inside) @ (top - inside) / ((top - inside) @ (top - inside))
+        assert (
+            0.0 <= share <= 1.0 and np.abs(inside + share * (top - inside) - moved).max() <= 1e-12
+        )
+    cov = np.diag([0.01, 0.04])
+    start, top = np.array([1.0, 0.0]), np.array([0.0, 1.0])
+    assert np.array_equal(optimize._onto_ceiling(start, top, 0.2, cov), top)  # all the way
+    falling = optimize._onto_ceiling(np.array([0.9, 0.1]), np.array([0.0, 1.0]), 0.15, cov)
+    assert abs(_sigma(falling, cov) - 0.15) <= 1e-12  # risk dips before it rises on this path
 
-    def only_at_base_tolerance(problem, variable, what, tolerance=1e-8):
-        if tolerance < 1e-8:
-            raise SolveError(f"{what}: no optimal solution at {tolerance}")
-        return real(problem, variable, what, tolerance)
 
-    monkeypatch.setattr(optimize, "_solve", only_at_base_tolerance)
-    front = frontier(MenuPrograms(mu, cov, lo, hi))  # a failed refinement keeps the 1e-8 answer
-    assert _inside(front, cov).max() > 20 * TOL and all(_feasible(w, lo, hi) for w in front.w)
-
-
-def test_exactly_tied_top_funds_leave_nodes_inside_their_ceilings():
-    """With a tie the highest return is reached below sigma_max: there is no ceiling to sit on."""
+def test_exactly_tied_top_funds_share_one_return_along_the_top():
     mu = np.array([0.03, 0.05, 0.08, 0.08])
     cov = np.diag([0.03, 0.08, 0.22, 0.15]) ** 2 + 0.0004  # the riskier tied fund comes first
     lo, hi = np.zeros(4), np.full(4, 0.75)
     front = frontier(MenuPrograms(mu, cov, lo, hi))
     assert np.array_equal(front.w[-1], [0.0, 0.0, 0.75, 0.25])  # greedy fill, in menu order
-    sigma = np.array([_sigma(w, cov) for w in front.w])
-    assert (sigma <= front.x + TOL).all() and (np.diff(front.y) >= -1e-9).all()
-    assert all(_feasible(w, lo, hi) for w in front.w)
     plateau = np.flatnonzero(front.y >= front.y[-1] - 1e-8)
-    assert len(plateau) > 5 and _inside(front, cov)[plateau[:-1]].max() > 1e-3
-    assert np.abs(_inside(front, cov)[: plateau[0]]).max() <= TOL  # below it, risk binds
+    assert len(plateau) > 5 and np.abs(_inside(front, cov)).max() <= TOL
+    assert all(_feasible(w, lo, hi) for w in front.w) and (np.diff(front.y) >= -1e-9).all()
 
 
 def test_a_menu_with_one_possible_mix_is_a_single_point():
