@@ -95,9 +95,10 @@ def menu_beta_blend(mu_hat, cov, rf: float) -> tuple[np.ndarray, np.ndarray]:
 def risk_free_rate(returns_by_symbol: Mapping[str, object]) -> float:
     """Trailing-12-month total return of SGOV, else of the TSP G Fund, else 4%.
 
-    Each value is a served symbol's daily total-return series up to `asof`. The 12-month return
-    compounds its last 252 returns; a series with fewer than 252 has no such return and is
-    passed over.
+    Each value is a served symbol's daily total-return series up to `asof`, on the symbol's own
+    pricing days: on a wider calendar the days it did not price would be missing returns, and
+    the growth across them with them. The 12-month return compounds its last 252 returns; a
+    series with fewer than 252 has no such return and is passed over.
     """
     for symbol in RISK_FREE_SOURCES:
         series = returns_by_symbol.get(symbol)
