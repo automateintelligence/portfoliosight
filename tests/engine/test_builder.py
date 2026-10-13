@@ -520,6 +520,19 @@ def test_stress_uses_a_supplied_total_return_index_up_to_asof(fixture_frame):
     position = [f["id"] for f in tensor["universe"]["funds"]].index("SCHF")
     assert derived["stress"]["gfc2008"]["r"][position] is None
     assert with_history["stress"]["gfc2008"]["r"][position] is not None
+    # a hole in the returns hides the growth across it: no number is made up from the pieces
+    holed = fixture_frame.copy()
+    holed.loc["2022-06-20":"2022-06-21", "VTI"] = np.nan
+    gapped = build_tensor(fixture_inputs("1y", returns=holed, **SMALL))
+    assert gapped["stress"]["rates2022"]["r"][0] is None
+    assert gapped["stress"]["gfc2008"]["r"][0] == derived["stress"]["gfc2008"]["r"][0]
+    assert gapped["stress"]["rates2022"]["r"][1:] == derived["stress"]["rates2022"]["r"][1:]
+    known = build_tensor(
+        fixture_inputs("1y", returns=holed, tr_index={"VTI": supplied["VTI"]}, **SMALL)
+    )
+    assert (
+        abs(known["stress"]["rates2022"]["r"][0] - derived["stress"]["rates2022"]["r"][0]) < 1e-12
+    )
     # and the caller's sessions drive the three-session rule
     sparse = build_tensor(fixture_inputs("1y", xnys_sessions=[pd.Timestamp("2026-10-12")], **SMALL))
     assert None not in [v for v in sparse["stress"]["covid2020"]["r"]]

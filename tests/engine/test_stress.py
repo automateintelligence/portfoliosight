@@ -6,7 +6,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from portfoliosight.engine.stress import COVERAGE_SESSIONS, WINDOWS, stress_returns
+from portfoliosight.engine.stress import (
+    COVERAGE_SESSIONS,
+    WINDOWS,
+    segments_from_returns,
+    stress_returns,
+)
 
 EXPECTED = {
     "gfc2008": ("2008 financial crisis", "2008-09-01", "2009-03-09"),
@@ -131,3 +136,47 @@ def test_sessions_can_be_supplied_by_the_caller():
     assert stress_returns({"X": full}, sessions=as_dates)["rates2022"]["r"] == [value]
     with pytest.raises(ValueError, match="DatetimeIndex"):
         stress_returns({"X": pd.Series([1.0, 1.1], index=[0, 1])})
+
+
+def test_segments_from_returns_split_at_missing_returns():
+    """A missing return hides the growth across it, so each run is its own record."""
+    index = pd.bdate_range("2022-09-26", periods=10, name="date")
+    column = pd.Series([np.nan, 0.01, 0.02, np.nan, np.nan, 0.03, -0.01, 0.02, np.nan, 0.05], index)
+    segments = segments_from_returns(column)
+    assert (
+        [list(segment.index) for segment in segments]
+        == [
+            list(index[0:3]),  # the day before the first return has a price too
+            list(index[4:8]),
+            list(index[8:10]),
+        ]
+    )
+    assert np.allclose(segments[0].to_numpy(), [1.0, 1.01, 1.01 * 1.02])
+    assert np.allclose(segments[1].to_numpy(), [1.0, 1.03, 1.03 * 0.99, 1.03 * 0.99 * 1.02])
+    assert np.allclose(segments[2].to_numpy(), [1.0, 1.05])
+    # a return on the very first row has no earlier row to anchor on
+    edge = segments_from_returns(pd.Series([0.01, 0.02, np.nan], index[:3]))
+    assert len(edge) == 1 and list(edge[0].index) == list(index[:2])
+    assert np.allclose(edge[0].to_numpy(), [1.01, 1.01 * 1.02])
+    assert segments_from_returns(pd.Series([np.nan, np.nan], index[:2])) == []
+    assert segments_from_returns(pd.Series([], index[:0], dtype=float)) == []
+
+
+def test_a_return_is_never_taken_across_two_records():
+    full = _series(4012)
+    returns = full.pct_change()
+    whole = stress_returns({"X": segments_from_returns(returns)})
+    for wid, (_, start, end) in EXPECTED.items():
+        assert abs(whole[wid]["r"][0] - _own(full, start, end)) <= 1e-12
+    holed = returns.copy()
+    holed.loc["2022-06-20":"2022-06-21"] = np.nan  # no price on the 20th: two returns are missing
+    out = stress_returns({"X": segments_from_returns(holed), "Y": full})
+    assert out["rates2022"]["r"][0] is None  # unknown growth across the hole: no number
+    assert abs(out["rates2022"]["r"][1] - _own(full, "2022-01-03", "2022-10-12")) <= 1e-12
+    assert (
+        out["gfc2008"]["r"][0] == whole["gfc2008"]["r"][0]
+    )  # windows clear of the hole keep theirs
+    assert out["covid2020"]["r"][0] == whole["covid2020"]["r"][0]
+    assert stress_returns({"X": []})["rates2022"]["r"] == [None]
+    early = holed.loc[:"2022-06-17"]  # only the first record reaches the window: its end is missing
+    assert stress_returns({"X": segments_from_returns(early)})["rates2022"]["r"] == [None]

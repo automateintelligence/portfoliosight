@@ -26,7 +26,7 @@ from .caps import RULE, CapsError, resolve_bounds
 from .invariants import check_floor, check_weights
 from .optimize import NX, Frontier, MenuPrograms, frontier
 from .stats import EW_HALFLIFE_DAYS, estimate_moments, menu_beta_blend, risk_free_rate
-from .stress import stress_returns
+from .stress import segments_from_returns, stress_returns
 from .suggest import suggested_floor
 from .surface import NY, Surface, frontier_curve, s_safe, surface
 from .torsion import TorsionBasis, enb, torsion_basis
@@ -68,7 +68,7 @@ class TensorInputs:
     universe_name: str
     preset_id: str | None = None
     requested_bounds: Sequence[Mapping[str, object]] | None = None  # [{"id", "min", "max"}]
-    tr_index: Mapping[str, pd.Series] | None = None  # for stress; else cumulated from returns
+    tr_index: Mapping[str, pd.Series] | None = None  # for stress; else rebuilt from returns
     rf_series: Mapping[str, pd.Series] | None = None  # served SGOV / TSP-G daily returns
     xnys_sessions: Sequence | None = None  # for the stress three-session rule; default XNYS
     engine_version: str = ENGINE_VERSION
@@ -167,11 +167,11 @@ def build_tensor(inputs: TensorInputs) -> dict:
     curve_sigma, curve_mu = frontier_curve(front.w, mu_s, moments.cov)
 
     history = frame.loc[frame.index <= asof]
-    tr_index = {}
+    tr_index: dict[str, pd.Series | list[pd.Series]] = {}
     for fund in included:
         given = None if inputs.tr_index is None else inputs.tr_index.get(fund)
         if given is None:
-            tr_index[fund] = (1.0 + history[fund].dropna()).cumprod()
+            tr_index[fund] = segments_from_returns(history[fund])
         else:
             tr_index[fund] = given.loc[given.index <= asof]
 
