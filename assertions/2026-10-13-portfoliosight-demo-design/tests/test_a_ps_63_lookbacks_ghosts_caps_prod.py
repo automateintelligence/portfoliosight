@@ -439,6 +439,11 @@ test("10y lookback redraws the frontier and lists the computed exclusions", asyn
 
   const menuHash = universeHash(menu.map((id) => ({ id })));
   await page.goto("/?f=" + menu.join(",") + "&lb=10y");
+  // The service must accept the menu: FIENX is a catalog symbol that is not served, not an
+  // unknown one. A refusal is reported here, with its status, instead of as a missing tensor.
+  const menuPost = () => api.posts.find((post) => post.path === "/api/tensors" && post.body?.lookback === "10y" && Array.isArray(post.body?.funds) && post.body.funds.length === menu.length);
+  await expect.poll(() => menuPost()?.status ?? null, { timeout: 30_000, message: "the page must POST the custom menu to /api/tensors" }).not.toBeNull();
+  expect([200, 202], `POST /api/tensors for [${menu.join(",")}] answered ${menuPost()!.status}; FIENX is a catalog symbol, so the menu must be accepted and FIENX set aside`).toContain(menuPost()!.status);
   const menuLoaded = () => api.tensors.find((entry) => entry.status === 200 && entry.body !== null && entry.path.endsWith("/" + menuHash + "/10y"));
   await expect.poll(() => menuLoaded() !== undefined, { timeout: 150_000, message: `the page must load the custom menu's 10y tensor (hash ${menuHash})` }).toBe(true);
   const menuTensor = menuLoaded()!.body;
