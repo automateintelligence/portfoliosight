@@ -181,7 +181,7 @@ def test_a_menu_with_the_converted_fund_sets_it_aside_in_every_view(cli, tmp_pat
     returns = write_converted_menu_parquet(tmp_path / "menu.parquet")
     assert pd.read_parquet(returns).shape[1] == 24
     aside = [{"id": CONVERTED, "reason": CONVERTED_REASON, "last_close": None}]
-    for lookback in ("5y", "10y", "1y"):
+    for lookback in ("5y", "ew", "10y", "1y"):
         code, out = _run(cli, tmp_path, *SMALL, returns=returns, lookback=lookback)
         tensor = json.loads(out.read_text())
         assert code == 0
