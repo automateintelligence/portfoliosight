@@ -438,6 +438,8 @@ def test_requested_caps_are_recorded_and_respected():
         ([{"id": "VTI", "max": 0.5}, {"id": "VTI", "max": 0.4}], "VTI: capped more than once"),
         ([{"max": 0.5}], "every cap entry needs a fund id"),
         ([{"id": "VTI", "min": 0.3}], "VTI"),  # above the default maximum of this window
+        ([{"id": "FIENX", "min": 2, "max": -1}], "FIENX"),  # excluded here, still validated
+        ([{"id": "FIENX", "min": 0.5, "max": 0.2}], "FIENX: min 0.5 is above max 0.2"),
         ([{"id": f, "max": 0.04} for f in ("VTI", "VTV", "VOE", "VB", "VBR", "VEA")], "sum"),
     ],
 )

@@ -6,7 +6,6 @@ window: a demo heuristic that keeps small menus usable, editable per fund.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping, Sequence
 from numbers import Real
 
@@ -26,6 +25,32 @@ def default_max(n: int) -> float:
     return min(max(3.0 / n, 0.25), 1.0)
 
 
+def requested_caps(
+    ids: Sequence[str], requested: Sequence[Mapping[str, object]] | None
+) -> dict[str, dict[str, object]]:
+    """A cap request keyed by fund id, each entry checked on its own.
+
+    Every entry must name a fund of the menu, once; a bound that is given must be a number in
+    `[0, 1]`, and `min` must not exceed `max`. A missing bound is `None`, the default rule. The
+    values are returned as given: the universe hash covers the request itself.
+    """
+    menu = set(ids)
+    by_id: dict[str, dict[str, object]] = {}
+    for entry in requested or ():
+        fund = entry.get("id")
+        if not isinstance(fund, str):
+            raise CapsError("every cap entry needs a fund id")
+        if fund not in menu:
+            raise CapsError(f"{fund}: not a fund of this menu")
+        if fund in by_id:
+            raise CapsError(f"{fund}: capped more than once")
+        low, high = _bound(fund, "min", entry.get("min")), _bound(fund, "max", entry.get("max"))
+        if low is not None and high is not None and low > high:
+            raise CapsError(f"{fund}: min {low:g} is above max {high:g}")
+        by_id[fund] = {"min": entry.get("min"), "max": entry.get("max")}
+    return by_id
+
+
 def resolve_bounds(
     ids: Sequence[str], requested: Sequence[Mapping[str, object]] | None = None
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -38,37 +63,38 @@ def resolve_bounds(
     ids = list(ids)
     if len(ids) < MIN_FUNDS:
         raise CapsError(f"a menu needs at least {MIN_FUNDS} funds; this one has {len(ids)}")
-    position = {fund: i for i, fund in enumerate(ids)}
-    if len(position) != len(ids):
+    if len(set(ids)) != len(ids):
         repeated = sorted({fund for fund in ids if ids.count(fund) > 1})
         raise CapsError(f"{', '.join(repeated)}: listed more than once in the menu")
+    by_id = requested_caps(ids, requested)
     lo = np.zeros(len(ids))
     hi = np.full(len(ids), default_max(len(ids)))
-    seen: set[str] = set()
-    for entry in requested or ():
-        fund = entry.get("id")
-        if not isinstance(fund, str):
-            raise CapsError("every cap entry needs a fund id")
-        if fund not in position:
-            raise CapsError(f"{fund}: not a fund of this menu")
-        if fund in seen:
-            raise CapsError(f"{fund}: capped more than once")
-        seen.add(fund)
-        for name, target in (("min", lo), ("max", hi)):
-            value = entry.get(name)
-            if value is None:
-                continue
-            if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value):
-                raise CapsError(f"{fund}: {name} must be a number between 0 and 1")
-            target[position[fund]] = float(value)
-    for fund, low, high in zip(ids, lo, hi, strict=True):
-        if not 0.0 <= low <= high <= 1.0:
-            raise CapsError(f"{fund}: bounds must satisfy 0 <= min <= max <= 1, got {low}, {high}")
+    for i, fund in enumerate(ids):
+        entry = by_id.get(fund, {})
+        low, high = _bound(fund, "min", entry.get("min")), _bound(fund, "max", entry.get("max"))
+        if low is not None:
+            lo[i] = low
+        if high is not None:
+            hi[i] = high
+        if lo[i] > hi[i]:  # a requested minimum above the default maximum
+            raise CapsError(f"{fund}: min {lo[i]:g} is above max {hi[i]:g}")
     if lo.sum() > 1.0 + SUM_TOL:
         raise CapsError(f"the sum of the minimums is {lo.sum():.6g}; it must not exceed 1")
     if hi.sum() < 1.0 - SUM_TOL:
         raise CapsError(f"the sum of the maximums is {hi.sum():.6g}; it must reach 1")
     return lo, hi
+
+
+def _bound(fund: str, name: str, value: object) -> float | None:
+    """One requested bound as a float, `None` for the default rule."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise CapsError(f"{fund}: {name} must be a number between 0 and 1")
+    number = float(value)
+    if not 0.0 <= number <= 1.0:  # also refuses NaN
+        raise CapsError(f"{fund}: {name} must be a number between 0 and 1")
+    return number
 
 
 def greedy_fill(mu, lo, hi, *, ascending: bool = False) -> np.ndarray:

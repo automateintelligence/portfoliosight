@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from . import ENGINE_VERSION
-from .caps import RULE, CapsError, resolve_bounds
+from .caps import RULE, requested_caps, resolve_bounds
 from .invariants import check_floor, check_weights
 from .optimize import NX, Frontier, MenuPrograms, frontier
 from .stats import EW_HALFLIFE_DAYS, estimate_moments, menu_beta_blend, risk_free_rate
@@ -129,7 +129,7 @@ def build_tensor(inputs: TensorInputs) -> dict:
     if len(set(ids)) != len(ids):
         raise ValueError("a fund is listed more than once in the menu")
     by_id = {fund.id: fund for fund in funds}
-    requested = _requested_by_id(inputs.requested_bounds, by_id)
+    requested = requested_caps(ids, inputs.requested_bounds)
     asof = pd.Timestamp(inputs.asof)
     if not isinstance(asof, pd.Timestamp):
         raise ValueError("asof must be a date")
@@ -252,23 +252,6 @@ def build_tensor(inputs: TensorInputs) -> dict:
     tensor["build_seconds"] = round(time.perf_counter() - started, 3)
     validate_tensor(tensor)
     return tensor
-
-
-def _requested_by_id(
-    requested: Sequence[Mapping[str, object]] | None, menu: Mapping[str, FundInput]
-) -> dict[str, dict[str, object]]:
-    """Requested caps keyed by fund id; every entry must name a fund of the menu, once."""
-    by_id: dict[str, dict[str, object]] = {}
-    for entry in requested or ():
-        fund = entry.get("id")
-        if not isinstance(fund, str):
-            raise CapsError("every cap entry needs a fund id")
-        if fund not in menu:
-            raise CapsError(f"{fund}: not a fund of this menu")
-        if fund in by_id:
-            raise CapsError(f"{fund}: capped more than once")
-        by_id[fund] = {"min": entry.get("min"), "max": entry.get("max")}
-    return by_id
 
 
 def _post_check(

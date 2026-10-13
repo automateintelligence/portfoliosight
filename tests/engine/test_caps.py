@@ -11,6 +11,7 @@ from portfoliosight.engine.caps import (
     default_max,
     greedy_fill,
     greedy_is_unique,
+    requested_caps,
     resolve_bounds,
 )
 
@@ -149,3 +150,26 @@ def test_greedy_is_unique_unless_tied_funds_can_trade_weight():
     # the lowest-return fill is judged the same way
     assert not greedy_is_unique(np.array([0.08, 0.07, 0.03, 0.03]), lo, hi, ascending=True)
     assert greedy_is_unique(np.array([0.08, 0.08, 0.04, 0.03]), lo, hi, ascending=True)
+
+
+def test_requested_caps_are_checked_fund_by_fund_whatever_the_window():
+    ids = ["AAA", "BBB", "CCC"]
+    request = [{"id": "BBB", "min": 0.1, "max": None}, {"id": "CCC", "max": 1}, {"id": "AAA"}]
+    assert requested_caps(ids, request) == {
+        "BBB": {"min": 0.1, "max": None},
+        "CCC": {"min": None, "max": 1},  # kept as given: the universe hash covers the request
+        "AAA": {"min": None, "max": None},
+    }
+    assert requested_caps(ids, None) == {} and requested_caps(ids, []) == {}
+    for entry, token in (
+        ({"id": "AAA", "min": 2, "max": -1}, "AAA"),
+        ({"id": "AAA", "min": 0.6, "max": 0.4}, "AAA: min 0.6 is above max 0.4"),
+        ({"id": "AAA", "max": 1.0000001}, "AAA: max must be a number between 0 and 1"),
+        ({"id": "AAA", "min": float("inf")}, "AAA"),
+        ({"id": "ZZZ", "max": 0.5}, "ZZZ: not a fund of this menu"),
+        ({"max": 0.5}, "fund id"),
+    ):
+        with pytest.raises(CapsError, match=token):
+            requested_caps(ids, [entry])
+    with pytest.raises(CapsError, match="AAA: capped more than once"):
+        requested_caps(ids, [{"id": "AAA"}, {"id": "AAA", "max": 0.5}])
