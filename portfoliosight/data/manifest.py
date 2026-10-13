@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from datetime import date, datetime
 from typing import Any
@@ -20,6 +21,7 @@ SERVED_WITHIN_SESSIONS = 3
 REASON_NO_DATA = "no data"
 REASON_NO_DATA_SINCE = "no data since {date}"
 REASON_UNVERIFIED = "corporate actions not yet verified after {date}"
+_NOTED_RE = re.compile(r"^(.+); no data since \d{4}-\d{2}-\d{2}$")
 
 
 class ManifestEntry(BaseModel):
@@ -76,17 +78,23 @@ def status_for(entry: Any, d_g: date) -> str:
     return "ok" if last >= floor and adjusted >= floor else "stale"
 
 
-def reason_for(entry: ManifestEntry, status: str, d_g: date) -> str | None:
-    """The fixed reason string that goes with a status, ``None`` for a served symbol."""
+def reason_for(entry: ManifestEntry, status: str, d_g: date, note: str | None = None) -> str | None:
+    """The fixed reason string that goes with a status, ``None`` for a served symbol.
+
+    ``note`` is the universe's remark on a fund whose data has ended ("converted to an ETF"); it
+    prefixes the "no data since" reason. Without one, a note already in the entry is kept.
+    """
     if status == "ok":
         return None
     if entry.last_date is None or entry.adjusted_through is None:
         return REASON_NO_DATA
-    if status == "unavailable":
-        return REASON_NO_DATA_SINCE.format(date=entry.last_date.isoformat())
     floor = session_back(d_g, SERVED_WITHIN_SESSIONS)
-    if status == "stale" and entry.last_date < floor:
-        return REASON_NO_DATA_SINCE.format(date=entry.last_date.isoformat())
+    if status == "unavailable" or (status == "stale" and entry.last_date < floor):
+        since = REASON_NO_DATA_SINCE.format(date=entry.last_date.isoformat())
+        if note is None:
+            kept = _NOTED_RE.match(entry.reason or "")
+            note = kept.group(1) if kept else None
+        return f"{note}; {since}" if note else since
     return REASON_UNVERIFIED.format(date=entry.adjusted_through.isoformat())
 
 

@@ -17,5 +17,8 @@
       "file": "data/universes/qse_core.txt",
       "starter_slice": 130
     }
-  ]
+  ],
+  "notes": {
+    "FIENX": "converted to an ETF"
+  }
 }

@@ -290,7 +290,9 @@ class _Ingest:
         entry.fetched_at = self.clock().astimezone(UTC).isoformat()
         if frame.empty:
             entry.status = "unavailable"
-            entry.reason = manifest_mod.reason_for(entry, "unavailable", self.d_g)
+            entry.reason = manifest_mod.reason_for(
+                entry, "unavailable", self.d_g, self._note(symbol)
+            )
             logger.info("%s: no data from %s", symbol, provider_name)
             return
         spliced, adjusted_through = splice_tail(record, frame, anchor)
@@ -304,7 +306,7 @@ class _Ingest:
     def _settle(self, symbol: str, entry: ManifestEntry) -> None:
         """Status against ``D_G``; and the name and kind, once, for an entry that has none."""
         entry.status = manifest_mod.status_for(entry, self.d_g)
-        entry.reason = manifest_mod.reason_for(entry, entry.status, self.d_g)
+        entry.reason = manifest_mod.reason_for(entry, entry.status, self.d_g, self._note(symbol))
         if entry.name and entry.name != symbol:
             return
         meta = self._fetch_meta(symbol)
@@ -313,6 +315,10 @@ class _Ingest:
             entry.kind = self._kind(symbol, meta, entry)
             if meta.first_date is not None and entry.first_date is None:
                 entry.first_date = meta.first_date
+
+    def _note(self, symbol: str) -> str | None:
+        known = self.info.get(symbol)
+        return known.note if known is not None else None
 
     def _kind(self, symbol: str, meta: SymbolMeta | None, entry: ManifestEntry | None) -> str:
         known = self.info.get(symbol)

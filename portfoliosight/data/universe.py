@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import csv
 import json
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -42,6 +43,7 @@ class SymbolInfo:
     tier: int
     income: bool
     kind: str | None  # "tsp", "stock", or None when the provider's meta decides (etf/mutual fund)
+    note: str | None = None  # why a fund has no recent data, e.g. "converted to an ETF"
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,7 @@ class Tiers:
     tier3: tuple[str, ...]  # file order, tier 2 symbols included as the file has them
     income: frozenset[str]
     starter_slice: int
+    notes: Mapping[str, str] = field(default_factory=dict)
 
     def tier3_only(self) -> tuple[str, ...]:
         """Tier 3 lines that are not already in tier 2, in file order."""
@@ -70,7 +73,9 @@ class Tiers:
                     kind = "stock"
                 else:
                     kind = None
-                out[symbol] = SymbolInfo(symbol, tier, symbol in self.income, kind)
+                out[symbol] = SymbolInfo(
+                    symbol, tier, symbol in self.income, kind, self.notes.get(symbol)
+                )
         return out
 
 
@@ -141,6 +146,7 @@ def load_tiers(tiers_file: Path = TIERS_FILE) -> Tiers:
         tier3=files[3],
         income=frozenset(income),
         starter_slice=int(by_tier[3].get("starter_slice", 130)),
+        notes={str(k).upper(): str(v) for k, v in config.get("notes", {}).items()},
     )
 
 

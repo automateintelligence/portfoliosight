@@ -106,6 +106,8 @@ def test_symbol_info_takes_the_lowest_tier():
     assert info["SGOV"] == universe.SymbolInfo("SGOV", 2, True, None)
     assert info["TSP-G"] == universe.SymbolInfo("TSP-G", 1, False, "tsp")
     assert info["A"] == universe.SymbolInfo("A", 3, False, "stock")
+    assert info["FIENX"] == universe.SymbolInfo("FIENX", 1, False, None, "converted to an ETF")
+    assert [s for s, known in info.items() if known.note] == ["FIENX"]
 
 
 def test_universe_lines_parse_comments_tags_and_case():

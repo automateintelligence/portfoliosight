@@ -109,6 +109,11 @@ def test_reasons_use_the_fixed_templates():
         == expected
     )
     assert manifest_mod.reason_for(behind, "unavailable", D) == "no data since 2024-10-30"
+    noted = "converted to an ETF; no data since 2024-10-30"
+    assert manifest_mod.reason_for(behind, "stale", D, "converted to an ETF") == noted
+    # A note already in the entry survives a recompute that has no universe at hand.
+    assert manifest_mod.reason_for(behind.model_copy(update={"reason": noted}), "stale", D) == noted
+    assert manifest_mod.reason_for(_entry(reason=noted), "ok", D) is None
     empty = _entry(last_date=None, adjusted_through=None)
     assert manifest_mod.reason_for(empty, "unavailable", D) == "no data"
 
@@ -120,11 +125,24 @@ def test_restatus_moves_ok_to_stale_and_keeps_unavailable():
             "LAG": _entry(last_date=session_back(D, 4), adjusted_through=session_back(D, 4)),
             "SEED": _entry(source="seed", status="pending", adjusted_through=date(2026, 2, 27)),
             "GONE": _entry(status="unavailable", reason="no data since 2026-03-09"),
+            "FIENX": _entry(
+                last_date=date(2024, 10, 30),
+                adjusted_through=date(2024, 10, 30),
+                status="stale",
+                reason="converted to an ETF; no data since 2024-10-30",
+            ),
         }
     )
     manifest_mod.restatus(manifest, D)
     got = {symbol: entry.status for symbol, entry in manifest.symbols.items()}
-    assert got == {"OK": "ok", "LAG": "stale", "SEED": "pending", "GONE": "unavailable"}
+    assert got == {
+        "OK": "ok",
+        "LAG": "stale",
+        "SEED": "pending",
+        "GONE": "unavailable",
+        "FIENX": "stale",
+    }
+    assert manifest.symbols["FIENX"].reason == "converted to an ETF; no data since 2024-10-30"
     assert manifest.symbols["LAG"].reason == "no data since 2026-03-03"
     assert manifest.symbols["GONE"].reason == "no data since 2026-03-09"
     assert manifest.symbols["OK"].reason is None

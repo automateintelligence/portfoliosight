@@ -516,7 +516,8 @@ def test_meta_request_stopped_by_the_budget_keeps_the_record(tmp_path, monkeypat
 
 def test_default_set_is_the_universe_priority_order(tmp_path):
     store = LocalStore(tmp_path / "store")
-    provider = FakeProvider(default_available=FEB23, gone={"FIENX"})
+    provider = FakeProvider(default_available=FEB23)
+    provider.available["FIENX"] = date(2025, 12, 30)  # its data ended; the universe says why
     tsp_provider = FakeProvider(default_available=FEB20, kind="tsp")
     tsp_provider.name = "tsp"
     clock = Clock(date(2026, 2, 24))
@@ -535,11 +536,23 @@ def test_default_set_is_the_universe_priority_order(tmp_path):
     assert [c[1] for c in tsp_provider.calls if c[0] == "daily"] == list(universe.tier1[23:])
     now = _manifest(store)
     assert len(now) == 39 and now["BND"]["income"] is True and now["BND"]["tier"] == 1
-    assert now["FIENX"]["status"] == "unavailable" and now["TSP-G"]["source"] == "tsp"
+    assert now["FIENX"]["status"] == "stale" and now["TSP-G"]["source"] == "tsp"
+    assert now["FIENX"]["reason"] == "converted to an ETF; no data since 2025-12-30"
     assert now["TSP-G"]["kind"] == "tsp" and now["VTI"]["kind"] == "etf"
-    # 22 funds with data cost two requests, FIENX one; the 16 TSP funds are not budgeted.
-    assert json.loads(store.get("meta/budget.json"))["days"] == {"2026-02-24": 45}
+    # 23 funds cost two requests each; the 16 TSP funds are not budgeted.
+    assert json.loads(store.get("meta/budget.json"))["days"] == {"2026-02-24": 46}
     assert len(_listed(store)) == 38
+    # A later refresh with an explicit set (no universe at hand) keeps the note.
+    code = download.run(
+        "refresh",
+        store=store,
+        providers={"tiingo": provider},
+        clock=clock,
+        sleep=clock.sleep,
+        symbols=["FIENX"],
+    )
+    assert code == 0
+    assert _manifest(store)["FIENX"]["reason"] == "converted to an ETF; no data since 2025-12-30"
 
 
 def test_measure_limits_through_run(tmp_path):
