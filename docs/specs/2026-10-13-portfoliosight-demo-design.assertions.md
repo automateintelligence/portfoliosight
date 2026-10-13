@@ -35,13 +35,13 @@ not regress.
 | Phase 2 (API, nightly, container) | A-PS-26 … A-PS-33 |
 | Phase 3 (front end) | A-PS-34 … A-PS-53 |
 | Phase 4 (production deployment) | A-PS-54 … A-PS-60, A-PS-66, A-PS-67, A-PS-68 |
-| Phase 5 (smoke tests and docs) | A-PS-61 … A-PS-65, A-PS-69 |
+| Phase 5 (smoke tests and docs) | A-PS-61 … A-PS-65 |
 
 **No owner-gated group.** Two things were owner-gated while this file was drafted and both cleared
 on 2026-10-13: §9.6 approves loading Tiingo-sourced data into R2 for development and testing, and
 the owner added `Zone › Zone WAF › Edit` to the Cloudflare token (listing the zone's rulesets now
 succeeds), so the build can create the two WAF custom rules and the rate-limiting rule of §9.4
-itself. The WAF assertions (A-PS-66…68, A-PS-69) therefore sit in the normal Phase 4/5 groups. If
+itself. The WAF assertions (A-PS-66…68) therefore sit in the normal Phase 4 group. If
 either permission is withdrawn, the affected assertions state their dependency in the setup and
 should be reported as blocked, not failed, without being weakened.
 
@@ -53,9 +53,10 @@ preview key is **not constructible without weakening the rule** (the only way th
 without the header is a real browser's `cf_clearance` cookie, which automation cannot obtain
 reliably). The preview page is therefore asserted at the unit level (A-PS-39), the deployed
 `PS_PRIVATE_PREVIEW` var and the absence of data on any keyless path are asserted in production
-(A-PS-61), and the preview page's appearance after a cleared challenge is one leg of the
-real-browser assertion (A-PS-69), which may need the owner's own Chrome. Production assertions send
-the `x-ps-gate` header, as the spec's smoke tests do.
+(A-PS-61), and the preview page's appearance after a cleared challenge is the owner's own browser
+check (H-PS-01, human verification, not in the machine gate: the Managed Challenge is built not to
+clear for automation). Production assertions send the `x-ps-gate` header, as the spec's smoke tests
+do.
 
 **Taste is not encoded.** "Fantastic visuals", "looks designed on purpose", "a visitor can tell what
 the colors mean without instructions" go to the owner as screenshots (§Expectations, "Open"). The
@@ -207,8 +208,6 @@ why it is load-bearing.
 **Phase 5 — smoke tests and docs**
 - **A-PS-61 — private preview is on in production and no keyless path yields data.** (M3 as
   reworded, §9.6)
-- **A-PS-69 — a real browser gets through the challenge, sees the preview page without the key,
-  and the chart with it.** (S20, F12, DoD 1, §9.6) May need the owner's own Chrome; see §0.
 - **A-PS-62 — TSP loads in one click and a custom menu builds end to end in production.** (S2,
   S11, S12, F14, DoD 11, DoD 12)
 - **A-PS-63 — lookbacks, ghosts and cap rebuilds work in production.** (S13, S12, DoD 14, DoD 15)
@@ -1499,7 +1498,7 @@ Phase 5 · prod + static
   from `web/` with the account token; the repo at the SHA the Worker reports (or the deploy
   log's SHA); a cookieless client. Note from §0: with the WAF rule in front, a headerless
   request gets the challenge, so the preview page itself is observed at the unit level
-  (A-PS-39) and in A-PS-69; this assertion checks the var and the absence of data.
+  (A-PS-39) and by the owner in H-PS-01; this assertion checks the var and the absence of data.
 - **Observation.** The versions output lists `PS_PRIVATE_PREVIEW` with value `1`;
   `wrangler.jsonc` `vars.PS_PRIVATE_PREVIEW == "1"`; each of the four keyless requests returns
   403 with either `cf-mitigated: challenge` or a body containing "private preview", and in every
@@ -1594,27 +1593,27 @@ Phase 5 · static + unit
   missing or duplicated `DoD-NN`; a coverage row under the thresholds. Fail = any.
 - **Kind.** contract (gates) with property legs (every test file; all 31 names).
 
-### A-PS-69 — a real browser gets through the challenge, sees the preview page without the key, and the chart with it
-Phase 5 · prod, real Chrome (may need the owner's own Chrome; depends on the WAF rule as A-PS-66)
-- **Claim.** In a real Chrome profile with no `ps_preview` cookie and no header, navigating to
-  `https://portfoliosight.ai/` passes Cloudflare's Managed Challenge and then shows the Worker's
-  "private preview" 403 page with no data; after opening `/?k=<PS_GATE_SECRET>` once the same
-  profile is redirected to `/` and sees `chart-canvas`; and on a later visit the page still loads
-  without re-entering the key.
-- **Setup.** Chrome launched with CDP (the owner's documented command) and a fresh
-  `--user-data-dir`; driven via Playwright `connectOverCDP`; `PS_GATE_SECRET` from the env file,
-  typed into the `k=` query only. If the challenge does not clear for automation within 60 s, the
-  test reports **blocked (needs the owner's browser)**, not failed, and the owner performs the
-  three navigations by hand; the result is recorded in the runbook.
-- **Observation.** First navigation: the challenge interstitial is observed (`cf-mitigated:
-  challenge` on the document response or the `challenge-platform` script), then a 403 document
-  whose text contains "private preview" and no `chart-canvas`. Second: a 302 from `/?k=…` to `/`
-  (the `k` value absent from the final URL), `chart-canvas` visible ≤ 5 s, and a `ps_preview`
-  cookie present with `HttpOnly`. Third (new tab, same profile): `chart-canvas` visible with no
-  `k=`. **Must-not-contain:** the secret in the final URL or in any page text; data on the first
-  navigation. Fail = any leg (or blocked as stated).
-- **Kind.** example (three navigations).
-
 ---
 
-End of assertions. 69 specs: A-PS-01 … A-PS-69. Owner-gated group: none (see §0).
+End of machine assertions. 68 specs: A-PS-01 … A-PS-68. Owner-gated group: none (see §0).
+
+## 4. Human verification (not in the gate)
+
+Not a machine assertion: no manifest entry, no gate test. The owner does this by hand and records
+the result and its date in the runbook.
+
+### H-PS-01 — the owner's own browser gets through the human check, sees the private-preview page without the key, and the chart with the preview link
+Phase 5 · the owner's own Chrome (S20, F12, DoD 1, §9.6)
+- **Why it is not in the gate.** Cloudflare's Managed Challenge is built not to clear for
+  automation, so a gate id for it could never go green. The parts a machine can see are asserted
+  elsewhere: the challenge at the edge (A-PS-66), the preview gate's logic (A-PS-39), and the
+  deployed preview var with no data on any keyless path (A-PS-61).
+- **What the owner checks.** In a Chrome profile with no `ps_preview` cookie: (1) opening
+  `https://portfoliosight.ai/` shows Cloudflare's human check, and after passing it the
+  "private preview" page with no chart and no data; (2) opening the preview link
+  `https://portfoliosight.ai/?k=<PS_GATE_SECRET>` once lands on `/` with the key gone from the
+  address bar and the chart showing; (3) on a later visit in the same profile the chart loads
+  without the key.
+- **Must not see.** The key in the final address or anywhere on the page; any data on the first
+  visit.
+
