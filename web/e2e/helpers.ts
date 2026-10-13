@@ -322,7 +322,7 @@ export async function towardDiversified(slider: Locator): Promise<string> {
 }
 
 /** Presses the diversification slider at one end of its track: "return" (top/left) or "diversified". */
-export async function pressDivEnd(slider: Locator, end: "return" | "diversified"): Promise<void> {
+export async function pressDivEnd(slider: Locator, end: "return" | "diversified", options: { force?: boolean } = {}): Promise<void> {
   const horizontal = (await slider.getAttribute("aria-orientation")) === "horizontal";
   const box = await rectOf(slider);
   const near = 3;
@@ -330,7 +330,8 @@ export async function pressDivEnd(slider: Locator, end: "return" | "diversified"
     ? { x: end === "return" ? near : box.width - near, y: box.height / 2 }
     : { x: box.width / 2, y: end === "return" ? near : box.height - near };
   await slider.scrollIntoViewIfNeeded();
-  await slider.click({ position });
+  // Forced for a slider the page has disabled: the press must still reach it, to show it does nothing.
+  await slider.click({ position, force: options.force ?? false });
 }
 
 /** Chart scales from the overlay's d3-axis ticks: client pixel = a + b · value (value as a fraction). */

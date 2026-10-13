@@ -429,8 +429,10 @@ test("DoD-09 diversification slider: suggested by default, moves the point down,
     await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-disabled", "true");
     await expect(page.getByText(DIV_DISABLED)).toBeVisible();
     const before = await rectOf(page.getByTestId("point-selected"));
-    await pressDivEnd(page.getByTestId("div-slider"), "diversified");
-    expect((await rectOf(page.getByTestId("point-selected"))).cy).toBe(before.cy);
+    await pressDivEnd(page.getByTestId("div-slider"), "diversified", { force: true });
+    await page.waitForTimeout(300);
+    expect((await rectOf(page.getByTestId("point-selected"))).cy, "a press on the disabled slider moves nothing").toBe(before.cy);
+    await expect.poll(() => param(page, "d")).toBe("auto");
   });
 });
 
@@ -1342,10 +1344,12 @@ test("DoD-30 build benchmark: the runbook's measurement and a fresh 23-fund buil
   for (let step = 0; step < 5 && accepted === null; step++) {
     const cap = Number((0.24 - ((second + step) % 86_400) * 1e-6).toFixed(6));
     const body = { funds: ids.map((id, index) => ({ id, min: null, max: index === 0 ? cap : null })), lookback: "5y" };
-    const started = Date.now();
+    let started = Date.now();
     let answer = await site.post("/api/tensors", body);
     if (answer.status() === 429) {
+      // the per-address allowance of five build requests a minute: wait it out once, then time the retry
       await new Promise((resolve) => setTimeout(resolve, 61_000));
+      started = Date.now();
       answer = await site.post("/api/tensors", body);
     }
     if (answer.status() === 200) continue; // already built in this generation: nothing to measure
