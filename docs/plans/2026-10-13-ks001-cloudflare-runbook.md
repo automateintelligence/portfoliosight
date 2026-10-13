@@ -176,9 +176,22 @@ Where the catch-up stands, and what happens next:
 
 Not done: the hostname cannot be routed with what the run may use. Attempted 2026-10-13.
 
-(a) Baseline, from the laptop. The ingress file on the host named three hostnames of other
-services: two answered over HTTPS (200 and 404); the third gives no HTTPS answer at all (TLS
-handshake failure at Cloudflare's edge; it answers 301 over plain HTTP), before and after.
+(a) Baseline, from the laptop: every hostname in the host's ingress file and its HTTPS status,
+saved under `~/.local/state/portfoliosight/`. This is "the loop of (a)" wherever this file asks
+for it again; run it before and after a change and `diff` the two `ingress-baseline-*` files.
+
+```
+state="$HOME/.local/state/portfoliosight"; mkdir -p "$state"; stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+ssh "$PS_KS001_SSH_HOST" "sed -n 's/^[[:space:]-]*hostname:[[:space:]]*//p' /etc/cloudflared/config.yml" \
+  | tr -d '"'"'" | sed 's/[[:space:]]*#.*$//' | grep -v '^api\.portfoliosight\.ai$' > "$state/ingress-hosts-$stamp.txt"
+while read -r h; do
+  printf '%s %s\n' "$h" "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$(printf '%s://%s/' https "$h")")"
+done < "$state/ingress-hosts-$stamp.txt" | tee "$state/ingress-baseline-$stamp.txt"
+```
+
+The file named three hostnames of other services: two answered over HTTPS (200 and 404); the
+third gives no HTTPS answer at all (`000`: TLS handshake failure at Cloudflare's edge; it
+answers 301 over plain HTTP), before and after.
 
 (b) The reviewed script, on the host, with `PS_INGRESS_ALLOW_UNREACHABLE=1` for that third name:
 
