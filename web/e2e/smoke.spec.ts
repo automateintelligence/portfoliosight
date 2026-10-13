@@ -75,10 +75,13 @@ function distanceToLine(point: { x: number; y: number }, line: { x: number; y: n
 
 test("DoD-01 the page loads with the gate header and draws the chart within 5 s", async ({ page }) => {
   const api = watchApi(page);
-  const response = await page.goto("/");
+  // The five seconds run from the moment the address is asked for, not from the end of loading.
+  const started = Date.now();
+  const response = await page.goto("/", { waitUntil: "commit", timeout: 5_000 });
   expect(response?.status(), "GET / with the gate header").toBe(200);
   expect(response?.headers()["cf-mitigated"], "no challenge for a request with the header").toBeUndefined();
-  await expect(page.getByTestId("chart-canvas")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("chart-canvas")).toBeVisible({ timeout: Math.max(1, 5_000 - (Date.now() - started)) });
+  expect(Date.now() - started, "milliseconds from the request to a visible chart").toBeLessThanOrEqual(5_000);
   await expect(page.getByText("PortfolioSight is in private preview")).toHaveCount(0);
   // A canvas element alone is not a chart: it must hold a settled drawing of the default menu.
   const print = await settledPrint(page);

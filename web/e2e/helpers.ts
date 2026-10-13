@@ -491,11 +491,17 @@ export async function setMenu(page: Page, ids: string[]): Promise<void> {
   expect((await fundRowIds(page)).sort()).toEqual([...ids].sort());
 }
 
-/** Waits until the build queue is idle, as DoD 12 and 30 require before a measurement. */
+/** Waits until nothing is queued and nothing is being built, as DoD 12 and 30 require before a measurement. */
 export async function idleQueue(site: Site, timeoutMs = 120_000): Promise<void> {
   await expect
-    .poll(async () => ((await site.json("/api/health")) as { queue: { depth: number } }).queue.depth, { timeout: timeoutMs, intervals: [3_000], message: "the build queue is idle" })
-    .toBe(0);
+    .poll(
+      async () => {
+        const queue = ((await site.json("/api/health")) as { queue: { depth: number; building: boolean } }).queue;
+        return [queue.depth, queue.building];
+      },
+      { timeout: timeoutMs, intervals: [3_000], message: "the build queue is idle (depth 0, nothing building)" },
+    )
+    .toEqual([0, false]);
 }
 
 /** Everything a visitor can read or be told by a screen reader, as one string. */
