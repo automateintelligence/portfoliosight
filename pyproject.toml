@@ -49,6 +49,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["portfoliosight*"]
 
+[tool.setuptools.package-data]
+portfoliosight = ["engine/*.json"]
+
 [tool.ruff]
 line-length = 100
 extend-exclude = ["portfoliosight/frontier_cli.py", "assertions", ".worktrees", ".venv", "*.md"]
