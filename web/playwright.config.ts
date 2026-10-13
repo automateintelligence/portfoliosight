@@ -35,7 +35,8 @@ export default defineConfig({
   retries: 0,
   forbidOnly: true,
   timeout: 90_000,
-  reporter: production || dryRun ? [["./e2e/redacting-reporter.ts"]] : [["list"]],
+  // Whenever a secret is in the environment, nothing but the redacting reporter prints.
+  reporter: production || dryRun || process.env.PS_GATE_SECRET ? [["./e2e/redacting-reporter.ts"]] : [["list"]],
   use: { baseURL: localURL, ...quiet },
   projects: [
     { name: "local-desktop", testDir: "e2e/local", testIgnore: /screenshots\.spec\.ts/, use: desktop },

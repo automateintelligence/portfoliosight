@@ -580,7 +580,9 @@ test("DoD-12 custom menu: four served funds build within 120 s; failure, unknown
     await choosePreset(page, /^Custom/);
     await expect(page.getByTestId("fund-add")).toBeVisible();
     await setMenu(page, four);
-    expect(api.tensorPosts().length, "builds requested before Use this menu").toBe(0);
+    const sent = api.tensorPosts().length;
+    await page.waitForTimeout(500);
+    expect(api.tensorPosts().length, "builds requested before Use this menu").toBe(sent);
     const mine = () => api.loaded().filter((entry) => entry.path.includes(`/${hash}/`));
     const notice = page.getByTestId("building-notice");
     const started = Date.now();
@@ -607,7 +609,9 @@ test("DoD-12 custom menu: four served funds build within 120 s; failure, unknown
     const tensor = mine()[0].body as TensorLike;
     expect(tensor.universe.funds.map((fund) => fund.id).sort()).toEqual([...four].sort());
     expect(tensor.universe.hash).toBe(hash);
-    for (const post of api.tensorPosts()) expect(universeHash(post.body.funds)).toBe(hash);
+    const posts = api.tensorPosts().slice(sent);
+    expect(posts.length, "build requests for the menu").toBeGreaterThanOrEqual(1);
+    for (const post of posts) expect(universeHash(post.body.funds)).toBe(hash);
     await expect.poll(() => param(page, "f")).not.toBeNull();
     expect(((await param(page, "f")) ?? "").split(",").map((item) => item.split(":")[0]).sort()).toEqual([...four].sort());
   });
@@ -618,6 +622,10 @@ test("DoD-13 funds and trades: dollar and share changes, the 100% rule, tickers 
   const api = watchApi(page);
   await openApp(page);
   const tensor = await shownTensor(api);
+  // A known selected mix: the frontier mix of one column, whose weights are in the tensor.
+  const column = walkableColumn(tensor);
+  await openApp(page, `u=guide2017&lb=5y&r=${column}&d=0`);
+  const selected = tensor.frontier.w[column];
   const funds = tensor.universe.funds;
   const held = guideHoldings().filter((h) => h.amount > 0 && funds.some((fund) => fund.id === h.id));
   const value = held.reduce((acc, h) => acc + h.amount, 0);
@@ -637,7 +645,9 @@ test("DoD-13 funds and trades: dollar and share changes, the 100% rule, tickers 
       await expect(rowOf(holding.id), `a trade row for ${holding.id}`).toHaveCount(1);
       const row = await read(holding.id);
       expect(Math.abs(row.now - (100 * holding.amount) / value), `${holding.id}: now % is its share of the entered dollars`).toBeLessThanOrEqual(0.06);
-      expect(Math.abs(row.change - (row.selected - row.now)), `${holding.id}: change = selected − now`).toBeLessThanOrEqual(0.16);
+      const weight = selected[funds.findIndex((fund) => fund.id === holding.id)];
+      expect(Math.abs(row.selected - 100 * weight), `${holding.id}: selected % is the selected mix's own weight`).toBeLessThanOrEqual(0.06);
+      expect(Math.abs(row.change - (100 * weight - (100 * holding.amount) / value)), `${holding.id}: change = selected − now`).toBeLessThanOrEqual(0.06);
       expect(row.usd, `${holding.id}: a dollar change`).not.toBeNull();
       expect(Math.abs((row.usd as number) - (row.change / 100) * value), `${holding.id}: dollars = change × portfolio value`).toBeLessThanOrEqual(0.0005 * value + 1);
     }
@@ -649,6 +659,10 @@ test("DoD-13 funds and trades: dollar and share changes, the 100% rule, tickers 
     expect(total, "something moves between the entered and the selected mix").toBeGreaterThan(0);
     expect(Math.abs(total - buys), "Total moved is the sum of the buys").toBeLessThanOrEqual(0.05 * all.length + 0.1);
     expect(Math.abs(buys - sells), "buys and sells balance").toBeLessThanOrEqual(0.1 * all.length);
+    // Every fund the selected mix holds is listed, held before or not.
+    for (const [index, fund] of funds.entries()) if (selected[index] > 0.001) await expect(rowOf(fund.id), `a trade row for ${fund.id}`).toHaveCount(1);
+    const own = funds.reduce((acc, fund, index) => acc + Math.max(selected[index] - (held.find((h) => h.id === fund.id)?.amount ?? 0) / value, 0), 0);
+    expect(Math.abs(total - 100 * own), "Total moved is the one-way turnover between the two mixes").toBeLessThanOrEqual(0.06);
   });
 
   await test.step("share mode: share and dollar changes use the tensor's last close", async () => {
@@ -669,6 +683,7 @@ test("DoD-13 funds and trades: dollar and share changes, the 100% rule, tickers 
       const row = await read(id);
       const price = close.get(id) as number;
       expect(Math.abs(row.now - (100 * shares * price) / worth), `${id}: now % = shares × last close ÷ value`).toBeLessThanOrEqual(0.06);
+      expect(Math.abs(row.selected - 100 * selected[funds.findIndex((fund) => fund.id === id)]), `${id}: selected % is unchanged by the unit`).toBeLessThanOrEqual(0.06);
       expect(Math.abs((row.usd as number) - (row.change / 100) * worth), `${id}: dollars = change × value`).toBeLessThanOrEqual(0.0005 * worth + 1);
       expect(row.shares, `${id}: a change in shares`).not.toBeNull();
       expect(Math.abs((row.shares as number) - (row.usd as number) / price), `${id}: shares = dollars ÷ last close`).toBeLessThanOrEqual(0.5 + 1 / price);
@@ -1182,8 +1197,13 @@ test("DoD-25 container and bundle hygiene: no runs, no private holdings, no secr
   expect(lines.filter((line) => line.includes("/runs")), "runs/ in the image").toEqual([]);
   expect(lines, "holdings files in the image").toEqual(["/app/data/holdings/holdings_guide2017_step2.csv"]);
   // Patterns go over stdin, never on a command line; grep prints file names only.
-  const inImage = ssh("docker exec -i portfoliosight-api grep -rIlF -f /dev/stdin /app /usr/local/lib 2>/dev/null; echo scanned", patterns);
-  expect(inImage.stdout.trim().split("\n"), "files in the image that hold a credential value").toEqual(["scanned"]);
+  // grep's own status is reported: 1 is "no file matched"; 0 is a leak and 2 a scan that did not run.
+  const inImage = ssh("docker exec -i portfoliosight-api sh -c 'grep -rIlF -f /dev/stdin /app /usr/local/lib; echo \"grep-status=$?\"'", patterns);
+  expect(inImage.status, `the scan of the image: ${inImage.stderr.slice(-300)}`).toBe(0);
+  expect(inImage.stdout.trim().split("\n"), "files in the image that hold a credential value, then grep's status").toEqual(["grep-status=1"]);
+  // Control: the same scan finds a string that is in the image.
+  const control = ssh("docker exec -i portfoliosight-api sh -c 'grep -rIlF -f /dev/stdin /app/portfoliosight/engine | head -1; echo scanned'", "ENGINE_VERSION\n");
+  expect(control.stdout.trim().split("\n").length, "the control scan finds the engine's version constant").toBe(2);
 
   // The repository at this revision.
   const inRepo = run("git", ["grep", "-I", "-l", "-F", "-f", "-", "--", "."], { input: patterns });

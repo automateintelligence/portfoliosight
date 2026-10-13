@@ -25,10 +25,10 @@ assertions/             the frozen done-gate for the spec (never edited)
 
 ```
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e ".[api,dev]"
+source .venv/bin/activate        # every command below is run from the repository root
 ruff check . && ruff format --check . && pyright .
 pytest --cov=portfoliosight --cov-report=term-missing      # live tests need PS_LIVE_TESTS=1
-cd web && npm ci && npm run lint && npm run typecheck && npm test
-cd web && npm run build && npm run e2e:local               # the page against the local API mock
+(cd web && npm ci && npm run lint && npm run typecheck && npm test && npm run build && npm run e2e:local)
 scripts/smoke.sh                 # one production test per definition of done, desktop and phone
 scripts/smoke_preview.sh         # production: nothing is served without the gate secret
 scripts/deploy_ks001.sh <sha>    # build and start the service on KS-001; same command rolls back
@@ -53,8 +53,8 @@ Settings, hosts and secrets are `KEY=value` lines in `~/.secrets/portfoliosight.
 ## Deployment
 
 - A Cloudflare Worker (`web/worker`, `web/wrangler.jsonc`) serves the page, reads tensors from R2,
-  forwards builds to the service and sends the share email. The only human check is Cloudflare's
-  own; while `PS_PRIVATE_PREVIEW` is `"1"` the Worker also requires the gate secret.
+  forwards builds and sends the share email. The only human check is Cloudflare's own; while
+  `PS_PRIVATE_PREVIEW` is `"1"` the Worker also requires the gate secret.
 - The build service runs on KS-001 in one container (`deploy/docker-compose.yml`, 2 CPUs,
   1536 MB) behind a cloudflared tunnel; a systemd timer runs the nightly job.
 - Steps, measurements and owner checks: `docs/plans/2026-10-13-ks001-cloudflare-runbook.md`.
