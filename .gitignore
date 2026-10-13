@@ -12,11 +12,6 @@ node_modules/
 web/dist/
 .wrangler/
 
-# personal holdings and the runs derived from them stay local
+# personal holdings stay local; research run outputs are not tracked
 data/holdings/holdings_2026-*.csv
-runs/r001_baseline/
-runs/r002_cap10/
-runs/r003_noRothBonds/
-runs/r004_noRothBonds_cap10/
-runs/r005_noRothBonds_cap06sep/
-runs/run_log.csv
+runs/
