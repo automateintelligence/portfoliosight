@@ -1,20 +1,16 @@
-"""Fixtures for the API tests: a seeded local store, a published generation, a gated client."""
+"""Fixtures for the API tests: the gate secret, a fake clock and a gated client."""
 
 from __future__ import annotations
 
 import itertools
 import json
-import shutil
 from collections.abc import Callable, Iterator
-from datetime import date
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from portfoliosight.data.store import LocalStore, put_json
-from portfoliosight.engine import ENGINE_VERSION
-from portfoliosight.jobs.fixture_store import fixture_asof, write_fixture_store
+from portfoliosight.data.store import LocalStore
 
 GATE = "unit-test-gate-secret-0123456789"
 _IPS = itertools.count(1)
@@ -38,47 +34,6 @@ class FakeClock:
 
     def __call__(self) -> float:
         return self.t
-
-
-@pytest.fixture(scope="session")
-def _fixture_store_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    directory = tmp_path_factory.mktemp("fixture-store")
-    write_fixture_store(directory)
-    return directory
-
-
-@pytest.fixture(scope="session")
-def d_g() -> date:
-    return fixture_asof()
-
-
-@pytest.fixture(scope="session")
-def generation(d_g: date) -> str:
-    return f"{d_g.isoformat()}-{ENGINE_VERSION}"
-
-
-@pytest.fixture
-def store(_fixture_store_dir: Path, tmp_path: Path, d_g: date, generation: str) -> LocalStore:
-    """A private copy of the fixture store with a hand-published generation and no tensors."""
-    root = tmp_path / "store"
-    shutil.copytree(_fixture_store_dir, root)
-    store = LocalStore(root)
-    put_json(
-        store,
-        f"meta/{generation}/generation.json",
-        {"generation": generation, "asof": d_g.isoformat(), "engine_version": ENGINE_VERSION},
-    )
-    put_json(
-        store,
-        f"meta/{generation}/presets.json",
-        {"generation": generation, "asof": d_g.isoformat(), "presets": []},
-    )
-    put_json(
-        store,
-        "meta/current.json",
-        {"generation": generation, "published_at": "2026-10-13T09:30:00+00:00"},
-    )
-    return store
 
 
 @pytest.fixture

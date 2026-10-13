@@ -1,0 +1,225 @@
+"""Build one tensor from the canonical store (spec 6, 4.12, 5.3).
+
+A build reads ``meta/{G}/generation.json`` for ``D_G``, the catalog as it is now and only the
+price records it needs, uses rows up to ``D_G``, and never writes over a tensor that exists.
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Mapping, Sequence
+from datetime import date, datetime, time
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+from portfoliosight.data import cache as cache_mod
+from portfoliosight.data import manifest as manifest_mod
+from portfoliosight.data import store as store_mod
+from portfoliosight.data.manifest import ManifestEntry
+from portfoliosight.data.returns import build_returns
+from portfoliosight.engine import ENGINE_VERSION
+from portfoliosight.engine.caps import CapsError
+from portfoliosight.engine.optimize import NX
+from portfoliosight.engine.stats import RISK_FREE_SOURCES
+from portfoliosight.engine.surface import NY
+from portfoliosight.engine.tensor import (
+    FundInput,
+    TensorInputs,
+    WindowUnavailable,
+    build_tensor,
+    canonical_json,
+)
+
+CUSTOM_MENU_NAME = "Custom menu"
+_VERSION_SUFFIX = ".version"
+
+
+class BuildRefused(Exception):
+    """A build that would fail the same way on every attempt; ``code`` names why."""
+
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.code = code
+        self.details = details
+
+
+class GenerationGone(BuildRefused):
+    """The generation's metadata is no longer in the store (the nightly pruned it)."""
+
+    def __init__(self, generation: str):
+        super().__init__("generation_gone", f"generation {generation} is no longer stored")
+
+
+class KeyExists(Exception):
+    """The tensor key is already written; the first tensor of a key is the one served."""
+
+
+def generation_key(generation: str) -> str:
+    return f"meta/{generation}/generation.json"
+
+
+def put_tensor(store: store_mod.Store, key: str, tensor: Mapping[str, Any]) -> None:
+    """Write a tensor in its stored form, unless the key exists."""
+    if store.exists(key):
+        raise KeyExists(key)
+    store.put(key, canonical_json(tensor).encode("utf-8"))
+
+
+def _cached_record(
+    store: store_mod.Store, cache_dir: Path, symbol: str, version: str
+) -> pd.DataFrame | None:
+    """A symbol's record through the scratch cache; ``None`` when the store has none.
+
+    Records change every night, so a cached file is used only while the catalog's ``fetched_at``
+    (``version``) is the one it was cached under. The label is written after the file, so it is
+    never newer than the content.
+    """
+    key = store_mod.record_key(symbol)
+    path = cache_mod.cached_path(cache_dir, key)
+    label = path.with_name(path.name + _VERSION_SUFFIX)
+    try:
+        current = label.read_text(encoding="utf-8") == version
+    except FileNotFoundError:
+        current = False
+    if not current:
+        path.unlink(missing_ok=True)
+    try:
+        cached = cache_mod.fetch_into_cache(store, key, cache_dir=cache_dir)
+    except KeyError:
+        return None
+    try:
+        data = cached.read_bytes()
+    except FileNotFoundError:  # evicted by another process between the fetch and the read
+        try:
+            data = store.get(key)
+        except KeyError:
+            return None
+    if not current:
+        tmp = label.with_name(f".tmp-{os.getpid()}-{label.name}")
+        tmp.write_text(version, encoding="utf-8")
+        os.replace(tmp, label)
+    return store_mod.record_from_bytes(data)
+
+
+def _upto(record: pd.DataFrame, asof: datetime) -> pd.DataFrame:
+    return record.loc[pd.to_datetime(record["date"]) <= asof].reset_index(drop=True)
+
+
+def _tr_series(record: pd.DataFrame) -> pd.Series:
+    index = pd.DatetimeIndex(pd.to_datetime(record["date"]), name="date")
+    return pd.Series(record["tr_index"].to_numpy(dtype=float), index=index).dropna()
+
+
+def _close_on(record: pd.DataFrame, asof: datetime) -> float | None:
+    """The raw close dated exactly ``asof``; ``None`` when the fund has no price that day."""
+    on_day = record.loc[pd.to_datetime(record["date"]) == asof, "close"]
+    if on_day.empty or pd.isna(on_day.iloc[-1]):
+        return None
+    return float(on_day.iloc[-1])
+
+
+def _fund_input(
+    fund: str, entry: ManifestEntry | None, record: pd.DataFrame | None, asof: datetime
+) -> FundInput:
+    if entry is None:
+        return FundInput(
+            id=fund,
+            name=fund,
+            kind="etf",
+            source="tiingo",
+            adjusted_through="",
+            fetched_at="",
+            served=False,
+        )
+    adjusted = entry.adjusted_through.isoformat() if entry.adjusted_through else ""
+    return FundInput(
+        id=fund,
+        name=entry.name or fund,
+        kind=entry.kind,
+        source=entry.source,
+        adjusted_through=adjusted,
+        fetched_at=entry.fetched_at or f"{adjusted}T00:00:00Z",
+        last_close=None if record is None else _close_on(record, asof),
+        served=entry.status == "ok",
+        catalog_reason=entry.reason,
+    )
+
+
+def build_from_store(
+    store: store_mod.Store,
+    *,
+    generation: str,
+    funds: Sequence[Mapping[str, Any]],
+    lookback: str,
+    cache_dir: str | os.PathLike[str],
+    universe_name: str = CUSTOM_MENU_NAME,
+    preset_id: str | None = None,
+    nx: int = NX,
+    ny: int = NY,
+) -> dict[str, Any]:
+    """The tensor of one (generation, menu, lookback), from the store as it is now.
+
+    ``funds`` is the requested policy, ``[{"id", "min", "max"}]`` in display order. Raises
+    ``GenerationGone`` when the generation's metadata is absent, and ``BuildRefused`` when the
+    window has too little shared history, the caps cannot be met by the funds in the window, or
+    the generation belongs to another engine version.
+    """
+    try:
+        meta = store_mod.get_json(store, generation_key(generation))
+    except KeyError:
+        raise GenerationGone(generation) from None
+    if meta.get("engine_version") != ENGINE_VERSION:
+        raise BuildRefused(
+            "engine_version_mismatch",
+            f"generation {generation} belongs to engine {meta.get('engine_version')}, "
+            f"this is engine {ENGINE_VERSION}",
+        )
+    d_g = date.fromisoformat(str(meta["asof"]))
+    asof = datetime.combine(d_g, time())
+    catalog = manifest_mod.load_manifest(store).symbols
+    root = Path(cache_dir)
+
+    def served_record(symbol: str) -> pd.DataFrame | None:
+        entry = catalog.get(symbol)
+        if entry is None or entry.status != "ok":
+            return None
+        record = _cached_record(store, root, symbol, entry.fetched_at or "")
+        return None if record is None else _upto(record, asof)
+
+    ids = [str(fund["id"]) for fund in funds]
+    records = {fund: served_record(fund) for fund in ids}
+    priced = {fund: record for fund, record in records.items() if record is not None}
+    rf_series = {}
+    for symbol in RISK_FREE_SOURCES:
+        record = priced[symbol] if symbol in priced else served_record(symbol)
+        if record is not None:
+            rf_series[symbol] = _tr_series(record).pct_change().dropna()
+    inputs = TensorInputs(
+        funds=[_fund_input(fund, catalog.get(fund), records[fund], asof) for fund in ids],
+        returns=build_returns(priced),
+        lookback=lookback,
+        asof=d_g,
+        universe_name=universe_name,
+        preset_id=preset_id,
+        requested_bounds=[
+            {"id": str(fund["id"]), "min": fund.get("min"), "max": fund.get("max")}
+            for fund in funds
+        ],
+        tr_index={fund: _tr_series(record) for fund, record in priced.items()},
+        rf_series=rf_series,
+        engine_version=ENGINE_VERSION,
+        nx=nx,
+        ny=ny,
+    )
+    try:
+        tensor = build_tensor(inputs)
+    except WindowUnavailable as exc:
+        details = {"lookback": lookback, "reason": exc.reason, "rows": exc.selection.rows}
+        raise BuildRefused("window_unavailable", str(exc), details) from exc
+    except CapsError as exc:
+        raise BuildRefused("caps_infeasible", str(exc), {"reason": str(exc)}) from exc
+    if tensor["generation"] != generation:
+        raise RuntimeError(f"built {tensor['generation']}, not the requested {generation}")
+    return tensor
