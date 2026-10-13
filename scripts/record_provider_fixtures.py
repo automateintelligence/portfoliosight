@@ -2,9 +2,10 @@
 """Record the provider fixtures of spec section 10, live, once.
 
 Writes raw Tiingo rows for the split windows (AAPL, NVDA, USO), the full histories (VTI, VBIAX),
-their meta objects, and a TR window whose annual stock dividend and cash dividend share one
-ex-date (the days that fix the basis rule of spec 4.1). Needs ``TIINGO_API_KEY`` in the
-environment; the key is never written. Cost: eleven Tiingo requests.
+their meta objects, a TR window whose annual stock dividend and cash dividend share one ex-date
+(the days that fix the basis rule of spec 4.1), and a slice of the tsp.gov CSV. Needs
+``TIINGO_API_KEY`` in the environment; the key is never written. Cost: eleven Tiingo requests
+and one tsp.gov request.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from portfoliosight.data.providers.tiingo import TiingoProvider  # noqa: E402
+from portfoliosight.data.providers.tsp import TspProvider  # noqa: E402
 
 FULL_HISTORY_START = date(1990, 1, 1)
 PRICE_WINDOWS: dict[str, tuple[str, date, date | None, bool]] = {
@@ -31,6 +33,23 @@ PRICE_WINDOWS: dict[str, tuple[str, date, date | None, bool]] = {
     # 3% stock dividend and cash dividend on one ex-date in March 2024, 2025 and 2026
     "TR_2024-02": ("TR", date(2024, 2, 1), date(2026, 4, 30), False),
 }
+# Every one of the 16 funds is priced in this range (L 2075 started in 2025).
+TSP_SLICE = (date(2026, 1, 1), date(2026, 3, 31))
+
+
+def _tsp_slice(text: str, start: date, end: date) -> str:
+    """The header, the rows dated inside the range, and the CSV's trailing blank row if any."""
+    lines = text.splitlines()
+    kept = [lines[0]]
+    for line in lines[1:]:
+        day = line.split(",", 1)[0].strip()
+        if not day:
+            if line.strip():
+                kept.append(line)
+            continue
+        if start.isoformat() <= day <= end.isoformat():
+            kept.append(line)
+    return "\n".join(kept) + "\n"
 
 
 def _write_rows(path: Path, rows: list[dict]) -> None:
@@ -42,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, default=REPO_ROOT / "tests" / "fixtures")
     parser.add_argument("--skip-tiingo", action="store_true")
+    parser.add_argument("--skip-tsp", action="store_true")
     args = parser.parse_args(argv)
 
     if not args.skip_tiingo:
@@ -61,6 +81,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
             print(f"{symbol}: {len(rows)} rows {rows[0]['date'][:10]}..{rows[-1]['date'][:10]}")
 
+    if not args.skip_tsp:
+        tsp_dir = args.out / "tsp"
+        tsp_dir.mkdir(parents=True, exist_ok=True)
+        text = _tsp_slice(TspProvider().fetch_csv(*TSP_SLICE), *TSP_SLICE)
+        (tsp_dir / "tsp-fund-price-history.csv").write_text(text, encoding="utf-8")
+        print(f"tsp: {len(text.splitlines()) - 1} rows")
     return 0
 
 
