@@ -1,0 +1,629 @@
+"""A-PS-48 — the default DOM is plain language, impersonal, with the disclaimer always visible.
+
+Phase 3, ui (Playwright against `vite preview`, run from pytest; desktop and phone, three themes,
+both presets of the mock; standard library only).
+
+Per viewport, theme and preset: with details off and the sections expanded through their chips,
+`document.body.innerText` matches none of the fifteen forbidden patterns (word-bounded,
+case-insensitive) and contains every plain label of the assertion ("The mix you entered" only where
+an allocation exists); the `disclaimer` element's text equals the spec 3.7 paragraph verbatim, is
+visible, and has neither an `aria-expanded="false"` ancestor nor a `section-*` ancestor (checked on
+load, expanded, and with details on); "Historical math, not investment advice." is the whole text of
+an element below the result strip; `footer-cta` links to exactly the three family URLs; with details
+on the four technical names appear (and two of them are proven absent before). A further leg loads
+both presets at three risk positions and both ends of the diversification slider and requires one
+identical CTA text and link set.
+Labels are compared case-insensitively because `innerText` reflects CSS `text-transform` (the HUD
+theme upper-cases headings).
+
+The Playwright spec mocks /api/* itself (page.route) from web/fixtures/guide2017_5y.json and
+data/holdings/holdings_guide2017_step2.csv: GET /api/presets (guide2017 with its "$" allocation and
+tsp with allocation null, a distinct hash and the same tensor re-labelled), GET /api/tensors/{G}/
+{hash}/{lb}, GET /api/symbols, GET /api/health, POST /api/tensors (200 ready, body recorded),
+POST /api/share (202), anything else 404. Views are addressed through the spec 8.1 URL keys; with
+an integer `r` inside the slider domain and `d=0` the selected mix is exactly `frontier.w[r]`
+(`d=1`: `grid.w_div[r]`), which is what the test recomputes from. The product must keep `r` and `d`
+as given (it may leave the URL untouched or rewrite the same values).
+
+Pinned interface (beyond the shared pins)
+- Each `section-{name}` element carries `aria-expanded`; `chip-{name}` expands it. `chip-trades`
+  may be absent when the preset has no allocation.
+- Axis labels, the heatmap legend and the slider labels are DOM or SVG text (canvas-drawn text is
+  not in `innerText`).
+"""
+
+# ruff: noqa: E501
+from __future__ import annotations
+
+import json
+import os
+import socket
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+WEB = ROOT / "web"
+
+# Projects this assertion runs on (desktop = chromium 1366x900, phone = chromium "iPhone 13").
+PROJECTS = ("desktop", "phone")
+
+CONFIG_TS = r"""
+import { defineConfig, devices } from "@playwright/test";
+
+const all = {
+  desktop: { name: "desktop", use: { browserName: "chromium" as const, viewport: { width: 1366, height: 900 } } },
+  phone: { name: "phone", use: { ...devices["iPhone 13"], browserName: "chromium" as const } },
+};
+const wanted = (process.env.PS_GATE_PROJECTS || "desktop").split(",");
+
+export default defineConfig({
+  testDir: ".",
+  testMatch: process.env.PS_GATE_SPEC,
+  fullyParallel: false,
+  workers: 1,
+  retries: 0,
+  forbidOnly: true,
+  timeout: 120_000,
+  outputDir: process.env.PS_GATE_OUTPUT,
+  reporter: [["json", { outputFile: process.env.PS_GATE_REPORT }]],
+  use: { baseURL: process.env.PS_GATE_BASE_URL },
+  projects: wanted.map((name) => (all as any)[name]),
+});
+"""
+
+# The whole Playwright spec lives in this frozen test: first the /api mock and page helpers
+# (the gate contract's "UI mock"; each UI gate file carries its own copy), then this assertion's
+# legs. It is written to web/e2e/__gate__/ for the run and removed afterwards.
+SPEC_TS = r"""
+import { expect, test, type Page } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
+
+// ---------------------------------------------------------------------------------------------
+// Fixture, presets body and the /api mock (the gate contract's "UI mock"; no product mock server)
+// ---------------------------------------------------------------------------------------------
+const GATE_ROOT = process.env.PS_GATE_ROOT || "";
+const THEMES = ["ks-dark", "light", "hud"] as const;
+const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
+const TSP_IDS = [
+  "TSP-G", "TSP-F", "TSP-C", "TSP-S", "TSP-I", "TSP-LINCOME", "TSP-L2030", "TSP-L2035", "TSP-L2040",
+  "TSP-L2045", "TSP-L2050", "TSP-L2055", "TSP-L2060", "TSP-L2065", "TSP-L2070", "TSP-L2075",
+];
+type ApiCall = { method: string; path: string; body: any };
+type Mock = { calls: ApiCall[]; tensorPosts: () => ApiCall[]; hashCustom: string };
+
+function readFixtureTensor(): any {
+  const file = path.join(GATE_ROOT, "web", "fixtures", "guide2017_5y.json");
+  if (!fs.existsSync(file)) throw new Error("UI fixture missing: web/fixtures/guide2017_5y.json");
+  const tensor = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (!/^[0-9a-f]{16}$/.test(String(tensor?.universe?.hash))) {
+    throw new Error("UI fixture is not a spec section 7 tensor: universe.hash is not 16 hex digits");
+  }
+  return tensor;
+}
+
+function readHoldings(): { id: string; description: string; amount: number }[] {
+  const file = path.join(GATE_ROOT, "data", "holdings", "holdings_guide2017_step2.csv");
+  if (!fs.existsSync(file)) throw new Error("holdings file missing: data/holdings/holdings_guide2017_step2.csv");
+  const lines = fs.readFileSync(file, "utf8").split(/\r?\n/).filter((line) => line.trim() !== "");
+  return lines.slice(1).map((line) => {
+    const cells = line.split(",");
+    const price = Number(cells[cells.length - 1]);
+    const qty = Number(cells[cells.length - 2]);
+    return {
+      id: cells[1].trim().toUpperCase(),
+      description: cells.slice(2, cells.length - 2).join(",").trim(),
+      amount: qty * price,
+    };
+  });
+}
+
+function shiftHash(hash: string, by: number): string {
+  return hash.split("").map((c) => ((parseInt(c, 16) + by) % 16).toString(16)).join("");
+}
+
+function buildPresets(tensor: any): any {
+  const G = tensor.generation;
+  const h1 = tensor.universe.hash;
+  const h2 = shiftHash(h1, 1);
+  const names = new Map<string, string>(tensor.universe.funds.map((f: any) => [f.id, f.name]));
+  const holdings = readHoldings();
+  const lookbacks = (hash: string) =>
+    Object.fromEntries(LOOKBACKS.map((lb) => [lb, { status: "ready", url: `/api/tensors/${G}/${hash}/${lb}` }]));
+  const allocation: Record<string, number> = {};
+  for (const h of holdings) allocation[h.id] = h.amount;
+  return {
+    generation: G,
+    asof: tensor.asof,
+    presets: [
+      {
+        id: "guide2017",
+        name: "The 2017 guide portfolio",
+        hash: h1,
+        funds: holdings.map((h) => ({ id: h.id, name: names.get(h.id) ?? h.description })),
+        allocation,
+        allocation_unit: "$",
+        lookbacks: lookbacks(h1),
+      },
+      {
+        id: "tsp",
+        name: "TSP (G, F, C, S, I)",
+        hash: h2,
+        funds: tensor.universe.funds.map((f: any) => ({ id: f.id, name: f.name })),
+        allocation: null,
+        allocation_unit: null,
+        lookbacks: lookbacks(h2),
+      },
+    ],
+  };
+}
+
+// Installs the mock on one page. `custom` (optional) is a second tensor served for a POST whose
+// fund ids are exactly the custom tensor's funds.
+async function installMock(page: Page, tensor: any, custom?: any): Promise<Mock> {
+  const calls: ApiCall[] = [];
+  const G = String(tensor.generation);
+  const h1 = String(tensor.universe.hash);
+  const h2 = shiftHash(h1, 1);
+  const h3 = shiftHash(h1, 2);
+  const presets = buildPresets(tensor);
+  const symbols = {
+    catalog_at: tensor.built_at ?? "2026-10-13T09:00:00Z",
+    tiers_served: [1, 2, 3],
+    symbols: [
+      ...tensor.universe.funds.map((f: any) => ({ id: f.id, name: f.name, kind: f.kind ?? "etf", tier: 1, first_date: "2005-01-03" })),
+      ...(custom ? custom.universe.funds : [])
+        .filter((f: any) => !tensor.universe.funds.some((g: any) => g.id === f.id))
+        .map((f: any) => ({ id: f.id, name: f.name, kind: "etf", tier: 2, first_date: "2012-10-16" })),
+      ...TSP_IDS.map((id) => ({ id, name: `${id.replace("TSP-", "")} Fund`, kind: "tsp", tier: 1, first_date: "2005-08-01" })),
+    ],
+  };
+  const health = {
+    status: "ok", version: tensor.engine_version, generation: G, asof: tensor.asof, asof_trading_days_behind: 0,
+    queue: { depth: 0, building: false }, nightly: { status: "ok" },
+  };
+  const customIds = custom ? custom.universe.funds.map((f: any) => f.id).sort().join(",") : null;
+  await page.route("**/api/**", async (route) => {
+    const request = route.request();
+    const where = new URL(request.url()).pathname;
+    if (!where.startsWith("/api/")) return route.continue();
+    const method = request.method();
+    let body: any = null;
+    const raw = request.postData();
+    if (raw) {
+      try { body = JSON.parse(raw); } catch { body = raw; }
+    }
+    calls.push({ method, path: where, body });
+    const send = (status: number, payload: any, r2 = false) =>
+      route.fulfill({
+        status,
+        contentType: "application/json",
+        headers: r2 ? { "x-ps-source": "r2", "cache-control": "no-store" } : { "cache-control": "no-store" },
+        body: JSON.stringify(payload),
+      });
+    if (method === "GET" && where === "/api/presets") return send(200, presets, true);
+    if (method === "GET" && where === "/api/symbols") return send(200, symbols, true);
+    if (method === "GET" && where === "/api/health") return send(200, health);
+    const hit = where.match(/^\/api\/tensors\/([^/]+)\/([0-9a-f]{16})\/([a-z0-9]+)$/);
+    if (method === "GET" && hit && LOOKBACKS.includes(hit[3])) {
+      const base = hit[2] === h3 && custom ? custom : hit[2] === h1 || hit[2] === h2 ? tensor : null;
+      if (base) {
+        const copy = JSON.parse(JSON.stringify(base));
+        copy.lookback = { ...copy.lookback, id: hit[3] };
+        if (hit[2] === h2) copy.universe = { ...copy.universe, hash: h2, preset_id: "tsp", name: "TSP (G, F, C, S, I)" };
+        return send(200, copy, true);
+      }
+    }
+    if (method === "POST" && where === "/api/tensors") {
+      const ids = Array.isArray(body?.funds) ? body.funds.map((f: any) => String(f?.id)).sort().join(",") : "";
+      const hash = customIds !== null && ids === customIds ? h3 : h1;
+      const lb = LOOKBACKS.includes(body?.lookback) ? body.lookback : "5y";
+      return send(200, { status: "ready", generation: G, hash, url: `/api/tensors/${G}/${hash}/${lb}` });
+    }
+    if (method === "POST" && where === "/api/share") return send(202, { status: "accepted" });
+    return send(404, { error: { code: "not_found", message: "not found", details: null } });
+  });
+  return {
+    calls,
+    tensorPosts: () => calls.filter((c) => c.method === "POST" && c.path === "/api/tensors"),
+    hashCustom: h3,
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Page helpers: only spec test ids, html[data-theme], the section 8.1 URL keys and ARIA are used
+// ---------------------------------------------------------------------------------------------
+const norm = (text: string) => text.replace(/\s+/g, " ").trim();
+
+async function openApp(page: Page, query: string): Promise<void> {
+  await page.goto(query ? `/?${query}` : "/");
+  await expect(page.getByTestId("chart-canvas")).toBeVisible();
+  await expect(page.getByTestId("div-word")).toHaveText(/\S/);
+}
+
+function urlParam(page: Page, key: string): string | null {
+  return new URL(page.url()).searchParams.get(key);
+}
+
+// The page was opened with integer r and d in {0, 1}; the product must keep both (r inside the domain).
+async function expectPosition(page: Page, r: number, d: number): Promise<void> {
+  await expect.poll(() => Number(urlParam(page, "r") ?? "NaN"), { message: `URL key r stays ${r}` }).toBeCloseTo(r, 9);
+  await expect.poll(() => Number(urlParam(page, "d") ?? "NaN"), { message: `URL key d stays ${d}` }).toBeCloseTo(d, 9);
+}
+
+// Integer risk positions inside the slider domain [s_safe, NX-1]: at these, with d=0, the selected
+// mix is exactly frontier.w[r] (spec 4.11), and with d=1 exactly grid.w_div[r].
+function domainInts(tensor: any): number[] {
+  const hi = tensor.frontier.x.length - 1;
+  const lo = Math.min(hi, Math.ceil(tensor.frontier.s_safe));
+  const out: number[] = [];
+  for (let r = lo; r <= hi; r++) out.push(r);
+  return out;
+}
+function threeInts(tensor: any): number[] {
+  const all = domainInts(tensor);
+  return Array.from(new Set([all[0], all[Math.floor(all.length / 2)], all[all.length - 1]]));
+}
+
+// Spec 4.6: b = T^{-T} w, p_i = Lambda_i b_i^2 / (w' Sigma w), ENB = exp(-sum p ln p).
+function enbOf(tensor: any, w: number[]): number {
+  const n = w.length;
+  let variance = 0;
+  for (let i = 0; i < n; i++) for (let k = 0; k < n; k++) variance += w[i] * tensor.cov[i][k] * w[k];
+  let entropy = 0;
+  for (let i = 0; i < n; i++) {
+    let b = 0;
+    for (let k = 0; k < n; k++) b += tensor.torsion_inv_t[i][k] * w[k];
+    const p = (tensor.torsion_lambda[i] * b * b) / variance;
+    if (p > 0) entropy -= p * Math.log(p);
+  }
+  return Math.exp(entropy);
+}
+
+// Any CSS colour string -> "#rrggbb" (lower case), by painting it; "invalid:..." when the browser
+// does not accept it as a colour.
+async function cssColorToHex(page: Page, value: string): Promise<string> {
+  return page.evaluate((v) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+    const paint = (base: string) => {
+      ctx.fillStyle = base;
+      ctx.fillStyle = v;
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.fillRect(0, 0, 1, 1);
+      return Array.from(ctx.getImageData(0, 0, 1, 1).data);
+    };
+    const a = paint("#000000");
+    const b = paint("#ffffff");
+    if (a.join() !== b.join()) return `invalid:${v}`;
+    if (a[3] !== 255) return `translucent:${v}`;
+    return "#" + a.slice(0, 3).map((x) => x.toString(16).padStart(2, "0")).join("");
+  }, value.trim());
+}
+
+async function tokenHex(page: Page, name: string): Promise<string> {
+  const raw = await page.evaluate((n) => getComputedStyle(document.documentElement).getPropertyValue(n), name);
+  return cssColorToHex(page, raw);
+}
+
+// Clicks the four chips; every section must report aria-expanded="true" afterwards. The Trades
+// section exists only when a current mix exists (spec 3.3), so it is optional without one.
+async function expandAll(page: Page, hasAllocation: boolean): Promise<void> {
+  for (const name of ["funds", "trades", "stress", "settings"]) {
+    const chip = page.getByTestId(`chip-${name}`);
+    if (name === "trades" && !hasAllocation && (await chip.count()) === 0) continue;
+    await chip.click();
+    await expect(page.getByTestId(`section-${name}`)).toHaveAttribute("aria-expanded", "true");
+  }
+}
+
+// theme-switch: either one clickable that cycles ks-dark -> light -> hud, or a group holding exactly
+// three button / role=radio segments in that order. Returns the theme that should now be active.
+async function advanceTheme(page: Page): Promise<string> {
+  const order = ["ks-dark", "light", "hud"];
+  const current = (await page.locator("html").getAttribute("data-theme")) ?? "";
+  const next = order[(order.indexOf(current) + 1) % 3];
+  const control = page.getByTestId("theme-switch");
+  const segments = control.locator('button, [role="radio"]');
+  if ((await segments.count()) === 3) await segments.nth(order.indexOf(next)).click();
+  else await control.click();
+  return next;
+}
+
+// ---------------------------------------------------------------------------------------------
+// A-PS-48
+// ---------------------------------------------------------------------------------------------
+const FORBIDDEN = [
+  "bets", "knee", "Sharpe", "tangency", "covariance", "sigma", "quantile", "significant", "you should",
+  "we recommend", "Risk Number", "Risk Score", "login", "sign in", "password",
+];
+const FORBIDDEN_RE = FORBIDDEN.map((p) => new RegExp(`\\b${p.replace(/ /g, "\\s+")}\\b`, "i"));
+const PLAIN_ALWAYS = [
+  "Risk: how much it bounces around in a year", "Expected return per year", "How spread out the risk is",
+  "Best-return mix at this risk", "Selected mix", "More return", "More diversified", "Suggested",
+  "Same menu, different years of history", "Historical math, not investment advice.",
+];
+const PLAIN_WITH_ALLOCATION = ["The mix you entered"];
+const TECHNICAL = [
+  "Standard deviation of yearly return", "effective number of bets, minimum torsion", "minimum torsion",
+  "Estimated central 95% range",
+];
+const ADVICE_LINE = "Historical math, not investment advice.";
+const DISCLAIMER =
+  "PortfolioSight is an educational tool. All figures are mathematical results computed from historical prices and are hypothetical; past performance does not predict future results. Nothing here is investment, tax or legal advice, and no output is a recommendation to buy or sell anything. PortfolioSight is not registered with the SEC, FINRA or any other regulator. You remain solely responsible for your decisions. Price data: Tiingo and tsp.gov.";
+const CTA_URLS = ["https://option-spread-scanner.ingage-bd0.workers.dev", "https://automateintelligence.ai", "https://securitysight.ai"];
+const PRESETS = ["guide2017", "tsp"] as const;
+
+const visibleText = async (page: Page) => norm(await page.evaluate(() => document.body.innerText));
+
+async function checkDisclaimer(page: Page, when: string): Promise<void> {
+  const el = page.getByTestId("disclaimer");
+  await expect(el, `disclaimer exists once (${when})`).toHaveCount(1);
+  await el.scrollIntoViewIfNeeded();
+  await expect(el, `disclaimer visible (${when})`).toBeVisible();
+  expect(norm((await el.textContent()) ?? ""), `disclaimer text verbatim (${when})`).toBe(DISCLAIMER);
+  const facts = await el.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return {
+      width: rect.width,
+      height: rect.height,
+      collapsedAncestor: node.closest('[aria-expanded="false"]') !== null,
+      insideSection: node.closest('[data-testid^="section-"]') !== null,
+    };
+  });
+  expect(facts.width * facts.height, `disclaimer has a visible rect (${when})`).toBeGreaterThan(0);
+  expect(facts.collapsedAncestor, `disclaimer has an aria-expanded="false" ancestor (${when})`).toBe(false);
+  expect(facts.insideSection, `disclaimer sits inside a collapsible section (${when})`).toBe(false);
+}
+
+async function ctaFacts(page: Page): Promise<{ text: string; hrefs: string[] }> {
+  const cta = page.getByTestId("footer-cta");
+  await expect(cta).toHaveCount(1);
+  return cta.evaluate((node) => ({
+    text: (node.textContent ?? "").replace(/\s+/g, " ").trim(),
+    hrefs: Array.from(node.querySelectorAll("a")).map((a) => (a.getAttribute("href") ?? "").replace(/\/+$/, "")),
+  }));
+}
+
+for (const theme of THEMES) {
+  for (const preset of PRESETS) {
+    test(`plain language ${theme} ${preset}`, async ({ page }) => {
+      const tensor = readFixtureTensor();
+      await installMock(page, tensor);
+      const hasAllocation = preset === "guide2017";
+      await openApp(page, `u=${preset}&lb=5y&t=${theme}`);
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      await checkDisclaimer(page, "on load, sections collapsed");
+      await expandAll(page, hasAllocation);
+      await expect(page.getByTestId("details-enb")).toBeHidden();
+      expect(urlParam(page, "x"), "details are off").not.toBe("1");
+
+      // details off: nothing forbidden, every plain label present
+      const text = await visibleText(page);
+      expect(text.length, "the scan read real page text").toBeGreaterThan(400);
+      expect(text.toLowerCase(), "the scan read the product page").toContain("portfoliosight");
+      for (const re of FORBIDDEN_RE) {
+        const hit = text.match(re);
+        const around = hit ? text.slice(Math.max(0, hit.index! - 40), hit.index! + 60) : "";
+        expect(hit, `forbidden pattern ${re} in the default view: "...${around}..."`).toBeNull();
+      }
+      const lower = text.toLowerCase();
+      for (const label of [...PLAIN_ALWAYS, ...(hasAllocation ? PLAIN_WITH_ALLOCATION : [])]) {
+        expect(lower, `plain label "${label}"`).toContain(label.toLowerCase());
+      }
+      await checkDisclaimer(page, "sections expanded");
+
+      // "Historical math, not investment advice." sits under the result strip
+      const layout = await page.evaluate((sentence) => {
+        const strip = ["range-low", "range-typical", "range-high", "div-word"]
+          .map((id) => document.querySelector(`[data-testid="${id}"]`))
+          .filter((el): el is Element => el !== null)
+          .map((el) => el.getBoundingClientRect().bottom);
+        let line: Element | null = null;
+        for (const el of Array.from(document.body.querySelectorAll("*"))) {
+          if ((el.textContent ?? "").replace(/\s+/g, " ").trim() === sentence) line = el;
+        }
+        const rect = line ? line.getBoundingClientRect() : null;
+        return { strip, top: rect ? rect.top : null, area: rect ? rect.width * rect.height : 0 };
+      }, ADVICE_LINE);
+      expect(layout.strip.length, "result strip readouts found").toBe(4);
+      expect(layout.top, "an element whose whole text is the advice line").not.toBeNull();
+      expect(layout.area).toBeGreaterThan(0);
+      expect(layout.top!, "advice line is below the result strip").toBeGreaterThanOrEqual(Math.max(...layout.strip) - 1);
+
+      // footer CTA: exactly the three family links
+      const cta = await ctaFacts(page);
+      expect(Array.from(new Set(cta.hrefs)).sort(), "footer-cta hrefs").toEqual([...CTA_URLS].sort());
+      for (const href of cta.hrefs) expect(CTA_URLS, `unexpected CTA link ${href}`).toContain(href);
+
+      // details on: the technical names appear, the disclaimer stays
+      await page.getByTestId("details-toggle").click();
+      await expect(page.getByTestId("details-enb")).toBeVisible();
+      const detailed = (await visibleText(page)).toLowerCase();
+      for (const name of TECHNICAL) expect(detailed, `technical name "${name}"`).toContain(name.toLowerCase());
+      for (const name of ["Standard deviation of yearly return", "Estimated central 95% range"]) {
+        expect(lower, `"${name}" must stay behind details`).not.toContain(name.toLowerCase());
+      }
+      await checkDisclaimer(page, "details on");
+    });
+  }
+}
+
+test("cta is generic across presets and slider positions", async ({ page }) => {
+  const tensor = readFixtureTensor();
+  await installMock(page, tensor);
+  const seen: string[] = [];
+  for (const preset of PRESETS) {
+    for (const r of threeInts(tensor)) {
+      for (const d of [0, 1]) {
+        await openApp(page, `u=${preset}&lb=5y&r=${r}&d=${d}`);
+        await expectPosition(page, r, d);
+        const cta = await ctaFacts(page);
+        expect(cta.text).toContain("More from the AutomateIntelligence family");
+        for (const name of ["Option Spread Scanner", "KnowledgeSight", "SecuritySight"]) expect(cta.text).toContain(name);
+        expect(cta.text, "CTA must not carry a result figure").not.toMatch(/\d+(\.\d+)?\s*%/);
+        seen.push(JSON.stringify(cta));
+      }
+    }
+  }
+  expect(seen.length).toBeGreaterThanOrEqual(4);
+  expect(new Set(seen).size, "CTA text and links identical across presets and positions").toBe(1);
+});
+"""
+EXPECTED_TITLES = {
+    "plain language ks-dark guide2017",
+    "plain language ks-dark tsp",
+    "plain language light guide2017",
+    "plain language light tsp",
+    "plain language hud guide2017",
+    "plain language hud tsp",
+    "cta is generic across presets and slider positions",
+}
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _wait_for_port(port: int, proc: subprocess.Popen, seconds: float = 60.0) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline and proc.poll() is None:
+        with socket.socket() as sock:
+            sock.settimeout(0.5)
+            if sock.connect_ex(("127.0.0.1", port)) == 0:
+                return True
+        time.sleep(0.25)
+    return False
+
+
+def _run_playwright(
+    name: str,
+    spec_ts: str,
+    projects: tuple[str, ...],
+    base_url: str | None = None,
+    extra_env: dict[str, str] | None = None,
+    timeout: int = 900,
+) -> dict[tuple[str, str], str]:
+    """Run one embedded Playwright spec and return {(project, test title): status}.
+
+    base_url=None: build the site and serve it with `vite preview` on a free local port (the
+    spec mocks /api/* itself with page.route). Otherwise run against base_url (production).
+    """
+    assert (WEB / "package.json").is_file(), (
+        "web/package.json is missing: the front end is not built yet"
+    )
+    bin_dir = WEB / "node_modules" / ".bin"
+    assert (bin_dir / "playwright").exists(), (
+        "web/node_modules/.bin/playwright is missing: run `npm ci` in web/"
+    )
+    preview = None
+    gate_dir = WEB / "e2e" / "__gate__"
+    spec = gate_dir / f"{name}.spec.ts"
+    config = gate_dir / f"{name}.config.ts"
+    report = None
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "report.json"
+        try:
+            if base_url is None:
+                assert (bin_dir / "vite").exists(), (
+                    "web/node_modules/.bin/vite is missing: run `npm ci` in web/"
+                )
+                build = subprocess.run(
+                    ["npm", "run", "build"], cwd=WEB, capture_output=True, text=True, timeout=600
+                )
+                assert build.returncode == 0, (
+                    f"`npm run build` failed in web/:\n{build.stdout[-3000:]}{build.stderr[-3000:]}"
+                )
+                port = _free_port()
+                preview = subprocess.Popen(
+                    [
+                        str(bin_dir / "vite"),
+                        "preview",
+                        "--host",
+                        "127.0.0.1",
+                        "--port",
+                        str(port),
+                        "--strictPort",
+                    ],
+                    cwd=WEB,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.STDOUT,
+                )
+                assert _wait_for_port(port, preview), (
+                    "`vite preview` did not start listening within 60 s"
+                )
+                base_url = f"http://127.0.0.1:{port}"
+            gate_dir.mkdir(parents=True, exist_ok=True)
+            spec.write_text(spec_ts, encoding="utf-8")
+            config.write_text(CONFIG_TS, encoding="utf-8")
+            env = dict(
+                os.environ,
+                PS_GATE_ROOT=str(ROOT),
+                PS_GATE_BASE_URL=base_url,
+                PS_GATE_REPORT=str(out),
+                PS_GATE_OUTPUT=str(Path(tmp) / "results"),
+                PS_GATE_SPEC=spec.name,
+                PS_GATE_PROJECTS=",".join(projects),
+                **(extra_env or {}),
+            )
+            proc = subprocess.run(
+                [str(bin_dir / "playwright"), "test", "--config", f"e2e/__gate__/{config.name}"],
+                cwd=WEB,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            if out.exists():
+                report = json.loads(out.read_text(encoding="utf-8"))
+        finally:
+            if preview is not None:
+                preview.terminate()
+                try:
+                    preview.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    preview.kill()
+            spec.unlink(missing_ok=True)
+            config.unlink(missing_ok=True)
+            if gate_dir.is_dir() and not any(gate_dir.iterdir()):
+                gate_dir.rmdir()
+    tail = proc.stdout[-6000:] + proc.stderr[-3000:]
+    assert report is not None, f"Playwright wrote no JSON report:\n{tail}"
+    statuses: dict[tuple[str, str], str] = {}
+
+    def walk(suite: dict) -> None:
+        for case in suite.get("specs", []):
+            for run in case.get("tests", []):
+                results = run.get("results", [])
+                for result in results:
+                    for error in result.get("errors", []):
+                        print(
+                            f"[{run.get('projectName')}] {case['title']}: {error.get('message', '')[:3000]}"
+                        )
+                final = results[-1]["status"] if results else "not-run"
+                statuses[(run.get("projectName", ""), case["title"])] = (
+                    final if len(results) == 1 else "retried"
+                )
+        for child in suite.get("suites", []):
+            walk(child)
+
+    for suite in report.get("suites", []):
+        walk(suite)
+    for error in report.get("errors", []):
+        print("playwright error:", error.get("message", "")[:3000])
+    return statuses
+
+
+def test_a_ps_48_playwright():
+    statuses = _run_playwright("a_ps_48", SPEC_TS, PROJECTS)
+    expected = {(project, title) for project in PROJECTS for title in EXPECTED_TITLES}
+    assert set(statuses) == expected, f"Playwright ran a different set of tests: {sorted(statuses)}"
+    not_passed = {key: status for key, status in statuses.items() if status != "passed"}
+    assert not not_passed, (
+        f"Playwright legs not passed (failed, skipped, timed out or retried): {not_passed}"
+    )
