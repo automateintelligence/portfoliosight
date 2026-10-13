@@ -1381,7 +1381,7 @@ Phase 4 · prod
   "guide2017"`; `funds` are the 23 Step 2 funds and `excluded` is empty.
   POST: 200, `hash` equals the preset's `hash`, and `GET url` body bytes equal the preset
   tensor's bytes (same `ETag`). POST for the 23 funds plus FIENX: 200 or 202, then
-  `GET /api/tensors/{G}/{hash}/5y` returns the tensor within 200 s; it is schema-valid, its
+  `GET /api/tensors/{G}/{hash}/5y` returns the tensor within 150 s; it is schema-valid, its
   `funds` are the 23 Step 2 funds and its `excluded` is exactly FIENX with the §5.1 reason (one
   real build per generation: the key is the same on every run). **Must-not-contain:** a lookback not `ready`; `x-ps-source:
   origin` on either preset GET; a POST that enqueues (202) for the preset key; FIENX among the

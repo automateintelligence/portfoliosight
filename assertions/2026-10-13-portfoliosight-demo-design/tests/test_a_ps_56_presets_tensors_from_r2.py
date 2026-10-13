@@ -33,7 +33,7 @@ Pinned interface (the product must provide exactly this):
 - The same POST for the 23 default funds plus `FIENX` (a catalog symbol that is not served, so the
   menu is accepted, spec 6) -> 200 `ready` or 202 `{"status": "queued"|"building", "generation",
   "hash"}`; `GET /api/tensors/{generation}/{hash}/5y` answers 202 while it builds and 200 with the
-  tensor within 200 s. That tensor validates against the same schema; its `universe.funds` are the
+  tensor within 150 s. That tensor validates against the same schema; its `universe.funds` are the
   23 Step 2 funds and its `universe.excluded` is exactly FIENX with reason
   "converted to an ETF; no data since 2024-10-30".
 """
@@ -368,10 +368,10 @@ else:
             assert answer.get("status") in ("queued", "building"), (
                 f"POST status is {answer.get('status')!r}"
             )
-        deadline = time.monotonic() + 200.0
+        deadline = time.monotonic() + 150.0
         got = _http("GET", SITE + url)
         while got.status == 202:
-            assert time.monotonic() < deadline, f"{url} was still building after 200 s"
+            assert time.monotonic() < deadline, f"{url} was still building after 150 s"
             time.sleep(3.0)
             got = _http("GET", SITE + url)
         assert got.status == 200, f"GET {url} answered {got.status}, expected the built tensor"
