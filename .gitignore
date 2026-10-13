@@ -15,3 +15,5 @@ web/dist/
 # personal holdings stay local; research run outputs are not tracked
 data/holdings/holdings_2026-*.csv
 runs/
+.worktrees/
+.conductor/
