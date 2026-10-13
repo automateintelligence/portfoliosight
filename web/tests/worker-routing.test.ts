@@ -364,7 +364,7 @@ describe("worker routing", () => {
     expect(originCalls).toEqual([]);
   });
 
-  it("HEAD for a tensor that is not stored asks the origin with GET and passes on its status only", async () => {
+  it("HEAD for a tensor that is not stored asks the origin with GET and passes on its status and listed headers, no body", async () => {
     const worker = await loadWorker();
     const e = makeEnv();
     originResponse = () =>
@@ -380,6 +380,7 @@ describe("worker routing", () => {
     expect(res.headers.get("retry-after")).toBe("2");
     expect(originCalls.map((c) => [c.method, c.url])).toEqual([["GET", `${API_ORIGIN}/v1/tensors/${G}/aaaaaaaaaaaaaaaa/5y`]]);
     expect(Object.fromEntries(originCalls[0].headers)["cf-connecting-ip"]).toBe("203.0.113.9");
+    expect(e.dataHeads).toEqual([`tensors/${G}/aaaaaaaaaaaaaaaa/5y.json`]);
     expect(e.dataGets).toEqual([]);
   });
 

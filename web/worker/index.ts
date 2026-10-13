@@ -136,7 +136,7 @@ async function serveTensor(request: Request, env: Env, segments: string[]): Prom
     const stored = await env.DATA.head(`${rest}.json`);
     if (stored !== null) return fromR2(stored, CACHE_TENSOR);
     const answer = await forward(request, env, rest, undefined, "GET");
-    void answer.body?.cancel();
+    await answer.body?.cancel().catch(() => undefined);
     return new Response(null, { status: answer.status, headers: answer.headers });
   }
   const object = await env.DATA.get(`${rest}.json`);
