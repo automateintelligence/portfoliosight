@@ -27,6 +27,7 @@ from portfoliosight.engine.tensor import (
     universe_hash,
     validate_tensor,
 )
+from portfoliosight.engine.torsion import TorsionError
 from tests.engine.helpers import fixture_inputs
 
 TOL = 1e-6
@@ -571,3 +572,36 @@ def test_menu_defects_are_refused_or_explained(fixture_frame):
         "reason": "corporate actions not yet verified after 2026-09-30",
         "last_close": inputs.funds[17].last_close,
     } in stale["universe"]["excluded"]
+
+
+def test_funds_in_exact_lockstep_fail_the_build_and_identical_funds_do_not(
+    fixture_frame, monkeypatch
+):
+    """Ledoit-Wolf shrinks nothing when every varying fund switches between two values together.
+
+    The fixed-window correlation is then singular and the build fails with the torsion error
+    before anything is factored or solved; nothing is regularized. The weighted window shrinks
+    by a fixed amount and builds, and so do two funds that merely have the same returns.
+    """
+    ids = ["VTI", "VTV", "AGG"]
+    funds = [fund for fund in fixture_inputs().funds if fund.id in ids]
+    frame = fixture_frame[ids]
+    swing = 0.01 * np.where(np.arange(len(frame)) % 2 == 0, 1.0, -1.0)
+    lockstep = frame.assign(VTI=swing, VTV=swing, AGG=0.0001)  # 252 rows of +-1%, 1%, 0.01%
+    programs = builder.MenuPrograms
+    made = []
+    monkeypatch.setattr(builder, "MenuPrograms", lambda *args: made.append(args) or programs(*args))
+    for returns in (lockstep, lockstep.iloc[:-1]):  # the swing ending up, and ending down
+        with pytest.raises(TorsionError, match="^the correlation matrix is not positive definite$"):
+            build_tensor(fixture_inputs("1y", funds=funds, returns=returns, **SMALL))
+    assert made == []
+    weighted = build_tensor(fixture_inputs("ew", funds=funds, returns=lockstep, **SMALL))
+    sigma = np.array(weighted["sigma"])
+    assert np.array(weighted["cov"])[0, 1] / (sigma[0] * sigma[1]) == pytest.approx(0.8, abs=1e-12)
+    twins = build_tensor(
+        fixture_inputs("1y", funds=funds, returns=frame.assign(VTV=frame["VTI"]), **SMALL)
+    )
+    sigma = np.array(twins["sigma"])
+    assert 0.9 < np.array(twins["cov"])[0, 1] / (sigma[0] * sigma[1]) < 0.99
+    assert sigma[0] == sigma[1] and 1.0 <= twins["enb_ref"] <= 3.0
+    assert len(made) == 2

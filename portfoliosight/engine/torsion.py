@@ -58,7 +58,8 @@ def min_torsion(cov, *, max_iter: int = MAX_ITERATIONS, tol: float = CONVERGENCE
     corr = cov / np.outer(sigma, sigma)
     corr = (corr + corr.T) / 2.0
     eigenvalues, vectors = np.linalg.eigh(corr)
-    if not eigenvalues[0] > 0:
+    # singular up to rounding counts as singular: the usual rank tolerance, n * eps * largest
+    if not eigenvalues[0] > len(corr) * np.finfo(float).eps * eigenvalues[-1]:
         raise TorsionError("the correlation matrix is not positive definite")
     root = (vectors * np.sqrt(eigenvalues)) @ vectors.T
     root_inverse = (vectors / np.sqrt(eigenvalues)) @ vectors.T

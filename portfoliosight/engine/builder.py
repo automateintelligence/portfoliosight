@@ -120,8 +120,10 @@ def build_tensor(inputs: TensorInputs) -> dict:
     """Compute the tensor of one (menu, lookback, asof).
 
     Raises `WindowUnavailable` when the window has too little shared history, `CapsError` when
-    the requested caps cannot be met by the funds included in the window, and an error from the
-    post-check when any computed mix breaks an invariant.
+    the requested caps cannot be met by the funds included in the window, `TorsionError` when
+    the funds' correlation matrix is singular (every varying fund switching between two values
+    in lockstep leaves Ledoit-Wolf nothing to shrink; nothing is regularized), and an error from
+    the post-check when any computed mix breaks an invariant.
     """
     started = time.perf_counter()
     funds = list(inputs.funds)

@@ -150,6 +150,9 @@ def test_recursion_runs_to_the_fixed_point_or_raises():
     assert np.abs(min_torsion(cov, tol=1e-4) - converged).max() > 1e-7  # a loose stop is not
 
 
+ALMOST_ONE = float(np.nextafter(1.0, 0.0))
+
+
 @pytest.mark.parametrize(
     ("cov", "message"),
     [
@@ -158,6 +161,9 @@ def test_recursion_runs_to_the_fixed_point_or_raises():
         (np.array([[0.04, 0.01], [0.02, 0.04]]), "symmetric"),
         (np.array([[0.04, 0.0], [0.0, 0.0]]), "positive diagonal"),
         (np.array([[0.04, 0.05], [0.05, 0.04]]), "positive definite"),
+        # singular up to rounding: the correlation is the largest number below 1
+        (0.04 * np.array([[1.0, ALMOST_ONE], [ALMOST_ONE, 1.0]]), "positive definite"),
+        (0.04 * np.array([[1.0, 1.0], [1.0, 1.0]]), "positive definite"),
     ],
 )
 def test_min_torsion_rejects_what_is_not_a_covariance(cov, message):
