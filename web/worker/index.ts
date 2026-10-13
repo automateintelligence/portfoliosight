@@ -46,8 +46,9 @@ let currentGeneration: { generation: string; readAt: number } | null = null;
 const unavailable = () => jsonError(503, "unavailable", "The data is not available right now");
 const notFound = () => jsonError(404, "not_found", "No such API path");
 
-function fromR2(object: R2ObjectBody, cacheControl: string): Response {
-  return new Response(object.body, {
+/** `object` with its body for GET; the result of `head()` (no body) for HEAD. */
+function fromR2(object: R2Object | R2ObjectBody, cacheControl: string): Response {
+  return new Response("body" in object ? object.body : null, {
     status: 200,
     headers: {
       "content-type": "application/json; charset=utf-8",
@@ -98,7 +99,7 @@ async function serveSymbols(env: Env): Promise<Response> {
  * the visitor's request (cookies, query, other headers) goes upstream, and only the body,
  * status and a short list of headers come back.
  */
-async function forward(request: Request, env: Env, rest: string, body?: Uint8Array): Promise<Response> {
+async function forward(request: Request, env: Env, rest: string, body?: Uint8Array, method = request.method): Promise<Response> {
   if (!env.PS_GATE_SECRET) return unavailable();
   const headers = new Headers({ "x-ps-gate": env.PS_GATE_SECRET, accept: "application/json" });
   const ip = request.headers.get("CF-Connecting-IP");
@@ -108,7 +109,7 @@ async function forward(request: Request, env: Env, rest: string, body?: Uint8Arr
 
   let upstream: Response;
   try {
-    upstream = await fetch(`${env.API_ORIGIN}/v1/${rest}`, { method: request.method, headers, body, redirect: "manual" });
+    upstream = await fetch(`${env.API_ORIGIN}/v1/${rest}`, { method, headers, body, redirect: "manual" });
   } catch {
     console.error("origin: unreachable");
     return jsonError(502, "origin_unreachable", "The service is not reachable right now", { "x-ps-source": "origin" });
@@ -129,6 +130,15 @@ async function serveTensor(request: Request, env: Env, segments: string[]): Prom
     return jsonError(400, "invalid_request", "Malformed tensor path");
   }
   const rest = `tensors/${generation}/${hash}/${lookback}`;
+  if (request.method === "HEAD") {
+    // HEAD answers what GET would, without the body: the stored object is not read, and a
+    // tensor that is not stored is asked for upstream with GET and only its status passed on
+    const stored = await env.DATA.head(`${rest}.json`);
+    if (stored !== null) return fromR2(stored, CACHE_TENSOR);
+    const answer = await forward(request, env, rest, undefined, "GET");
+    await answer.body?.cancel().catch(() => undefined);
+    return new Response(null, { status: answer.status, headers: answer.headers });
+  }
   const object = await env.DATA.get(`${rest}.json`);
   return object === null ? forward(request, env, rest) : fromR2(object, CACHE_TENSOR);
 }
@@ -165,7 +175,9 @@ async function handleApi(request: Request, env: Env, pathname: string): Promise<
     return forward(request, env, "tensors", body);
   }
   if (route === "POST share") return handleShare(request, env, durableLimiter(env));
-  if (request.method === "GET" && rest.startsWith("tensors/")) return serveTensor(request, env, rest.split("/").slice(1));
+  if ((request.method === "GET" || request.method === "HEAD") && rest.startsWith("tensors/")) {
+    return serveTensor(request, env, rest.split("/").slice(1));
+  }
   return notFound();
 }
 
