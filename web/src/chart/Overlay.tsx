@@ -18,6 +18,8 @@ type Props = {
   selectedLabel: string;
   /** The risk position and its domain, for the point's slider semantics. */
   position: { s: number; min: number; max: number };
+  /** A tensor is loading: the point does not move. */
+  busy: boolean;
   tooltip: ReactNode;
   /** Horizontal drag: the pixel x the ceiling should move to. */
   onRiskPixel: (px: number) => void;
@@ -35,7 +37,7 @@ const AXIS_LOCK = 6; // px of travel before a drag commits to one direction
  * SVG layer over the canvas: axes (d3-axis ticks), the dashed risk-ceiling line and the markers,
  * each drawn at its mix's actual risk and return. Updates on every slider tick.
  */
-export function Overlay({ scales, phone, ceiling, selected, mostDiversified, current, funds, selectedLabel, position, tooltip, onRiskPixel, onDivDrag, onNudge }: Props) {
+export function Overlay({ scales, phone, ceiling, selected, mostDiversified, current, funds, selectedLabel, position, busy, tooltip, onRiskPixel, onDivDrag, onNudge }: Props) {
   const xAxisRef = useRef<SVGGElement>(null);
   const yAxisRef = useRef<SVGGElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -62,7 +64,7 @@ export function Overlay({ scales, phone, ceiling, selected, mostDiversified, cur
     return { px: e.clientX - (r?.left ?? 0), py: e.clientY - (r?.top ?? 0) };
   };
   const onPointerDown = (e: ReactPointerEvent<SVGGElement>) => {
-    if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (busy || (e.pointerType === "mouse" && e.button !== 0)) return;
     const p = local(e);
     // Remember where the pointer grabbed, so the ceiling and the point do not jump under it.
     drag.current = { x0: p.px, y0: p.py, grabDx: cx - p.px, axis: null };
@@ -99,7 +101,7 @@ export function Overlay({ scales, phone, ceiling, selected, mostDiversified, cur
   const onKeyDown = (e: KeyboardEvent<SVGGElement>) => {
     const moves: Record<string, [number, number]> = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowDown: [0, 1], ArrowUp: [0, -1] };
     const move = moves[e.key];
-    if (!move) return;
+    if (!move || busy) return;
     e.preventDefault();
     onNudge(move[0], move[1]);
   };
@@ -138,6 +140,7 @@ export function Overlay({ scales, phone, ceiling, selected, mostDiversified, cur
           aria-valuemax={Number(position.max.toFixed(4))}
           aria-valuenow={Number(position.s.toFixed(4))}
           aria-valuetext={selectedLabel}
+          aria-disabled={busy || undefined}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}

@@ -243,6 +243,34 @@ describe("store: transitions", () => {
     expect(store.getState().tensor).toBe(before);
   });
 
+  it("limits that cannot be met for a newly chosen window leave the shown window selected", async () => {
+    const store = await boot("?f=" + IDS.slice(0, 3).join(",") + "&c=" + IDS[0] + "::50");
+    tensorRoute = () => json(409, { status: "failed", error: "caps_infeasible", attempts: 1, retry: false, details: null });
+    store.dispatch({ type: "setLookback", lookback: "10y" });
+    await flush();
+    await advance(500);
+    expect(store.getState().lookback).toBe("5y");
+    expect(store.getState().tensor!.lookback.id).toBe("5y");
+    expect(decode(new URL(replaced[replaced.length - 1], "https://portfoliosight.ai").search).lookback).toBe("5y");
+  });
+
+  it("an explicit percent unit on a dollar preset reopens in percent", async () => {
+    const store = await boot("?u=guide2017&unit=pct");
+    expect(store.getState().unit).toBe("pct");
+    const search = new URL(replaced[replaced.length - 1], "https://portfoliosight.ai").search;
+    expect((await boot(search)).getState().unit).toBe("pct");
+  });
+
+  it("a challenge reported by another request writes the address once and reloads once", async () => {
+    const store = await boot("");
+    await advance(500);
+    const writes = replaced.length;
+    store.dispatch({ type: "challenged" });
+    store.dispatch({ type: "challenged" });
+    expect(replaced.length).toBe(writes + 1);
+    expect((location.reload as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+  });
+
   it("before the first generation the store reports that data is not loaded yet", async () => {
     vi.stubGlobal("fetch", async (input: string) =>
       input === "/api/health"

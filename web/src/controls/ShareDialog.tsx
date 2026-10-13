@@ -1,15 +1,15 @@
 import { Check, Copy, Send, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { postShare } from "../api/http";
+import { ChallengeError, postShare } from "../api/http";
 import { plain } from "../copy";
 
-type Props = { open: boolean; url: string; privatePreview: boolean; onClose: () => void };
+type Props = { open: boolean; url: string; privatePreview: boolean; onClose: () => void; /** The human check expired: the page reloads to run it. */ onChallenge?: () => void };
 
 export const MAX_SHARE_URL = 2048;
 const ADDRESS = /^[^\s@,<>()"]+@[^\s@,<>()"]+\.[^\s@,<>()"]+$/;
 
 /** Copy the address of this view, or send it by email (fixed message; spec 9.3). */
-export function ShareDialog({ open, url, privatePreview, onClose }: Props) {
+export function ShareDialog({ open, url, privatePreview, onClose, onChallenge }: Props) {
   const [to, setTo] = useState("");
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
@@ -59,8 +59,9 @@ export function ShareDialog({ open, url, privatePreview, onClose }: Props) {
                 ? plain.shareTooLong
                 : plain.shareFailed,
       );
-    } catch {
-      setStatus(plain.shareFailed);
+    } catch (err) {
+      if (err instanceof ChallengeError && onChallenge) onChallenge();
+      else setStatus(plain.shareFailed);
     } finally {
       setBusy(false);
     }

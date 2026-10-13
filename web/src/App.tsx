@@ -91,6 +91,13 @@ export default function App() {
   const math = useMemo(() => (tensor ? portfolioMath(tensor) : null), [tensor]);
   const view = useMemo(() => (tensor && math ? deriveView(tensor, math, state.s, state.t) : null), [tensor, math, state.s, state.t]);
   const mix = useMemo(() => (tensor ? currentMix({ rows: state.rows, unit: state.unit }, tensor) : null), [tensor, state.rows, state.unit]);
+  const cellStats = useCallback(
+    (j: number, k: number) => {
+      const w = tensor?.grid.w[j]?.[k];
+      return math && w ? math.stats(w) : null;
+    },
+    [tensor, math],
+  );
   const frontierEnb = useMemo(() => (tensor && math ? tensor.frontier.w.map((w) => math.stats(w).enb) : []), [tensor, math]);
   const currentStats = useMemo(() => (math && mix?.weights ? math.stats(mix.weights) : null), [math, mix]);
 
@@ -277,6 +284,8 @@ export default function App() {
             themeEpoch={themeEpoch}
             reveal={reveal}
             notice={notice}
+            busy={busy}
+            cellStats={cellStats}
             onRiskPixel={onRiskPixel}
             onDivDrag={onDivDrag}
             onNudge={onNudge}
@@ -306,6 +315,7 @@ export default function App() {
               details={state.details}
               phone={phone}
               stem={scales.margins.bottom + 22}
+              busy={busy}
               onChange={setS}
             />
           )}
@@ -427,7 +437,7 @@ export default function App() {
         </div>
       </footer>
 
-      <ShareDialog open={share !== null} url={share ?? ""} privatePreview={state.previewOn} onClose={closeShare} />
+      <ShareDialog open={share !== null} url={share ?? ""} privatePreview={state.previewOn} onClose={closeShare} onChallenge={() => dispatch({ type: "challenged" })} />
     </div>
   );
 }

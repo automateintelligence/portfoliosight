@@ -38,8 +38,8 @@ export function Trades({ funds, wNow, wSel, unit, amounts }: Props) {
             <span className="num">{pct(wNow[i])}</span>
             <span className="num">{pct(wSel[i])}</span>
             <span className={`num ${tone(rows[i].dpp) ?? ""}`}>{signedPp(rows[i].dpp)}</span>
-            {unit !== "pct" && <span className="num wide-only">{rows[i].dUsd === null ? "—" : signedMoney(rows[i].dUsd as number)}</span>}
-            {unit === "shares" && <span className="num wide-only">{rows[i].unknownPrice || rows[i].dShares === null ? "no price" : signedInt(rows[i].dShares as number)}</span>}
+            {unit !== "pct" && <span className={unit === "shares" ? "num extra extra-a" : "num extra extra-wide"} data-label="in $">{rows[i].dUsd === null ? "—" : signedMoney(rows[i].dUsd as number)}</span>}
+            {unit === "shares" && <span className="num extra extra-b" data-label="shares">{rows[i].unknownPrice || rows[i].dShares === null ? "no price" : signedInt(rows[i].dShares as number)}</span>}
           </div>
         ))}
         <div className={`trow trow-total cols-${cols}`}>

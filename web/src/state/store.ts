@@ -80,6 +80,7 @@ export type Action =
   | { type: "loadGhosts" }
   | { type: "loadSymbols" }
   | { type: "flushUrl" }
+  | { type: "challenged" }
   | { type: "setUnit"; unit: Unit }
   | { type: "setAmount"; id: string; amount: number | null }
   | { type: "useMenu"; rows: Row[] }
@@ -335,6 +336,7 @@ export function createStore(init: { search: string }): Store {
     if (answer.code === "unknown_symbols") {
       const list = Array.isArray(answer.details?.symbols) ? (answer.details.symbols as unknown[]).map(String) : [];
       set({
+        lookback: state.tensorLookback ?? state.lookback,
         menuError: list.length ? `No verified current data for ${list.join(", ")}. Remove ${list.length > 1 ? "them" : "it"} to continue.` : "This menu has a fund we cannot find.",
         build: { status: state.tensor ? "ready" : "idle", error: null, position: null },
       });
@@ -342,6 +344,7 @@ export function createStore(init: { search: string }): Store {
     }
     if (answer.status === 422 || answer.status === 400) {
       set({
+        lookback: state.tensorLookback ?? state.lookback,
         menuError: answer.message || reason || "This menu cannot be computed as entered.",
         build: { status: state.tensor ? "ready" : "idle", error: null, position: null },
       });
@@ -372,6 +375,8 @@ export function createStore(init: { search: string }): Store {
     }
     set({ build: { status: "building", error: null, position: null }, menuError: null }, false);
     const stale = () => halted || seq !== loadSeq;
+    // The window to show when this request cannot be drawn: the one that is on screen.
+    const shown = () => opts.previous ?? state.tensorLookback ?? lookback;
     const handle = async (answer: TensorAnswer): Promise<void> => {
       if (stale()) return;
       if (answer.kind === "tensor") {
@@ -394,7 +399,7 @@ export function createStore(init: { search: string }): Store {
         if (answer.error === "window_unavailable") windowUnavailable(lookback, opts.previous ?? null);
         else if (answer.error === "caps_infeasible") {
           clearPoll();
-          set({ menuError: CAPS_INFEASIBLE, build: { status: state.tensor ? "ready" : "idle", error: null, position: null } }, false);
+          set({ menuError: CAPS_INFEASIBLE, lookback: shown(), build: { status: state.tensor ? "ready" : "idle", error: null, position: null } });
         } else fail(answer.error, answer.retry);
       } else {
         refused(answer, lookback, opts.previous ?? null);
@@ -526,6 +531,9 @@ export function createStore(init: { search: string }): Store {
       const preset = state.presets.presets.find((p) => p.id === state.preset) ?? state.presets.presets[0];
       if (!preset) return;
       adoptPreset(preset, unitInUrl);
+      // An explicit percent unit on a preset that arrives in another unit cannot be written back
+      // with `u=` (the address omits unit=pct), so it is kept as a custom menu instead.
+      if (state.unit === "pct" && (unitOfPreset(preset) ?? "pct") !== "pct") state = { ...state, preset: null };
       emit();
     }
     await load(state.lookback);
@@ -646,6 +654,9 @@ export function createStore(init: { search: string }): Store {
         for (const g of state.ghosts) void loadGhost(g);
         return;
       }
+      case "challenged":
+        onChallenge();
+        return;
       case "flushUrl":
         if (halted || !started) return;
         if (urlTimer !== null) clearTimeout(urlTimer);

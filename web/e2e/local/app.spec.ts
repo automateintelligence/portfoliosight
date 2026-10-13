@@ -136,6 +136,22 @@ test("before the first data load the page says so plainly", async ({ page, reque
   await expect(page.getByTestId("build-retry")).toHaveCount(0);
 });
 
+test("trades show dollar changes at every width, and details name a map cell on hover", async ({ page }, testInfo) => {
+  await open(page);
+  await section(page, "trades");
+  const row = page.getByTestId("section-trades").getByRole("listitem").first();
+  await expect(row).toContainText("$");
+  const money = row.locator(".extra").first();
+  await expect(money).toBeVisible();
+  expect((await money.boundingBox())!.width).toBeGreaterThan(20);
+  if (testInfo.project.name.includes("phone")) return;
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.getByTestId("details-toggle").click();
+  const box = (await page.getByTestId("chart").boundingBox())!;
+  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.75);
+  await expect(page.getByTestId("chart").getByText(/sits at risk \d+\.\d+%, return \d+\.\d+%/)).toBeVisible();
+});
+
 test("the share dialog says the link is for invited testers while preview is on", async ({ page }) => {
   await open(page);
   await page.getByTestId("share-open").click();

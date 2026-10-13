@@ -18,15 +18,18 @@ type Props = {
   phone: boolean;
   /** Height of the dashed stem that links the thumb to the chart's risk axis. */
   stem: number;
+  /** A tensor is loading: the slider waits. */
+  busy?: boolean;
   onChange: (s: number) => void;
 };
 
 /** One thumb on the chart's risk axis; its two readouts always move together (spec 3.2). */
-export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, phone, stem, onChange }: Props) {
+export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, phone, stem, busy = false, onChange }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const readoutRef = useRef<HTMLDivElement>(null);
   const [readoutW, setReadoutW] = useState(0);
-  const disabled = !(domain.s_max > domain.s_safe);
+  const single = !(domain.s_max > domain.s_safe);
+  const disabled = single || busy;
   const step = (domain.s_max - domain.s_safe) / 200;
   const clamp = useCallback((v: number) => Math.min(domain.s_max, Math.max(domain.s_safe, v)), [domain.s_max, domain.s_safe]);
 
@@ -105,7 +108,7 @@ export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, 
         </span>
         {details && <span className="readout-tech">{technical.riskSlider}</span>}
       </div>
-      {disabled && <p className="risk-note">{plain.riskDisabled}</p>}
+      {single && <p className="risk-note">{plain.riskDisabled}</p>}
     </div>
   );
 }

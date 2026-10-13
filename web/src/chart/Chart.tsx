@@ -1,4 +1,4 @@
-import { forwardRef, useMemo, type ReactNode } from "react";
+import { forwardRef, useMemo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import type { Tensor } from "../api/tensor";
 import { plain, technical } from "../copy";
 import { pct, signedPct } from "../format";
@@ -19,6 +19,9 @@ type Props = {
   themeEpoch: number;
   reveal: boolean;
   notice: ReactNode;
+  busy: boolean;
+  /** Actual risk and return of the mix computed for cell (j, k), or null for an empty cell. */
+  cellStats: (j: number, k: number) => { sigma: number; mu: number } | null;
   onRiskPixel: (px: number) => void;
   onDivDrag: (dy: number, start: boolean) => void;
   onNudge: (ds: number, dt: number) => void;
@@ -83,7 +86,7 @@ function Legend({ scales, phone, details, hasCurrent, hasGhosts }: { scales: Cha
 
 /** The chart: canvas heatmap and frontier, SVG markers, DOM labels. */
 export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
-  { tensor, view, scales, ghosts, frontierEnb, current, details, phone, themeEpoch, reveal, notice, onRiskPixel, onDivDrag, onNudge },
+  { tensor, view, scales, ghosts, frontierEnb, current, details, phone, themeEpoch, reveal, notice, busy, cellStats, onRiskPixel, onDivDrag, onNudge },
   ref,
 ) {
   const funds = useMemo(
@@ -117,8 +120,24 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
     return `polygon(${pts.join(", ")})`;
   }, [tensor, view, scales]);
 
+  // Details: hovering the map names the cell under the pointer and where its mix really sits.
+  const [cell, setCell] = useState<{ j: number; k: number; px: number; py: number } | null>(null);
+  const onHover = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!details || !tensor || !scales || e.pointerType === "touch") return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const px = e.clientX - r.left;
+    const py = e.clientY - r.top;
+    const xs = tensor.frontier.x;
+    const ys = tensor.grid.y;
+    const j = Math.round(((scales.x.invert(px) - xs[0]) / (xs[xs.length - 1] - xs[0])) * (xs.length - 1));
+    const k = Math.round(((scales.y.invert(py) - ys[0]) / (ys[ys.length - 1] - ys[0])) * (ys.length - 1));
+    const inside = j >= 0 && j < xs.length && k >= 0 && k < ys.length && tensor.grid.z[j][k] !== null;
+    setCell(inside ? { j, k, px, py } : null);
+  };
+  const hovered = cell && details && tensor ? cellStats(cell.j, cell.k) : null;
+
   return (
-    <div ref={ref} className="chart" data-testid="chart" data-ghost-count={ghosts.length}>
+    <div ref={ref} className="chart" data-testid="chart" data-ghost-count={ghosts.length} onPointerMove={onHover} onPointerLeave={() => setCell(null)}>
       {ready && (
         <>
           <Heatmap tensor={tensor} frontierEnb={frontierEnb} ghosts={ghosts} scales={scales} themeEpoch={themeEpoch} reveal={reveal} />
@@ -174,10 +193,17 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
             }
             onRiskPixel={onRiskPixel}
             onDivDrag={onDivDrag}
+            busy={busy}
             position={{ s: view.s, min: view.domain.s_safe, max: view.domain.s_max }}
             onNudge={onNudge}
           />
         </>
+      )}
+      {ready && cell && hovered && (
+        <div className="celltip num" role="status" style={{ left: Math.min(cell.px + 14, scales.width - 250), top: Math.max(8, cell.py - 54) }}>
+          <span>{`Mix computed for risk ceiling ${pct(tensor.frontier.x[cell.j])} and return floor ${pct(tensor.grid.y[cell.k])}`}</span>
+          <span>{`sits at risk ${pct(hovered.sigma, 2)}, return ${pct(hovered.mu, 2)}`}</span>
+        </div>
       )}
       {notice}
     </div>
