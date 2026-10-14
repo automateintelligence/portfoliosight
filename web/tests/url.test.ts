@@ -165,7 +165,7 @@ describe("encode and decode", () => {
         ghosts: LOOKBACKS.filter(() => rnd() < 0.3),
         r: rnd() < 0.2 ? null : Math.round(rnd() * 47e6) / 1e6,
         d: rnd() < 0.4 ? "auto" : Math.round(rnd() * 1e6) / 1e6,
-        theme: pick([null, "ks-dark", "light", "hud"] as const),
+        theme: pick([null, "ks-dark", "light", "hud", "grid"] as const),
         details: rnd() < 0.5,
       };
       const search = encode(state);
