@@ -62,7 +62,7 @@ export type TensorLike = {
   lookback: { id: string };
   universe: { hash: string; funds: { id: string; last_close?: number | null }[]; excluded?: { id: string; reason: string }[] };
   bounds: { requested: { min: number | null; max: number | null }[]; min: number[]; max: number[] };
-  frontier: { x: number[]; y: number[]; w: number[][] };
+  frontier: { x: number[]; y: number[]; w: number[][]; s_safe: number };
   frontier_curve: { sigma: number[]; mu: number[] };
   grid: { y: number[]; z: (number | null)[][]; w: (number[] | null)[][]; k_div: number[]; y_div: number[]; w_div: number[][] };
   stress: Record<string, { label: string; r: (number | null)[] }>;
@@ -97,19 +97,9 @@ export function frontAt(tensor: TensorLike, s: number) {
   return { sigma, mu, ...range6mPct(mu, sigma) };
 }
 
-/** The risk slider's domain: `s_safe` is the rightmost maximum of the bad six months over the curve. */
+/** The risk slider's domain: from the tensor's `frontier.s_safe` (the engine's rule, spec 4.9) to the last column. */
 export function sliderDomain(tensor: TensorLike): { sSafe: number; sMax: number } {
-  const curve = tensor.frontier_curve;
-  let best = -Infinity;
-  let at = 0;
-  for (let i = 0; i < curve.mu.length; i++) {
-    const low = curve.mu[i] / 2 - (RANGE_Z * curve.sigma[i]) / Math.SQRT2;
-    if (low >= best) {
-      best = low;
-      at = i;
-    }
-  }
-  return { sSafe: at / SUBSTEPS, sMax: tensor.frontier.x.length - 1 };
+  return { sSafe: tensor.frontier.s_safe, sMax: tensor.frontier.x.length - 1 };
 }
 
 /** Yearly return, yearly risk and ENB (minimum torsion, spec 4.6) of weights `w`. */

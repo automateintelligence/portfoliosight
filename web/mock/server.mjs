@@ -126,8 +126,6 @@ function twoFundTensor(lookback) {
   }
   const curveSigma = [];
   const curveMu = [];
-  let sSafe = 0;
-  let bestLow = -Infinity;
   for (let i = 0; i <= (NX - 1) * 8; i++) {
     const s = i / 8;
     const j = Math.min(NX - 2, Math.floor(s));
@@ -135,12 +133,23 @@ function twoFundTensor(lookback) {
     const a = (1 - lam) * aFront[j] + lam * aFront[j + 1];
     curveSigma.push(sigmaOf(a));
     curveMu.push(muOf(a));
-    const low = muOf(a) / 2 - (1.96 * sigmaOf(a)) / Math.SQRT2;
-    if (low >= bestLow) {
-      bestLow = low;
-      sSafe = s;
-    }
   }
+  // Each column's ladder has two levels, the frontier mix and the most diversified cell: with two
+  // funds a straight blend of the two is the walk by return. The one-year range of a mix is its
+  // normal range (the mock has no return history to resample), and the slider starts at the
+  // rightmost frontier node with the best bad year, as the engine's rule reads.
+  const levels = aFront.map((a, j) => [a, wDiv[j][1]]);
+  const rangeAt = (a) => {
+    const m = muOf(a);
+    const spread = 1.96 * sigmaOf(a);
+    return { bad: m - spread, typical: m, good: m + spread, normal: { low: m - spread, mid: m, high: m + spread } };
+  };
+  const block = (shape) => {
+    const pick = (f) => shape.map((row) => (Array.isArray(row) ? row.map((a) => f(rangeAt(a))) : f(rangeAt(row))));
+    return { bad: pick((r) => r.bad), typical: pick((r) => r.typical), good: pick((r) => r.good), normal: { low: pick((r) => r.normal.low), mid: pick((r) => r.normal.mid), high: pick((r) => r.normal.high) } };
+  };
+  const bad = aFront.map((a) => rangeAt(a).bad);
+  const sSafe = bad.lastIndexOf(Math.max(...bad));
   const fund = (id, name, lastClose) => ({ id, name, kind: "etf", source: "tiingo", adjusted_through: fixture.asof, fetched_at: fixture.built_at, last_close: lastClose });
   const win = (id, r) => ({ label: fixture.stress[id].label, start: fixture.stress[id].start, end: fixture.stress[id].end, r });
   return {
@@ -168,8 +177,24 @@ function twoFundTensor(lookback) {
     torsion_inv_t: [[1, 0], [0, 1]],
     torsion_lambda: [v0, v1],
     bounds: { requested: [{ min: null, max: null }, { min: null, max: null }], min: [0, 0], max: [1, 1], rule: "max(0.25, 3/N)" },
-    frontier: { x, y: yFront, w: aFront.map(wOf), s_safe: sSafe },
+    frontier_uncapped: { sigma: aFront.map(sigmaOf), mu: [...yFront] },
+    frontier: { x, y: yFront, w: aFront.map(wOf), s_safe: sSafe, range: block(aFront) },
+    ladder: {
+      y: levels.map((pair) => pair.map(muOf)),
+      z: levels.map((pair) => pair.map(enbAt)),
+      w: levels.map((pair) => pair.map(wOf)),
+      hop: levels.map(() => [false]),
+      collapsed: kDiv.map((k) => k < 0),
+      t_balanced: levels.map(() => 0),
+      y_balanced: [...yFront],
+      default_point: "balanced",
+      t_suggested: levels.map(() => 0),
+      y_suggested: [...yFront],
+      range: block(levels),
+    },
     grid: { y: gridY, z, w: gw, k_div: kDiv, y_div: yDiv, w_div: wDiv, y_sug: [...yFront] },
+    entered: null,
+    range_method: fixture.range_method,
     enb_ref: enbRef,
     stress: { gfc2008: win("gfc2008", [null, null]), covid2020: win("covid2020", [0.004, -0.021]), rates2022: win("rates2022", [0.009, -0.034]) },
     notes: fixture.notes ?? [],

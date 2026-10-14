@@ -65,7 +65,9 @@ describe("heatmap drawing", () => {
     expect(drawHeatmap(ctx, TENSOR, [], scales, COLORS, 1)).toBe(feasible);
     expect(rects.length).toBe(feasible);
     const j = 20;
-    const k = 5;
+    // the row of the column's peak always holds a cell
+    const k = TENSOR.grid.k_div[j];
+    expect(k).toBeGreaterThanOrEqual(0);
     const cx = scales.x(TENSOR.frontier.x[j]);
     const cy = scales.y(TENSOR.grid.y[k]);
     const hit = rects.filter((r) => r.x <= cx && cx <= r.x + r.w && r.y <= cy && cy <= r.y + r.h);

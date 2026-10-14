@@ -12,6 +12,13 @@ const optional = z.number().nullable();
 
 const stressWindow = z.strictObject({ label: text, start: date, end: date, r: z.array(optional).min(2) });
 
+// A one-year range (spec 4.9): the bootstrap's bad / typical / good year and the normal range.
+// `of` is the shape of each number: one per mix (a vector), one per ladder level (a matrix),
+// or a single mix (a number).
+const range = <T extends z.ZodType>(of: T) =>
+  z.strictObject({ bad: of, typical: of, good: of, normal: z.strictObject({ low: of, mid: of, high: of }) });
+const unitVector = z.array(z.number().min(0).max(1)).min(2);
+
 const schema = z.strictObject({
   schema: z.literal(2),
   engine_version: z.string().regex(/^[0-9]+(\.[0-9]+)*$/),
@@ -20,6 +27,7 @@ const schema = z.strictObject({
   build_seconds: z.number().min(0),
   asof: date,
   frontier_curve: z.strictObject({ sigma: vector, mu: vector }),
+  frontier_uncapped: z.strictObject({ sigma: vector, mu: vector }),
   universe: z.strictObject({
     hash: z.string().regex(/^[0-9a-f]{16}$/),
     name: text,
@@ -61,7 +69,20 @@ const schema = z.strictObject({
     max: vector,
     rule: z.literal("max(0.25, 3/N)"),
   }),
-  frontier: z.strictObject({ x: vector, y: vector, w: matrix, s_safe: z.number().min(0) }),
+  frontier: z.strictObject({ x: vector, y: vector, w: matrix, s_safe: z.number().min(0), range: range(vector) }),
+  ladder: z.strictObject({
+    y: matrix,
+    z: matrix,
+    w: z.array(matrix).min(2),
+    hop: z.array(z.array(z.boolean()).min(1)).min(2),
+    collapsed: z.array(z.boolean()).min(2),
+    t_balanced: unitVector,
+    y_balanced: vector,
+    default_point: z.enum(["balanced", "peak"]),
+    t_suggested: unitVector,
+    y_suggested: vector,
+    range: range(matrix),
+  }),
   grid: z.strictObject({
     y: vector,
     z: z.array(z.array(optional).min(2)).min(2),
@@ -71,6 +92,16 @@ const schema = z.strictObject({
     w_div: matrix,
     y_sug: vector,
   }),
+  entered: z.strictObject({ w: vector, set_aside: z.number().min(0).max(1), range: range(z.number()) }).nullable(),
+  range_method: z.strictObject({
+    name: text,
+    horizon_days: z.int().min(1),
+    paths: z.int().min(1),
+    mean_block_days: z.int().min(1),
+    percentiles: z.array(z.number()).length(3),
+    percentile_method: z.literal("linear"),
+    seed: z.int(),
+  }),
   enb_ref: z.number().min(1),
   stress: z.strictObject({ gfc2008: stressWindow, covid2020: stressWindow, rates2022: stressWindow }),
   notes: z.array(text),
@@ -78,7 +109,7 @@ const schema = z.strictObject({
 
 export type Tensor = z.infer<typeof schema>;
 
-/** Every array whose length is not n (funds), nx (risk columns) or ny (return floors) as spec 7 lays out. */
+/** Every array whose length is not n (funds), nx (risk columns), ny (raster rows) or the ladder's levels as spec 7 lays out. */
 function sizeErrors(t: Tensor): string[] {
   const n = t.universe.funds.length;
   const nx = t.frontier.x.length;
@@ -103,6 +134,22 @@ function sizeErrors(t: Tensor): string[] {
   rows("grid.w_div", t.grid.w_div, nx, n);
   rows("grid.z", t.grid.z, nx, ny);
   rows("grid.w", t.grid.w, nx, ny);
+  for (const name of ["sigma", "mu"] as const) size(`frontier_uncapped.${name}`, t.frontier_uncapped[name], nx);
+  const levels = t.ladder.y[0]?.length ?? 0;
+  for (const name of ["y", "z"] as const) rows(`ladder.${name}`, t.ladder[name], nx, levels);
+  rows("ladder.hop", t.ladder.hop, nx, levels - 1);
+  size("ladder.w", t.ladder.w, nx);
+  t.ladder.w.forEach((column, j) => rows(`ladder.w[${j}]`, column, levels, n));
+  for (const name of ["collapsed", "t_balanced", "y_balanced", "t_suggested", "y_suggested"] as const) size(`ladder.${name}`, t.ladder[name], nx);
+  for (const name of ["bad", "typical", "good"] as const) {
+    size(`frontier.range.${name}`, t.frontier.range[name], nx);
+    rows(`ladder.range.${name}`, t.ladder.range[name], nx, levels);
+  }
+  for (const name of ["low", "mid", "high"] as const) {
+    size(`frontier.range.normal.${name}`, t.frontier.range.normal[name], nx);
+    rows(`ladder.range.normal.${name}`, t.ladder.range.normal[name], nx, levels);
+  }
+  if (t.entered !== null) size("entered.w", t.entered.w, n);
   if (errors.length > 0) return errors;
 
   if (t.frontier.s_safe > nx - 1) errors.push(`frontier.s_safe ${t.frontier.s_safe} is beyond the last column`);
