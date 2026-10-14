@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseTensor } from "../src/api/client";
 import { drawHeatmap, type HeatColors, RAMP_FLOOR, rampPosition } from "../src/chart/Heatmap";
-import { clipCurve, DESKTOP_MARGINS, makeScales, paddedExtent, PHONE_MARGINS } from "../src/chart/scales";
+import { CHART_FOOT, clipCurve, DESKTOP_MARGINS, makeScales, paddedExtent, PHONE_MARGINS } from "../src/chart/scales";
 import { portfolioMath } from "../src/math/portfolio";
 import { atNode, ceilingAt, deriveView, frontierMuAt, ladderCollapsedAt, limitsBind, positionOfCeiling } from "../src/math/view";
 
@@ -29,13 +29,23 @@ function recorder() {
 
 describe("chart scales (spec 8)", () => {
   it("uses the desktop and phone margins and maps risk right, return up", () => {
-    expect(DESKTOP_MARGINS).toEqual({ top: 48, right: 16, bottom: 40, left: 56 });
-    expect(PHONE_MARGINS).toEqual({ top: 32, right: 12, bottom: 36, left: 44 });
+    expect(DESKTOP_MARGINS).toEqual({ top: 48, right: 16, bottom: 58, left: 56 });
+    expect(PHONE_MARGINS).toEqual({ top: 32, right: 12, bottom: 54, left: 44 });
     const extent = { xMin: 0, xMax: 0.2, yMin: 0, yMax: 0.1 };
     const d = makeScales(1000, 500, extent, false);
-    expect([d.x(0), d.x(0.2), d.y(0), d.y(0.1)]).toEqual([56, 984, 460, 48]);
+    expect([d.x(0), d.x(0.2), d.y(0), d.y(0.1)]).toEqual([56, 984, 442, 48]);
     const p = makeScales(358, 358, extent, true);
-    expect([p.x(0), p.x(0.2), p.y(0), p.y(0.1)]).toEqual([44, 346, 322, 32]);
+    expect([p.x(0), p.x(0.2), p.y(0), p.y(0.1)]).toEqual([44, 346, 304, 32]);
+  });
+
+  it("the chart box grows by the foot it adds under the ticks, so the plot keeps its size", () => {
+    // The plot of the old 40/36 px bottom margins, in a box CHART_FOOT px taller.
+    expect(CHART_FOOT).toBe(18);
+    expect(DESKTOP_MARGINS.bottom - CHART_FOOT).toBe(40);
+    expect(PHONE_MARGINS.bottom - CHART_FOOT).toBe(36);
+    const css = fs.readFileSync(path.resolve(process.cwd(), "src/styles/app.css"), "utf8");
+    expect(css).toContain(`--chart-foot: ${CHART_FOOT}px;`);
+    expect(css).toMatch(/\.chart \{\s*position: relative;\s*height: calc\(var\(--chart-h\) \+ var\(--chart-foot\)\);/);
   });
 
   it("pads the extent so no mark touches the frame", () => {

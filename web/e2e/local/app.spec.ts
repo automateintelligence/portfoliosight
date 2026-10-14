@@ -557,7 +557,8 @@ test("trades show dollar changes at every width, and details name a map cell on 
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.getByTestId("details-toggle").click();
   const box = (await page.getByTestId("chart").boundingBox())!;
-  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.75);
+  // the same spot of the plot as before the box grew a foot for the axis title (CHART_FOOT, 18 px)
+  await page.mouse.move(box.x + box.width * 0.6, box.y + (box.height - 18) * 0.75);
   await expect(page.locator('[data-testid="mix-card"][data-for="cell"]')).toContainText(/At risk \d+\.\d%, earning at least \d+\.\d%/);
 });
 
@@ -647,4 +648,25 @@ test("the strip marks Bad, Typical and Good on one scale that holds still as the
   await expect.poll(() => new URL(page.url()).searchParams.get("lb")).toBe("1y");
   await expect(page.getByTestId("point-selected")).toBeVisible();
   expect(await scaleOf(), "the scale after the history window changed").toEqual(first);
+});
+
+test("the axis title and its details line sit inside the chart frame, under the tick labels, in every look", async ({ page }, testInfo) => {
+  const looks = isPhone(testInfo.project.name) ? ["ks-dark", "grid"] : ["ks-dark", "light", "hud", "grid"];
+  for (const look of looks) {
+    await open(page, `t=${look}&x=1`);
+    if ((await page.getByTestId("details-toggle").getAttribute("aria-pressed")) !== "true") await page.getByTestId("details-toggle").click();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const title = page.getByTestId("x-title");
+    await expect(title.locator(".tech")).toHaveText("Standard deviation of yearly return");
+    const facts = await page.getByTestId("chart").evaluate((chart) => {
+      const c = chart.getBoundingClientRect();
+      const t = chart.querySelector(".x-title")!.getBoundingClientRect();
+      const ticks = Array.from(chart.querySelectorAll(".axis-x .tick text")).map((el) => el.getBoundingClientRect());
+      const border = parseFloat(getComputedStyle(chart).borderBottomWidth) || 0;
+      return { frameBottom: c.bottom - border, frameRight: c.right, titleTop: t.top, titleBottom: t.bottom, titleRight: t.right, tickBottom: Math.max(...ticks.map((r) => r.bottom)) };
+    });
+    expect(facts.titleBottom, `${look}: room under the title`).toBeLessThanOrEqual(facts.frameBottom - 4);
+    expect(facts.titleRight, `${look}: inside on the right`).toBeLessThanOrEqual(facts.frameRight);
+    expect(facts.titleTop, `${look}: the title is under the tick labels`).toBeGreaterThanOrEqual(facts.tickBottom);
+  }
 });

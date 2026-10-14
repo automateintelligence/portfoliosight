@@ -7,7 +7,7 @@ import type { Range, Stats, View } from "../math/view";
 import { Heatmap, NO_LIMITS, type Ghost } from "./Heatmap";
 import { MixCard, topHoldings, type CardMix } from "./MixCard";
 import { Overlay, type LineEnd, type MarkId } from "./Overlay";
-import type { ChartScales } from "./scales";
+import { X_TITLE_GAP, type ChartScales } from "./scales";
 
 type Props = {
   tensor: Tensor | null;
@@ -246,7 +246,7 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
             {plain.yAxis}
             {details && <span className="tech">{technical.yAxis}</span>}
           </p>
-          <p className="chart-label x-title">
+          <p className="chart-label x-title" data-testid="x-title" style={{ top: scales.plot.bottom + (phone ? X_TITLE_GAP.phone : X_TITLE_GAP.desktop) }}>
             {plain.xAxis}
             {details && <span className="tech">{technical.xAxis}</span>}
           </p>

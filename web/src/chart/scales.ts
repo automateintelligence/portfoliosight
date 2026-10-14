@@ -2,9 +2,17 @@ import { scaleLinear, type ScaleLinear } from "d3-scale";
 
 export type Margins = { top: number; right: number; bottom: number; left: number };
 
-/** Spec 8: chart margins 48/16/40/56 px (desktop) and 32/12/36/44 (phone), as top/right/bottom/left. */
-export const DESKTOP_MARGINS: Margins = { top: 48, right: 16, bottom: 40, left: 56 };
-export const PHONE_MARGINS: Margins = { top: 32, right: 12, bottom: 36, left: 44 };
+/**
+ * Spec 8: chart margins 48/16/58/56 px (desktop) and 32/12/54/44 (phone), as top/right/bottom/left.
+ * The bottom margin holds the axis ticks and, under them, the axis title with its details line;
+ * it is `CHART_FOOT` px deeper than the plot alone needs, and the chart box is that much taller
+ * (app.css `--chart-foot`), so the plot keeps its size.
+ */
+export const DESKTOP_MARGINS: Margins = { top: 48, right: 16, bottom: 58, left: 56 };
+export const PHONE_MARGINS: Margins = { top: 32, right: 12, bottom: 54, left: 44 };
+export const CHART_FOOT = 18;
+/** Distance from the plot's bottom edge to the top of the axis title: under the tick labels. */
+export const X_TITLE_GAP = { desktop: 23, phone: 21 } as const;
 
 export type Extent = { xMin: number; xMax: number; yMin: number; yMax: number };
 

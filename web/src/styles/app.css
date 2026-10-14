@@ -72,6 +72,8 @@ button {
   --div-col: 150px;
   --hero-gap: 14px;
   --chart-h: clamp(330px, calc(100vh - 362px), 700px);
+  /* Room under the axis ticks for the axis title and its details line (scales.ts CHART_FOOT). */
+  --chart-foot: 18px;
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -504,7 +506,7 @@ button {
 
 .chart {
   position: relative;
-  height: var(--chart-h);
+  height: calc(var(--chart-h) + var(--chart-foot));
   min-width: 0;
   border: 1px solid var(--chart-border);
   border-radius: var(--radius-card);
@@ -872,9 +874,9 @@ button {
   top: 14px;
 }
 
+/* Under the tick labels (its top is set from the plot's bottom edge), inside the frame. */
 .x-title {
   right: 16px;
-  bottom: 4px;
   text-align: right;
   font-size: 11px;
 }
@@ -2494,7 +2496,6 @@ button {
 
   .x-title {
     right: 12px;
-    bottom: 4px;
   }
 
   .legend {
@@ -2534,7 +2535,6 @@ button {
 
   .x-title {
     font-size: 10px;
-    bottom: 3px;
   }
 
   .risk,
