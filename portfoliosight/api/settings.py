@@ -12,11 +12,13 @@ import os
 from pydantic import BaseModel, ConfigDict, Field
 
 from portfoliosight.api.gate import GATE_SECRET_ENV
+from portfoliosight.engine.ladder import LEVELS
 from portfoliosight.engine.optimize import NX
 from portfoliosight.engine.surface import NY
 
 GRID_NX_ENV = "PS_GRID_NX"
 GRID_NY_ENV = "PS_GRID_NY"
+GRID_LEVELS_ENV = "PS_GRID_LEVELS"
 MIN_GATE_SECRET_LENGTH = 16
 
 
@@ -25,12 +27,16 @@ class SettingsError(Exception):
 
 
 class GridSettings(BaseModel):
-    """The tensor grid: 48 x 32, or the one fallback of spec 4.12 (32 x 24) set on the host."""
+    """The tensor grid: 48 risk columns, 12 ladder levels a column and a 32-row raster.
+
+    A host that cannot meet the build-time target of spec 4.12 sets fewer ladder levels.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     nx: int = Field(default=NX, ge=2)
     ny: int = Field(default=NY, ge=2)
+    levels: int = Field(default=LEVELS, ge=1)
 
     @classmethod
     def from_env(cls) -> GridSettings:
@@ -38,9 +44,13 @@ class GridSettings(BaseModel):
             return cls(
                 nx=int(os.environ.get(GRID_NX_ENV) or NX),
                 ny=int(os.environ.get(GRID_NY_ENV) or NY),
+                levels=int(os.environ.get(GRID_LEVELS_ENV) or LEVELS),
             )
         except ValueError as exc:
-            raise SettingsError(f"{GRID_NX_ENV} and {GRID_NY_ENV} must be integers >= 2") from exc
+            raise SettingsError(
+                f"{GRID_NX_ENV} and {GRID_NY_ENV} must be integers >= 2 "
+                f"and {GRID_LEVELS_ENV} an integer >= 1"
+            ) from exc
 
 
 class Settings(BaseModel):

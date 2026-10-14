@@ -115,6 +115,7 @@ def unpublished(store, generation, monkeypatch, tmp_path):
     monkeypatch.setenv("PS_PROVIDER_SYMBOLS_PER_MONTH", "100000")
     monkeypatch.setenv("PS_GRID_NX", "12")
     monkeypatch.setenv("PS_GRID_NY", "8")
+    monkeypatch.setenv("PS_GRID_LEVELS", "3")
     return _Recording(store)
 
 
@@ -390,6 +391,21 @@ def test_entry_point_publishes_real_tensors_offline(unpublished, generation, mon
     guide = json.loads(store.get(sorted(k for k in _expected_keys(generation) if "/5y" in k)[0]))
     names = {guide["universe"]["name"], guide["universe"]["preset_id"]}
     assert names <= {"Example Portfolio", "guide2017", "TSP (G, F, C, S, I)", "tsp"}
+    # a preset that comes with an allocation has it built in as the entered mix, in every view
+    presets = {preset.id: preset for preset in preset_definitions()}
+    for key in _expected_keys(generation):
+        tensor = json.loads(store.get(key))
+        held = presets[tensor["universe"]["preset_id"]].allocation
+        if held is None:
+            assert tensor["entered"] is None and tensor["universe"]["preset_id"] == "tsp"
+            continue
+        ids = [fund["id"] for fund in tensor["universe"]["funds"]]
+        total = sum(held[fund] for fund in ids)
+        expected = [held[fund] / total for fund in ids]
+        assert tensor["entered"]["w"] == pytest.approx(expected, abs=1e-15)
+        assert tensor["entered"]["set_aside"] == pytest.approx(1.0 - total / sum(held.values()))
+        spread = tensor["entered"]["range"]
+        assert spread["bad"] < spread["typical"] < spread["good"]
     status = store_mod.get_json(store, "meta/status.json")
     assert status["published"] is True and status["finished"]
     assert status["preset_tensors_built"] == {"guide2017": 6, "tsp": 6}

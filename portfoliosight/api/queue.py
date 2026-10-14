@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from portfoliosight.api.hashing import universe_hash
-from portfoliosight.api.presets import tensor_key, tensor_url
+from portfoliosight.api.presets import preset_definitions, tensor_key, tensor_url
 from portfoliosight.api.settings import GridSettings
 from portfoliosight.data import cache as cache_mod
 from portfoliosight.data import store as store_mod
@@ -37,7 +37,7 @@ install_redaction([logger.name])
 MAX_DEPTH = 20
 MAX_ATTEMPTS = 3
 MAX_FAILED = 2000  # failed job states kept; older ones are forgotten
-INITIAL_BUILD_SECONDS = 30.0  # the build-time target of spec 4.12, until builds are measured
+INITIAL_BUILD_SECONDS = 30.0  # a first guess (spec 4.12), until this process has measured builds
 BUILD_FAILED = "build_failed"
 
 Key = tuple[str, str, str]
@@ -58,8 +58,9 @@ def build_job(
     """Build one tensor and write ``tensors/{generation}/{uhash}/{lookback}.json``.
 
     The default ``build_fn`` of the queue worker and of the nightly. A key that exists is left
-    alone: nothing is built and nothing is written. The scratch cache is evicted to its cap
-    afterwards (spec 5.3).
+    alone: nothing is built and nothing is written. A preset that comes with an allocation has
+    it built in as the tensor's entered mix. The scratch cache is evicted to its cap afterwards
+    (spec 5.3).
     """
     key = tensor_key(generation, uhash, lookback)
     if store.exists(key):
@@ -77,8 +78,10 @@ def build_job(
             cache_dir=cache_dir,
             universe_name=universe_name,
             preset_id=preset_id,
+            allocation=_preset_allocation(preset_id),
             nx=grid.nx,
             ny=grid.ny,
+            levels=grid.levels,
         )
         try:
             put_tensor(store, key, tensor)
@@ -86,6 +89,14 @@ def build_job(
             logger.info("%s was written by another builder first; keeping that tensor", key)
     finally:
         cache_mod.evict(cache_dir=cache_dir)
+
+
+def _preset_allocation(preset_id: str | None) -> Mapping[str, float] | None:
+    """The allocation of the preset ``preset_id``; ``None`` for a custom menu or a bare preset."""
+    for preset in preset_definitions() if preset_id is not None else ():
+        if preset.id == preset_id:
+            return preset.allocation
+    return None
 
 
 class QueueBusy(Exception):

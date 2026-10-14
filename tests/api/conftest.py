@@ -44,6 +44,7 @@ def api_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("PS_CACHE_MAX_MB", "300")
     monkeypatch.setenv("PS_GRID_NX", "12")
     monkeypatch.setenv("PS_GRID_NY", "8")
+    monkeypatch.setenv("PS_GRID_LEVELS", "3")
 
 
 @pytest.fixture
