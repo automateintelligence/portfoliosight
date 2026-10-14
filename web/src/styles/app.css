@@ -1858,6 +1858,21 @@ button {
   flex: 1 1 auto;
 }
 
+/* Funds: the running total while the percentages are not exactly 100%, a gentle warning. */
+.funds-total {
+  padding: 2px 8px;
+  border-left: 3px solid var(--warn);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.toolbar .btn svg {
+  flex: 0 0 auto;
+}
+
 /* Funds */
 .rows {
   display: grid;

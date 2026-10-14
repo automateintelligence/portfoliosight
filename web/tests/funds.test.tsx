@@ -53,7 +53,9 @@ it("scales percentages up over the funds in use when one fund is set aside", () 
   const partial = parseTensor({ ...raw, universe: { ...raw.universe, excluded: [{ id: out.id, reason: "no data since 2024-10-30", last_close: null }] } });
   const rows: Row[] = [funds[0], funds[1], out].map((f, i) => ({ id: f.id, name: f.id, amount: [60, 20, 20][i] }));
   render(<Funds rows={rows} unit="pct" tensor={partial} symbols={null} mixStatus="ok" setAside={0.2} menuError={null} busy={false} selected={null} onUnit={noop} onAmount={noop} onUseMenu={noop} onNeedSymbols={noop} />);
-  expect(screen.getByTestId("funds-total").textContent).toBe("Adds up to 100%");
+  // exactly 100%: no running total and no Scale to 100%
+  expect(screen.queryByTestId("funds-total")).toBeNull();
+  expect(screen.queryByTestId("funds-scale100")).toBeNull();
   expect(cell("entered", funds[0].id)).toBe("75.0%");
   expect(cell("entered", funds[1].id)).toBe("25.0%");
   expect(cell("entered", out.id)).toBe("");
@@ -136,4 +138,84 @@ it("the theme switch offers four looks in order, as segments and as one cycling 
     expect(onChange).toHaveBeenLastCalledWith(to);
     one.unmount();
   }
+});
+
+it("in %, shows the running total and Scale to 100% together while the entries are not exactly 100%", () => {
+  const onAmount = vi.fn();
+  show({ unit: "pct", amounts: [60, 32], onAmount });
+  expect(screen.getByTestId("funds-total").textContent).toBe("Total: 92%, 8% to go");
+  const scale = screen.getByTestId("funds-scale100");
+  expect(scale.getAttribute("aria-label")).toMatch(/^Scale to 100%: /);
+  expect(scale.textContent).toBe("Scale to 100%");
+  fireEvent.click(scale);
+  expect(onAmount.mock.calls).toEqual([
+    [funds[0].id, 65.22],
+    [funds[1].id, 34.78],
+  ]);
+  cleanup();
+  show({ unit: "pct", amounts: [70, 38.9] });
+  expect(screen.getByTestId("funds-total").textContent).toBe("Total: 108.9%, 8.9% over");
+  cleanup();
+  // inside the drawing rule (100 +- 0.05) but not exactly 100 at the fields' precision
+  show({ unit: "pct", amounts: [60, 39.98] });
+  expect(screen.getByTestId("funds-total").textContent).toBe("Total: 99.98%, 0.02% to go");
+  expect(screen.getByTestId("funds-scale100")).toBeTruthy();
+});
+
+it("hides the running total and Scale to 100% at exactly 100%, with nothing entered, and in $ and Shares", () => {
+  const cases: { unit: Unit; amounts: (number | null)[] }[] = [
+    { unit: "pct", amounts: [60, 40] },
+    { unit: "pct", amounts: [33.33, 33.33, 33.34] },
+    { unit: "pct", amounts: [] },
+    { unit: "pct", amounts: [0, 0] },
+    { unit: "usd", amounts: [3000, 1000] },
+    { unit: "shares", amounts: [10, 3] },
+  ];
+  for (const c of cases) {
+    show({ unit: c.unit, amounts: c.amounts });
+    expect(screen.queryByTestId("funds-total"), JSON.stringify(c)).toBeNull();
+    expect(screen.queryByTestId("funds-scale100"), JSON.stringify(c)).toBeNull();
+    expect(screen.getByTestId("funds-clear"), "Clear all is in every unit").toBeTruthy();
+    cleanup();
+  }
+  show({ unit: "pct", amounts: [] });
+  expect(screen.getByTestId("funds-entered").textContent).toBe("No amounts entered: tickers only.");
+  cleanup();
+  show({ unit: "usd", amounts: [3000, 1000] });
+  expect(screen.getByTestId("funds-entered").textContent).toBe("$4,000 entered");
+});
+
+it("Clear all empties every amount and keeps the fund list", () => {
+  const onAmount = vi.fn();
+  const onUseMenu = vi.fn();
+  show({ unit: "usd", amounts: [3000, null, 500], onAmount, onUseMenu });
+  const clear = screen.getByTestId("funds-clear");
+  expect(clear.getAttribute("aria-label")).toMatch(/^Clear all: /);
+  fireEvent.click(clear);
+  expect(onAmount.mock.calls).toEqual([
+    [funds[0].id, null],
+    [funds[2].id, null],
+  ]);
+  expect(onUseMenu).not.toHaveBeenCalled();
+  for (const f of funds) expect(screen.getByTestId(`fund-row-${f.id}`)).toBeTruthy();
+  cleanup();
+  show({ unit: "pct", amounts: [] });
+  expect((screen.getByTestId("funds-clear") as HTMLButtonElement).disabled, "nothing to clear").toBe(true);
+});
+
+it("Clear all and Scale to 100% also act on a changed fund list before it is recalculated", () => {
+  const onAmount = vi.fn();
+  show({ unit: "pct", amounts: [30, 10], onAmount });
+  fireEvent.change(screen.getByTestId("fund-add"), { target: { value: "ZZNEW" } });
+  fireEvent.keyDown(screen.getByTestId("fund-add"), { key: "Enter" });
+  expect(screen.getByTestId("use-menu")).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("ZZNEW amount in percent"), { target: { value: "40" } });
+  expect(screen.getByTestId("funds-total").textContent).toBe("Total: 80%, 20% to go");
+  fireEvent.click(screen.getByTestId("funds-scale100"));
+  expect(screen.queryByTestId("funds-total")).toBeNull();
+  expect((screen.getByLabelText("ZZNEW amount in percent") as HTMLInputElement).value).toBe("50");
+  expect(onAmount).toHaveBeenCalledWith(funds[0].id, 37.5);
+  fireEvent.click(screen.getByTestId("funds-clear"));
+  expect((screen.getByLabelText("ZZNEW amount in percent") as HTMLInputElement).value).toBe("");
+  expect(screen.getByTestId("use-menu")).toBeTruthy();
 });

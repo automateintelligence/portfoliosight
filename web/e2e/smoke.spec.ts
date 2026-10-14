@@ -708,7 +708,8 @@ test("DoD-13 funds and trades: dollar and share changes, the 100% rule, tickers 
     await page.goto(`/?f=${pair[0]}:60,${pair[1]}:32&unit=pct`);
     await expect(page.getByTestId("point-selected")).toBeVisible({ timeout: 150_000 });
     await openSection(page, "funds");
-    await expect(page.getByTestId("funds-total")).toHaveText("Adds up to 92%: 8% to go");
+    await expect(page.getByTestId("funds-total")).toHaveText("Total: 92%, 8% to go");
+    await expect(page.getByTestId("funds-scale100")).toBeVisible();
     // The fund list is the one plotted, so there is no recalculate button: amounts apply as typed.
     await expect(page.getByTestId("use-menu")).toHaveCount(0);
     await expect(page.getByTestId("funds-hint")).toHaveText("Amounts apply as you type.");
@@ -716,14 +717,17 @@ test("DoD-13 funds and trades: dollar and share changes, the 100% rule, tickers 
     await expect(page.getByTestId("point-current")).toHaveCount(0);
     await expect(page.getByTestId("chip-trades")).toHaveCount(0);
     await page.getByTestId(`fund-row-${pair[1]}`).locator("input").fill("40");
-    await expect(page.getByTestId("funds-total")).toHaveText("Adds up to 100%");
+    // exactly 100%: the running total and Scale to 100% both go away
+    await expect(page.getByTestId("funds-total")).toHaveCount(0);
+    await expect(page.getByTestId("funds-scale100")).toHaveCount(0);
     await expect(page.getByTestId("use-menu")).toHaveCount(0);
     await expect(page.getByTestId(`mix-entered-${pair[1]}`)).toHaveText("40.0%");
     await expect(page.getByTestId(`mix-selected-${pair[1]}`)).toHaveText(/^\d+\.\d%$/);
     await expect(page.getByTestId("point-current")).toBeVisible();
     await expect(page.getByTestId("chip-trades")).toBeVisible();
     for (const id of pair) await page.getByTestId(`fund-row-${id}`).locator("input").fill("");
-    await expect(page.getByTestId("funds-total")).toHaveText("No amounts entered: tickers only.");
+    await expect(page.getByTestId("funds-entered")).toHaveText("No amounts entered: tickers only.");
+    await expect(page.getByTestId("funds-total")).toHaveCount(0);
     await expect(page.getByTestId("section-trades")).toHaveCount(0);
     await expect(page.getByTestId("chip-trades")).toHaveCount(0);
     await expect(page.getByTestId("point-current")).toHaveCount(0);

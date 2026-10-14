@@ -58,6 +58,11 @@ export const plain = {
   fundsRecalculate: "Recalculate with these funds",
   fundsAsYouType: "Amounts apply as you type.",
   fundsChanged: "The fund list has changed: recalculate to see it on the chart.",
+  fundsNone: "No amounts entered: tickers only.",
+  fundsClear: "Clear all",
+  fundsClearHint: "Clear every amount; the funds stay in the list",
+  fundsScale: "Scale to 100%",
+  fundsScaleHint: "Scale the amounts in proportion so they add up to exactly 100%",
   fundsOpen: "Show funds & amounts",
   fundsClose: "Hide funds & amounts",
   colEntered: "Mix entered %",
@@ -159,6 +164,8 @@ export const excludedFund = (fund: string, date: string, window: string) =>
 export const stressLine = (pct: string) => `What this mix did: ${pct} (${plain.selectedMix})`;
 export const stressGap = (n: number, m: number, pct: string) =>
   `${n} of ${m} funds (${pct}% of the mix) didn't exist yet; result is for the rest.`;
+/** The running total of percentages while it is not exactly 100%: "Total: 92%, 8% to go". */
+export const fundsTotal = (total: string, gap: string, over: boolean) => `Total: ${total}%, ${gap}% ${over ? "over" : "to go"}`;
 export const staleLine = (asof: string) => `Prices through ${asof}; the nightly refresh has not run since then.`;
 // Behind the details toggle only (it names the technical measure).
 export const enbLine = (n: string, m: string) =>

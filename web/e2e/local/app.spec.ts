@@ -159,7 +159,7 @@ test("the picker offers served funds, and percentages must add up before the men
 
   await page.goto("/?f=SGOV:60,VTIP:32&unit=pct");
   await section(page, "funds");
-  await expect(page.getByTestId("funds-total")).toHaveText("Adds up to 92%: 8% to go");
+  await expect(page.getByTestId("funds-total")).toHaveText("Total: 92%, 8% to go");
   // Amounts apply as they are typed: there is nothing to press while the fund list is unchanged.
   await expect(page.getByTestId("funds-hint")).toHaveText("Amounts apply as you type.");
   await expect(page.getByTestId("use-menu")).toHaveCount(0);
@@ -568,4 +568,46 @@ test("the share dialog says the link is for invited testers while preview is on"
   await page.getByTestId("share-email").fill("not-an-address");
   await page.getByTestId("share-send").click();
   await expect(page.getByTestId("share-status")).toHaveText("That address doesn't look right");
+});
+
+test("Clear all and Scale to 100% work from the keyboard; the total and Scale show only for % entries off 100%", async ({ page }) => {
+  await open(page, "f=SGOV:60,VTIP:32&unit=pct");
+  await section(page, "funds");
+  const total = page.getByTestId("funds-total");
+  const scale = page.getByTestId("funds-scale100");
+  const clear = page.getByTestId("funds-clear");
+  const amount = (id: string) => page.getByTestId(`fund-row-${id}`).locator("input");
+  await expect(total).toHaveText("Total: 92%, 8% to go");
+  await expect(scale).toHaveAccessibleName(/^Scale to 100%/);
+  await expect(page.getByTestId("point-current")).toHaveCount(0);
+  // the total follows the typing
+  await amount("VTIP").fill("38.9");
+  await expect(total).toHaveText("Total: 98.9%, 1.1% to go");
+  await scale.focus();
+  await page.keyboard.press("Enter");
+  await expect(amount("SGOV")).toHaveValue("60.67");
+  await expect(amount("VTIP")).toHaveValue("39.33");
+  await expect(total).toHaveCount(0);
+  await expect(scale).toHaveCount(0);
+  await expect(page.getByTestId("point-current")).toBeVisible();
+  await expect(page.getByTestId("mix-entered-SGOV")).toHaveText("60.7%");
+  // Clear all empties the amounts and keeps the funds; the square goes with the amounts
+  await expect(clear).toHaveAccessibleName(/^Clear all/);
+  await clear.focus();
+  await page.keyboard.press("Space");
+  await expect(amount("SGOV")).toHaveValue("");
+  await expect(amount("VTIP")).toHaveValue("");
+  await expect(page.getByTestId("fund-row-SGOV")).toBeVisible();
+  await expect(page.getByTestId("fund-row-VTIP")).toBeVisible();
+  await expect(page.getByTestId("point-current")).toHaveCount(0);
+  await expect(page.getByTestId("funds-entered")).toHaveText("No amounts entered: tickers only.");
+  await expect(total).toHaveCount(0);
+  await expect(clear).toBeDisabled();
+  // in $ there is no total note and no Scale to 100%, whatever the amounts; Clear all stays
+  await page.goto("/?f=SGOV:600,VTIP:320&unit=usd");
+  await section(page, "funds");
+  await expect(page.getByTestId("funds-entered")).toHaveText("$920 entered");
+  await expect(total).toHaveCount(0);
+  await expect(scale).toHaveCount(0);
+  await expect(clear).toBeEnabled();
 });
