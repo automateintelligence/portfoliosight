@@ -22,7 +22,8 @@ method are in `docs/reviews/`.
 - Engine: shrunk returns, Ledoit-Wolf covariance, long-only frontier with caps (and the uncapped
   frontier for reference), effective number of bets by minimum torsion; at every risk level a
   ladder of mixes that hold that risk and trade return for the exact measure, from the frontier
-  mix to the most diversified mix found, with a balanced point at the knee; one-year ranges from
+  mix to the most diversified mix found, with a balanced point at the knee (this is the exact-ENB
+  refinement of the surface, formerly listed as a later option); one-year ranges from
   a stationary block bootstrap of the menu's own history; a precomputed tensor per menu and
   lookback; the browser interpolates computed mixes and recomputes every statistic, and asks the
   service for the range of any other mix.
