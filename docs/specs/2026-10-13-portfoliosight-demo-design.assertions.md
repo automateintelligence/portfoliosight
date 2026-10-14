@@ -61,7 +61,7 @@ do.
 **Taste is not encoded.** "Fantastic visuals", "looks designed on purpose", "a visitor can tell what
 the colors mean without instructions" go to the owner as screenshots (§Expectations, "Open"). The
 mechanical proxies kept here are the honest ones: no table on the first screen, no jargon in the
-default DOM, three themes with distinct computed tokens and a repainted canvas, no horizontal
+default DOM, four themes with distinct computed tokens and a repainted canvas, no horizontal
 scroll on a phone.
 
 ---
@@ -179,7 +179,7 @@ why it is load-bearing.
   F4, DoD 10)
 - **A-PS-48 — the default DOM is plain language, impersonal, with the disclaimer always visible.**
   (S7, F2, F11, M6, M8, DoD 6, DoD 20)
-- **A-PS-49 — three themes with distinct computed tokens and a repainted canvas; the choice is
+- **A-PS-49 — four themes with distinct computed tokens and a repainted canvas; the choice is
   remembered; HUD references nothing.** (S15, F5, M6, DoD 17, DoD 18)
 - **A-PS-50 — stress cards show real history with coverage, or say they cannot.** (S14, M7, DoD 16)
 - **A-PS-51 — the address reproduces the view in a fresh context.** (S17, S22, DoD 19)
@@ -1071,7 +1071,7 @@ Phase 3 · unit (vitest with mocked bindings; requests carry the gate header)
 - **Kind.** contract.
 
 ### A-PS-41 — the first screen is the chart and its controls; sections are collapsed; no tangency marker
-Phase 3 · ui (desktop 1366×900; all three themes)
+Phase 3 · ui (desktop 1366×900; all four themes)
 - **Claim.** On load with the fixture preset, the first viewport contains `chart-canvas`,
   `risk-slider`, `div-slider`, the result strip (`range-low`, `range-typical`, `range-high`,
   `div-word`) and the four chips, no `<table>`, no trade row and no stress card is visible, all
@@ -1089,10 +1089,10 @@ Phase 3 · ui (desktop 1366×900; all three themes)
   and no line element other than `ceiling-line`, the axes and the frontier. **Must-not-
   contain:** a fourth marker; a visible table in the first viewport; a section expanded on
   load. Fail = any theme, any leg.
-- **Kind.** property (three themes).
+- **Kind.** property (four themes).
 
 ### A-PS-42 — the phone layout fits and works with a thumb
-Phase 3 · ui ("iPhone 13" device profile; all three themes)
+Phase 3 · ui ("iPhone 13" device profile; all four themes)
 - **Claim.** `document.documentElement.scrollWidth ≤ window.innerWidth`; the chart, both sliders,
   the result strip and the chip row are within the first 1.2 viewport heights; every interactive
   element's hit area is ≥ 44 × 44 px; the diversification slider is horizontal (width > height)
@@ -1107,7 +1107,7 @@ Phase 3 · ui ("iPhone 13" device profile; all three themes)
   touchend` sequence of +60 px on `point-selected` increases the `r` query value and moves
   `ceiling-line` right. **Must-not-contain:** horizontal overflow in any state; a touch target
   under 44 px; a vertical `div-slider` at this width. Fail = any theme, any leg.
-- **Kind.** property (three themes; every interactive element).
+- **Kind.** property (four themes; every interactive element).
 
 ### A-PS-43 — the default view is the Example Portfolio with its allocation and no fund set aside; a menu holding a fund its tensor sets aside shows the excluded-fund note; the preset menu is driven by `/api/presets`
 Phase 3 · ui
@@ -1141,7 +1141,7 @@ Phase 3 · ui
 - **Kind.** example (anchored to the mock body as source of truth).
 
 ### A-PS-44 — the heatmap renders from the theme ramp under the frontier only
-Phase 3 · ui (all three themes)
+Phase 3 · ui (all four themes)
 - **Claim.** Sampling the canvas at 20 points inside feasible cells yields ≥ 3 distinct colors,
   every sampled color lies on the theme's `--heat-0..4` ramp, points above the frontier equal the
   page background, and the plain legend text is present.
@@ -1154,7 +1154,7 @@ Phase 3 · ui (all three themes)
   above-frontier samples equal the computed `--bg` (±2/255); the legend text "How spread out the
   risk is" is visible. **Must-not-contain:** a sampled cell color off the ramp (for instance a
   stale ramp from another theme); a colored pixel above the frontier. Fail = any theme.
-- **Kind.** property (three themes; 25 samples each).
+- **Kind.** property (four themes; 25 samples each).
 
 ### A-PS-45 — the risk slider's readouts are the frontier mix's truth and move together without a request
 Phase 3 · ui
@@ -1215,10 +1215,10 @@ Phase 3 · ui + unit
   of bets, minimum torsion" appears. Unit: the seven `q` values map to Poor, Fair, Fair, Average,
   Average, Good, Good. **Must-not-contain:** a numeric score next to the word in the default
   view; a font size above 14 px; a word outside the four. Fail = any.
-- **Kind.** property (threshold boundaries; three themes for the style legs).
+- **Kind.** property (threshold boundaries; four themes for the style legs).
 
 ### A-PS-48 — the default DOM is plain language, impersonal, with the disclaimer always visible
-Phase 3 · ui (desktop and phone; three themes; both presets of the mock)
+Phase 3 · ui (desktop and phone; four themes; both presets of the mock)
 - **Claim.** With details off and every section expanded, the visible text contains none of
   `bets`, `knee`, `Sharpe`, `tangency`, `covariance`, `sigma`, `quantile`, `significant`,
   `you should`, `we recommend`, `Risk Number`, `Risk Score`, `login`, `sign in`, `password`
@@ -1242,7 +1242,7 @@ Phase 3 · ui (desktop and phone; three themes; both presets of the mock)
   positions). Fail = any viewport, theme or preset.
 - **Kind.** property (2 viewports × 3 themes × 2 presets).
 
-### A-PS-49 — three themes with distinct computed tokens and a repainted canvas; the choice is remembered; HUD references nothing
+### A-PS-49 — four themes with distinct computed tokens and a repainted canvas; the choice is remembered; HUD references nothing
 Phase 3 · ui + static
 - **Claim.** `theme-switch` cycles `ks-dark → light → hud` on `html[data-theme]`; for each theme
   the computed `--bg`, `--surface`, `--text`, `--accent`, `--frontier` and `--heat-0..4` equal the
@@ -1267,7 +1267,7 @@ Phase 3 · ui + static
   the word `HUD` (proves the scope is populated). **Must-not-contain:** two themes whose
   canvas samples are indistinguishable; a token value from the wrong column; a needle hit.
   Fail = any.
-- **Kind.** property (three themes; every token; every scoped file).
+- **Kind.** property (four themes; every token; every scoped file).
 
 ### A-PS-50 — stress cards show real history with coverage, or say they cannot
 Phase 3 · ui + unit
