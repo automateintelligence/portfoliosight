@@ -94,7 +94,7 @@ Single column, 16 px side gutters, no horizontal scroll. Header 48 px (wordmark,
 | `--warn` | `#E8907E` | `#B85C00` | `#FFA63D` | `#FFB347` |
 | `--link` | `#6CB4EE` | `#0F6CBD` | `#FFC96B` | `#8AE4F5` |
 | `--shadow` | `0 4px 12px rgba(0,0,0,.3)` | `0 1px 3px rgba(0,0,0,.08)` | `0 0 14px rgba(232,64,28,.32)` | `0 0 12px rgba(53,201,232,.35)` |
-| `--heat-0..4` (ramp positions 0→1; a cell sits at `1 − 0.8·Z/enb_ref`, so `--heat-4` is the least spread-out end) | `#1A1A1E #4A2A24 #A54930 #E8907E #F5DCC9` | `#FFFFFF #DCEBF9 #8BBDEA #2F86D1 #0B5394` | `#080506 #3D0E08 #B02A10 #F08A24 #FFE39A` | `#04070B #0B2F3F #1D8FA8 #35C9E8 #C8F7FF` |
+| `--heat-0..4` (ramp positions 0→1; in ks-dark, HUD and Grid a cell sits at `1 − 0.8·Z/enb_ref`, so `--heat-4` is the least spread-out end; in Light it sits at `Z/enb_ref`, so `--heat-0` is the least spread-out end and `--heat-4` the most) | `#1A1A1E #4A2A24 #A54930 #E8907E #F5DCC9` | `#FFFFFF #DCEBF9 #8BBDEA #2F86D1 #0B5394` | `#080506 #3D0E08 #B02A10 #F08A24 #FFE39A` | `#04070B #0B2F3F #1D8FA8 #35C9E8 #C8F7FF` |
 | `--frontier` | `#EAE6E2` | `#1B1B1B` | `#FFF4DC` | `#C8F7FF` |
 | `--mark-selected` | fill `--accent`, ring `--text` | fill `--accent`, ring `#FFFFFF` | fill `#FFD25A`, ring `#FFFFFF` | fill `--warn`, ring `--accent` |
 | `--mark-current` | `--link` | `#E07A1F` | `#FFFFFF` | `--error` |
