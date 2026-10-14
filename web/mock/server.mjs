@@ -5,8 +5,12 @@
 //   GET  /api/presets, /api/symbols, /api/health, /api/tensors/{G}/{hash}/{lookback}
 //   POST /api/tensors            (bodies are recorded)
 //   POST /api/share              (always 202; nothing is sent)
+//   POST /api/range              409 range_unavailable (the page keeps its own figure), or the
+//                                stand-in one-year range of the posted weights (below) while the
+//                                "ranges" switch is on
 //   GET  /__mock/posts           recorded POST /api/tensors bodies
-//   POST /__mock/config          {"stale": 3, "unavailable": "10y", "challenge": 1, "build409": 2,
+//   GET  /__mock/ranges          recorded POST /api/range bodies
+//   POST /__mock/config          {"stale": 3, "unavailable": "10y", "challenge": 1, "build409": 2, "ranges": true,
 //                                 "noGeneration": true}
 //   POST /__mock/reset           clears the switches and the recorded bodies
 import fs from "node:fs";
@@ -222,12 +226,29 @@ function tensorFor(hash, lookback) {
   return copy;
 }
 
-const DEFAULTS = { stale: 0, unavailable: null, challenge: 0, build409: 0, noGeneration: false };
+const DEFAULTS = { stale: 0, unavailable: null, challenge: 0, build409: 0, ranges: false, noGeneration: false };
 let config = { ...DEFAULTS };
 // As the service does: an unusable window is a failed build that is not retried (409).
 const windowUnavailable = (lookback) => ({ status: "failed", error: "window_unavailable", attempts: 1, retry: false, details: { lookback, reason: "not enough shared history", rows: 61 } });
 const noGeneration = { error: { code: "no_generation", message: "No generation has been published yet.", details: null } };
 let posts = [];
+let rangePosts = [];
+
+// The service resamples the menu's daily history; the mock has none, so its stand-in for the
+// one-year range of a mix is mu -+ 1.96 sigma around mu, from the tensor's own moments. It is
+// enough for the page to tell the service's figure from its own blend of the node ranges.
+function standInRange(tensor, weights) {
+  const n = tensor.mu_s.length;
+  let mu = 0;
+  let variance = 0;
+  for (let i = 0; i < n; i++) {
+    mu += tensor.mu_s[i] * weights[i];
+    for (let k = 0; k < n; k++) variance += weights[i] * tensor.cov[i][k] * weights[k];
+  }
+  const spread = 1.96 * Math.sqrt(variance);
+  const normal = { low: mu - spread, mid: mu, high: mu + spread };
+  return { bad: normal.low, typical: mu, good: normal.high, normal };
+}
 
 const send = (res, status, body, headers = {}) => {
   const text = typeof body === "string" ? body : JSON.stringify(body);
@@ -248,9 +269,11 @@ const server = http.createServer(async (req, res) => {
   const method = req.method ?? "GET";
 
   if (where === "/__mock/posts" && method === "GET") return send(res, 200, posts);
+  if (where === "/__mock/ranges" && method === "GET") return send(res, 200, rangePosts);
   if (where === "/__mock/reset" && method === "POST") {
     config = { ...DEFAULTS };
     posts = [];
+    rangePosts = [];
     return send(res, 200, { ok: true });
   }
   if (where === "/__mock/config" && method === "POST") {
@@ -305,6 +328,25 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, { status: "ready", generation: G, hash, url: `/api/tensors/${G}/${hash}/${lookback}` });
   }
   if (method === "POST" && where === "/api/share") return send(res, 202, { ok: true });
+  if (method === "POST" && where === "/api/range") {
+    let body = null;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      return send(res, 422, { error: { code: "invalid_request", message: "body is not JSON", details: null } });
+    }
+    rangePosts.push(body);
+    if (body?.generation !== G || !/^[0-9a-f]{16}$/.test(String(body?.hash)) || !LOOKBACKS.includes(body?.lookback)) {
+      return send(res, 404, { error: { code: "unknown_tensor", message: "No tensor was built under this address.", details: null } });
+    }
+    const tensor = tensorFor(body.hash, body.lookback);
+    const weights = Array.isArray(body.weights) ? body.weights.map(Number) : [];
+    if (weights.length !== tensor.mu_s.length || weights.some((w) => !Number.isFinite(w))) {
+      return send(res, 422, { error: { code: "invalid_request", message: "one weight per fund", details: null } });
+    }
+    if (!config.ranges) return send(res, 409, { error: { code: "range_unavailable", message: "the price history behind this tensor changed after it was built", details: null } });
+    return send(res, 200, standInRange(tensor, weights));
+  }
   return send(res, 404, { error: { code: hit ? "unknown_tensor" : "not_found", message: "not found", details: null } });
 });
 

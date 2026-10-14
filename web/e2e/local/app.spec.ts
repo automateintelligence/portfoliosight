@@ -97,6 +97,31 @@ test("an expired human check reloads once and the view comes back", async ({ pag
   expect(new URL(page.url()).searchParams.get("f")).toBe("SGOV:50,VTIP:50");
 });
 
+test("the strip swaps in the service's one-year range for exact weights, and keeps its own when the service cannot answer", async ({ page, request }) => {
+  const pctOf = async (id: string) => Number(((await page.getByTestId(id).textContent()) ?? "").replace("−", "-").replace(/[+%]/g, ""));
+  // a position between two columns: the page blends the node ranges, then asks the service
+  await open(page, "u=guide2017&lb=5y&r=20.5&d=0.4");
+  const own = await pctOf("range-typical");
+  await expect.poll(async () => ((await (await page.request.get("/__mock/ranges")).json()) as unknown[]).length).toBeGreaterThan(0);
+  const asked = ((await (await page.request.get("/__mock/ranges")).json()) as { weights: number[]; lookback: string }[]).at(-1)!;
+  expect(asked.lookback).toBe("5y");
+  expect(asked.weights.length).toBe(23);
+  expect(Math.abs(asked.weights.reduce((a, b) => a + b, 0) - 1)).toBeLessThan(1e-9);
+  // the mock refuses by default (409): the blended figure stays
+  await page.waitForTimeout(800);
+  expect(await pctOf("range-typical")).toBe(own);
+  // with answers switched on, the service's figure replaces it once the sliders rest
+  await request.post("/__mock/config", { data: { ranges: true } });
+  await open(page, "u=guide2017&lb=5y&r=20.25&d=0.45");
+  const before = await pctOf("range-typical");
+  await expect.poll(() => pctOf("range-typical"), { timeout: 5000 }).not.toBe(before);
+  // a column and one of its levels is exact already: nothing is asked
+  const count = ((await (await page.request.get("/__mock/ranges")).json()) as unknown[]).length;
+  await open(page, "u=guide2017&lb=5y&r=24&d=0");
+  await page.waitForTimeout(800);
+  expect(((await (await page.request.get("/__mock/ranges")).json()) as unknown[]).length).toBe(count);
+});
+
 test("a failed build offers Retry, and Retry sends the same request", async ({ page, request }) => {
   await request.post("/__mock/config", { data: { build409: 1 } });
   await page.goto("/?f=SGOV:50,VTIP:50&unit=pct");
@@ -270,7 +295,8 @@ test("every frontier line is named at its right end and the names do not collide
   await expect(page.getByTestId("frontier-label-5y")).toHaveText("5 years");
   await open(page, "g=10y,ew,1y");
   await expect(page.getByTestId("chart")).toHaveAttribute("data-ghost-count", "3");
-  const want: Record<string, string> = { "5y": "5 years", "10y": "10 years", ew: "Weighted recent", "1y": "1 year" };
+  // the No limits line is named like the history windows, and is not one of them in the count
+  const want: Record<string, string> = { "5y": "5 years", "10y": "10 years", ew: "Weighted recent", "1y": "1 year", nolimits: "No limits" };
   for (const [id, text] of Object.entries(want)) await expect(page.getByTestId(`frontier-label-${id}`)).toHaveText(text);
   const chart = await boxOf(page, "chart");
   const boxes = await Promise.all(Object.keys(want).map(async (id) => ({ id, box: (await page.getByTestId(`frontier-label-${id}`).locator("text").boundingBox())! })));
@@ -305,7 +331,7 @@ test("every frontier line is named at its right end and the names do not collide
 test("the square and the open circle show the same card as the selected mix", async ({ page }, testInfo) => {
   await open(page);
   const card = page.getByTestId("mix-card");
-  const titles: Record<string, string> = { selected: "Selected mix", current: "The mix you entered", div: "Most diversified at this risk" };
+  const titles: Record<string, string> = { selected: "Selected mix", current: "The mix you entered", div: "Optimized" };
   for (const kind of ["current", "div", "selected"]) {
     const mark = page.locator(`[data-mark="${kind}"]`);
     if (isPhone(testInfo.project.name)) {
@@ -326,7 +352,7 @@ test("the square and the open circle show the same card as the selected mix", as
     }
     await expect(card).toHaveAttribute("data-for", kind);
     await expect(card.locator("h3")).toHaveText(titles[kind]);
-    await expect(card.locator(".tip-range")).toHaveText(/Low\s*[+−]?\d+\.\d%\s*Typical\s*[+−]?\d+\.\d%\s*High\s*[+−]?\d+\.\d%/);
+    await expect(card.locator(".tip-range")).toHaveText(/Bad\s*[+−]?\d+\.\d%\s*Typical\s*[+−]?\d+\.\d%\s*Good\s*[+−]?\d+\.\d%/);
     await expect(card.getByTestId("mix-card-word")).toHaveText(/^(Good|Average|Fair|Poor)$/);
     expect(await card.locator("li").count(), `${kind}: largest holdings`).toBeGreaterThanOrEqual(3);
     await expect(card).toContainText("Risk and expected return are per year.");
@@ -338,7 +364,13 @@ test("the square and the open circle show the same card as the selected mix", as
     await page.keyboard.press("Escape");
     if (!isPhone(testInfo.project.name)) await mark.blur();
   }
-  if (isPhone(testInfo.project.name)) return;
+  if (isPhone(testInfo.project.name)) {
+    // a press on either marker that moves drags the selected point, so the page must not pan from it
+    for (const kind of ["current", "div"]) {
+      expect(await page.locator(`[data-mark="${kind}"]`).evaluate((el) => getComputedStyle(el).touchAction), `${kind}: no panning from the marker`).toBe("none");
+    }
+    return;
+  }
   // a mouse over the square shows its card as well
   const square = await boxOf(page, "point-current");
   await page.mouse.move(square.x + square.width / 2, square.y + square.height / 2);
@@ -378,19 +410,22 @@ test("hovering the colour map shows a plain card for the mix there", async ({ pa
   const after = await boxOf(page, "chart");
   await page.mouse.move(after.x + after.width * 0.3, after.y + after.height * 0.72);
   await expect(card).toContainText("independent bets");
-  await expect(card).toContainText(/Computed for risk ceiling \d+\.\d% and return floor \d+\.\d%/);
+  await expect(card).toContainText(/At risk \d+\.\d%, earning at least \d+\.\d%/);
 });
 
-test("the details explain the diversification word and Suggested in plain words, each once", async ({ page }) => {
+test("the details explain the diversification word and Optimized in plain words, each once", async ({ page }) => {
   await open(page);
   await page.getByTestId("details-toggle").click();
   await expect(page.getByTestId("details-words")).toContainText("the most spread-out mix these funds can make");
   for (const word of ["Good:", "Average:", "Fair:", "Poor:"]) await expect(page.getByTestId("details-words")).toContainText(word);
-  await expect(page.getByTestId("details-suggested")).toContainText("most diversified mix at this risk that still earns about as much");
+  await expect(page.getByTestId("details-suggested")).toContainText("Optimized is the balanced point");
   const text = await page.locator("body").innerText();
   expect(text).not.toContain("Words compare this mix");
-  expect(text.split("within one standard error of the paired daily return difference").length - 1, "the method sentence is stated once").toBe(1);
-  await expect(page.getByTestId("details-method")).toContainText("Lowest return floor");
+  expect(text).not.toContain("standard error");
+  expect(text.split("the knee of diversification (ENB) gained against return given up").length - 1, "the method sentence is stated once").toBe(1);
+  await expect(page.getByTestId("details-method")).toContainText("Optimized: the knee of diversification");
+  // the bell-curve figure appears in the details only, labelled as such
+  await expect(page.getByTestId("details-bell")).toContainText("Textbook bell-curve figure");
 });
 
 test("trades export a CSV file from the browser", async ({ page }) => {
@@ -499,7 +534,7 @@ test("trades show dollar changes at every width, and details name a map cell on 
   await page.getByTestId("details-toggle").click();
   const box = (await page.getByTestId("chart").boundingBox())!;
   await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.75);
-  await expect(page.locator('[data-testid="mix-card"][data-for="cell"]')).toContainText(/Computed for risk ceiling \d+\.\d% and return floor \d+\.\d%/);
+  await expect(page.locator('[data-testid="mix-card"][data-for="cell"]')).toContainText(/At risk \d+\.\d%, earning at least \d+\.\d%/);
 });
 
 test("the share dialog says the link is for invited testers while preview is on", async ({ page }) => {
