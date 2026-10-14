@@ -57,6 +57,17 @@ describe("theme tokens (spec 3.5)", () => {
     });
   });
 
+  it("Light reads its ramp rising (palest along the frontier); ks-dark, HUD and Grid read it turned; each legend bar agrees", () => {
+    const turned = "linear-gradient(90deg, var(--heat-4), var(--heat-3), var(--heat-2), var(--heat-1))";
+    const rising = "linear-gradient(90deg, var(--heat-1), var(--heat-2), var(--heat-3), var(--heat-4))";
+    const want: Record<string, [string, string]> = { "ks-dark": ["turned", turned], light: ["rising", rising], hud: ["turned", turned], grid: ["turned", turned] };
+    for (const theme of THEMES) {
+      const got = declarations(theme);
+      expect(got.get("--heat-ramp"), `--heat-ramp in ${theme}`).toBe(want[theme][0]);
+      expect(got.get("--heat-legend"), `--heat-legend in ${theme}`).toBe(want[theme][1]);
+    }
+  });
+
   it("ks-dark is also the default on :root", () => {
     expect(css).toMatch(/:root,\s*\[data-theme="ks-dark"\]\s*\{\s*--bg: #141417;/);
   });
