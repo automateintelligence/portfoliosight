@@ -14,6 +14,7 @@ from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, cast
 
+import numpy as np
 import pandas as pd
 
 from portfoliosight.data import cache as cache_mod
@@ -25,8 +26,8 @@ from portfoliosight.engine import ENGINE_VERSION
 from portfoliosight.engine.caps import CapsError
 from portfoliosight.engine.ladder import LEVELS
 from portfoliosight.engine.optimize import NX
-from portfoliosight.engine.ranges import RangeModel, range_model
-from portfoliosight.engine.stats import RISK_FREE_SOURCES
+from portfoliosight.engine.ranges import METHOD, RangeModel, one_year_ranges, range_model
+from portfoliosight.engine.stats import RISK_FREE_SOURCES, ew_weights
 from portfoliosight.engine.surface import NY
 from portfoliosight.engine.tensor import (
     FundInput,
@@ -290,4 +291,34 @@ def range_model_from_store(
     )
     if len(sample) < 2:
         raise RangeUnavailable("the window no longer holds two shared days of prices")
-    return range_model(sample.to_numpy(), tensor["mu_s"], tensor["cov"])
+    if tensor["range_method"] != dict(METHOD):
+        raise RangeUnavailable("this tensor's ranges were made with another method")
+    model = range_model(sample.to_numpy(), tensor["mu_s"], tensor["cov"])
+    if not _same_history(tensor, model):
+        raise RangeUnavailable("the price history behind this tensor changed after it was built")
+    return model
+
+
+def _same_history(tensor: Mapping[str, Any], model: RangeModel) -> bool:
+    """True when ``model`` holds the sample the tensor was built from.
+
+    The rebuilt sample must have the build's row count, every fund's sample mean (weighted for
+    ``ew``) must equal the tensor's ``mu_sample``, and the one-year ranges of every frontier node
+    must come out as stored. A record corrected or a calendar changed since the build fails one
+    of the three, and the endpoint then refuses rather than answer from different history.
+    """
+    window = tensor["lookback"]
+    rows = int(window["rows"])
+    if len(model.sample) != rows:
+        return False
+    halflife = window["ew_halflife_days"]
+    weights = np.full(rows, 1.0 / rows) if halflife is None else ew_weights(rows, int(halflife))
+    means = 252.0 * (weights @ model.sample)
+    if not np.allclose(means, tensor["mu_sample"], rtol=1e-9, atol=1e-12):
+        return False
+    again = one_year_ranges(model, np.asarray(tensor["frontier"]["w"], dtype=float))
+    stored = tensor["frontier"]["range"]
+    return all(
+        np.allclose(again[name], stored[name], rtol=1e-9, atol=1e-12)
+        for name in ("bad", "typical", "good")
+    )

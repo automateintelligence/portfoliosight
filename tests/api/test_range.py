@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from portfoliosight.api import ranges as ranges_mod
 from portfoliosight.api.hashing import universe_hash
 from portfoliosight.api.presets import tensor_key
 from portfoliosight.api.queue import build_job
+from portfoliosight.data import store as store_mod
 from tests.api.conftest import headers
 
 MENU = ["VTI", "BND", "VNQ"]
@@ -96,6 +98,30 @@ def test_the_sample_is_read_once_and_kept(make_client, built, store):
     for weights in ([0.2, 0.3, 0.5], [0.6, 0.4, 0.0]):
         assert _post(client, _body(built, weights)).status_code == 200
     assert counting.calls == first  # nothing more was read
+
+
+def test_an_interpolated_mix_a_rounding_error_outside_its_bounds_is_ranged(make_client, built):
+    """The page sends interpolated mixes as they are; spec 4.11 allows 1e-6 either side."""
+    client = make_client(start_worker=False)
+    for weights in ([1.0 + 4e-7, -4e-7, 0.0], [0.6, 0.4 + 5.5e-16, -5.5e-16]):
+        assert _post(client, _body(built, weights)).status_code == 200, weights
+    for weights in ([1.0 + 2e-6, -2e-6, 0.0], [0.6, 0.4 + 2e-6, -2e-6]):
+        assert _post(client, _body(built, weights)).status_code == 422, weights
+
+
+def test_history_restated_after_the_build_is_refused(
+    make_client, built, store, monkeypatch, tmp_path
+):
+    """A range always comes from the tensor's own sample: changed history is a 409."""
+    record = store_mod.get_record(store, "VTI")
+    later = record["date"] >= pd.Timestamp(built["lookback"]["start"]) + pd.Timedelta(days=90)
+    record.loc[later, "tr_index"] = record.loc[later, "tr_index"] * 1.001
+    store_mod.put_record(store, "VTI", record)
+    monkeypatch.setenv("PS_CACHE_DIR", str(tmp_path / "empty-cache"))  # nothing kept from the build
+    client = make_client(start_worker=False)
+    response = _post(client, _body(built, [0.5, 0.3, 0.2]))
+    assert response.status_code == 409 and response.json()["error"]["code"] == "range_unavailable"
+    assert "changed after it was built" in response.json()["error"]["message"]
 
 
 def test_only_the_most_recently_used_models_are_kept(store, built, api_env, monkeypatch):

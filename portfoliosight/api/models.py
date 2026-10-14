@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from portfoliosight.api.errors import ApiError, invalid_request
 from portfoliosight.engine.caps import CapsError, resolve_bounds
+from portfoliosight.engine.invariants import TOL
 
 MIN_FUNDS = 2
 MAX_FUNDS = 30
@@ -41,7 +42,9 @@ class TensorRequest(BaseModel):
         return [{"id": fund.id, "min": fund.min, "max": fund.max} for fund in self.funds]
 
 
-Weight = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
+# A weight is in [0, 1] within the tolerance of spec 4.11: a mix the page interpolates between
+# solved mixes can sit a rounding error outside, and is sent as it is.
+Weight = Annotated[float, Field(ge=-TOL, le=1.0 + TOL, allow_inf_nan=False)]
 
 
 class RangeRequest(BaseModel):
@@ -68,8 +71,8 @@ def parse_range_request(body: bytes) -> RangeRequest:
     """The validated request, or a 422 ``invalid_request`` saying what is wrong.
 
     Checks the shape only: a generation and a hash of the right form, a known lookback, and 2
-    to 30 weights, each a number in ``[0, 1]``. Whether they add up to 1, and whether there is
-    one per fund of the menu, is checked by ``ranges.range_body``.
+    to 30 weights, each a number in ``[0, 1]`` within 1e-6. Whether they add up to 1, and
+    whether there is one per fund of the menu, is checked by ``ranges.range_body``.
     """
     try:
         return RangeRequest.model_validate_json(body)

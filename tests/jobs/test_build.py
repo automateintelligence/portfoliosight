@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import cast
 
 import pandas as pd
@@ -289,6 +289,52 @@ def test_range_model_refuses_a_window_with_no_shared_days_left(store, generation
     manifest_mod.write_catalog(store, manifest, datetime.now(UTC))
     with pytest.raises(RangeUnavailable, match="no longer holds two shared days"):
         range_model_from_store(store, key, cache_dir=tmp_path / "cache")
+
+
+def test_range_model_of_an_ew_tensor_repeats_its_ranges(store, generation, tmp_path):
+    key, tensor = _stored(store, generation, tmp_path, lookback="ew")
+    assert tensor["lookback"]["ew_halflife_days"] is not None
+    model = range_model_from_store(store, key, cache_dir=tmp_path / "cache")
+    again = one_year_ranges(model, tensor["frontier"]["w"])
+    assert again["bad"] == pytest.approx(tensor["frontier"]["range"]["bad"], rel=1e-12)
+
+
+def _corrected(store, fund: str, day: str, by: float) -> None:
+    """Restate one day of a fund's history, as a provider correction would."""
+    record = store_mod.get_record(store, fund)
+    later = record["date"] >= pd.Timestamp(day)
+    record.loc[later, "tr_index"] = record.loc[later, "tr_index"] * (1.0 + by)
+    store_mod.put_record(store, fund, record)
+    manifest = manifest_mod.load_manifest(store)
+    manifest.symbols[fund].fetched_at = "2026-10-14T00:00:00+00:00"  # a newer record
+    manifest_mod.write_catalog(store, manifest, datetime.now(UTC))
+
+
+def test_range_model_refuses_history_that_changed_after_the_build(store, generation, tmp_path):
+    """The endpoint answers from the build's own sample or not at all."""
+    key, tensor = _stored(store, generation, tmp_path)
+    middle = (date.fromisoformat(tensor["lookback"]["start"]) + timedelta(days=180)).isoformat()
+    # one restated day of one fund: its sample mean and the frontier ranges move
+    _corrected(store, "BND", middle, 1e-4)
+    with pytest.raises(RangeUnavailable, match="changed after it was built"):
+        range_model_from_store(store, key, cache_dir=tmp_path / "cache")
+
+
+def test_range_model_refuses_a_tensor_made_with_another_method(store, generation, tmp_path):
+    key, tensor = _stored(store, generation, tmp_path)
+    put_tensor(
+        store, key + ".other", {**tensor, "range_method": {**tensor["range_method"], "paths": 500}}
+    )
+    with pytest.raises(RangeUnavailable, match="another method"):
+        range_model_from_store(store, key + ".other", cache_dir=tmp_path / "cache")
+    shifted = {
+        **tensor,
+        "frontier": {**tensor["frontier"], "range": {**tensor["frontier"]["range"]}},
+    }
+    shifted["frontier"]["range"]["bad"] = [v + 1e-6 for v in tensor["frontier"]["range"]["bad"]]
+    put_tensor(store, key + ".shifted", shifted)
+    with pytest.raises(RangeUnavailable, match="changed after it was built"):
+        range_model_from_store(store, key + ".shifted", cache_dir=tmp_path / "cache")
 
 
 def test_missing_generation_is_generation_gone(store, generation, tmp_path):
