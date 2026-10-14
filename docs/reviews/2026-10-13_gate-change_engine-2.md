@@ -13,7 +13,8 @@ after review. Until then `conductor gate verify` reports the files below as chan
 
 ## What changed in the product that the gate reads
 
-- Tensor: new `ladder`, `frontier.range`, `frontier_uncapped`, `entered`, `range_method`;
+- Tensor: new `ladder`, `frontier.range`, `frontier_uncapped`, `entered`, `range_method`,
+  `lookback.sample_sha256`;
   `frontier.s_safe` is now the rightmost frontier node with the best bad year (an integer);
   `grid` is the heatmap raster resampled from the ladders (same field names and types as before;
   `grid.w_div` is the peak). `ENGINE_VERSION` 0.2.0; the schema number stays 2 (it already was).
