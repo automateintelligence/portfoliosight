@@ -19,7 +19,7 @@ const GUIDE_NAME = "Example Portfolio";
 const TSP_NAME = "TSP (G, F, C, S, I)";
 const TSP_IDS = ["TSP-C", "TSP-F", "TSP-G", "TSP-I", "TSP-S"];
 const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
-const THEME_BG: Record<string, string> = { "ks-dark": "#141417", light: "#F3F3F3", hud: "#04070B" };
+const THEME_BG: Record<string, string> = { "ks-dark": "#141417", light: "#F3F3F3", hud: "#080506", grid: "#04070B" };
 const DISCLAIMER =
   "PortfolioSight is an educational tool. All figures are mathematical results computed from historical prices and are hypothetical; past performance does not predict future results. Nothing here is investment, tax or legal advice, and no output is a recommendation to buy or sell anything. PortfolioSight is not registered with the SEC, FINRA or any other regulator. You remain solely responsible for your decisions. Price data: Tiingo and tsp.gov.";
 const FAMILY = ["https://option-spread-scanner.ingage-bd0.workers.dev", "https://automateintelligence.ai", "https://securitysight.ai"];
@@ -298,9 +298,9 @@ test("DoD-07 the heatmap is drawn from the theme's ramp under the frontier only"
   pixels.forEach((pixel, i) => {
     const cell = cells[i];
     expect(pixel[3], `cell (${cell.j}, ${cell.k}) is painted`).toBe(255);
-    // Spec 8: colour = ramp(Z / enb_ref); the Z range of the cell's neighbourhood is allowed.
+    // Spec 8: colour = ramp(1 - 0.8 * Z / enb_ref), brightest along the frontier; the Z range of the cell's neighbourhood is allowed.
     let near = Infinity;
-    for (let step = 0; step <= 50; step++) near = Math.min(near, channelDistance(ramp(Math.min(1, cell.qMin + ((cell.qMax - cell.qMin) * step) / 50)), pixel));
+    for (let step = 0; step <= 50; step++) near = Math.min(near, channelDistance(ramp(1 - 0.8 * Math.min(1, cell.qMin + ((cell.qMax - cell.qMin) * step) / 50)), pixel));
     expect(near, `cell (${cell.j}, ${cell.k}) ${hex(pixel)} is the ramp colour of its own diversification value`).toBeLessThanOrEqual(12);
   });
 
@@ -497,7 +497,7 @@ test("DoD-11 TSP preset: five funds, 60% ceiling, no entered mix, L 2050 offered
   await page.getByTestId("fund-add").fill("L 2050");
   await expect(page.getByRole("option").filter({ hasText: "TSP-L2050" })).toBeVisible();
   await expect(page.getByTestId("fund-row-TSP-L2050")).toHaveCount(0);
-  // Offered means it can be added: the row appears, as a draft that asks for "Use this menu".
+  // Offered means it can be added: the row appears, as a draft that asks to be recalculated.
   await page.getByRole("option").filter({ hasText: "TSP-L2050" }).click();
   await expect(page.getByTestId("fund-row-TSP-L2050")).toBeVisible();
   expect(api.tensorPosts().length, "nothing is built until the menu is used").toBe(0);
@@ -587,7 +587,8 @@ test("DoD-12 custom menu: four served funds build within 120 s; failure, unknown
     await setMenu(page, four);
     const sent = api.tensorPosts().length;
     await page.waitForTimeout(500);
-    expect(api.tensorPosts().length, "builds requested before Use this menu").toBe(sent);
+    expect(api.tensorPosts().length, "builds requested before Recalculate with these funds").toBe(sent);
+    await expect(page.getByTestId("use-menu")).toHaveText("Recalculate with these funds");
     const mine = () => api.loaded().filter((entry) => entry.path.includes(`/${hash}/`));
     const notice = page.getByTestId("building-notice");
     const started = Date.now();
@@ -696,19 +697,24 @@ test("DoD-13 funds and trades: dollar and share changes, the 100% rule, tickers 
     expect(api.tensorPosts().length, "amounts never trigger a build").toBe(0);
   });
 
-  await test.step("percent mode: the running total gates Use this menu; tickers only hides Trades", async () => {
+  await test.step("percent mode: the running total gates the mix, with nothing to press; tickers only hides Trades", async () => {
     const catalog = ((await site.json("/api/symbols")) as Symbols).symbols.map((symbol) => symbol.id);
     const pair = ["SGOV", "VTIP"].every((id) => catalog.includes(id)) ? ["SGOV", "VTIP"] : ["VTI", "BND"];
     await page.goto(`/?f=${pair[0]}:60,${pair[1]}:32&unit=pct`);
     await expect(page.getByTestId("point-selected")).toBeVisible({ timeout: 150_000 });
     await openSection(page, "funds");
     await expect(page.getByTestId("funds-total")).toHaveText("Adds up to 92%: 8% to go");
-    await expect(page.getByTestId("use-menu")).toBeDisabled();
+    // The fund list is the one plotted, so there is no recalculate button: amounts apply as typed.
+    await expect(page.getByTestId("use-menu")).toHaveCount(0);
+    await expect(page.getByTestId("funds-hint")).toHaveText("Amounts apply as you type.");
+    await expect(page.getByTestId(`mix-entered-${pair[1]}`)).toHaveText("");
     await expect(page.getByTestId("point-current")).toHaveCount(0);
     await expect(page.getByTestId("chip-trades")).toHaveCount(0);
     await page.getByTestId(`fund-row-${pair[1]}`).locator("input").fill("40");
     await expect(page.getByTestId("funds-total")).toHaveText("Adds up to 100%");
-    await expect(page.getByTestId("use-menu")).toBeEnabled();
+    await expect(page.getByTestId("use-menu")).toHaveCount(0);
+    await expect(page.getByTestId(`mix-entered-${pair[1]}`)).toHaveText("40.0%");
+    await expect(page.getByTestId(`mix-selected-${pair[1]}`)).toHaveText(/^\d+\.\d%$/);
     await expect(page.getByTestId("point-current")).toBeVisible();
     await expect(page.getByTestId("chip-trades")).toBeVisible();
     for (const id of pair) await page.getByTestId(`fund-row-${id}`).locator("input").fill("");
@@ -873,7 +879,8 @@ test("DoD-16 stress cards: three windows with the mix's own numbers and coverage
       continue;
     }
     expect(Math.abs(parsePercent(/What this mix did: ([^()]+)/.exec(text)?.[1] ?? "", id) - 100 * own.value), `${id}: the selected mix's return`).toBeLessThanOrEqual(0.1);
-    expect(text).toContain(`(${tensor.stress[id].label})`);
+    expect(text, `${id}: the card is headed by its window`).toContain(tensor.stress[id].label);
+    expect(text, `${id}: the number is the selected mix's`).toMatch(/What this mix did: [^()]+\(Selected mix\)/);
     const gap = `${own.missing} of ${weights.length} funds (${((1 - own.covered) * 100).toFixed(1)}% of the mix) didn't exist yet; result is for the rest.`;
     if (1 - own.covered >= 0.0005) expect(text, `${id}: coverage note`).toContain(gap);
     else expect(text, `${id}: no coverage note for a mix that fully existed`).not.toContain("didn't exist yet");
@@ -892,7 +899,7 @@ test("DoD-16 stress cards: three windows with the mix's own numbers and coverage
   expect(await card.innerText()).not.toMatch(/\d%/);
 });
 
-test("DoD-17 themes: three looks, the table's backgrounds, a repainted chart, remembered; the address wins", async ({ page }, testInfo) => {
+test("DoD-17 themes: four looks, the table's backgrounds, a repainted chart, remembered; the address wins", async ({ page }, testInfo) => {
   await openApp(page);
   const html = page.locator("html");
   const next = async () => {
@@ -904,7 +911,7 @@ test("DoD-17 themes: three looks, the table's backgrounds, a repainted chart, re
   };
   fs.mkdirSync(ARTIFACTS, { recursive: true });
   const prints: number[][] = [];
-  for (const theme of ["ks-dark", "light", "hud"]) {
+  for (const theme of ["ks-dark", "light", "hud", "grid"]) {
     if (theme !== "ks-dark") await next();
     await expect(html).toHaveAttribute("data-theme", theme);
     expect((await html.evaluate((el) => getComputedStyle(el).getPropertyValue("--bg"))).trim().toUpperCase(), `--bg of ${theme}`).toBe(THEME_BG[theme]);
@@ -915,19 +922,25 @@ test("DoD-17 themes: three looks, the table's backgrounds, a repainted chart, re
     await expect.poll(() => param(page, "t")).toBe(theme);
     await page.screenshot({ path: path.join(ARTIFACTS, `${testInfo.project.name}-${theme}.png`) });
   }
-  expect(await page.evaluate(() => localStorage.getItem("ps.theme"))).toBe("hud");
+  expect(await page.evaluate(() => localStorage.getItem("ps.theme"))).toBe("grid");
 
   // Remembered: a fresh visit without a theme in the address opens in the last choice.
   await openApp(page);
-  await expect(html).toHaveAttribute("data-theme", "hud");
+  await expect(html).toHaveAttribute("data-theme", "grid");
   // The address wins over the stored choice, without overwriting it.
   await openApp(page, "t=light");
   await expect(html).toHaveAttribute("data-theme", "light");
-  expect(await page.evaluate(() => localStorage.getItem("ps.theme"))).toBe("hud");
+  expect(await page.evaluate(() => localStorage.getItem("ps.theme"))).toBe("grid");
   await next();
   await expect(html).toHaveAttribute("data-theme", "hud");
+  // A shared link with t=hud opens the red and gold HUD, whatever is stored; t=grid the cyan Grid.
+  await page.evaluate(() => localStorage.setItem("ps.theme", "light"));
   await openApp(page, "t=hud");
   await expect(html).toHaveAttribute("data-theme", "hud");
+  expect(hex((await themeColors(page, ["--accent"]))["--accent"]), "the HUD accent is red").toBe("#D63A18");
+  await openApp(page, "t=grid");
+  await expect(html).toHaveAttribute("data-theme", "grid");
+  expect(hex((await themeColors(page, ["--accent"]))["--accent"]), "the Grid accent is cyan").toBe("#35C9E8");
 });
 
 test("DoD-18 the HUD look names no film, character or trademark, in the sources or as served", async ({ page, site }) => {

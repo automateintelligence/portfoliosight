@@ -11,10 +11,24 @@ const open = async (page: Page, query = "") => {
   await expect(page.getByTestId("chart-canvas")).toBeVisible();
   await expect(page.getByTestId("point-selected")).toBeVisible();
 };
+// The page scrolls a section into view smoothly; a click sent while it still moves can land
+// somewhere else, so this waits until the scroll position holds.
+const settled = async (page: Page) => {
+  await expect
+    .poll(async () => {
+      const y = await page.evaluate(() => window.scrollY);
+      await page.waitForTimeout(120);
+      return (await page.evaluate(() => window.scrollY)) === y;
+    })
+    .toBe(true);
+};
 const section = async (page: Page, id: string) => {
   await page.getByTestId(`chip-${id}`).click();
   await expect(page.getByTestId(`section-${id}`)).toHaveAttribute("aria-expanded", "true");
+  await settled(page);
 };
+const isPhone = (name: string) => name.includes("phone");
+const boxOf = async (page: Page, id: string) => (await page.getByTestId(id).boundingBox())!;
 const posts = async (page: Page) => (await (await page.request.get("/__mock/posts")).json()) as { funds: { id: string }[]; lookback: string }[];
 
 test("nothing scrolls sideways with details on and every section open", async ({ page }) => {
@@ -121,12 +135,314 @@ test("the picker offers served funds, and percentages must add up before the men
   await page.goto("/?f=SGOV:60,VTIP:32&unit=pct");
   await section(page, "funds");
   await expect(page.getByTestId("funds-total")).toHaveText("Adds up to 92%: 8% to go");
-  await expect(page.getByTestId("use-menu")).toBeDisabled();
+  // Amounts apply as they are typed: there is nothing to press while the fund list is unchanged.
+  await expect(page.getByTestId("funds-hint")).toHaveText("Amounts apply as you type.");
+  await expect(page.getByTestId("use-menu")).toHaveCount(0);
   await expect(page.getByTestId("point-current")).toHaveCount(0);
+  await expect(page.getByTestId("mix-entered-VTIP")).toHaveText("");
   await page.getByTestId("fund-row-VTIP").locator("input").fill("40");
-  await expect(page.getByTestId("use-menu")).toBeEnabled();
   await expect(page.getByTestId("point-current")).toBeVisible();
+  await expect(page.getByTestId("mix-entered-VTIP")).toHaveText("40.0%");
   await expect(page.getByTestId("chip-trades")).toBeVisible();
+});
+
+test("recalculate appears only when the fund list changes, and sends the new list", async ({ page }) => {
+  await open(page, "f=SGOV:60,VTIP:40&unit=pct");
+  await section(page, "funds");
+  await expect(page.getByText("Use this menu")).toHaveCount(0);
+  await expect(page.getByTestId("use-menu")).toHaveCount(0);
+  const before = (await posts(page)).length;
+  await page.getByTestId("fund-add").fill("VTI");
+  await page.getByTestId("fund-add").press("Enter");
+  await expect(page.getByTestId("fund-row-VTI")).toBeVisible();
+  const button = page.getByTestId("use-menu");
+  await expect(button).toHaveText("Recalculate with these funds");
+  expect((await posts(page)).length, "nothing is computed before the button is pressed").toBe(before);
+  await button.click();
+  await expect.poll(async () => (await posts(page)).length).toBe(before + 1);
+  expect((await posts(page)).at(-1)!.funds.map((f) => f.id).sort()).toEqual(["SGOV", "VTI", "VTIP"]);
+  await expect(page.getByTestId("use-menu")).toHaveCount(0);
+});
+
+test("funds sit in a sidebar beside the chart on a wide screen and in a section on a phone", async ({ page }, testInfo) => {
+  await open(page);
+  const side = page.getByTestId("section-funds");
+  await expect(side).toHaveAttribute("aria-expanded", "false");
+  if (isPhone(testInfo.project.name)) {
+    await expect(page.getByTestId("funds-toggle")).toHaveCount(0);
+    await section(page, "funds");
+    const chart = await boxOf(page, "chart");
+    const row = await boxOf(page, "fund-row-VTI");
+    expect(row.y, "on a phone the table is below the chart").toBeGreaterThan(chart.y + chart.height);
+    return;
+  }
+  const closed = await boxOf(page, "chart");
+  const toggle = page.getByTestId("funds-toggle");
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("fund-row-VTI")).toHaveCount(0);
+  await toggle.click();
+  await expect(side).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("fund-row-VTI")).toBeVisible();
+  const chart = await boxOf(page, "chart");
+  const panel = (await side.boundingBox())!;
+  const view = page.viewportSize()!;
+  expect(chart.width, "the chart gives up width").toBeLessThan(closed.width - 200);
+  expect(chart.width, "and is still a chart").toBeGreaterThan(520);
+  expect(chart.x, "the chart stays on the left").toBeLessThanOrEqual(closed.x);
+  expect(panel.x, "the sidebar is to the right of the chart").toBeGreaterThanOrEqual(chart.x + chart.width);
+  expect(panel.x + panel.width).toBeLessThanOrEqual(view.width);
+  expect(panel.y, "beside the chart, not under it").toBeLessThan(chart.y + 40);
+  expect(panel.y + panel.height, "inside the first screen").toBeLessThanOrEqual(view.height);
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  // remembered in this browser
+  await page.reload();
+  await expect(page.getByTestId("section-funds")).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("fund-row-VTI")).toBeVisible();
+  await page.getByTestId("funds-toggle").click();
+  await expect(page.getByTestId("section-funds")).toHaveAttribute("aria-expanded", "false");
+  await page.reload();
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  await expect(page.getByTestId("section-funds")).toHaveAttribute("aria-expanded", "false");
+  // the chip opens it too
+  await page.getByTestId("chip-funds").click();
+  await expect(page.getByTestId("section-funds")).toHaveAttribute("aria-expanded", "true");
+});
+
+test("the table always shows the mix entered and the selected mix, and the selected one follows the sliders", async ({ page }) => {
+  await open(page);
+  await section(page, "funds");
+  await expect(page.getByTestId("section-funds").getByText("Mix entered %").first()).toBeAttached();
+  await expect(page.getByTestId("section-funds").getByText("Selected mix %").first()).toBeAttached();
+  const column = async (kind: string) => page.locator(`[data-testid^="mix-${kind}-"]`).allTextContents();
+  const total = (cells: string[]) => cells.reduce((acc, c) => acc + (Number.parseFloat(c) || 0), 0);
+  const entered = await column("entered");
+  expect(entered.length).toBeGreaterThan(10);
+  expect(Math.abs(total(entered) - 100), "the mix entered adds up to 100%").toBeLessThan(0.6);
+  const first = await column("selected");
+  expect(Math.abs(total(first) - 100), "the selected mix adds up to 100%").toBeLessThan(0.6);
+  // the risk slider moves it
+  await page.getByTestId("point-selected").focus();
+  for (let i = 0; i < 12; i++) await page.keyboard.press("ArrowRight");
+  await expect.poll(async () => (await column("selected")).join("|")).not.toBe(first.join("|"));
+  const second = await column("selected");
+  // and so does the diversification slider
+  for (let i = 0; i < 8; i++) await page.keyboard.press("ArrowDown");
+  await expect.poll(async () => (await column("selected")).join("|")).not.toBe(second.join("|"));
+  expect(Math.abs(total(await column("selected")) - 100)).toBeLessThan(0.6);
+  expect((await column("entered")).join("|"), "the mix entered does not move").toBe(entered.join("|"));
+  // the other units keep both columns
+  const units = page.getByTestId("unit-toggle").getByRole("radio");
+  await expect(units).toHaveText(["Shares", "%", "$"]);
+  await units.nth(0).click();
+  await expect(page.getByTestId("amount-head")).toHaveText("Shares (Qty)");
+  await expect(page.locator('[data-testid^="mix-selected-"]').first()).toHaveText(/%$/);
+  await page.getByTestId("fund-row-VTI").locator("input").fill("10");
+  await expect(page.getByTestId("mix-entered-VTI")).toHaveText(/^\d+\.\d%$/);
+});
+
+test("every frontier line is named at its right end and the names do not collide", async ({ page }, testInfo) => {
+  await open(page);
+  await expect(page.getByTestId("frontier-label-5y")).toHaveText("5 years");
+  await open(page, "g=10y,ew,1y");
+  await expect(page.getByTestId("chart")).toHaveAttribute("data-ghost-count", "3");
+  const want: Record<string, string> = { "5y": "5 years", "10y": "10 years", ew: "Weighted recent", "1y": "1 year" };
+  for (const [id, text] of Object.entries(want)) await expect(page.getByTestId(`frontier-label-${id}`)).toHaveText(text);
+  const chart = await boxOf(page, "chart");
+  const boxes = await Promise.all(Object.keys(want).map(async (id) => ({ id, box: (await page.getByTestId(`frontier-label-${id}`).locator("text").boundingBox())! })));
+  for (const { id, box } of boxes) {
+    expect(box.x >= chart.x && box.x + box.width <= chart.x + chart.width && box.y >= chart.y && box.y + box.height <= chart.y + chart.height, `${id} label is inside the chart`).toBe(true);
+  }
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i].box;
+      const b = boxes[j].box;
+      const apart = a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y + 1 || b.y + b.height <= a.y + 1;
+      expect(apart, `${boxes[i].id} and ${boxes[j].id} labels overlap`).toBe(true);
+    }
+  }
+  // "ew" ends beside the primary line in the mock, so it is stepped away and joined by a leader
+  await expect(page.getByTestId("frontier-label-ew").locator("path.leader")).toHaveCount(1);
+  await expect(page.getByTestId("frontier-label-5y").locator("path.leader")).toHaveCount(0);
+  if (isPhone(testInfo.project.name)) return;
+  // hovering a ghost line names it; the primary line does not need it
+  const end = page.getByTestId("frontier-label-10y");
+  const x = chart.x + Number(await end.getAttribute("data-end-x"));
+  const y = chart.y + Number(await end.getAttribute("data-end-y"));
+  await expect(page.getByTestId("ghost-tip")).toHaveCount(0);
+  await page.mouse.move(x - 80, y + 60);
+  await page.mouse.move(x - 2, y + 1, { steps: 5 });
+  await expect(page.getByTestId("ghost-tip")).toContainText("10 years");
+  await expect(end).toHaveClass(/is-hot/);
+  await page.mouse.move(chart.x + 20, chart.y + 20);
+  await expect(page.getByTestId("ghost-tip")).toHaveCount(0);
+});
+
+test("the square and the open circle show the same card as the selected mix", async ({ page }, testInfo) => {
+  await open(page);
+  const card = page.getByTestId("mix-card");
+  const titles: Record<string, string> = { selected: "Selected mix", current: "The mix you entered", div: "Most diversified at this risk" };
+  for (const kind of ["current", "div", "selected"]) {
+    const mark = page.locator(`[data-mark="${kind}"]`);
+    if (isPhone(testInfo.project.name)) {
+      if (kind === "selected") continue; // on a phone the selected point is a drag handle
+      await page.getByTestId("chart").tap({ position: { x: 30, y: 30 } });
+      await mark.locator(".hit").tap({ force: true });
+    } else {
+      await page.mouse.move(5, 5);
+      await expect(card).toHaveCount(0);
+      // the square and the circle can sit on top of each other: keyboard focus picks one exactly
+      await mark.focus();
+    }
+    await expect(card).toHaveCount(1);
+    if (isPhone(testInfo.project.name) && kind === "div" && (await card.getAttribute("data-for")) === "current") {
+      // the square covers the circle in this view: a second tap turns the card over
+      await expect(page.getByText("Tap again for the marker underneath.")).toBeVisible();
+      await page.locator('[data-mark="current"] .hit').tap({ force: true });
+    }
+    await expect(card).toHaveAttribute("data-for", kind);
+    await expect(card.locator("h3")).toHaveText(titles[kind]);
+    await expect(card.locator(".tip-range")).toHaveText(/Low\s*[+−]?\d+\.\d%\s*Typical\s*[+−]?\d+\.\d%\s*High\s*[+−]?\d+\.\d%/);
+    await expect(card.getByTestId("mix-card-word")).toHaveText(/^(Good|Average|Fair|Poor)$/);
+    expect(await card.locator("li").count(), `${kind}: largest holdings`).toBeGreaterThanOrEqual(3);
+    await expect(card.locator("li").first()).toHaveText(/^[A-Z0-9.-]+\s*\d+\.\d%$/);
+    const box = (await card.boundingBox())!;
+    const chart = await boxOf(page, "chart");
+    expect(box.x >= chart.x && box.y >= chart.y && box.x + box.width <= chart.x + chart.width + 1 && box.y + box.height <= chart.y + chart.height + 1, `${kind}: the card stays inside the chart`).toBe(true);
+    await page.keyboard.press("Escape");
+    if (!isPhone(testInfo.project.name)) await mark.blur();
+  }
+  if (isPhone(testInfo.project.name)) return;
+  // a mouse over the square shows its card as well
+  const square = await boxOf(page, "point-current");
+  await page.mouse.move(square.x + square.width / 2, square.y + square.height / 2);
+  await expect(card).toHaveCount(1);
+  expect(["current", "div"]).toContain(await card.getAttribute("data-for"));
+});
+
+test("hovering the colour map shows a plain card for the mix there", async ({ page }, testInfo) => {
+  test.skip(isPhone(testInfo.project.name), "the map answers to a mouse; a phone has none");
+  await open(page);
+  const chart = await boxOf(page, "chart");
+  await page.mouse.move(chart.x + chart.width * 0.3, chart.y + chart.height * 0.72);
+  const card = page.locator('[data-testid="mix-card"][data-for="cell"]');
+  await expect(card).toBeVisible();
+  await expect(card.locator("h3")).toHaveText("The mix at this spot");
+  await expect(card).toContainText(/Risk\s*\d+\.\d%/);
+  await expect(card).toContainText(/Expected return\s*\d+\.\d%/);
+  await expect(card.getByTestId("mix-card-word")).toHaveText(/^(Good|Average|Fair|Poor)$/);
+  expect(await card.locator("li").count()).toBeGreaterThanOrEqual(3);
+  const plain = (await card.innerText()).toLowerCase();
+  for (const word of ["ceiling", "floor", "sits at", "bets", "computed for"]) expect(plain, `"${word}" in the default card`).not.toContain(word);
+  // over a marker the marker's own card wins
+  await page.getByTestId("point-selected").hover({ force: true });
+  await expect(card).toHaveCount(0);
+  // details add the measure and where the mix was computed
+  await page.mouse.move(chart.x + 10, chart.y + 10);
+  await page.getByTestId("details-toggle").click();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const after = await boxOf(page, "chart");
+  await page.mouse.move(after.x + after.width * 0.3, after.y + after.height * 0.72);
+  await expect(card).toContainText("independent bets");
+  await expect(card).toContainText(/Computed for risk ceiling \d+\.\d% and return floor \d+\.\d%/);
+});
+
+test("the details explain the diversification word and Suggested in plain words, each once", async ({ page }) => {
+  await open(page);
+  await page.getByTestId("details-toggle").click();
+  await expect(page.getByTestId("details-words")).toContainText("the most spread-out mix these funds can make");
+  for (const word of ["Good:", "Average:", "Fair:", "Poor:"]) await expect(page.getByTestId("details-words")).toContainText(word);
+  await expect(page.getByTestId("details-suggested")).toContainText("most diversified mix at this risk that still earns about as much");
+  const text = await page.locator("body").innerText();
+  expect(text).not.toContain("Words compare this mix");
+  expect(text.split("within one standard error of the paired daily return difference").length - 1, "the method sentence is stated once").toBe(1);
+  await expect(page.getByTestId("details-method")).toContainText("Lowest return floor");
+});
+
+test("trades export a CSV file from the browser", async ({ page }) => {
+  await open(page);
+  await section(page, "trades");
+  const sent: string[] = [];
+  page.on("request", (r) => sent.push(r.url()));
+  const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("trades-export").click()]);
+  expect(download.suggestedFilename()).toMatch(/^portfoliosight-trades-\d{4}-\d{2}-\d{2}\.csv$/);
+  const stream = await download.createReadStream();
+  let csv = "";
+  for await (const chunk of stream) csv += chunk.toString();
+  const lines = csv.trimEnd().split("\r\n");
+  expect(lines[0]).toBe("Fund,Now %,Selected %,Change (percentage points),Change ($)");
+  expect(lines.length).toBeGreaterThan(5);
+  const rows = lines.slice(1).map((l) => l.split(","));
+  for (const r of rows) {
+    expect(r.length).toBe(5);
+    expect(r[0]).toMatch(/^[A-Z0-9.-]+$/);
+    for (const cell of r.slice(1)) expect(Number.isFinite(Number(cell)), cell).toBe(true);
+  }
+  const sum = (col: number) => rows.reduce((acc, r) => acc + Number(r[col]), 0);
+  expect(Math.abs(sum(1) - 100)).toBeLessThan(0.3);
+  expect(Math.abs(sum(2) - 100)).toBeLessThan(0.3);
+  expect(Math.abs(sum(3)), "changes cancel out").toBeLessThan(0.3);
+  // the table on the page agrees with the file for its first row
+  const shown = await page.getByTestId("section-trades").getByRole("listitem").first().innerText();
+  expect(shown).toContain(rows[0][0]);
+  expect(sent.filter((u) => !u.startsWith("blob:")), "the export sends nothing").toEqual([]);
+});
+
+test("four looks: the switcher reaches each, and a shared link opens the HUD or the Grid", async ({ page }, testInfo) => {
+  await open(page);
+  const html = page.locator("html");
+  await expect(html).toHaveAttribute("data-theme", "ks-dark");
+  const control = page.getByTestId("theme-switch");
+  const order = ["ks-dark", "light", "hud", "grid"];
+  if (isPhone(testInfo.project.name)) {
+    for (const next of ["light", "hud", "grid", "ks-dark"]) {
+      await control.click();
+      await expect(html).toHaveAttribute("data-theme", next);
+    }
+  } else {
+    const segments = control.getByRole("radio");
+    await expect(segments).toHaveText(["Dark", "Light", "HUD", "Grid"]);
+    const header = (await page.locator(".hdr-in").boundingBox())!;
+    const box = (await control.boundingBox())!;
+    expect(box.x + box.width, "the four segments fit in the header").toBeLessThanOrEqual(header.x + header.width + 0.5);
+    for (const id of ["grid", "hud", "light", "ks-dark"]) {
+      await segments.nth(order.indexOf(id)).click();
+      await expect(html).toHaveAttribute("data-theme", id);
+      await expect(segments.nth(order.indexOf(id))).toHaveAttribute("aria-checked", "true");
+      await expect.poll(() => new URL(page.url()).searchParams.get("t")).toBe(id);
+    }
+  }
+  const look = async () =>
+    page.evaluate(() => {
+      const cs = getComputedStyle(document.documentElement);
+      const chart = document.querySelector('[data-testid="chart"]')!;
+      return {
+        accent: cs.getPropertyValue("--accent").trim().toLowerCase(),
+        gap: cs.getPropertyValue("--cell-gap").trim(),
+        gridLines: getComputedStyle(chart, "::after").content !== "none",
+        ring: getComputedStyle(document.querySelector(".pt-selected .reticle")!).animationName,
+      };
+    });
+  await open(page, "t=hud");
+  await expect(html).toHaveAttribute("data-theme", "hud");
+  expect(await look(), "HUD: red accent, no grid over the map, the turning ring").toEqual({ accent: "#d63a18", gap: "0", gridLines: false, ring: "reticle" });
+  await open(page, "t=grid");
+  await expect(html).toHaveAttribute("data-theme", "grid");
+  expect(await look(), "Grid: the cyan look with its grid").toEqual({ accent: "#35c9e8", gap: "1", gridLines: true, ring: "reticle" });
+});
+
+test("stress cards name the selected mix and set the entered mix in bold", async ({ page }) => {
+  await open(page);
+  await section(page, "stress");
+  const cards = page.locator('[data-testid^="stress-"]');
+  await expect(cards).toHaveCount(3);
+  for (let i = 0; i < 3; i++) {
+    await expect(cards.nth(i).locator(".big")).toHaveText(/^What this mix did: [+−]?\d+\.\d% \(Selected mix\)$/);
+    const entered = cards.nth(i).locator("strong");
+    await expect(entered).toHaveText(/^The mix you entered: [+−]?\d+\.\d%$/);
+    expect(Number(await entered.evaluate((el) => getComputedStyle(el).fontWeight))).toBeGreaterThanOrEqual(700);
+    expect(Number(await entered.locator(".num").evaluate((el) => getComputedStyle(el).fontWeight))).toBeGreaterThanOrEqual(700);
+  }
 });
 
 test("before the first data load the page says so plainly", async ({ page, request }) => {
@@ -149,7 +465,7 @@ test("trades show dollar changes at every width, and details name a map cell on 
   await page.getByTestId("details-toggle").click();
   const box = (await page.getByTestId("chart").boundingBox())!;
   await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.75);
-  await expect(page.getByTestId("chart").getByText(/sits at risk \d+\.\d+%, return \d+\.\d+%/)).toBeVisible();
+  await expect(page.locator('[data-testid="mix-card"][data-for="cell"]')).toContainText(/Computed for risk ceiling \d+\.\d% and return floor \d+\.\d%/);
 });
 
 test("the share dialog says the link is for invited testers while preview is on", async ({ page }) => {
