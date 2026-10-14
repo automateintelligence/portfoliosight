@@ -74,13 +74,14 @@ def surface(
 def raster(surf: Surface, front: Frontier, program: EnbProgram, ny: int = NY) -> Raster:
     """Resample the ladders on `ny` floors from the lowest peak return to the top of the frontier.
 
-    In column `j` a floor inside the ladder's span, `y_peak[j] < Y_k <= y_front[j]`, holds the
-    ladder's mix at that return: the straight blend of the two ladder mixes whose returns
-    enclose it, which earns exactly `Y_k` and whose risk is at most `X_j`; where those two are a
-    hop apart, the upper one, which earns more than `Y_k`. The highest floor at or below the
-    peak's return holds the peak itself (the frontier mix in a collapsed column), so every
-    column has a bottom cell. Every other cell is empty: above the frontier nothing is feasible,
-    and below the peak nothing is worth showing.
+    Cell `(j, k)` holds the most diversified mix found at risk `X_j` that earns at least `Y_k`.
+    Inside the ladder's span, `y_peak[j] < Y_k <= y_front[j]`, that is the ladder's mix at that
+    return: the straight blend of the two ladder mixes whose returns enclose it, which earns
+    exactly `Y_k` and whose risk is at most `X_j`; where those two are a hop apart, the upper
+    one, which earns more than `Y_k`. At or below the peak's return the floor no longer binds
+    and the cell holds the peak itself (the frontier mix in a collapsed column). Above the
+    frontier nothing is feasible and the cell is empty. `k_div[j]` is the highest row that
+    holds the peak.
     """
     if ny < 2:
         raise ValueError("a raster needs at least 2 rows")
@@ -93,10 +94,10 @@ def raster(surf: Surface, front: Frontier, program: EnbProgram, ny: int = NY) ->
         cells: list[np.ndarray | None] = [None] * ny
         returns = surf.y[j]
         bottom = int(np.searchsorted(y, returns[-1], side="right")) - 1
-        for k in range(bottom, ny):
+        for k in range(ny):
             if y[k] > returns[0]:
                 break
-            if k == bottom:
+            if k <= bottom:
                 mix = surf.w[j, -1]
             else:
                 lower = int(np.argmax(returns < y[k]))  # the first level earning less than Y_k

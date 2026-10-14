@@ -129,15 +129,16 @@ def test_raster_resamples_the_ladders_on_shared_floors(menu):
         assert grid.y_div[j] == (front_y if surf.collapsed[j] else grid.y[bottom])
         for k in range(NY):
             mix = grid.w[j][k]
-            inside = bottom <= k and grid.y[k] <= front_y
+            inside = grid.y[k] <= front_y
             assert (mix is not None) == inside and bool(np.isnan(grid.z[j, k])) == (not inside)
             if mix is None:
                 continue
             cells += 1
             assert menu.feasible(mix) and menu.sigma(mix) <= menu.front.x[j] + TOL
             assert menu.mu @ mix >= grid.y[k] - TOL and grid.z[j, k] == menu.enb(mix)
-            if k == bottom:
-                assert np.array_equal(mix, surf.w[j, -1])  # the bottom cell is the peak itself
+            if k <= bottom:
+                # the floor does not bind at or below the peak's return: the cell is the peak
+                assert np.array_equal(mix, surf.w[j, -1])
                 continue
             lower = int(np.argmax(surf.y[j] < grid.y[k]))  # the two levels around that return
             if surf.hop[j, lower - 1]:
@@ -164,7 +165,7 @@ def test_raster_does_not_blend_across_a_hop():
     checked = 0
     for j in range(24):
         for k, mix in enumerate(grid.w[j]):
-            if mix is None or k == grid.k_div[j] or surf.collapsed[j]:
+            if mix is None or k <= grid.k_div[j] or surf.collapsed[j]:
                 continue
             lower = int(np.argmax(surf.y[j] < grid.y[k]))
             if surf.hop[j, lower - 1]:

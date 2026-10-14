@@ -408,16 +408,18 @@ def test_raster_block(fixture_tensor, arrays):
         peak_y = arrays.ly[j, -1]
         bottom = max(k for k in range(NY) if arrays.gy[k] <= peak_y)
         cells = [k for k in range(NY) if arrays.gw[j][k] is not None]
-        assert cells == [k for k in range(bottom, NY) if arrays.gy[k] <= arrays.yf[j]]
-        assert np.array_equal(arrays.gw[j][bottom], arrays.w_div[j])
+        assert cells == [k for k in range(NY) if arrays.gy[k] <= arrays.yf[j]]
+        # at and below the peak's return the floor does not bind: every such cell is the peak
+        assert all(np.array_equal(arrays.gw[j][k], arrays.w_div[j]) for k in range(bottom + 1))
         if arrays.collapsed[j]:
             assert arrays.k_div[j] == -1 and arrays.y_div[j] == arrays.yf[j]
             continue
         assert arrays.k_div[j] == bottom and arrays.y_div[j] == arrays.gy[bottom] <= peak_y
-        for k in cells[1:]:  # above the bottom cell: the ladder's mix at exactly that return
+        ladder = [k for k in cells if k > bottom]
+        for k in ladder:  # above the peak's row: the ladder's mix at exactly that return
             assert abs(arrays.mu @ np.array(arrays.gw[j][k]) - arrays.gy[k]) <= 1e-12
-        if len(cells) >= 4:  # more return, less diversification, from the peak up
-            assert arrays.gz[j][cells[-1]] < arrays.gz[j][cells[0]] - 0.1
+        if len(ladder) >= 3:  # more return, less diversification, from the peak up
+            assert arrays.gz[j][ladder[-1]] < arrays.gz[j][bottom] - 0.1
     assert arrays.k_div[0] == -1 and sum(k >= 0 for k in arrays.k_div) == NX - 1
 
 
