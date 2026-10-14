@@ -670,3 +670,14 @@ test("the axis title and its details line sit inside the chart frame, under the 
     expect(facts.titleTop, `${look}: the title is under the tick labels`).toBeGreaterThanOrEqual(facts.tickBottom);
   }
 });
+
+test("the family links open in a new tab and say so", async ({ page }) => {
+  await open(page);
+  const links = page.getByTestId("footer-cta").locator("a");
+  await expect(links).toHaveCount(3);
+  for (const link of await links.all()) {
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    await expect(link).toHaveAccessibleName(/\(opens in a new tab\)$/);
+  }
+});

@@ -2391,6 +2391,12 @@ button {
   border-color: var(--link);
 }
 
+/* Family links open in a new tab; the small arrow says so (and the hidden text, to a reader). */
+.cta a .ext {
+  margin-left: 5px;
+  opacity: 0.75;
+}
+
 .cta .url {
   color: var(--muted);
   font-size: 10.5px;

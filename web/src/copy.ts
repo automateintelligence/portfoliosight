@@ -114,6 +114,7 @@ export const disclaimer =
 
 export const family = {
   lead: "More from the AutomateIntelligence family",
+  newTab: "(opens in a new tab)",
   links: [
     { name: "Option Spread Scanner", href: "https://option-spread-scanner.ingage-bd0.workers.dev" },
     { name: "KnowledgeSight", href: "https://automateintelligence.ai" },

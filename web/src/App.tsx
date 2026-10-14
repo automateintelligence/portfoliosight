@@ -1,4 +1,4 @@
-import { BarChart3, ChevronDown, ListChecks, PanelRightClose, PanelRightOpen, Settings as SettingsIcon, Share2, ArrowLeftRight } from "lucide-react";
+import { BarChart3, ChevronDown, ExternalLink, ListChecks, PanelRightClose, PanelRightOpen, Settings as SettingsIcon, Share2, ArrowLeftRight } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Chart, MarkKeys } from "./chart/Chart";
 import { NO_LIMITS } from "./chart/Heatmap";
@@ -532,8 +532,10 @@ export default function App() {
             <span>{family.lead}:</span>
             {family.links.map((link, i) => (
               <span key={link.href}>
-                <a href={link.href} rel="noopener">
+                <a href={link.href} target="_blank" rel="noopener noreferrer" title={`${link.name} ${family.newTab}`}>
                   {link.name}
+                  <ExternalLink className="ext" size={11} aria-hidden="true" />
+                  <span className="sr-only">{` ${family.newTab}`}</span>
                 </a>
                 <span className="sep">{` (${link.href})${i < family.links.length - 1 ? ", " : "."}`}</span>
               </span>
