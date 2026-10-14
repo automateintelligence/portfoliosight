@@ -476,7 +476,7 @@ export async function typeFund(page: Page, id: string): Promise<void> {
   }
 }
 
-/** Makes the Funds table hold exactly `ids` (a draft until "Use this menu"). */
+/** Makes the Funds table hold exactly `ids` (a draft until "Recalculate with these funds"). */
 export async function setMenu(page: Page, ids: string[]): Promise<void> {
   for (const id of await fundRowIds(page)) {
     if (ids.includes(id)) continue;

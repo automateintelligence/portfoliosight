@@ -45,6 +45,7 @@ describe("site bundle hygiene", () => {
     const css = files.filter((f) => f.name.endsWith(".css")).map((f) => f.text).join("\n");
     const urls = [...css.matchAll(/url\(([^)]+)\)/g)].map((m) => m[1].replace(/["']/g, ""));
     expect(urls.length).toBeGreaterThanOrEqual(8);
-    for (const u of urls) expect(u.startsWith("/fonts/"), u).toBe(true);
+    // Fonts and the HUD theme's decorative dial are the only files a stylesheet loads, both from this origin.
+    for (const u of urls) expect(/^"?\/(?:fonts|art)\/[\w.-]+"?$/.test(u), u).toBe(true);
   });
 });

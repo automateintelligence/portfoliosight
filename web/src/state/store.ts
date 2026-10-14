@@ -93,7 +93,7 @@ export type Store = {
 };
 
 const THEME_KEY = "ps.theme";
-const isTheme = (v: unknown): v is ThemeId => v === "ks-dark" || v === "light" || v === "hud";
+const isTheme = (v: unknown): v is ThemeId => v === "ks-dark" || v === "light" || v === "hud" || v === "grid";
 
 function storedTheme(): ThemeId | null {
   try {

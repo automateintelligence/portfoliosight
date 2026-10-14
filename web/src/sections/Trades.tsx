@@ -1,7 +1,9 @@
+import { Download } from "lucide-react";
 import { plain } from "../copy";
 import { pct, signedInt, signedMoney, signedPp } from "../format";
 import { tradeDeltas } from "../math/amounts";
 import type { Unit } from "../state/store";
+import { downloadCsv, tradesCsv, tradesFilename } from "./tradesCsv";
 
 type Props = {
   funds: { id: string; last_close?: number | null }[];
@@ -10,19 +12,28 @@ type Props = {
   unit: Unit;
   /** Amounts in the tensor's fund order. */
   amounts: (number | null)[];
+  /** Date of the prices behind the view, for the export's filename. */
+  asof: string;
 };
 
 const tone = (v: number) => (v > 0.0005 ? "up" : v < -0.0005 ? "down" : undefined);
 
 /** Moves from the mix you entered to the selected mix, per unit (spec 3.3). */
-export function Trades({ funds, wNow, wSel, unit, amounts }: Props) {
+export function Trades({ funds, wNow, wSel, unit, amounts, asof }: Props) {
   const lastClose = funds.map((f) => f.last_close ?? null);
   const { rows, turnover } = tradeDeltas({ wNow, wSel, unit, amounts, lastClose });
   const cols = unit === "shares" ? 6 : unit === "usd" ? 5 : 4;
   const shown = funds.map((f, i) => ({ f, i })).filter(({ i }) => wNow[i] > 5e-5 || wSel[i] > 5e-4);
   return (
     <div>
-      <p className="acc-lead">{plain.trades}</p>
+      <div className="toolbar">
+        <p className="acc-lead">{plain.trades}</p>
+        <span className="spacer" />
+        <button type="button" className="btn" data-testid="trades-export" onClick={() => downloadCsv(tradesCsv({ funds, wNow, wSel, unit, amounts }), tradesFilename(asof))}>
+          <Download size={15} aria-hidden="true" />
+          <span>{plain.tradesExport}</span>
+        </button>
+      </div>
       <div role="list">
         <div className={`trow row-head cols-${cols}`} aria-hidden="true">
           <span>Fund</span>

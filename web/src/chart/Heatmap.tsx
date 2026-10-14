@@ -41,8 +41,19 @@ function traceCurve(ctx: Ctx, curve: Curve, scales: ChartScales, dpr: number): v
   }
 }
 
+/** How far up the ramp the most spread-out mix sits, so the darkest cells still stand off the page. */
+export const RAMP_FLOOR = 0.2;
+
 /**
- * Draws, in order: one filled rectangle per feasible cell (colour = ramp(Z / enb_ref), spec 8),
+ * Position on the theme's ramp for a mix whose diversification is `q` = Z / enb_ref. The ramp
+ * runs the other way from the measure: the least spread-out mixes, which lie along the frontier,
+ * take the bright end, so the frontier reads as a lit wall and the well-spread valleys below it
+ * are darker.
+ */
+export const rampPosition = (q: number): number => 1 - (1 - RAMP_FLOOR) * Math.max(0, Math.min(1, q));
+
+/**
+ * Draws, in order: one filled rectangle per feasible cell (colour = ramp(rampPosition(Z / enb_ref)), spec 8),
  * clipped to the area under the frontier so nothing is painted above it; ghost frontiers at 40%
  * opacity; the primary frontier at 2 px. Works in device pixels for crisp cell edges.
  */
@@ -84,7 +95,7 @@ export function drawHeatmap(ctx: Ctx, tensor: Tensor, ghosts: Ghost[], scales: C
       for (let k = 0; k < NY; k++) if (column[k] !== null && column[k] !== undefined) kTop = k;
       const from = kTop >= 0 ? Math.round((scales.y(grid.y[kTop]) - cellH / 2) * dpr) : Math.round(floorY);
       const upTo = Math.round((scales.y(frontier.y[j]) - cellH) * dpr);
-      ctx.fillStyle = ramp(Math.max(0, Math.min(1, zTop / tensor.enb_ref)));
+      ctx.fillStyle = ramp(rampPosition(zTop / tensor.enb_ref));
       if (from > upTo) ctx.fillRect(left, upTo, Math.max(1, right - left - gapPx), from - upTo - gapPx);
     }
     for (let k = 0; k < NY; k++) {
@@ -93,7 +104,7 @@ export function drawHeatmap(ctx: Ctx, tensor: Tensor, ghosts: Ghost[], scales: C
       const cy = scales.y(grid.y[k]);
       const top = Math.round((cy - cellH / 2) * dpr);
       const bottom = Math.round((cy + cellH / 2) * dpr);
-      ctx.fillStyle = ramp(Math.max(0, Math.min(1, z / tensor.enb_ref)));
+      ctx.fillStyle = ramp(rampPosition(z / tensor.enb_ref));
       ctx.fillRect(left, top, Math.max(1, right - left - gapPx), Math.max(1, bottom - top - gapPx));
       cells += 1;
     }
@@ -115,10 +126,11 @@ export function drawHeatmap(ctx: Ctx, tensor: Tensor, ghosts: Ghost[], scales: C
     ctx.restore();
   }
 
-  // Primary frontier: a soft backdrop-coloured edge for legibility, then the 2 px line.
+  // Primary frontier: a backdrop-coloured edge, so the line holds against the bright band of the
+  // map just under it, then the 2 px line.
   ctx.save();
   ctx.setLineDash([]);
-  ctx.globalAlpha = 0.5;
+  ctx.globalAlpha = 0.85;
   ctx.strokeStyle = colors.backdrop;
   ctx.lineWidth = 5 * dpr;
   ctx.beginPath();

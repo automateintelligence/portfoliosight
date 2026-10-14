@@ -323,7 +323,7 @@ assertions:
     level: spec
     kind: contract
   - id: A-PS-41
-    claim: "On load with the fixture preset, in all three themes, the first viewport holds chart-canvas, both sliders, the result strip and the four chips, no table, fund row or stress card is visible, all four sections are collapsed, each chip expands its section, and the overlay markers are exactly point-selected, point-div and point-current."
+    claim: "On load with the fixture preset, in all four themes, the first viewport holds chart-canvas, both sliders, the result strip and the four chips, no table, fund row or stress card is visible, all four sections are collapsed, each chip expands its section, and the overlay markers are exactly point-selected, point-div and point-current."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_41_first_screen.py"
     setup: ""
     teardown: ""
@@ -331,7 +331,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-42
-    claim: "On the iPhone 13 profile, in all three themes, the page never overflows horizontally, the chart, sliders, result strip and chips fit in 1.2 viewport heights, every interactive element has a 44 by 44 px hit area, the diversification slider is horizontal with More return left and More diversified right, the header is 48 px, and a touch drag on point-selected changes the risk position."
+    claim: "On the iPhone 13 profile, in all four themes, the page never overflows horizontally, the chart, sliders, result strip and chips fit in 1.2 viewport heights, every interactive element has a 44 by 44 px hit area, the diversification slider is horizontal with More return left and More diversified right, the header is 48 px, and a touch drag on point-selected changes the risk position."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_42_phone_layout.py"
     setup: ""
     teardown: ""
@@ -347,7 +347,7 @@ assertions:
     level: spec
     kind: example
   - id: A-PS-44
-    claim: "In all three themes, 20 canvas samples inside feasible cells show at least 3 distinct colors that all lie on the theme's --heat-0..4 ramp, 5 samples above the frontier equal the page background, and the plain legend text is present."
+    claim: "In all four themes, 20 canvas samples inside feasible cells show at least 3 distinct colors that all lie on the theme's --heat-0..4 ramp, 5 samples above the frontier equal the page background, and the plain legend text is present."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_44_heatmap_theme_ramp.py"
     setup: ""
     teardown: ""
@@ -387,7 +387,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-49
-    claim: "theme-switch cycles ks-dark, light, hud on html[data-theme], each theme's computed tokens equal the spec 3.5 table, the canvas repaints differently for every pair of themes with the frontier stroke in --frontier, the choice survives reload through localStorage ps.theme, ?t=hud wins over storage, reduced motion yields no CSS transitions, and the repository holds no reference to the film, characters or trademarks behind the HUD look."
+    claim: "theme-switch cycles ks-dark, light, hud, grid on html[data-theme], each theme's computed tokens equal the spec 3.5 table, the canvas repaints differently for every pair of themes with the frontier stroke in --frontier, the choice survives reload through localStorage ps.theme, ?t=hud and ?t=grid win over storage, reduced motion yields no CSS transitions, and the repository holds no reference to the film, characters or trademarks behind the HUD look."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_49_themes_tokens_canvas.py"
     setup: ""
     teardown: ""

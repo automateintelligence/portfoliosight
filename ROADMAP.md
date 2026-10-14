@@ -17,7 +17,7 @@ method are in `docs/reviews/`.
   one; stress cards for 2008, March 2020 and 2022 that never show a number for a mix that mostly
   did not exist; per-fund limits that scale with the size of the menu; six lookbacks with faint
   overlays.
-- Three looks (KnowledgeSight dark, Light, HUD), a phone layout, an address that always describes
+- Four looks (KnowledgeSight dark, Light, HUD, Grid), a phone layout, an address that always describes
   the view, and a share dialog that copies the link or emails a fixed message.
 - Engine: shrunk returns, Ledoit-Wolf covariance, long-only frontier with caps, effective number
   of bets by minimum torsion, a precomputed tensor per menu and lookback; the browser interpolates

@@ -85,7 +85,7 @@ import path from "node:path";
 // Fixture, presets body and the /api mock (the gate contract's "UI mock"; no product mock server)
 // ---------------------------------------------------------------------------------------------
 const GATE_ROOT = process.env.PS_GATE_ROOT || "";
-const THEMES = ["ks-dark", "light", "hud"] as const;
+const THEMES = ["ks-dark", "light", "hud", "grid"] as const;
 const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
 const TSP_IDS = [
   "TSP-G", "TSP-F", "TSP-C", "TSP-S", "TSP-I", "TSP-LINCOME", "TSP-L2030", "TSP-L2035", "TSP-L2040",
@@ -320,15 +320,15 @@ async function expandAll(page: Page, hasAllocation: boolean): Promise<void> {
   }
 }
 
-// theme-switch: either one clickable that cycles ks-dark -> light -> hud, or a group holding exactly
-// three button / role=radio segments in that order. Returns the theme that should now be active.
+// theme-switch: either one clickable that cycles ks-dark -> light -> hud -> grid, or a group holding
+// exactly four button / role=radio segments in that order. Returns the theme that should now be active.
 async function advanceTheme(page: Page): Promise<string> {
-  const order = ["ks-dark", "light", "hud"];
+  const order = ["ks-dark", "light", "hud", "grid"];
   const current = (await page.locator("html").getAttribute("data-theme")) ?? "";
-  const next = order[(order.indexOf(current) + 1) % 3];
+  const next = order[(order.indexOf(current) + 1) % 4];
   const control = page.getByTestId("theme-switch");
   const segments = control.locator('button, [role="radio"]');
-  if ((await segments.count()) === 3) await segments.nth(order.indexOf(next)).click();
+  if ((await segments.count()) === 4) await segments.nth(order.indexOf(next)).click();
   else await control.click();
   return next;
 }
@@ -479,7 +479,9 @@ EXPECTED_TITLES = {
     "plain language light guide2017",
     "plain language light tsp",
     "plain language hud guide2017",
+    "plain language grid guide2017",
     "plain language hud tsp",
+    "plain language grid tsp",
     "cta is generic across presets and slider positions",
 }
 

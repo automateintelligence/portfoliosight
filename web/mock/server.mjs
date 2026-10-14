@@ -176,10 +176,19 @@ function twoFundTensor(lookback) {
   };
 }
 
+// Every window is the same fixture, so a ghost line would hide under the primary one. The drawn
+// frontier of the other windows is stretched a little, each differently ("ew" barely, so two
+// line ends sit close together); the numbers of the view itself are untouched.
+const CURVE_STRETCH = { "1y": [1.08, 1.22], "2y": [1.04, 1.12], "3y": [0.97, 0.9], "10y": [1.12, 0.84], ew: [1.005, 1.03] };
+
 function tensorFor(hash, lookback) {
   if (hash === H3) return twoFundTensor(lookback);
   const copy = structuredClone(fixture);
   copy.lookback = { ...copy.lookback, id: lookback };
+  const stretch = CURVE_STRETCH[lookback];
+  if (stretch) {
+    copy.frontier_curve = { sigma: copy.frontier_curve.sigma.map((v) => v * stretch[0]), mu: copy.frontier_curve.mu.map((v) => v * stretch[1]) };
+  }
   if (hash === H2) {
     copy.universe = { ...copy.universe, hash: H2, preset_id: "tsp", name: SECOND_NAME };
   } else if (hash !== H1) {

@@ -1,12 +1,12 @@
-import { Crosshair, Moon, Sun } from "lucide-react";
+import { Grid3x3, Moon, Radar, Sun } from "lucide-react";
 import { nextTheme, THEMES, type Theme } from "../theme/useTheme";
 
-const LABEL: Record<Theme, string> = { "ks-dark": "Dark", light: "Light", hud: "HUD" };
-const ICON = { "ks-dark": Moon, light: Sun, hud: Crosshair } as const;
+const LABEL: Record<Theme, string> = { "ks-dark": "Dark", light: "Light", hud: "HUD", grid: "Grid" };
+const ICON = { "ks-dark": Moon, light: Sun, hud: Radar, grid: Grid3x3 } as const;
 
 type Props = { theme: Theme; compact: boolean; onChange: (theme: Theme) => void };
 
-/** Three looks: KnowledgeSight dark, Light, HUD. A segmented control, or one cycling button on a phone. */
+/** Four looks: KnowledgeSight dark, Light, HUD, Grid. A segmented control, or one cycling button on a phone. */
 export function ThemeSwitch({ theme, compact, onChange }: Props) {
   if (compact) {
     const Icon = ICON[theme];

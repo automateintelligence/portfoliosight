@@ -11,7 +11,7 @@ describe("copy (spec 3.6, 3.7)", () => {
     copy.disclaimer,
     copy.capsRule("25", 23),
     copy.excludedFund("VXUS", "2025-03-03", "3-year"),
-    copy.stressLine("−31%", "2008 crisis"),
+    copy.stressLine("−31%"),
     copy.stressGap(2, 18, "11"),
     copy.staleLine("2026-10-09"),
   ];
@@ -45,7 +45,7 @@ describe("copy (spec 3.6, 3.7)", () => {
     expect(copy.plain.building).toBe("Give us a moment: computing this menu (about 30 seconds)");
     expect(copy.plain.advice).toBe("Historical math, not investment advice.");
     expect(copy.capsRule("25", 23)).toBe("No single fund above 25% (menu of 23)");
-    expect(copy.stressLine("−31%", "2008 crisis")).toBe("What this mix did: −31% (2008 crisis)");
+    expect(copy.stressLine("−31%")).toBe("What this mix did: −31% (Selected mix)");
     expect(copy.stressGap(2, 18, "11")).toBe("2 of 18 funds (11% of the mix) didn't exist yet; result is for the rest.");
   });
 

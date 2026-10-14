@@ -24,7 +24,7 @@ export function Stress({ tensor, wSel, wNow, details }: Props) {
               <p className="big">{plain.stressSentinel}</p>
             ) : (
               <p className="big">
-                What this mix did: <b className={`num ${sel.value < 0 ? "neg" : "pos"}`}>{signedPct(sel.value)}</b> ({win.label})
+                What this mix did: <b className={`num ${sel.value < 0 ? "neg" : "pos"}`}>{signedPct(sel.value)}</b> ({plain.selectedMix})
               </p>
             )}
             {sel.value !== null && 1 - sel.covered >= 0.0005 && <p>{stressGap(missing, n, ((1 - sel.covered) * 100).toFixed(1))}</p>}
@@ -33,7 +33,9 @@ export function Stress({ tensor, wSel, wNow, details }: Props) {
                 <p>{plain.currentMix}: not enough of it existed then to say.</p>
               ) : (
                 <p>
-                  {plain.currentMix}: <span className="num">{signedPct(now.value)}</span>
+                  <strong className="entered">
+                    {plain.currentMix}: <span className="num">{signedPct(now.value)}</span>
+                  </strong>
                   {1 - now.covered >= 0.0005 ? " (for the part of it that existed then)" : ""}
                 </p>
               ))}

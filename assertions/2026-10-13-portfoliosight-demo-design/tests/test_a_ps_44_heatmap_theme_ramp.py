@@ -1,6 +1,6 @@
 """A-PS-44 - the heatmap renders from the theme ramp under the frontier only.
 
-Playwright (desktop, all three themes via ?t=) run from pytest; stdlib only.
+Playwright (desktop, all four themes via ?t=) run from pytest; stdlib only.
 
 Mock (built by the embedded spec, no product mock server): page.route on /api/** serving
 GET /api/presets (two presets: guide2017 with the allocation from
@@ -20,7 +20,9 @@ Pinned interface (beyond the shared pins of the gate contract):
   linear pixel scales from them.
 - custom properties --heat-0..4 and --bg resolve to colours on the chart element.
 - cell (j, k) is painted around (frontier.x[j], grid.y[k]) with interpolateRgbBasis(--heat-0..4)
-  at Z / enb_ref (spec 8); nothing is painted on the canvas above the frontier (a legend or title
+  at 1 - 0.8 * Z / enb_ref (spec 8; owner feedback 1 turned the ramp round: the least spread-out
+  mixes, which lie along the frontier, take the --heat-4 end, and the most spread-out ones the
+  dark end, stopping a fifth of the way up the ramp so they stay visible); nothing is painted on the canvas above the frontier (a legend or title
   there must be DOM, not canvas pixels).
 - the legend text "How spread out the risk is" is visible DOM text.
 """
@@ -80,7 +82,7 @@ import path from "node:path";
 // Shared helper block (each gate file embeds its own copy; nothing here imports product code).
 // ---------------------------------------------------------------------------------------------
 const ROOT = process.env.PS_GATE_ROOT || "";
-const THEMES = ["ks-dark", "light", "hud"];
+const THEMES = ["ks-dark", "light", "hud", "grid"];
 const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
 const TSP: [string, string][] = [
   ["TSP-G", "G Fund"], ["TSP-F", "F Fund"], ["TSP-C", "C Fund"], ["TSP-S", "S Fund"], ["TSP-I", "I Fund"],
@@ -453,11 +455,17 @@ for (const theme of THEMES) {
         const where = `cell (j=${c.j}, k=${c.k}) rgb(${pixel.map((v) => Math.round(v)).join(",")})`;
         const onRamp = Math.min(...fine.map((p) => channelDistance(p, pixel)));
         expect(onRamp, `${where} is ${onRamp.toFixed(1)}/255 off the ${theme} ramp interpolateRgbBasis(--heat-0..4)`).toBeLessThanOrEqual(12);
-        // Spec 8: colour = ramp(Z / enb_ref). Allow the Z range of the 3 x 3 neighbourhood.
+        // Spec 8: colour = ramp(1 - 0.8 * Z / enb_ref). Allow the Z range of the 3 x 3 neighbourhood.
         let near = Infinity;
-        for (let s = 0; s <= 50; s++) near = Math.min(near, channelDistance(ramp(Math.min(1, c.qMin + ((c.qMax - c.qMin) * s) / 50)), pixel));
-        expect(near, `${where} is not the ramp colour of its own Z / enb_ref (${c.q.toFixed(3)}; neighbourhood ${c.qMin.toFixed(3)}..${c.qMax.toFixed(3)})`).toBeLessThanOrEqual(12);
+        for (let s = 0; s <= 50; s++) near = Math.min(near, channelDistance(ramp(1 - 0.8 * Math.min(1, c.qMin + ((c.qMax - c.qMin) * s) / 50)), pixel));
+        expect(near, `${where} is not the ramp colour of its own 1 - 0.8 * Z / enb_ref (${c.q.toFixed(3)}; neighbourhood ${c.qMin.toFixed(3)}..${c.qMax.toFixed(3)})`).toBeLessThanOrEqual(12);
       });
+
+      // Direction: the least spread-out sampled cell sits nearer the --heat-4 end than the most spread-out one.
+      const byQ = cells.map((c, i) => ({ q: c.q, pixel: cellPixels[i] })).sort((a, b) => a.q - b.q);
+      const top = ramp(1);
+      expect(byQ[byQ.length - 1].q - byQ[0].q, "the samples span a real range of Z / enb_ref").toBeGreaterThan(0.1);
+      expect(channelDistance(top, byQ[0].pixel), "the least spread-out cell is nearer --heat-4 than the most spread-out cell").toBeLessThan(channelDistance(top, byQ[byQ.length - 1].pixel));
 
       // 5 points above the frontier: the page background, nothing painted.
       const NX = tensor.frontier.x.length;
@@ -487,6 +495,7 @@ EXPECTED_TITLES = {
     "heatmap comes from the theme ramp, under the frontier only: ks-dark",
     "heatmap comes from the theme ramp, under the frontier only: light",
     "heatmap comes from the theme ramp, under the frontier only: hud",
+    "heatmap comes from the theme ramp, under the frontier only: grid",
 }
 
 

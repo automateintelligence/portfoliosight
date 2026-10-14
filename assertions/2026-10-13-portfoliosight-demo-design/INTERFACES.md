@@ -182,3 +182,28 @@ the docstring is authoritative for that test.
   URL value and its universe hash are unchanged. A-PS-31 asserts `presets[0].name ==
   "Example Portfolio"`. The record is the section "Preset display name" of the same review file.
 - A-PS-13: the 403 "names the missing scope" leg cannot be forced against the live bucket.
+- Owner feedback 1, 2026-10-13 (the third sanctioned change of the frozen gate in this run). The
+  owner's design notes on the live site changed these pins; every changed test asserts the new
+  truth as strongly as before:
+  - **Four themes.** `html[data-theme]` is `ks-dark | light | hud | grid`. `hud` is the new red
+    and gold look; the look that was `hud` is now `grid` with the same tokens. `theme-switch` is
+    one clickable that cycles ks-dark -> light -> hud -> grid, or a group of exactly four
+    `button` / `[role=radio]` segments in that order. Every per-theme assertion (A-PS-41, 42, 44,
+    47, 48, 49) runs for all four; A-PS-49 holds both token columns and compares all six pairs of
+    canvases. `web/worker/share.ts` still accepts only `t=ks-dark|light|hud` in a mailed link
+    (the Worker's validators were out of scope for this change), so A-PS-38 is unchanged.
+  - **Funds & amounts.** From 1024 px `section-funds` is an `<aside>` beside the chart (it still
+    carries `aria-expanded`, and `chip-funds` still opens it); below 1024 px it is the accordion
+    section as before. `use-menu` exists only while the fund list on screen differs from the
+    list that is plotted, and reads "Recalculate with these funds".
+  - **Copy.** Stress card: "What this mix did: N% (Selected mix)". The diversification and
+    "Suggested" explanations behind details were rewritten (spec 3.6).
+  - **New test ids** (asserted by `web/e2e/local/app.spec.ts` and `web/tests/`, free for later
+    gate assertions): `funds-toggle` (opens and closes the sidebar; `aria-expanded`),
+    `funds-hint`, `amount-head`, `mix-entered-{ID}`, `mix-selected-{ID}`,
+    `frontier-label-{lookback id}` (a `<g>` in the overlay holding a `<text>` and, when the label
+    was moved, a `path.leader`; `data-end-x` / `data-end-y` are the line end in chart pixels),
+    `ghost-tip`, `mix-card` (`data-for` = `selected | current | div | cell`), `mix-card-word`,
+    `trades-export`, `details-words`, `details-suggested`, `details-method`. The markers'
+    wrappers carry `data-mark` = `selected | div | current`; `point-*` ids are unchanged and no
+    new `point-` id exists.

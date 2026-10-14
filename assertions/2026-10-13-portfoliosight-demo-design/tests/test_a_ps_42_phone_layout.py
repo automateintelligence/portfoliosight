@@ -81,7 +81,7 @@ import path from "node:path";
 // Shared helper block (each gate file embeds its own copy; nothing here imports product code).
 // ---------------------------------------------------------------------------------------------
 const ROOT = process.env.PS_GATE_ROOT || "";
-const THEMES = ["ks-dark", "light", "hud"];
+const THEMES = ["ks-dark", "light", "hud", "grid"];
 const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
 const TSP: [string, string][] = [
   ["TSP-G", "G Fund"], ["TSP-F", "F Fund"], ["TSP-C", "C Fund"], ["TSP-S", "S Fund"], ["TSP-I", "I Fund"],
@@ -538,6 +538,7 @@ EXPECTED_TITLES = {
     "phone layout fits and works with a thumb: ks-dark",
     "phone layout fits and works with a thumb: light",
     "phone layout fits and works with a thumb: hud",
+    "phone layout fits and works with a thumb: grid",
 }
 
 

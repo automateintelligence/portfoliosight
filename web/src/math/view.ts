@@ -63,6 +63,9 @@ export type View = {
   front: Stats;
   frontRange: Range;
   mostDiversified: Stats;
+  /** Weights of the most diversified mix at this risk (the open circle). */
+  divWeights: number[];
+  divRange: Range;
   word: ReturnType<typeof diversificationWord>;
 };
 
@@ -76,7 +79,8 @@ export function deriveView(tensor: Tensor, math: PMath, sIn: number, tSetting: n
   const weights = math.interpolate(s, t);
   const selected = math.stats(weights);
   const front = math.stats(math.interpolate(s, 0));
-  const mostDiversified = math.stats(math.interpolate(s, 1));
+  const divWeights = math.interpolate(s, 1);
+  const mostDiversified = math.stats(divWeights);
   const ceiling = ceilingAt(tensor, s);
   return {
     s,
@@ -93,6 +97,8 @@ export function deriveView(tensor: Tensor, math: PMath, sIn: number, tSetting: n
     front,
     frontRange: math.range6m(front.mu, front.sigma),
     mostDiversified,
+    divWeights,
+    divRange: math.range6m(mostDiversified.mu, mostDiversified.sigma),
     word: diversificationWord(selected.enb / tensor.enb_ref),
   };
 }

@@ -98,8 +98,17 @@ export function ResultStrip({ low, typical, high, word, details, facts, staleAso
               {facts.lookbackStart} to {facts.lookbackEnd} ({facts.rows} trading days) · prices through {facts.asof}
             </dd>
           </dl>
-          <p className="wide hint">
-            {technical.resultStrip}. {technical.cutPoints} The line on the chart: {technical.frontier}. Suggested: {technical.suggested}. {facts.notes.join(" ")}
+          <dl className="wide">
+            <dt>What the diversification word means</dt>
+            <dd data-testid="details-words">{technical.cutPoints}</dd>
+          </dl>
+          <dl className="wide">
+            <dt>What “{plain.suggested}” means</dt>
+            <dd data-testid="details-suggested">{technical.suggested}</dd>
+          </dl>
+          <p className="wide hint" data-testid="details-method">
+            Method. Range: {technical.resultStrip}. The line on the chart: {technical.frontier}. {plain.suggested}: {technical.suggestedMethod}.{" "}
+            {facts.notes.filter((n) => !/^the suggested point\b/i.test(n)).join(" ")}
           </p>
         </div>
       )}

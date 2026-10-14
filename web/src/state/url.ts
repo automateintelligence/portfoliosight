@@ -8,7 +8,7 @@ export type Lookback = (typeof LOOKBACKS)[number];
 
 const PRESETS = ["guide2017", "tsp"] as const;
 const UNITS = ["pct", "usd", "shares"] as const;
-const THEMES = ["ks-dark", "light", "hud"] as const;
+const THEMES = ["ks-dark", "light", "hud", "grid"] as const;
 
 export type UrlState = {
   /** `u`; `null` is a custom menu. */

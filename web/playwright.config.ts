@@ -42,7 +42,8 @@ export default defineConfig({
     { name: "local-desktop", testDir: "e2e/local", testIgnore: /screenshots\.spec\.ts/, use: desktop },
     { name: "local-phone", testDir: "e2e/local", testIgnore: /screenshots\.spec\.ts/, use: phone },
     { name: "shots-desktop", testDir: "e2e/local", testMatch: /screenshots\.spec\.ts/, use: desktop },
-    { name: "shots-phone", testDir: "e2e/local", testMatch: /screenshots\.spec\.ts/, use: phone },
+    // The owner-feedback views are desktop views; the phone project takes the first screens only.
+    { name: "shots-phone", testDir: "e2e/local", testMatch: /screenshots\.spec\.ts/, grepInvert: /owner feedback 1 views/, use: phone },
     // DoD 4 is the phone layout: it runs only on the phone.
     { name: "chromium-desktop", testMatch: smokeSpecs, grepInvert: /DoD-04\b/, use: { ...desktop, ...quiet, baseURL: smokeURL } },
     { name: "chromium-phone", testMatch: smokeSpecs, grepInvert: desktopOnly, use: { ...phone, ...quiet, baseURL: smokeURL } },
