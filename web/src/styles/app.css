@@ -72,6 +72,8 @@ button {
   --div-col: 150px;
   --hero-gap: 14px;
   --chart-h: clamp(330px, calc(100vh - 362px), 700px);
+  /* Room under the axis ticks for the axis title and its details line (scales.ts CHART_FOOT). */
+  --chart-foot: 18px;
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -368,14 +370,25 @@ button {
   overflow: hidden;
 }
 
+/* Narrow enough to give the chart its room: the amount column needs only "1,000,000". */
 .side-open .side {
-  width: clamp(348px, 31vw, 440px);
+  width: 360px;
 }
 
 /* Between 1024 and 1279 px the open sidebar leaves the chart little room: everything tightens. */
 @media (min-width: 1024px) and (max-width: 1279px) {
   .side-open .side {
-    width: 318px;
+    width: 326px;
+  }
+
+  /* Tighter columns, so the amount field still shows a seven-digit amount. */
+  .side-open .side .row {
+    grid-template-columns: 48px minmax(60px, 1fr) 60px 60px 28px;
+    gap: 0 6px;
+  }
+
+  .side-open .side .row .amt {
+    padding: 0 6px;
   }
 
   .app:has(.stage.side-open) {
@@ -504,7 +517,7 @@ button {
 
 .chart {
   position: relative;
-  height: var(--chart-h);
+  height: calc(var(--chart-h) + var(--chart-foot));
   min-width: 0;
   border: 1px solid var(--chart-border);
   border-radius: var(--radius-card);
@@ -872,9 +885,9 @@ button {
   top: 14px;
 }
 
+/* Under the tick labels (its top is set from the plot's bottom edge), inside the frame. */
 .x-title {
   right: 16px;
-  bottom: 4px;
   text-align: right;
   font-size: 11px;
 }
@@ -1586,6 +1599,18 @@ button {
   max-width: 460px;
 }
 
+/* The whole scale (the same for every mix of the menu), faint under the Bad-to-Good band. */
+.rangebar .rb-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 12px;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 1px;
+  background: var(--border);
+}
+
 .rangebar .rb-line {
   position: absolute;
   top: 12px;
@@ -1616,6 +1641,25 @@ button {
   margin-top: 3px;
 }
 
+/* Bad and Good: square end caps on the band, taller than it, unlike the round typical dot. */
+.rangebar .rb-cap {
+  position: absolute;
+  top: 12px;
+  width: 3px;
+  height: 16px;
+  margin: -8px 0 0 -1.5px;
+  border-radius: 1px;
+  box-shadow: 0 0 0 1px var(--surface);
+}
+
+.rangebar .rb-low {
+  background: var(--error);
+}
+
+.rangebar .rb-high {
+  background: var(--success);
+}
+
 .rangebar .rb-dot {
   position: absolute;
   top: 12px;
@@ -1635,7 +1679,8 @@ button {
 
 .divword-cap {
   font-size: 11px;
-  color: var(--muted);
+  font-weight: 700;
+  color: var(--strip-cap-strong);
 }
 
 .divword-val {
@@ -1856,6 +1901,30 @@ button {
 
 .toolbar .spacer {
   flex: 1 1 auto;
+}
+
+/* Funds: the live region of the total line takes no room while it is empty (it stays mounted). */
+.funds-live:empty {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+/* Funds: the running total while the percentages are not exactly 100%, a gentle warning. */
+.funds-total {
+  padding: 2px 8px;
+  border-left: 3px solid var(--warn);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.toolbar .btn svg {
+  flex: 0 0 auto;
 }
 
 /* Funds */
@@ -2342,6 +2411,12 @@ button {
   border-color: var(--link);
 }
 
+/* Family links open in a new tab; the small arrow says so (and the hidden text, to a reader). */
+.cta a .ext {
+  margin-left: 5px;
+  opacity: 0.75;
+}
+
 .cta .url {
   color: var(--muted);
   font-size: 10.5px;
@@ -2447,7 +2522,6 @@ button {
 
   .x-title {
     right: 12px;
-    bottom: 4px;
   }
 
   .legend {
@@ -2487,7 +2561,6 @@ button {
 
   .x-title {
     font-size: 10px;
-    bottom: 3px;
   }
 
   .risk,

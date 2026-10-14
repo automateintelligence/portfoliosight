@@ -225,3 +225,26 @@ the docstring is authoritative for that test.
   feedback 1 (palest along the frontier, deepest blue for the most spread-out mixes). The legend
   bar is the token `--heat-legend` and runs the same way as the map in each theme. A-PS-44 asserts
   the light position and direction; the other three themes are unchanged.
+- UI round 2, 2026-10-13 (owner direction, issue #69). New test ids, asserted by
+  `web/e2e/local/app.spec.ts` and `web/tests/` and free for later gate assertions:
+  `funds-clear` ("Clear all": empties every amount, keeps the fund list; in every unit, disabled
+  while nothing is entered), `funds-scale100` ("Scale to 100%": rescales the entries in proportion
+  to exactly 100 at the fields' two decimals, largest remainder, zeros stay zero), `funds-total`
+  (now the running total "Total: 92%, 8% to go" beside `funds-scale100`; both exist only in the %
+  unit while some entry is above zero and the entries do not add up to exactly 100.00, never in $
+  or Shares), `funds-entered` (the "$N entered" / "N shares entered" / "No amounts entered: tickers
+  only." line that `funds-total` used to carry), `range-bar` (the strip's bar, `role="img"` with a
+  spoken label, `data-lo` / `data-hi` = its fixed scale for the menu as fractions), `range-mark-low`,
+  `range-mark-typical`, `range-mark-high` (the Bad and Good end caps and the typical dot, each
+  titled), `x-title` (the risk-axis title, under the tick labels and inside the chart frame).
+  Chart margins are 48/16/58/56 (desktop) and 32/12/54/44 (phone); the chart box is 18 px taller
+  than before, so the plot keeps its size. The details line "Yearly figures for this mix" no longer
+  repeats the standard deviation as a "risk ceiling", and neither does the selected mix's card.
+  The family links in `footer-cta` open in a new tab (`target="_blank"`,
+  `rel="noopener noreferrer"`) and say so to a screen reader.
+  Later the same day: the sections and the chips under the strip run `section-funds`,
+  `section-stress`, `section-trades`, `section-settings` (Stress tests above Trades); the No
+  limits curve is named "No allocation limits" at its end (`frontier-label-nolimits`) and in its
+  legend key (`key-nolimits`: "No allocation limits: same funds, no limit on any one fund";
+  `caps-none` still reads "No limits"); the open sidebar is 360 px wide (326 px from 1024 to
+  1279 px).

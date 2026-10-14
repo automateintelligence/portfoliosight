@@ -7,7 +7,7 @@ import type { Range, Stats, View } from "../math/view";
 import { Heatmap, NO_LIMITS, type Ghost } from "./Heatmap";
 import { MixCard, topHoldings, type CardMix } from "./MixCard";
 import { Overlay, type LineEnd, type MarkId } from "./Overlay";
-import type { ChartScales } from "./scales";
+import { X_TITLE_GAP, type ChartScales } from "./scales";
 
 type Props = {
   tensor: Tensor | null;
@@ -86,7 +86,7 @@ export function MarkKeys({ hasCurrent, hasGhosts, hasNoLimits, compact = false }
             <svg viewBox="0 0 18 12" aria-hidden="true">
               <path d="M1 10 C5 5 10 3.5 17 3" fill="none" stroke="var(--frontier)" strokeWidth="1.2" strokeDasharray="3 2.5" opacity="0.55" />
             </svg>
-            <span>{compact ? plain.noLimits : `${plain.noLimits}: ${plain.noLimitsLine.toLowerCase()}`}</span>
+            <span>{compact ? plain.noLimits : `${plain.noAllocationLimits}: ${plain.noLimitsLine.toLowerCase()}`}</span>
           </li>
         )}
       </ul>
@@ -219,7 +219,7 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
         divLabel={spoken(plain.optimized, view.optRange, divMix.word)}
         currentLabel={current && curMix ? spoken(plain.currentMix, current.range, curMix.word) : ""}
         cards={{
-          selected: card("selected", plain.selectedMix, selMix, ` Risk ceiling ${pct(view.ceiling)}.`),
+          selected: card("selected", plain.selectedMix, selMix),
           div: card("div", plain.optimized, divMix),
           current: curMix ? card("current", plain.currentMix, curMix, current?.range ? undefined : ` ${technical.rangePending}`) : null,
         }}
@@ -246,7 +246,7 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
             {plain.yAxis}
             {details && <span className="tech">{technical.yAxis}</span>}
           </p>
-          <p className="chart-label x-title">
+          <p className="chart-label x-title" data-testid="x-title" style={{ top: scales.plot.bottom + (phone ? X_TITLE_GAP.phone : X_TITLE_GAP.desktop) }}>
             {plain.xAxis}
             {details && <span className="tech">{technical.xAxis}</span>}
           </p>

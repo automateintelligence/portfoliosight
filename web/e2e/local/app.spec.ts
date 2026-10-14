@@ -159,7 +159,7 @@ test("the picker offers served funds, and percentages must add up before the men
 
   await page.goto("/?f=SGOV:60,VTIP:32&unit=pct");
   await section(page, "funds");
-  await expect(page.getByTestId("funds-total")).toHaveText("Adds up to 92%: 8% to go");
+  await expect(page.getByTestId("funds-total")).toHaveText("Total: 92%, 8% to go");
   // Amounts apply as they are typed: there is nothing to press while the fund list is unchanged.
   await expect(page.getByTestId("funds-hint")).toHaveText("Amounts apply as you type.");
   await expect(page.getByTestId("use-menu")).toHaveCount(0);
@@ -296,7 +296,7 @@ test("every frontier line is named at its right end and the names do not collide
   await open(page, "g=10y,ew,1y");
   await expect(page.getByTestId("chart")).toHaveAttribute("data-ghost-count", "3");
   // the No limits line is named like the history windows, and is not one of them in the count
-  const want: Record<string, string> = { "5y": "5 years", "10y": "10 years", ew: "Weighted recent", "1y": "1 year", nolimits: "No limits" };
+  const want: Record<string, string> = { "5y": "5 years", "10y": "10 years", ew: "Weighted recent", "1y": "1 year", nolimits: "No allocation limits" };
   for (const [id, text] of Object.entries(want)) await expect(page.getByTestId(`frontier-label-${id}`)).toHaveText(text);
   const chart = await boxOf(page, "chart");
   const boxes = await Promise.all(Object.keys(want).map(async (id) => ({ id, box: (await page.getByTestId(`frontier-label-${id}`).locator("text").boundingBox())! })));
@@ -315,6 +315,8 @@ test("every frontier line is named at its right end and the names do not collide
   await expect(page.getByTestId("frontier-label-ew").locator("path.leader")).toHaveCount(1);
   await expect(page.getByTestId("frontier-label-5y").locator("path.leader")).toHaveCount(0);
   if (isPhone(testInfo.project.name)) return;
+  // the legend names the curve the same way, with what it means
+  await expect(page.getByTestId("key-nolimits")).toHaveText("No allocation limits: same funds, no limit on any one fund");
   // hovering a ghost line names it; the primary line does not need it
   const end = page.getByTestId("frontier-label-10y");
   const x = chart.x + Number(await end.getAttribute("data-end-x"));
@@ -557,7 +559,8 @@ test("trades show dollar changes at every width, and details name a map cell on 
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.getByTestId("details-toggle").click();
   const box = (await page.getByTestId("chart").boundingBox())!;
-  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.75);
+  // the same spot of the plot as before the box grew a foot for the axis title (CHART_FOOT, 18 px)
+  await page.mouse.move(box.x + box.width * 0.6, box.y + (box.height - 18) * 0.75);
   await expect(page.locator('[data-testid="mix-card"][data-for="cell"]')).toContainText(/At risk \d+\.\d%, earning at least \d+\.\d%/);
 });
 
@@ -568,4 +571,159 @@ test("the share dialog says the link is for invited testers while preview is on"
   await page.getByTestId("share-email").fill("not-an-address");
   await page.getByTestId("share-send").click();
   await expect(page.getByTestId("share-status")).toHaveText("That address doesn't look right");
+});
+
+test("Clear all and Scale to 100% work from the keyboard; the total and Scale show only for % entries off 100%", async ({ page }) => {
+  await open(page, "f=SGOV:60,VTIP:32&unit=pct");
+  await section(page, "funds");
+  const total = page.getByTestId("funds-total");
+  const scale = page.getByTestId("funds-scale100");
+  const clear = page.getByTestId("funds-clear");
+  const amount = (id: string) => page.getByTestId(`fund-row-${id}`).locator("input");
+  await expect(total).toHaveText("Total: 92%, 8% to go");
+  await expect(scale).toHaveAccessibleName(/^Scale to 100%/);
+  await expect(page.getByTestId("point-current")).toHaveCount(0);
+  // the total follows the typing
+  await amount("VTIP").fill("38.9");
+  await expect(total).toHaveText("Total: 98.9%, 1.1% to go");
+  await scale.focus();
+  await page.keyboard.press("Enter");
+  // the button goes away; focus moves on to Clear all, not to the page
+  await expect(clear).toBeFocused();
+  await expect(amount("SGOV")).toHaveValue("60.67");
+  await expect(amount("VTIP")).toHaveValue("39.33");
+  await expect(total).toHaveCount(0);
+  await expect(scale).toHaveCount(0);
+  await expect(page.getByTestId("point-current")).toBeVisible();
+  await expect(page.getByTestId("mix-entered-SGOV")).toHaveText("60.7%");
+  // Clear all empties the amounts and keeps the funds; the square goes with the amounts
+  await expect(clear).toHaveAccessibleName(/^Clear all/);
+  await clear.focus();
+  await page.keyboard.press("Space");
+  await expect(amount("SGOV")).toHaveValue("");
+  await expect(amount("VTIP")).toHaveValue("");
+  // Clear all turns off; focus moves to the first amount
+  await expect(amount("SGOV")).toBeFocused();
+  await expect(page.getByTestId("fund-row-SGOV")).toBeVisible();
+  await expect(page.getByTestId("fund-row-VTIP")).toBeVisible();
+  await expect(page.getByTestId("point-current")).toHaveCount(0);
+  await expect(page.getByTestId("funds-entered")).toHaveText("No amounts entered: tickers only.");
+  await expect(total).toHaveCount(0);
+  await expect(clear).toBeDisabled();
+  // in $ there is no total note and no Scale to 100%, whatever the amounts; Clear all stays
+  await page.goto("/?f=SGOV:600,VTIP:320&unit=usd");
+  await section(page, "funds");
+  await expect(page.getByTestId("funds-entered")).toHaveText("$920 entered");
+  await expect(total).toHaveCount(0);
+  await expect(scale).toHaveCount(0);
+  await expect(clear).toBeEnabled();
+});
+
+// @desktop-only: the phone strip shows the three figures without the bar (playwright.config.ts).
+test("the strip marks Bad, Typical and Good on one scale that holds still as the sliders and the history window move @desktop-only", async ({ page }) => {
+  await open(page, "u=guide2017&lb=5y");
+  const bar = page.getByTestId("range-bar");
+  const scaleOf = async () => [await bar.getAttribute("data-lo"), await bar.getAttribute("data-hi")];
+  const xOf = async (id: string) => {
+    const b = (await page.getByTestId(id).boundingBox())!;
+    return b.x + b.width / 2;
+  };
+  await expect(bar).toHaveAttribute("role", "img");
+  await expect(bar).toHaveAttribute("aria-label", /fixed scale.*Bad .*Typical .*Good /);
+  for (const id of ["range-mark-low", "range-mark-typical", "range-mark-high"]) await expect(page.getByTestId(id)).toBeVisible();
+  await expect(page.getByTestId("range-mark-low")).toHaveAttribute("title", /^Bad year: /);
+  await expect(page.getByTestId("range-mark-high")).toHaveAttribute("title", /^Good year: /);
+  const ends = async () => [await xOf("range-mark-low"), await xOf("range-mark-typical"), await xOf("range-mark-high")];
+  const [lo, typ, hi] = await ends();
+  expect(lo).toBeLessThan(typ);
+  expect(typ).toBeLessThan(hi);
+  // the caps are not the dot: thin and taller than wide
+  const cap = (await page.getByTestId("range-mark-high").boundingBox())!;
+  expect(cap.height).toBeGreaterThan(cap.width * 3);
+  const first = await scaleOf();
+  const lowBefore = await page.getByTestId("range-low").textContent();
+  await page.getByTestId("point-selected").focus();
+  for (let i = 0; i < 25; i++) await page.keyboard.press("ArrowRight");
+  await expect(page.getByTestId("range-low")).not.toHaveText(lowBefore ?? "");
+  expect(await scaleOf(), "the scale after the risk slider moved").toEqual(first);
+  expect((await ends())[2]).not.toBeCloseTo(hi, 0);
+  for (let i = 0; i < 10; i++) await page.keyboard.press("ArrowDown");
+  expect(await scaleOf(), "the scale after the diversification slider moved").toEqual(first);
+  await section(page, "settings");
+  await page.getByTestId("lookback-1y").check({ force: true });
+  await expect.poll(() => new URL(page.url()).searchParams.get("lb")).toBe("1y");
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  expect(await scaleOf(), "the scale after the history window changed").toEqual(first);
+});
+
+test("the axis title and its details line sit inside the chart frame, under the tick labels, in every look", async ({ page }, testInfo) => {
+  const looks = isPhone(testInfo.project.name) ? ["ks-dark", "grid"] : ["ks-dark", "light", "hud", "grid"];
+  for (const look of looks) {
+    await open(page, `t=${look}&x=1`);
+    if ((await page.getByTestId("details-toggle").getAttribute("aria-pressed")) !== "true") await page.getByTestId("details-toggle").click();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const title = page.getByTestId("x-title");
+    await expect(title.locator(".tech")).toHaveText("Standard deviation of yearly return");
+    const facts = await page.getByTestId("chart").evaluate((chart) => {
+      const c = chart.getBoundingClientRect();
+      const t = chart.querySelector(".x-title")!.getBoundingClientRect();
+      const ticks = Array.from(chart.querySelectorAll(".axis-x .tick text")).map((el) => el.getBoundingClientRect());
+      const border = parseFloat(getComputedStyle(chart).borderBottomWidth) || 0;
+      return { frameBottom: c.bottom - border, frameRight: c.right, titleTop: t.top, titleBottom: t.bottom, titleRight: t.right, tickBottom: Math.max(...ticks.map((r) => r.bottom)) };
+    });
+    expect(facts.titleBottom, `${look}: room under the title`).toBeLessThanOrEqual(facts.frameBottom - 4);
+    expect(facts.titleRight, `${look}: inside on the right`).toBeLessThanOrEqual(facts.frameRight);
+    expect(facts.titleTop, `${look}: the title is under the tick labels`).toBeGreaterThanOrEqual(facts.tickBottom);
+  }
+});
+
+test("the family links open in a new tab and say so", async ({ page }) => {
+  await open(page);
+  const links = page.getByTestId("footer-cta").locator("a");
+  await expect(links).toHaveCount(3);
+  for (const link of await links.all()) {
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    await expect(link).toHaveAccessibleName(/\(opens in a new tab\)$/);
+  }
+});
+
+test("the sections and their buttons run Funds & amounts, Stress tests, Trades, Settings", async ({ page }) => {
+  await open(page);
+  const chips = await page.locator(".chips .chip").evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
+  expect(chips).toEqual(["chip-funds", "chip-stress", "chip-trades", "chip-settings"]);
+  const sections = await page.locator('[data-testid^="section-"]').evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
+  expect(sections.filter((id) => id !== "section-funds")).toEqual(["section-stress", "section-trades", "section-settings"]);
+});
+
+// @desktop-only: there is no sidebar on a phone (playwright.config.ts).
+test("the sidebar's amount column holds 1,000,000 and the sidebar leaves the chart its room @desktop-only", async ({ page }) => {
+  for (const [theme, width] of ["ks-dark", "light", "hud", "grid"].flatMap((t) => [1024, 1280, 1366, 1920].map((w) => [t, w] as const))) {
+    await page.setViewportSize({ width, height: 900 });
+    await open(page, `t=${theme}&f=VTI:1000000,BND:250000&unit=usd`);
+    if ((await page.getByTestId("funds-toggle").getAttribute("aria-expanded")) !== "true") await page.getByTestId("funds-toggle").click();
+    const input = page.getByTestId("fund-row-VTI").locator("input");
+    await expect(input).toHaveValue("1000000");
+    // the field shows the whole number: nothing scrolls inside it
+    const fits = () => input.evaluate((el) => (el as HTMLInputElement).scrollWidth <= (el as HTMLInputElement).clientWidth + 1);
+    expect(await fits(), `${theme} ${width}: 1000000 fits`).toBe(true);
+    if (width >= 1280) {
+      // typed with separators, while the field has focus
+      await input.fill("1,000,000");
+      expect(await fits(), `${theme} ${width}: 1,000,000 fits as typed`).toBe(true);
+      await input.blur();
+    }
+    const side = await boxOf(page, "section-funds");
+    expect(side.width, `${theme} ${width}: sidebar width`).toBeLessThanOrEqual(360);
+    // the amount head stays on one line (two in the tight 1024 px layout, as before); the narrow
+    // percentage heads keep their three lines at most
+    const lines = await page.locator(".side .row-head > span").evaluateAll((els) =>
+      els.map((el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return [el.getAttribute("data-testid") ?? el.className, new Set(Array.from(range.getClientRects()).map((r) => Math.round(r.top))).size] as const;
+      }),
+    );
+    for (const [head, n] of lines) expect(n, `${theme} ${width}: ${head} lines`).toBeLessThanOrEqual(head === "amount-head" ? (width >= 1280 ? 1 : 2) : 3);
+  }
 });

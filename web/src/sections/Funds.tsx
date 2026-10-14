@@ -1,10 +1,10 @@
-import { Plus, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Eraser, Percent, Plus, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SymbolEntry } from "../api/http";
 import type { Tensor } from "../api/tensor";
-import { plain } from "../copy";
+import { fundsTotal, plain } from "../copy";
 import { amountText, money, parseAmount, pct } from "../format";
-import { amountsToWeights, percentTotal } from "../math/amounts";
+import { amountsToWeights, percentShown, percentTotal, scaleTo100 } from "../math/amounts";
 import { MAX_FUNDS, MIN_FUNDS, type Row, type Unit } from "../state/store";
 
 type Props = {
@@ -115,16 +115,38 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
     else setAddError(`${query.trim().toUpperCase()} isn't offered: no verified current data for it.`);
   };
 
-  const totalLine =
-    unit === "pct"
-      ? anyAmount
-        ? total.message
-        : "No amounts entered: tickers only."
-      : anyAmount
-        ? unit === "usd"
-          ? `${money(sum)} entered`
-          : `${sum.toLocaleString("en-US")} shares entered`
-        : "No amounts entered: tickers only.";
+  // In %, while the entries are not exactly 100% as the fields show them, the running total and
+  // the button that scales them there appear together; otherwise neither does.
+  const shown = percentShown(list.map((r) => r.amount));
+  const offTotal = unit === "pct" && shown.entered && !shown.exact;
+  const gap = Math.round(Math.abs(100 - shown.total) * 100) / 100;
+  const enteredLine = !anyAmount
+    ? plain.fundsNone
+    : unit === "usd"
+      ? `${money(sum)} entered`
+      : unit === "shares"
+        ? `${sum.toLocaleString("en-US")} shares entered`
+        : null;
+  // Both act on every fund in the list on screen, as typing into each field would.
+  const setAll = (next: (number | null)[]) => {
+    if (draft) setDraft(draft.map((r, i) => ({ ...r, amount: next[i] })));
+    list.forEach((r, i) => {
+      if (next[i] !== r.amount && rows.some((p) => p.id === r.id)) onAmount(r.id, next[i]);
+    });
+  };
+  // Each button goes away (Scale) or turns off (Clear all) once used, so keyboard focus moves on to
+  // a control that stays: Clear all after scaling, the first amount after clearing.
+  const clearRef = useRef<HTMLButtonElement>(null);
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const clearAll = () => {
+    setAll(list.map(() => null));
+    // after the emptied fields have rendered: a focused field keeps the text it had
+    requestAnimationFrame(() => rowsRef.current?.querySelector<HTMLInputElement>("input.amt")?.focus());
+  };
+  const scaleAll = () => {
+    clearRef.current?.focus();
+    setAll(scaleTo100(list.map((r) => r.amount)));
+  };
 
   return (
     <div>
@@ -136,9 +158,30 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
             </button>
           ))}
         </div>
-        <span className={pctBlocked ? "err" : "hint"} data-testid="funds-total" role="status">
-          {totalLine}
+        {/* One live region, always mounted, so a reader hears the total as soon as it appears. */}
+        <span className="funds-live" role="status">
+          {offTotal && (
+            <span className="funds-total" data-testid="funds-total">
+              {fundsTotal(String(shown.total), String(gap), shown.total > 100)}
+            </span>
+          )}
+          {enteredLine && (
+            <span className="hint" data-testid="funds-entered">
+              {enteredLine}
+            </span>
+          )}
         </span>
+        {offTotal && (
+          <button type="button" className="btn" data-testid="funds-scale100" title={plain.fundsScaleHint} aria-label={`${plain.fundsScale}: ${plain.fundsScaleHint.toLowerCase()}`} onClick={scaleAll}>
+            <Percent size={14} aria-hidden="true" />
+            <span>{plain.fundsScale}</span>
+          </button>
+        )}
+        <span className="spacer" />
+        <button ref={clearRef} type="button" className="btn btn-quiet" data-testid="funds-clear" title={plain.fundsClearHint} aria-label={`${plain.fundsClear}: ${plain.fundsClearHint.toLowerCase()}`} disabled={!anyAmount} onClick={clearAll}>
+          <Eraser size={14} aria-hidden="true" />
+          <span>{plain.fundsClear}</span>
+        </button>
       </div>
       <p className="hint" data-testid="funds-hint">
         {plain.fundsAsYouType}
@@ -162,7 +205,7 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
       {mixStatus === "ok" && setAside !== null && setAside > 0.0005 && (
         <p className="hint">{`${pct(setAside)} of the mix you entered is in funds set aside in this view; the rest is scaled up to 100%.`}</p>
       )}
-      <div className="rows" role="list">
+      <div className="rows" role="list" ref={rowsRef}>
         <div className="row row-head" aria-hidden="true">
           <span className="tk">Ticker</span>
           <span className="nm">Fund</span>

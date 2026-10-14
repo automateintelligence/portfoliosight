@@ -28,6 +28,8 @@ export const plain = {
   ghosts: "Same menu, different years of history",
   noLimits: "No limits",
   noLimitsLine: "Same funds, no limit on any one fund",
+  /** The legend's and the line's name for the No limits curve (owner direction 2026-10-13). */
+  noAllocationLimits: "No allocation limits",
   resetLimits: "Reset limits",
   currentMix: "The mix you entered",
   selectedMix: "Selected mix",
@@ -58,6 +60,11 @@ export const plain = {
   fundsRecalculate: "Recalculate with these funds",
   fundsAsYouType: "Amounts apply as you type.",
   fundsChanged: "The fund list has changed: recalculate to see it on the chart.",
+  fundsNone: "No amounts entered: tickers only.",
+  fundsClear: "Clear all",
+  fundsClearHint: "Clear every amount; the funds stay in the list",
+  fundsScale: "Scale to 100%",
+  fundsScaleHint: "Scale the amounts in proportion so they add up to exactly 100%",
   fundsOpen: "Show funds & amounts",
   fundsClose: "Hide funds & amounts",
   colEntered: "Mix entered %",
@@ -101,7 +108,7 @@ export const technical = {
   caps: "Editable default: max = max(0.25, 3/N)",
   cutPoints:
     "The word tells you how evenly this mix's risk is shared out. We look at how many truly different kinds of investment are carrying the risk, and compare that with the most spread-out mix these funds can make. Good: at least three-quarters as spread out as that best mix. Average: at least half. Fair: at least 30%. Poor: less than that, so one or two holdings carry most of the risk.",
-  cellPlace: (ceiling: string, floor: string) => `At risk ${ceiling}, earning at least ${floor}`,
+  cellPlace: (risk: string, floor: string) => `At risk ${risk}, earning at least ${floor}`,
 } as const;
 
 export const disclaimer =
@@ -109,6 +116,7 @@ export const disclaimer =
 
 export const family = {
   lead: "More from the AutomateIntelligence family",
+  newTab: "(opens in a new tab)",
   links: [
     { name: "Option Spread Scanner", href: "https://option-spread-scanner.ingage-bd0.workers.dev" },
     { name: "KnowledgeSight", href: "https://automateintelligence.ai" },
@@ -134,7 +142,7 @@ export const lookbackLine: Record<string, string> = {
   "10y": "10 years",
   ew: "Weighted recent",
   // not a history window: the same menu with every fund allowed 0% to 100% (owner's wording)
-  nolimits: "No limits",
+  nolimits: "No allocation limits",
 };
 
 export const lookbackShort: Record<string, string> = {
@@ -159,7 +167,12 @@ export const excludedFund = (fund: string, date: string, window: string) =>
 export const stressLine = (pct: string) => `What this mix did: ${pct} (${plain.selectedMix})`;
 export const stressGap = (n: number, m: number, pct: string) =>
   `${n} of ${m} funds (${pct}% of the mix) didn't exist yet; result is for the rest.`;
+/** The running total of percentages while it is not exactly 100%: "Total: 92%, 8% to go". */
+export const fundsTotal = (total: string, gap: string, over: boolean) => `Total: ${total}%, ${gap}% ${over ? "over" : "to go"}`;
 export const staleLine = (asof: string) => `Prices through ${asof}; the nightly refresh has not run since then.`;
 // Behind the details toggle only (it names the technical measure).
 export const enbLine = (n: string, m: string) =>
   `spreads risk over the equivalent of ${n} independent bets; highest found on this menu: ${m}`;
+/** The strip's bar, spoken: it is drawn on one scale for every mix of this menu. */
+export const rangeBarLabel = (from: string, to: string, low: string, typical: string, high: string) =>
+  `One-year range on a fixed scale from ${from} to ${to}, the same for every mix of this menu: ${plain.rangeLow} ${low}, ${plain.rangeTypical} ${typical}, ${plain.rangeHigh} ${high}`;

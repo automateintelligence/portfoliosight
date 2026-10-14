@@ -1,4 +1,4 @@
-import { BarChart3, ChevronDown, ListChecks, PanelRightClose, PanelRightOpen, Settings as SettingsIcon, Share2, ArrowLeftRight } from "lucide-react";
+import { BarChart3, ChevronDown, ExternalLink, ListChecks, PanelRightClose, PanelRightOpen, Settings as SettingsIcon, Share2, ArrowLeftRight } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Chart, MarkKeys } from "./chart/Chart";
 import { NO_LIMITS } from "./chart/Heatmap";
@@ -11,6 +11,7 @@ import { ShareDialog } from "./controls/ShareDialog";
 import { ThemeSwitch } from "./controls/ThemeSwitch";
 import { disclaimer, family, lookbackLine, lookbackNames, plain } from "./copy";
 import { portfolioMath, type YearRange } from "./math/portfolio";
+import { stripScale } from "./math/stripScale";
 import { atNode, ceilingAt, deriveView, limitsBind, positionOfCeiling } from "./math/view";
 import { Funds } from "./sections/Funds";
 import { Settings } from "./sections/Settings";
@@ -18,6 +19,7 @@ import { Stress } from "./sections/Stress";
 import { Trades } from "./sections/Trades";
 import { createStore, currentMix, LOOKBACKS, type LookbackId } from "./state/store";
 import { useExactRange } from "./state/useExactRange";
+import { useStripBounds } from "./state/useStripBounds";
 import { applyTheme, useMediaQuery, useThemeEpoch } from "./theme/useTheme";
 
 type SectionId = "funds" | "trades" | "stress" | "settings";
@@ -118,6 +120,9 @@ export default function App() {
   // column's level the tensor's own figure is already exact, so nothing is asked.
   const selectedExact = useExactRange(rangeKey, tensor && nodeView && !atNode(tensor, nodeView.s, nodeView.t) ? nodeView.weights : null);
   const view = useMemo(() => (nodeView && selectedExact ? { ...nodeView, range: selectedExact } : nodeView), [nodeView, selectedExact]);
+  // The strip's bar keeps one scale per menu, over every history window loaded for it and every
+  // figure it has shown.
+  const stripBounds = useStripBounds(tensor, state.ghostTensors, view ? [view.range.low, view.range.high] : []);
   const mix = useMemo(() => (tensor ? currentMix({ rows: state.rows, unit: state.unit }, tensor) : null), [tensor, state.rows, state.unit]);
   const cellMix = useCallback(
     (j: number, k: number) => {
@@ -142,6 +147,7 @@ export default function App() {
     if (!math || !mix?.weights || !currentStats) return null;
     return { stats: currentStats, range: builtIn ?? enteredExact, weights: mix.weights };
   }, [math, mix, currentStats, builtIn, enteredExact]);
+
 
   const lookbackGhosts = useMemo(
     () => state.ghosts.flatMap((id) => (state.ghostTensors[id] ? [{ id, curve: state.ghostTensors[id]!.frontier_curve }] : [])),
@@ -249,7 +255,8 @@ export default function App() {
   const needSymbols = useCallback(() => dispatch({ type: "loadSymbols" }), [dispatch]);
 
   const hasMix = Boolean(mix?.weights);
-  const sections: SectionId[] = hasMix ? ["funds", "trades", "stress", "settings"] : ["funds", "stress", "settings"];
+  // Stress tests come before Trades, so the cards sit near the chart on a smaller screen.
+  const sections: SectionId[] = hasMix ? ["funds", "stress", "trades", "settings"] : ["funds", "stress", "settings"];
   const presets = state.presets?.presets ?? [];
   const busy = state.build.status === "building";
   const includedAmounts = useMemo(() => {
@@ -425,6 +432,7 @@ export default function App() {
             typical={view.range.typical}
             high={view.range.high}
             normal={view.normal}
+            scale={stripScale(stripBounds, [view.range.low, view.range.typical, view.range.high])}
             word={view.word}
             details={state.details}
             facts={{
@@ -432,7 +440,6 @@ export default function App() {
               enbRef: tensor.enb_ref,
               mu: view.selected.mu,
               sigma: view.selected.sigma,
-              ceiling: view.ceiling,
               lookbackStart: tensor.lookback.start,
               lookbackEnd: tensor.lookback.end,
               rows: tensor.lookback.rows,
@@ -490,14 +497,14 @@ export default function App() {
             {fundsTable}
           </Accordion>
         )}
+        <Accordion id="stress" title={plain.chips.stress} open={open.stress} onToggle={() => setOpen((p) => ({ ...p, stress: !p.stress }))}>
+          {tensor && view ? <Stress tensor={tensor} wSel={view.weights} wNow={mix?.weights ?? null} details={state.details} /> : null}
+        </Accordion>
         {hasMix && tensor && view && mix?.weights && (
           <Accordion id="trades" title={plain.chips.trades} open={open.trades} onToggle={() => setOpen((p) => ({ ...p, trades: !p.trades }))}>
             <Trades funds={tensor.universe.funds} wNow={mix.weights} wSel={view.weights} unit={state.unit} amounts={includedAmounts} asof={tensor.asof} />
           </Accordion>
         )}
-        <Accordion id="stress" title={plain.chips.stress} open={open.stress} onToggle={() => setOpen((p) => ({ ...p, stress: !p.stress }))}>
-          {tensor && view ? <Stress tensor={tensor} wSel={view.weights} wNow={mix?.weights ?? null} details={state.details} /> : null}
-        </Accordion>
         <Accordion id="settings" title={plain.chips.settings} open={open.settings} onToggle={() => setOpen((p) => ({ ...p, settings: !p.settings }))}>
           {tensor ? (
             <Settings
@@ -527,8 +534,10 @@ export default function App() {
             <span>{family.lead}:</span>
             {family.links.map((link, i) => (
               <span key={link.href}>
-                <a href={link.href} rel="noopener">
+                <a href={link.href} target="_blank" rel="noopener noreferrer" title={`${link.name} ${family.newTab}`}>
                   {link.name}
+                  <ExternalLink className="ext" size={11} aria-hidden="true" />
+                  <span className="sr-only">{` ${family.newTab}`}</span>
                 </a>
                 <span className="sep">{` (${link.href})${i < family.links.length - 1 ? ", " : "."}`}</span>
               </span>

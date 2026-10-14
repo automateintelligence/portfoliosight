@@ -34,6 +34,50 @@ export function percentTotal(amounts: Amount[]): { total: number; ok: boolean; m
   return { total, ok: Math.abs(total - 100) <= PERCENT_BAND + SUM_NOISE, message: `Adds up to ${shown}%${rest}` };
 }
 
+/** Decimals an amount field shows (format.ts `amountText`). */
+export const AMOUNT_DECIMALS = 2;
+
+/** Each amount in the field's smallest step (hundredths), rounded as the fields round it (`toFixed`); blank is 0. */
+const steps = (amounts: Amount[], decimals: number) => amounts.map((amount) => Math.round(Number((amount ?? 0).toFixed(decimals)) * 10 ** decimals));
+
+/**
+ * The percentages as the fields show them: their total and whether it is exactly 100. Exact means
+ * the fields add up to 100 to their precision *and* the amounts themselves do (a field can show
+ * 5 for 5.004, and twenty of them are 100.08). `total` is the fields' sum, or the amounts' own sum
+ * (to the same precision) when only that one is off. `entered` is false when no field holds more
+ * than zero.
+ */
+export function percentShown(amounts: Amount[], decimals = AMOUNT_DECIMALS): { total: number; exact: boolean; entered: boolean } {
+  const scale = 10 ** decimals;
+  const fields = sum(steps(amounts, decimals));
+  const own = Math.round(sum(amounts.map((amount) => amount ?? 0)) * scale);
+  const want = 100 * scale;
+  return { total: (fields !== want ? fields : own) / scale, exact: fields === want && own === want, entered: amounts.some((amount) => (amount ?? 0) > 0) };
+}
+
+/**
+ * Rescales the entries in proportion so that, at the fields' precision, they add up to exactly
+ * 100: each gets the floor of its share in hundredths, and the hundredths left over go one each
+ * to the largest remainders (ties to the earlier field). Blank stays blank and zero stays zero.
+ * Entries that add up to nothing are returned unchanged.
+ */
+export function scaleTo100(amounts: Amount[], decimals = AMOUNT_DECIMALS): Amount[] {
+  const total = sum(amounts.map((amount) => amount ?? 0));
+  if (!(total > 0)) return [...amounts];
+  const units = 100 * 10 ** decimals;
+  const exact = amounts.map((amount) => ((amount ?? 0) / total) * units);
+  const floors = exact.map((v) => Math.floor(v + SUM_NOISE));
+  let left = units - sum(floors);
+  const order = exact.map((v, i) => ({ i, rest: v - floors[i] })).sort((a, b) => b.rest - a.rest || a.i - b.i);
+  for (const { i } of order) {
+    if (left <= 0) break;
+    if (!((amounts[i] ?? 0) > 0)) continue;
+    floors[i] += 1;
+    left -= 1;
+  }
+  return amounts.map((amount, i) => (amount === null ? null : floors[i] / 10 ** decimals));
+}
+
 /**
  * The current mix from entered amounts. `empty`: nothing entered, or it adds up to nothing.
  * `invalid_total`: percentages outside 100 +- 0.05. `unknown_price`: shares of a fund without a

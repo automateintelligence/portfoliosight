@@ -59,6 +59,8 @@
 :root,
 [data-theme="ks-dark"] {
   color-scheme: dark;
+  /* Strong strip captions ("Diversification"): brighter than --text on the dark looks, darker on Light. */
+  --strip-cap-strong: #FFFFFF;
   --radius-control: 8px;
   --radius-card: 16px;
   --font-wordmark: var(--font-serif);
@@ -124,6 +126,8 @@
 }
 [data-theme="light"] {
   color-scheme: light;
+  /* Strong strip captions ("Diversification"): brighter than --text on the dark looks, darker on Light. */
+  --strip-cap-strong: #0A0A0A;
   --radius-control: 4px;
   --radius-card: 8px;
   --font-wordmark: var(--font-ui);
@@ -190,6 +194,8 @@
 }
 [data-theme="hud"] {
   color-scheme: dark;
+  /* Strong strip captions ("Diversification"): brighter than --text on the dark looks, darker on Light. */
+  --strip-cap-strong: #FFFBF4;
   --radius-control: 3px;
   --radius-card: 4px;
   --font-wordmark: var(--font-hud);
@@ -259,6 +265,8 @@
 }
 [data-theme="grid"] {
   color-scheme: dark;
+  /* Strong strip captions ("Diversification"): brighter than --text on the dark looks, darker on Light. */
+  --strip-cap-strong: #F2FDFF;
   --radius-control: 8px;
   --radius-card: 16px;
   --font-wordmark: var(--font-ui);
