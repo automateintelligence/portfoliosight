@@ -3,9 +3,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseTensor } from "../src/api/client";
 import { drawHeatmap, RAMP_FLOOR, rampPosition } from "../src/chart/Heatmap";
-import { DESKTOP_MARGINS, makeScales, paddedExtent, PHONE_MARGINS } from "../src/chart/scales";
+import { clipCurve, DESKTOP_MARGINS, makeScales, paddedExtent, PHONE_MARGINS } from "../src/chart/scales";
 import { portfolioMath } from "../src/math/portfolio";
-import { ceilingAt, deriveView, frontierMuAt, ladderCollapsedAt, positionOfCeiling } from "../src/math/view";
+import { atNode, ceilingAt, deriveView, frontierMuAt, ladderCollapsedAt, limitsBind, positionOfCeiling } from "../src/math/view";
 
 const TENSOR = parseTensor(JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "fixtures/guide2017_5y.json"), "utf8")));
 const math = portfolioMath(TENSOR);
@@ -88,6 +88,42 @@ describe("heatmap drawing", () => {
   });
 });
 
+describe("the No limits line is cut at the chart's edges", () => {
+  it("keeps the part inside the box and moves the ends onto its edges", () => {
+    const curve = { sigma: [0.0, 0.1, 0.2, 0.3], mu: [0.0, 0.05, 0.1, 0.2] };
+    const cut = clipCurve(curve, { xMin: 0.05, xMax: 1, yMin: -1, yMax: 0.15 });
+    expect(cut.sigma[0]).toBeCloseTo(0.05, 15);
+    expect(cut.mu[0]).toBeCloseTo(0.025, 15);
+    expect(cut.sigma.slice(1, 3)).toEqual([0.1, 0.2]);
+    // it leaves through the top at mu = 0.15, half way along the last segment
+    expect(cut.sigma[3]).toBeCloseTo(0.25, 15);
+    expect(cut.mu[3]).toBeCloseTo(0.15, 15);
+    expect(clipCurve(curve, { xMin: 0, xMax: 1, yMin: 0, yMax: 1 })).toEqual(curve);
+    expect(clipCurve(curve, { xMin: 2, xMax: 3, yMin: 0, yMax: 1 }).sigma).toHaveLength(0);
+  });
+
+  it("the fixture's uncapped frontier lies on or above the capped one inside the view", () => {
+    const u = TENSOR.frontier_uncapped;
+    for (let j = 0; j < TENSOR.frontier.x.length; j++) {
+      const i = u.sigma.findIndex((s) => s >= TENSOR.frontier.x[j] - 1e-12);
+      if (i >= 0) expect(u.mu[i]).toBeGreaterThanOrEqual(TENSOR.frontier.y[j] - 1e-9);
+    }
+  });
+
+  it("the No limits line is drawn only when the limits change the frontier", () => {
+    expect(limitsBind(TENSOR), "the fixture's 25% limits bind").toBe(true);
+    // limits that never bind: the frontier with them lifted is the same frontier
+    const same = { ...TENSOR, frontier_uncapped: { sigma: [...TENSOR.frontier.x], mu: [...TENSOR.frontier.y] } };
+    expect(limitsBind(same)).toBe(false);
+    // the same risks, more return at one node
+    const higher = { ...same, frontier_uncapped: { sigma: same.frontier_uncapped.sigma, mu: same.frontier_uncapped.mu.map((m, j) => (j === 20 ? m + 0.002 : m)) } };
+    expect(limitsBind(higher)).toBe(true);
+    // more reach in risk with the limits lifted
+    const wider = { ...same, frontier_uncapped: { sigma: [...same.frontier_uncapped.sigma.slice(0, -1), same.frontier_uncapped.sigma.at(-1)! + 0.01], mu: same.frontier_uncapped.mu } };
+    expect(limitsBind(wider)).toBe(true);
+  });
+});
+
 describe("view derivation", () => {
   const domain = math.riskSliderDomain();
   it("the ceiling and its inverse agree, and the dashed line ends on the drawn frontier", () => {
@@ -98,7 +134,7 @@ describe("view derivation", () => {
     expect(frontierMuAt(TENSOR.frontier_curve, TENSOR.frontier_curve.sigma[8 * j])).toBeCloseTo(TENSOR.frontier_curve.mu[8 * j], 12);
   });
 
-  it("auto follows the suggested position and the selected mix never passes the ceiling", () => {
+  it("auto starts at the Optimized mix and the selected mix never passes the ceiling", () => {
     for (const s of [domain.s_safe, 12.5, 30, domain.s_max]) {
       const auto = deriveView(TENSOR, math, s, "auto");
       expect(auto.t).toBe(math.tAuto(s));
@@ -109,15 +145,29 @@ describe("view derivation", () => {
         expect(v.moved).toBe(true);
       }
       expect(deriveView(TENSOR, math, s, 0).selected.mu).toBeCloseTo(auto.front.mu, 12);
-      expect(deriveView(TENSOR, math, s, 1).selected.enb).toBeCloseTo(auto.mostDiversified.enb, 12);
+      expect(deriveView(TENSOR, math, s, 1).selected.enb).toBeCloseTo(auto.peak.enb, 12);
+      // the open circle is the Optimized mix, which is where the second slider starts
+      expect(auto.optWeights).toEqual(auto.weights);
+      expect(auto.optRange).toEqual(auto.range);
     }
   });
 
-  it("readouts come from the frontier mix and the strip from the selected mix", () => {
+  it("readouts come from the frontier mix and the strip from the selected mix, both one-year", () => {
     const v = deriveView(TENSOR, math, 30, 1);
-    expect(v.frontRange).toEqual(math.range6m(v.front.mu, v.front.sigma));
-    expect(v.range).toEqual(math.range6m(v.selected.mu, v.selected.sigma));
+    expect(v.frontRange).toEqual(math.yearRange(30, 0));
+    expect(v.frontRange.low).toBe(TENSOR.frontier.range.bad[30]);
+    expect(v.range).toEqual(math.yearRange(30, 1));
+    expect(v.range.low).toBe(TENSOR.ladder.range.bad[30][TENSOR.ladder.range.bad[30].length - 1]);
+    expect(v.normal).toEqual(math.normalRange(v.selected.mu, v.selected.sigma));
     expect(v.range.typical).not.toBe(v.frontRange.typical);
+  });
+
+  it("a position on a column and a level needs no answer from the service", () => {
+    const L = TENSOR.ladder.w[0].length;
+    expect(atNode(TENSOR, 24, 6 / (L - 1))).toBe(true);
+    expect(atNode(TENSOR, 24, TENSOR.ladder.t_suggested[24])).toBe(true);
+    expect(atNode(TENSOR, 24.5, 6 / (L - 1))).toBe(false);
+    expect(atNode(TENSOR, 24, 0.5)).toBe(false);
   });
 
   it("a position outside the domain is clamped, and a collapsed column disables the second slider", () => {

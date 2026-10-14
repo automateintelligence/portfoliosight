@@ -5,6 +5,8 @@ import type { ChartScales } from "./scales";
 
 export type Curve = { sigma: number[]; mu: number[] };
 export type Ghost = { id: string; curve: Curve };
+/** The id of the reference line drawn like a ghost: the same menu with every fund allowed 0% to 100%. */
+export const NO_LIMITS = "nolimits";
 
 export type HeatColors = {
   heat: string[];

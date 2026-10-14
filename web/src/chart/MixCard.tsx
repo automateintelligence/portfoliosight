@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
-import { enbLine, plain } from "../copy";
+import { enbLine, plain, technical } from "../copy";
 import { pct, signedPct } from "../format";
+
+const BELL_Z = 1.96;
 
 export type CardMix = {
   /** Yearly risk and expected return of the mix, and the measure behind the diversification word. */
@@ -10,7 +12,7 @@ export type CardMix = {
   word: string;
   /** Largest holdings, biggest first. */
   holdings: { id: string; w: number }[];
-  /** Six-month range; left out of the smaller card that follows the pointer over the map. */
+  /** One-year range; left out of the smaller card that follows the pointer over the map, and while an entered mix's range is not known. */
   range?: { low: number; typical: number; high: number };
 };
 
@@ -75,6 +77,7 @@ export function MixCard({ kind, title, mix, details, enbRef, extra }: Props) {
       {details && (
         <p className="tip-tech">
           {`This mix ${enbLine(mix.enb.toFixed(1), enbRef.toFixed(1))}.`}
+          {` ${technical.bellCurve(signedPct(mix.mu - BELL_Z * mix.sigma), signedPct(mix.mu), signedPct(mix.mu + BELL_Z * mix.sigma))}.`}
           {extra}
         </p>
       )}

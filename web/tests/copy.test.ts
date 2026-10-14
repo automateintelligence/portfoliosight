@@ -38,7 +38,11 @@ describe("copy (spec 3.6, 3.7)", () => {
     expect(copy.plain.words).toEqual(["Good", "Average", "Fair", "Poor"]);
     expect(copy.plain.divMoreReturn).toBe("More return");
     expect(copy.plain.divMoreDiversified).toBe("More diversified");
-    expect(copy.plain.suggested).toBe("Suggested");
+    expect(copy.plain.optimized).toBe("Optimized");
+    expect(copy.plain.noLimits).toBe("No limits");
+    expect(copy.lookbackLine.nolimits).toBe("No limits");
+    expect([copy.plain.rangeLow, copy.plain.rangeTypical, copy.plain.rangeHigh]).toEqual(["Bad", "Typical", "Good"]);
+    expect([copy.plain.riskBad, copy.plain.riskTypical, copy.plain.resultStripSuffix]).toEqual(["Bad year", "Typical year", "over one year"]);
     expect(copy.plain.frontier).toBe("Best return at each level of risk");
     expect(copy.plain.ghosts).toBe("Same menu, different years of history");
     expect(copy.plain.currentMix).toBe("The mix you entered");
@@ -52,7 +56,13 @@ describe("copy (spec 3.6, 3.7)", () => {
   it("carries the technical strings behind details", () => {
     expect(copy.technical.xAxis).toBe("Standard deviation of yearly return");
     expect(copy.technical.enbName).toBe("effective number of bets, minimum torsion");
-    expect(copy.technical.resultStrip).toContain("Estimated central 95% range");
+    // A-PS-48 requires this technical name behind details
+    expect(copy.technical.resultStrip).toMatch(/^Estimated central 95% range of the one-year return: .* over 2,000 one-year paths/);
+    expect(copy.technical.bellCurve("−9.0%", "+6.0%", "+21.0%")).toBe("Textbook bell-curve figure (normal, μ ± 1.96σ): −9.0% to +21.0% around +6.0%");
+    expect(copy.technical.optimized.balanced).toContain("balanced point");
+    // nothing on the page speaks of six months any more
+    const all = JSON.stringify({ plain: copy.plain, technical: { ...copy.technical, bellCurve: "", cellPlace: "" } });
+    expect(all).not.toMatch(/six|6 months|six-month/i);
     expect(copy.enbLine("3.8", "5.1")).toBe("spreads risk over the equivalent of 3.8 independent bets; highest found on this menu: 5.1");
   });
 

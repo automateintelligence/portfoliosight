@@ -3,9 +3,8 @@ import { plain, technical } from "../copy";
 import { useSlide } from "./useSlide";
 
 type Props = {
-  /** Position: 0 = the best-return mix, 1 = the most diversified mix at this risk. */
+  /** Position: 0 = the best-return mix, 1 = the most diversified mix at this risk. It starts at the Optimized mix (the open circle on the chart), so the slider carries no mark of its own. */
   t: number;
-  tSuggested: number;
   moved: boolean;
   disabled: boolean;
   horizontal: boolean;
@@ -18,7 +17,7 @@ const STEP = 1 / 40;
 const PAD = 11; // half the thumb, so the thumb never leaves the track
 
 /** The second slider: moves the point along the column at the risk ceiling (spec 3.2). No numbers. */
-export function DivSlider({ t, tSuggested, moved, disabled, horizontal, details, onChange, onReset }: Props) {
+export function DivSlider({ t, moved, disabled, horizontal, details, onChange, onReset }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const clamp = (v: number) => Math.min(1, Math.max(0, v));
 
@@ -54,7 +53,7 @@ export function DivSlider({ t, tSuggested, moved, disabled, horizontal, details,
   // The ARIA value rises with the arrow keys that raise it: toward diversified when horizontal,
   // toward return when vertical (where the up arrow moves the thumb up).
   const value = horizontal ? t * 100 : (1 - t) * 100;
-  const text = moved ? `${Math.round(t * 100)} of 100 toward ${plain.divMoreDiversified.toLowerCase()}` : plain.suggested;
+  const text = moved ? `${Math.round(t * 100)} of 100 toward ${plain.divMoreDiversified.toLowerCase()}` : plain.optimized;
   const aria = {
     role: "slider" as const,
     tabIndex: disabled ? -1 : 0,
@@ -69,7 +68,7 @@ export function DivSlider({ t, tSuggested, moved, disabled, horizontal, details,
   const pos = (frac: number) => `calc(${PAD}px + (100% - ${2 * PAD}px) * ${frac})`;
   const reset = moved && !disabled && (
     <button type="button" className="btn-link" data-testid="div-reset" onClick={onReset}>
-      {plain.resetSuggested}
+      {plain.resetOptimized}
     </button>
   );
   const note = disabled && <p className="divs-note">{plain.divDisabled}</p>;
@@ -85,10 +84,6 @@ export function DivSlider({ t, tSuggested, moved, disabled, horizontal, details,
         </div>
         <div ref={ref} className="hslider" data-testid="div-slider" onKeyDown={onKeyDown} {...aria} {...slide}>
           <span className="h-track" />
-          <span className="h-tick" style={{ left: pos(tSuggested) }} />
-          <span className="h-tick-label" style={{ left: pos(Math.min(0.86, Math.max(0.14, tSuggested))) }}>
-            {plain.suggested}
-          </span>
           <span className="h-thumb" style={{ left: pos(t) }} />
         </div>
         {note}
@@ -101,10 +96,6 @@ export function DivSlider({ t, tSuggested, moved, disabled, horizontal, details,
       <span className="divs-end">{plain.divMoreReturn}</span>
       <div ref={ref} className="vslider" data-testid="div-slider" onKeyDown={onKeyDown} {...aria} {...slide}>
         <span className="v-track" />
-        <span className="v-tick" style={{ top: pos(tSuggested) }} />
-        <span className="v-tick-label" style={{ top: pos(tSuggested) }}>
-          {plain.suggested}
-        </span>
         <span className="v-thumb" style={{ top: pos(t) }} />
       </div>
       <span className="divs-end">{plain.divMoreDiversified}</span>

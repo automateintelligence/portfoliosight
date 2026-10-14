@@ -13,12 +13,16 @@ export type DetailFacts = {
   rows: number;
   asof: string;
   notes: string[];
+  /** Which mix the tensor calls Optimized (spec 4.8). */
+  defaultPoint: "balanced" | "peak";
 };
 
 type Props = {
   low: number;
   typical: number;
   high: number;
+  /** The bell-curve figure, shown in the details only. */
+  normal: { low: number; mid: number; high: number };
   word: string;
   details: boolean;
   facts: DetailFacts;
@@ -26,8 +30,8 @@ type Props = {
   onToggleDetails: () => void;
 };
 
-/** "Selected mix": the six-month range, the quiet diversification word, and the details toggle. */
-export function ResultStrip({ low, typical, high, word, details, facts, staleAsof, onToggleDetails }: Props) {
+/** "Selected mix": the one-year range, the quiet diversification word, and the details toggle. */
+export function ResultStrip({ low, typical, high, normal, word, details, facts, staleAsof, onToggleDetails }: Props) {
   // A small picture of the range: where low, typical and high sit around zero.
   const lo = Math.min(low, 0);
   const hi = Math.max(high, 0);
@@ -93,6 +97,12 @@ export function ResultStrip({ low, typical, high, word, details, facts, staleAso
             </dd>
           </dl>
           <dl>
+            <dt>One-year range, two ways</dt>
+            <dd className="num" data-testid="details-bell">
+              from this history: {signedPct(low)} to {signedPct(high)} around {signedPct(typical)} · {technical.bellCurve(signedPct(normal.low), signedPct(normal.mid), signedPct(normal.high))}
+            </dd>
+          </dl>
+          <dl>
             <dt>History used</dt>
             <dd className="num">
               {facts.lookbackStart} to {facts.lookbackEnd} ({facts.rows} trading days) · prices through {facts.asof}
@@ -103,12 +113,12 @@ export function ResultStrip({ low, typical, high, word, details, facts, staleAso
             <dd data-testid="details-words">{technical.cutPoints}</dd>
           </dl>
           <dl className="wide">
-            <dt>What “{plain.suggested}” means</dt>
-            <dd data-testid="details-suggested">{technical.suggested}</dd>
+            <dt>What “{plain.optimized}” means</dt>
+            <dd data-testid="details-suggested">{technical.optimized[facts.defaultPoint]}</dd>
           </dl>
           <p className="wide hint" data-testid="details-method">
-            Method. Range: {technical.resultStrip}. The line on the chart: {technical.frontier}. {plain.suggested}: {technical.suggestedMethod}.{" "}
-            {facts.notes.filter((n) => !/^the suggested point\b/i.test(n)).join(" ")}
+            Method. Range: {technical.resultStrip}. The line on the chart: {technical.frontier}. {plain.optimized}: {technical.optimizedMethod[facts.defaultPoint]}.{" "}
+            {facts.notes.filter((n) => !/^(the balanced point|one-year ranges)\b/i.test(n)).join(" ")}
           </p>
         </div>
       )}

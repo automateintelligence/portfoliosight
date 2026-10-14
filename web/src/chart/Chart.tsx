@@ -4,7 +4,7 @@ import { lookbackLine, plain, technical } from "../copy";
 import { pct, signedPct } from "../format";
 import { diversificationWord } from "../math/portfolio";
 import type { Range, Stats, View } from "../math/view";
-import { Heatmap, type Ghost } from "./Heatmap";
+import { Heatmap, NO_LIMITS, type Ghost } from "./Heatmap";
 import { MixCard, topHoldings, type CardMix } from "./MixCard";
 import { Overlay, type LineEnd, type MarkId } from "./Overlay";
 import type { ChartScales } from "./scales";
@@ -15,8 +15,8 @@ type Props = {
   scales: ChartScales | null;
   ghosts: Ghost[];
   frontierEnb: number[];
-  /** The mix the visitor entered: its statistics, six-month range and weights. */
-  current: { stats: Stats; range: Range; weights: number[] } | null;
+  /** The mix the visitor entered: its statistics, one-year range (null while it is not known) and weights. */
+  current: { stats: Stats; range: Range | null; weights: number[] } | null;
   details: boolean;
   phone: boolean;
   themeEpoch: number;
@@ -44,7 +44,7 @@ function segDist2(px: number, py: number, ax: number, ay: number, bx: number, by
 }
 
 /** What each mark on the chart is. Inside the chart on desktop, a row under it on a phone. */
-export function MarkKeys({ hasCurrent, hasGhosts }: { hasCurrent: boolean; hasGhosts: boolean }) {
+export function MarkKeys({ hasCurrent, hasGhosts, hasNoLimits, compact = false }: { hasCurrent: boolean; hasGhosts: boolean; hasNoLimits: boolean; compact?: boolean }) {
   return (
       <ul className="keys">
         <li>
@@ -71,7 +71,7 @@ export function MarkKeys({ hasCurrent, hasGhosts }: { hasCurrent: boolean; hasGh
           <svg viewBox="0 0 18 12" aria-hidden="true">
             <circle cx="9" cy="6" r="4" fill="none" stroke="var(--mark-div)" strokeWidth="1.8" />
           </svg>
-          <span>{plain.mostDiversified}</span>
+          <span>{plain.optimized}</span>
         </li>
         {hasGhosts && (
           <li>
@@ -81,11 +81,19 @@ export function MarkKeys({ hasCurrent, hasGhosts }: { hasCurrent: boolean; hasGh
             <span>{plain.ghosts}</span>
           </li>
         )}
+        {hasNoLimits && (
+          <li data-testid="key-nolimits">
+            <svg viewBox="0 0 18 12" aria-hidden="true">
+              <path d="M1 10 C5 5 10 3.5 17 3" fill="none" stroke="var(--frontier)" strokeWidth="1.2" strokeDasharray="3 2.5" opacity="0.55" />
+            </svg>
+            <span>{compact ? plain.noLimits : `${plain.noLimits}: ${plain.noLimitsLine.toLowerCase()}`}</span>
+          </li>
+        )}
       </ul>
   );
 }
 
-function Legend({ scales, phone, details, hasCurrent, hasGhosts }: { scales: ChartScales; phone: boolean; details: boolean; hasCurrent: boolean; hasGhosts: boolean }) {
+function Legend({ scales, phone, details, hasCurrent, hasGhosts, hasNoLimits }: { scales: ChartScales; phone: boolean; details: boolean; hasCurrent: boolean; hasGhosts: boolean; hasNoLimits: boolean }) {
   return (
     <div className="legend" style={{ left: scales.plot.left + (phone ? 8 : 18), top: scales.plot.top + (phone ? 0 : 4) }}>
       <p className="legend-title">{plain.heatLegend}</p>
@@ -95,7 +103,7 @@ function Legend({ scales, phone, details, hasCurrent, hasGhosts }: { scales: Cha
         <span className="ramp-bar" style={{ background: "linear-gradient(90deg, var(--heat-4), var(--heat-3), var(--heat-2), var(--heat-1))" }} />
         <span>{plain.heatMore}</span>
       </div>
-      {!phone && <MarkKeys hasCurrent={hasCurrent} hasGhosts={hasGhosts} />}
+      {!phone && <MarkKeys hasCurrent={hasCurrent} hasGhosts={hasGhosts} hasNoLimits={hasNoLimits} />}
     </div>
   );
 }
@@ -110,6 +118,8 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
     [details, tensor],
   );
   const ready = tensor && view && scales && scales.width > 0;
+  // `data-ghost-count` counts the history windows toggled on; the No limits line is not one.
+  const lookbackGhosts = ghosts.filter((g) => g.id !== NO_LIMITS).length;
 
   // Everything right of the ceiling is beyond the chosen risk: that part of the map recedes.
   const dimPath = useMemo(() => {
@@ -185,14 +195,16 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
 
   const cardOf = (stats: Stats, weights: ArrayLike<number>, range?: Range): CardMix | null =>
     tensor ? { ...stats, word: diversificationWord(stats.enb / tensor.enb_ref), holdings: topHoldings(tensor.universe.funds, weights), range } : null;
-  const spoken = (title: string, range: Range, word: string) =>
-    `${title}: ${plain.rangeLow} ${signedPct(range.low)}, ${plain.rangeTypical} ${signedPct(range.typical)}, ${plain.rangeHigh} ${signedPct(range.high)} ${plain.resultStripSuffix}. ${plain.diversification}: ${word}.`;
+  const spoken = (title: string, range: Range | null, word: string) =>
+    range
+      ? `${title}: ${plain.rangeLow} ${signedPct(range.low)}, ${plain.rangeTypical} ${signedPct(range.typical)}, ${plain.rangeHigh} ${signedPct(range.high)} ${plain.resultStripSuffix}. ${plain.diversification}: ${word}.`
+      : `${title}. ${plain.diversification}: ${word}.`;
 
   let overlay: ReactNode = null;
   if (ready) {
     const selMix = cardOf(view.selected, view.weights, view.range)!;
-    const divMix = cardOf(view.mostDiversified, view.divWeights, view.divRange)!;
-    const curMix = current ? cardOf(current.stats, current.weights, current.range) : null;
+    const divMix = cardOf(view.optimized, view.optWeights, view.optRange)!;
+    const curMix = current ? cardOf(current.stats, current.weights, current.range ?? undefined) : null;
     const card = (kind: MarkId, title: string, mix: CardMix, extra?: ReactNode) => <MixCard kind={kind} title={title} mix={mix} details={details} enbRef={tensor.enb_ref} extra={extra} />;
     overlay = (
       <Overlay
@@ -200,16 +212,16 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
         phone={phone}
         ceiling={{ sigma: view.ceiling, mu: view.ceilingMu }}
         selected={view.selected}
-        mostDiversified={view.mostDiversified}
+        optimized={view.optimized}
         current={current?.stats ?? null}
         funds={funds}
         selectedLabel={`${plain.selectedMix}: ${plain.rangeLow} ${signedPct(view.range.low)}, ${plain.rangeTypical} ${signedPct(view.range.typical)}, ${plain.rangeHigh} ${signedPct(view.range.high)} ${plain.resultStripSuffix}. Left and right arrows change risk; up and down arrows move between more return and more diversified.`}
-        divLabel={spoken(plain.mostDiversified, view.divRange, divMix.word)}
+        divLabel={spoken(plain.optimized, view.optRange, divMix.word)}
         currentLabel={current && curMix ? spoken(plain.currentMix, current.range, curMix.word) : ""}
         cards={{
           selected: card("selected", plain.selectedMix, selMix, ` Risk ceiling ${pct(view.ceiling)}.`),
-          div: card("div", plain.mostDiversified, divMix),
-          current: curMix ? card("current", plain.currentMix, curMix) : null,
+          div: card("div", plain.optimized, divMix),
+          current: curMix ? card("current", plain.currentMix, curMix, current?.range ? undefined : ` ${technical.rangePending}`) : null,
         }}
         lines={lines}
         hot={hot}
@@ -225,7 +237,7 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
   const flip = (p: number, size: number, room: number) => (p + 18 + size <= room - 4 ? p + 18 : Math.max(4, p - 18 - size));
 
   return (
-    <div ref={ref} className="chart" data-testid="chart" data-ghost-count={ghosts.length} onPointerMove={onHover} onPointerLeave={clear} onPointerDown={clear}>
+    <div ref={ref} className="chart" data-testid="chart" data-ghost-count={lookbackGhosts} onPointerMove={onHover} onPointerLeave={clear} onPointerDown={clear}>
       {ready && (
         <>
           <Heatmap tensor={tensor} frontierEnb={frontierEnb} ghosts={ghosts} scales={scales} themeEpoch={themeEpoch} reveal={reveal} />
@@ -238,7 +250,7 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
             {plain.xAxis}
             {details && <span className="tech">{technical.xAxis}</span>}
           </p>
-          <Legend scales={scales} phone={phone} details={details} hasCurrent={current !== null} hasGhosts={ghosts.length > 0} />
+          <Legend scales={scales} phone={phone} details={details} hasCurrent={current !== null} hasGhosts={lookbackGhosts > 0} hasNoLimits={ghosts.length > lookbackGhosts} />
           {overlay}
         </>
       )}
@@ -257,7 +269,8 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
       {ready && ghostAt && (
         <div className="ghosttip" data-testid="ghost-tip" role="status" style={{ left: Math.min(ghostAt.px + 14, scales.width - 190), top: Math.max(6, ghostAt.py - 46) }}>
           <b>{lookbackLine[ghostAt.id] ?? ghostAt.id}</b>
-          <span>{plain.ghosts}</span>
+          <span>{ghostAt.id === NO_LIMITS ? plain.noLimitsLine : plain.ghosts}</span>
+          {details && ghostAt.id === NO_LIMITS && <span>{technical.noLimits}</span>}
         </div>
       )}
       {notice}

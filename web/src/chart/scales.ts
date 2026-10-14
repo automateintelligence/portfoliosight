@@ -29,6 +29,55 @@ export function makeScales(width: number, height: number, extent: Extent, phone:
   return { x, y, width, height, margins, plot: { left, right, top, bottom, width: right - left, height: bottom - top } };
 }
 
+/**
+ * The longest run of a polyline that lies inside the box `[xMin, xMax] x [yMin, yMax]`, its ends
+ * moved onto the box's edges (Liang-Barsky on each segment). A frontier rises in both risk and
+ * return, so its inside part is one run.
+ */
+export function clipCurve(curve: { sigma: number[]; mu: number[] }, box: Extent): { sigma: number[]; mu: number[] } {
+  let best: [number, number][] = [];
+  let run: [number, number][] = [];
+  const close = () => {
+    if (run.length > best.length) best = run;
+    run = [];
+  };
+  for (let i = 1; i < curve.sigma.length; i++) {
+    const [x0, y0, x1, y1] = [curve.sigma[i - 1], curve.mu[i - 1], curve.sigma[i], curve.mu[i]];
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    let lo = 0;
+    let hi = 1;
+    const sides: [number, number][] = [
+      [-dx, x0 - box.xMin],
+      [dx, box.xMax - x0],
+      [-dy, y0 - box.yMin],
+      [dy, box.yMax - y0],
+    ];
+    let inside = true;
+    for (const [p, q] of sides) {
+      if (p === 0) {
+        if (q < 0) inside = false;
+      } else if (p < 0) lo = Math.max(lo, q / p);
+      else hi = Math.min(hi, q / p);
+    }
+    if (!inside || lo > hi) {
+      close();
+      continue;
+    }
+    const a: [number, number] = [x0 + lo * dx, y0 + lo * dy];
+    const b: [number, number] = [x0 + hi * dx, y0 + hi * dy];
+    if (run.length === 0) run.push(a);
+    else if (lo > 0) {
+      close();
+      run.push(a);
+    }
+    run.push(b);
+    if (hi < 1) close();
+  }
+  close();
+  return { sigma: best.map((p) => p[0]), mu: best.map((p) => p[1]) };
+}
+
 /** Pads a data extent so marks never touch the plot edge and the axes start on round percents. */
 export function paddedExtent(points: { sigma: number; mu: number }[], cell: { dx: number; dy: number }): Extent {
   let xMin = Infinity;

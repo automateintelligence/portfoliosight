@@ -5,7 +5,10 @@
 import type { Tensor } from "../api/tensor";
 
 export type Stats = { mu: number; sigma: number; enb: number };
-export type Range6m = { low: number; typical: number; high: number };
+/** A one-year range (spec 4.9): the bad, typical and good year (2.5th, 50th, 97.5th percentiles). */
+export type YearRange = { low: number; typical: number; high: number };
+/** The textbook bell-curve figure: `mu -+ 1.96 sigma` around `mu`, for the details only. */
+export type NormalRange = { low: number; mid: number; high: number };
 export type Curve = { sigma: number[]; mu: number[] };
 export type Domain = { s_safe: number; s_max: number };
 export type DiversificationWord = "Good" | "Average" | "Fair" | "Poor";
@@ -13,8 +16,10 @@ export type DiversificationWord = "Good" | "Average" | "Fair" | "Poor";
 export interface PortfolioMath {
   /** Yearly expected return, yearly standard deviation and ENB of weights `w` (`enb` is NaN for a mix without variance). */
   stats(w: ArrayLike<number>): Stats;
-  /** Six-month range of a mix with yearly `(mu, sigma)`: `mu/2 -+ 1.96 * sigma/sqrt(2)`. */
-  range6m(mu: number, sigma: number): Range6m;
+  /** The one-year range at `(s, t)` read off the tensor's node ranges (`ladder.range`), blended exactly as `interpolate` blends the mixes. Exact at a column's levels; between them a blend of exact figures. */
+  yearRange(s: number, t: number): YearRange;
+  /** The bell-curve figure of a mix with yearly `(mu, sigma)`: `mu -+ 1.96 sigma`. */
+  normalRange(mu: number, sigma: number): NormalRange;
   /** The mix at risk position `s` in `[0, nx - 1]` and diversification position `t` in `[0, 1]` (0 = frontier mix, 1 = the peak, the most diversified mix found at that risk). */
   interpolate(s: number, t: number): number[];
   /** Actual `(sigma, mu)` of the frontier mix at 8 sub-steps per column gap, recomputed from `frontier.w`. The same object on every call: do not mutate. */
@@ -42,10 +47,9 @@ type Mix = ArrayLike<number>;
 
 const lerp = (a: Mix, b: Mix, f: number): number[] => Array.from(a, (v, i) => (1 - f) * v + f * b[i]);
 
-function range6m(mu: number, sigma: number): Range6m {
-  const typical = mu / 2;
-  const spread = (RANGE_Z * sigma) / Math.SQRT2;
-  return { low: typical - spread, typical, high: typical + spread };
+function normalRange(mu: number, sigma: number): NormalRange {
+  const spread = RANGE_Z * sigma;
+  return { low: mu - spread, mid: mu, high: mu + spread };
 }
 
 /** The word for `q = ENB(w) / enb_ref` (spec 4.6). */
@@ -107,17 +111,27 @@ export function portfolioMath(tensor: Tensor): PortfolioMath {
 
   const peaks: Mix[] = ladder.w.map((levels) => levels[levels.length - 1]);
 
-  // Column j's mix at fraction t of its ladder. Level l of L sits at t = l / (L - 1); between two
-  // levels the mix is their straight blend, except across a hop, where the upper level holds up
-  // to the middle of the step and the lower one from there on.
-  function ladderMix(j: number, t: number): Mix {
-    const levels = ladder.w[j];
-    const last = levels.length - 1;
+  // Where fraction t falls on column j's ladder. Level l of L sits at t = l / (L - 1); between two
+  // levels the blend is straight, except across a hop, where the upper level holds up to the
+  // middle of the step and the lower one from there on.
+  function step(j: number, t: number): { level: number; share: number } {
+    const last = ladder.w[j].length - 1;
     const position = t * last;
     const level = Math.min(Math.floor(position), last - 1);
-    let share = position - level;
-    if (ladder.hop[j][level]) share = share < 0.5 ? 0 : 1;
-    return lerp(levels[level], levels[level + 1], share);
+    const share = position - level;
+    return { level, share: ladder.hop[j][level] ? (share < 0.5 ? 0 : 1) : share };
+  }
+
+  function ladderMix(j: number, t: number): Mix {
+    const { level, share } = step(j, t);
+    return lerp(ladder.w[j][level], ladder.w[j][level + 1], share);
+  }
+
+  function columnRange(j: number, t: number): YearRange {
+    const { level, share } = step(j, t);
+    const at = (rows: number[][]) => (1 - share) * rows[j][level] + share * rows[j][level + 1];
+    const { bad, typical, good } = ladder.range;
+    return { low: at(bad), typical: at(typical), high: at(good) };
   }
 
   function split(s: number): { j: number; lam: number } {
@@ -152,7 +166,14 @@ export function portfolioMath(tensor: Tensor): PortfolioMath {
 
   return {
     stats,
-    range6m,
+    yearRange(s, t) {
+      if (!(t >= 0 && t <= 1)) throw new RangeError(`diversification position ${t} is outside [0, 1]`);
+      const { j, lam } = split(s);
+      const a = columnRange(j, t);
+      const b = columnRange(j + 1, t);
+      return { low: (1 - lam) * a.low + lam * b.low, typical: (1 - lam) * a.typical + lam * b.typical, high: (1 - lam) * a.high + lam * b.high };
+    },
+    normalRange,
     interpolate,
     frontierCurve: () => curve,
     riskSliderDomain: () => domain,

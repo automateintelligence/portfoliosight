@@ -271,7 +271,7 @@ describe("parseTensor", () => {
   });
 });
 
-describe("stats and range6m", () => {
+describe("stats and one-year ranges", () => {
   const M = portfolioMath(parseTensor(clone()));
 
   it("reproduces the spec 4.6 identities on two uncorrelated funds", () => {
@@ -321,14 +321,44 @@ describe("stats and range6m", () => {
     expect(M.stats(Array(N).fill(0)).enb).toBeNaN();
   });
 
-  it("range6m is mu/2 -+ 1.96 sigma/sqrt 2", () => {
-    const r = M.range6m(0.08, 0.2);
-    expect(r.typical).toBeCloseTo(0.04, 15);
-    // 1.96 * 0.2 / sqrt(2) = 0.2771858582...
-    expect(r.low).toBeCloseTo(-0.2371858582, 9);
-    expect(r.high).toBeCloseTo(0.3171858582, 9);
-    expect(r.high - r.typical).toBeCloseTo(r.typical - r.low, 15);
-    expect(M.range6m(0.05, 0)).toEqual({ low: 0.025, typical: 0.025, high: 0.025 });
+  it("the bell-curve figure is mu -+ 1.96 sigma around mu", () => {
+    const r = M.normalRange(0.08, 0.2);
+    expect(r.mid).toBe(0.08);
+    expect(r.low).toBeCloseTo(0.08 - 0.392, 15);
+    expect(r.high).toBeCloseTo(0.08 + 0.392, 15);
+    expect(M.normalRange(0.05, 0)).toEqual({ low: 0.05, mid: 0.05, high: 0.05 });
+  });
+
+  it("yearRange is the tensor's own figure at every column and level, and blends like interpolate between them", () => {
+    const L = RAW.ladder.w[0].length;
+    const R = RAW.ladder.range;
+    for (const j of [0, 2, 17, 24, NX - 1]) {
+      for (let l = 0; l < L; l++) {
+        const r = M.yearRange(j, l / (L - 1));
+        expect(r.low, `bad (${j}, ${l})`).toBeCloseTo(R.bad[j][l], 14);
+        expect(r.typical, `typical (${j}, ${l})`).toBeCloseTo(R.typical[j][l], 14);
+        expect(r.high, `good (${j}, ${l})`).toBeCloseTo(R.good[j][l], 14);
+      }
+      // level 0 is the frontier mix: the risk slider's readout at a column
+      expect(M.yearRange(j, 0).low).toBe(RAW.frontier.range.bad[j]);
+    }
+    // between two columns and two levels: the same blend as the mixes (no hop on the fixture)
+    const s = 20.25;
+    const t = 4.5 / (L - 1);
+    const at = (rows: number[][], j: number) => 0.5 * rows[j][4] + 0.5 * rows[j][5];
+    expect(M.yearRange(s, t).low).toBeCloseTo(0.75 * at(R.bad, 20) + 0.25 * at(R.bad, 21), 14);
+    expect(M.yearRange(s, t).high).toBeCloseTo(0.75 * at(R.good, 20) + 0.25 * at(R.good, 21), 14);
+    expect(() => M.yearRange(3, 1.5)).toThrow(RangeError);
+    expect(() => M.yearRange(-1, 0.5)).toThrow(RangeError);
+  });
+
+  it("yearRange does not blend across a hop", () => {
+    const T = tiny([HOP, HOP]) as ReturnType<typeof tiny> & { ladder: { range: { bad: number[][] } } };
+    T.ladder.range.bad = [[-0.1, -0.2, -0.3], [-0.1, -0.2, -0.3]];
+    const m = portfolioMath(parseTensor(T));
+    expect(m.yearRange(0, 0.2).low).toBe(-0.1);
+    expect(m.yearRange(0, 0.25).low).toBe(-0.2);
+    expect(m.yearRange(0, 0.75).low).toBeCloseTo(-0.25, 15);
   });
 });
 

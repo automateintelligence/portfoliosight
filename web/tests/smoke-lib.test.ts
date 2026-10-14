@@ -53,8 +53,7 @@ describe("the test's own tensor math agrees with the page's", () => {
     expect(sSafe).toBe(math.riskSliderDomain().s_safe);
     expect(sMax).toBe(math.riskSliderDomain().s_max);
     for (const s of [sSafe, 10, 23.4, sMax]) {
-      const page = math.stats(math.interpolate(s, 0));
-      const range = math.range6m(page.mu, page.sigma);
+      const range = math.yearRange(s, 0);
       const own = frontAt(tensor, s);
       expect(Math.abs(own.low - 100 * range.low)).toBeLessThan(0.05);
       expect(Math.abs(own.typical - 100 * range.typical)).toBeLessThan(0.05);
