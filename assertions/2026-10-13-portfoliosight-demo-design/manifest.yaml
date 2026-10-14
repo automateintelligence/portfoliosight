@@ -267,7 +267,7 @@ assertions:
     level: spec
     kind: contract
   - id: A-PS-34
-    claim: "stats(w) in web/src/math/portfolio.ts equals the tensor's own values at every grid node, ladder level and frontier node within 1e-9 relative, interpolate(s, t) walks the ladders as spec 4.11 says and keeps its invariants for 200 random positions, t = 0 reproduces w_front(s) and t = 1 the interpolated peak, a pair of collapsed ladders is constant in t, the recomputed frontier_curve equals the tensor's, and the risk slider's domain starts at the tensor's s_safe."
+    claim: "stats(w) in web/src/math/portfolio.ts equals the tensor's own values at every grid node, ladder level and frontier node within 1e-9 relative, interpolate(s, t) walks the ladders as spec 4.11 says and keeps its invariants for 200 random positions, t = 0 reproduces w_front(s) and t = 1 the interpolated peak, a pair of collapsed ladders is constant in t, the recomputed frontier_curve equals the tensor's, the risk slider's domain starts at the tensor's s_safe, yearRange(s, t) equals ladder.range at every node and blends between nodes as interpolate does, and normalRange(mu, sigma) is mu -+ 1.96 sigma."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_34_browser_math_fidelity.py"
     setup: ""
     teardown: ""
@@ -299,7 +299,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-38
-    claim: "POST /api/share accepts only a valid same-origin {to, url} JSON request, sends the fixed MailChannels template carrying the re-encoded URL, refuses every invalid input without sending, enforces the per-IP minute and day caps and the global day cap (a valid x-ps-gate header lifts only the per-IP caps), sends nothing with the test key, and the dialog shows the preview notice while preview is on."
+    claim: "POST /api/share accepts only a valid same-origin {to, url} JSON request, sends the fixed MailChannels template carrying the re-encoded URL, refuses every invalid input without sending (a link in any of the four themes ks-dark, light, hud, grid is sent and any other theme is refused), enforces the per-IP minute and day caps and the global day cap (a valid x-ps-gate header lifts only the per-IP caps), sends nothing with the test key, and the dialog shows the preview notice while preview is on."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_38_share_validators_template_caps.py"
     setup: ""
     teardown: ""
@@ -315,7 +315,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-40
-    claim: "The Worker redirects www to the apex, answers 404 on any other host, serves presets, symbols and tensor hits from R2 with the spec 9.3 headers, forwards a tensor miss, POST /api/tensors and GET /api/health to the origin with the four headers, handles POST /api/share itself, sends every other path to ASSETS, and exposes no other /api/ path."
+    claim: "The Worker redirects www to the apex, answers 404 on any other host, serves presets, symbols and tensor hits from R2 with the spec 9.3 headers, forwards a tensor miss, POST /api/tensors, POST /api/range and GET /api/health to the origin with the four headers (a POST body over 16 KB is refused with 413 before the origin), handles POST /api/share itself, sends every other path to ASSETS, and exposes no other /api/ path."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_40_worker_routing_surface.py"
     setup: ""
     teardown: ""
@@ -355,7 +355,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-45
-    claim: "At five increasing risk-slider positions ceiling-line moves right, both readouts equal Low_front(s) and Typical_front(s) computed from frontier_curve within 0.1 pp and both change on every move, point-selected never sits right of the line, no /api request fires, an arrow key steps 1/200 of the domain, and after the diversification slider moves down the result strip differs from the readouts and is labelled Selected mix."
+    claim: "At five increasing risk-slider positions ceiling-line moves right, both readouts equal the frontier mix's bad and typical year (frontier.range, blended between nodes) within 0.1 pp and both change on every move, point-selected never sits right of the line, no /api request fires but POST /api/range naming the tensor on screen, an arrow key steps 1/200 of the domain, and after the diversification slider moves down the result strip shows the most diversified mix's typical year (ladder.range), differs from the readouts and is labelled Selected mix."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_45_risk_slider_readouts.py"
     setup: ""
     teardown: ""
@@ -419,7 +419,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-53
-    claim: "A cap minimum above the maximum for VTI shows an inline error and sends no request, a valid VTI maximum of 10 sends one POST /api/tensors with VTI min null and max 0.10 and every other fund null/null, caps-reset restores the rule values and sends an all-null policy, and Settings states the rule in one sentence with the current N."
+    claim: "A cap minimum above the maximum for VTI shows an inline error and sends no POST but the range of the mix on screen, a valid VTI maximum of 10 sends one POST /api/tensors with VTI min null and max 0.10 and every other fund null/null, caps-reset restores the rule values and sends an all-null policy, and Settings states the rule in one sentence with the current N."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_53_caps_inline_validation.py"
     setup: ""
     teardown: ""

@@ -161,12 +161,13 @@ why it is load-bearing.
 - **A-PS-37 — the client never waits on the server during a drag, recovers from an expired
   challenge by reloading, and stops after three failed builds.** (F8, F12, F14, §3.2)
 - **A-PS-38 — share validators, the fixed template and the caps.** (S18, F15, §9.3) The one outbound
-  channel.
+  channel; a link in any of the four themes is sent, any other theme refused.
 - **A-PS-39 — the private-preview gate.** (M3 as reworded, §9.6) No key → 403 page without data;
   header passes; `?k=` sets the cookie and redirects; wrong key refused; preview off passes
   through; the secret is never echoed.
 - **A-PS-40 — the Worker's routing surface is exactly §9.3.** (M4, M10, §9.3) Host check, R2 reads,
-  origin forwarding with the gate header, share, assets, nothing else.
+  origin forwarding with the gate header (tensor miss, `POST /api/tensors`, `POST /api/range`,
+  `GET /api/health`), share, assets, nothing else.
 - **A-PS-41 — the first screen is the chart and its controls; sections are collapsed; no tangency
   marker.** (S1, S8, F1, F2, DoD 3)
 - **A-PS-42 — the phone layout fits and works with a thumb.** (S16, F6, DoD 4)
@@ -174,9 +175,9 @@ why it is load-bearing.
   aside; a menu holding a fund its tensor sets aside shows the excluded-fund note; the preset menu
   is driven by `/api/presets`.** (S2, S24, DoD 5)
 - **A-PS-44 — the heatmap renders from the theme ramp under the frontier only.** (S5, DoD 7)
-- **A-PS-45 — the risk slider's readouts are the frontier mix's truth and move together without a
-  request.** (S3, F7, F8, DoD 8)
-- **A-PS-46 — the diversification slider starts at the suggested spot, moves the point down and
+- **A-PS-45 — the risk slider's readouts are the frontier mix's one-year truth and move together
+  with no request but the range of the mix on screen.** (S3, F7, F8, DoD 8)
+- **A-PS-46 — the diversification slider starts at the Optimized point, moves the point down and
   never right, and the point is drawn where its mix sits.** (S4, F9, S23, DoD 9)
 - **A-PS-47 — the diversification word is quiet, one of four, with thresholds as specified.** (S6,
   F4, DoD 10)
@@ -964,7 +965,10 @@ Phase 3 · unit (vitest)
   the same combination of the peaks; the collapsed pair gives identical vectors for
   `t ∈ {0, 0.3, 1}`; the recomputed curve matches all 377 points within 1e-9; the domain's left
   end is `frontier.s_safe`, which is the last maximum of `frontier.range.bad`, and moves when the
-  tensor's does. `range6m` on `(μ, σ)` yields `μ/2 ∓ 1.96σ/√2`. **Must-not-contain:** any
+  tensor's does. `yearRange(j, l/(L−1))` equals `ladder.range.{bad,typical,good}[j][l]` at every
+  node (and `frontier.range` at level 0) within 1e-12; between nodes it equals the test's own
+  blend with the hop rule of the mixes, and bad < typical < good; `normalRange(μ, σ)` yields
+  `μ ∓ 1.96σ` around `μ`; no `range6m` is exported. **Must-not-contain:** any
   renormalization (`Σw` must equal exactly the convex combination, not a rescaled value).
   Fail = any leg.
 - **Kind.** property (every node and level; 200 random positions; collapsed case).
@@ -1029,7 +1033,8 @@ Phase 3 · unit (vitest, mocked `fetch`, reducer)
 Phase 3 · unit (vitest over `web/worker/share.ts`)
 - **Claim.** `POST /api/share` accepts only `{"to", "url"}` JSON ≤ 2 KB with `Origin:
   https://portfoliosight.ai`, one bare RFC 5322 addr-spec ≤ 254 chars, and a `url` that parses to
-  `https://portfoliosight.ai/` with only §8.1 keys and ≤ 2,048 chars; the MailChannels request
+  `https://portfoliosight.ai/` with only §8.1 keys, `t` one of the four themes `ks-dark | light |
+  hud | grid`, and ≤ 2,048 chars; the MailChannels request
   carries the **re-encoded** URL, `from.email = SHARE_FROM`, `name = "PortfolioSight"`, the fixed
   subject and body, `Reply-To = SHARE_REPLY_TO`, the DKIM fields; the `ShareLimiter` logic refuses
   the 2nd per IP per minute, the 4th per IP per day and the 51st global per day; with
@@ -1039,14 +1044,16 @@ Phase 3 · unit (vitest over `web/worker/share.ts`)
   record for the limiter; inputs: valid; display-name recipient `"Jeff <a@b.c>"`; two addresses;
   255-char address; `url` on `https://example.com/`; `url` with a `javascript:` scheme; `url` with
   an extra key `zz=1`; `url` with `k=…`; a 3 KB body; a non-JSON body; a request with a foreign
-  `Origin`; the React dialog rendered with the client's preview flag on and off.
+  `Origin`; a `url` in each of the four themes and one with an unknown theme (`t=neon`, `t=HUD`,
+  `t=grid2`, …); the React dialog rendered with the client's preview flag on and off.
 - **Observation.** Valid → 202 `{"ok": true}` and exactly one MailChannels call whose JSON has
   `personalizations[0].to[0].email` equal to the input, `from.email == SHARE_FROM`, subject
   `"Someone shared a PortfolioSight view with you"`, text body consisting of the one fixed line,
   the re-encoded link and the disclaimer line, `dkim_domain`, `dkim_selector`, `dkim_private_key`
   present, and the link equal to `encode(decode(url))` with `zz` and `k` absent. Each invalid
   input → the §9.3 code (400 `invalid_recipient`/`invalid_url`, 413, 415, 403 or 400 for the
-  foreign origin) and **zero** MailChannels calls. Limiter: sequences crossing each cap return
+  foreign origin) and **zero** MailChannels calls. Each of the four themes → 202 with that `t` in
+  the link; an unknown theme → 400 `invalid_url` and zero calls. Limiter: sequences crossing each cap return
   429 exactly at the cap, two IPs independent, the global cap shared. `"test"` key: 202, zero
   outbound calls, one log line. Dialog: preview on → a notice that recipients cannot open the
   link until preview is off; preview off → notice absent. **Must-not-contain:** the raw
@@ -1086,9 +1093,10 @@ Phase 3 · unit (vitest with mocked bindings; requests carry the gate header)
   `Cache-Control: public, max-age=300` and `x-ps-source: r2`; `GET /api/symbols` → `meta/
   symbols.json` likewise; `GET /api/tensors/{G}/{hash}/{lookback}` validates the three segments,
   serves an R2 hit with `public, max-age=86400, immutable`, the object's etag and `x-ps-source:
-  r2`, and on a miss forwards to `API_ORIGIN + "/v1/…"`; `POST /api/tensors` and `GET /api/health`
-  forward with `x-ps-gate`, `content-type`, `accept` and `CF-Connecting-IP` and return the upstream
-  `Cache-Control` with `x-ps-source: origin`; `POST /api/share` is handled in the Worker; every
+  r2`, and on a miss forwards to `API_ORIGIN + "/v1/…"`; `POST /api/tensors`, `POST /api/range`
+  and `GET /api/health` forward with `x-ps-gate`, `content-type`, `accept` and `CF-Connecting-IP`
+  and return the upstream `Cache-Control` with `x-ps-source: origin`; a `POST` body over 16 KB is
+  refused with 413 before any origin fetch; `POST /api/share` is handled in the Worker; every
   other path goes to `ASSETS`; no other `/api/` path exists.
 - **Setup.** Mocked `env` as in A-PS-39 with `PS_PRIVATE_PREVIEW = "0"`; recorded `fetch` for the
   origin; `DATA.get` recorded.
@@ -1097,7 +1105,7 @@ Phase 3 · unit (vitest with mocked bindings; requests carry the gate header)
   malformed segments returns 4xx with **no** `DATA.get` and no origin fetch; `/api/anything-else`
   and `/api/login` return 404 (not forwarded, not assets); `/` and `/some/deep/link` call
   `ASSETS.fetch`; the www redirect preserves `?u=tsp&lb=5y`. **Must-not-contain:** an origin
-  fetch without `x-ps-gate`; a forwarded request for a path outside the three forwarded ones; a
+  fetch without `x-ps-gate`; a forwarded request for a path outside the four forwarded ones; a
   `DATA` read on a malformed key. Fail = any.
 - **Kind.** contract.
 
@@ -1187,23 +1195,28 @@ Phase 3 · ui (all four themes)
   stale ramp from another theme); a colored pixel above the frontier. Fail = any theme.
 - **Kind.** property (four themes; 25 samples each).
 
-### A-PS-45 — the risk slider's readouts are the frontier mix's truth and move together without a request
+### A-PS-45 — the risk slider's readouts are the frontier mix's one-year truth and move together with no request but the range of the mix on screen
 Phase 3 · ui
 - **Claim.** At five increasing slider positions `ceiling-line` moves right, `risk-readout-bad`
-  and `risk-readout-typical` equal `Low_front(s)` and `Typical_front(s)` computed by the test
-  from `frontier_curve` (±0.1 pp), both change on every move, `point-selected` never sits right
-  of the line, no `/api/*` request fires during the moves, arrow keys step 1/200 of the domain,
-  and after moving the diversification slider down the result strip differs from the readouts and
-  is labelled "Selected mix".
-- **Setup.** As A-PS-41; the test reads `frontier_curve` and `s_safe` from the fixture; positions
+  and `risk-readout-typical` equal the frontier mix's bad and typical year, read by the test from
+  `frontier.range` and blended between nodes (±0.1 pp), both change on every move,
+  `point-selected` never sits right of the line, no `/api/*` request fires during the moves but
+  `POST /api/range` naming the tensor on screen, arrow keys step 1/200 of the domain, and after
+  moving the diversification slider down the result strip shows the most diversified mix's
+  typical year, differs from the readouts and is labelled "Selected mix".
+- **Setup.** As A-PS-41 (the mock answers `POST /api/range` with 404, so the page shows its node
+  ranges); the test reads `frontier.range` and `s_safe` from the fixture; positions
   `s_safe + i·(NX−1−s_safe)/6` for `i = 1..5`, set by keyboard/drag on `risk-slider`; the
   network log recorded.
 - **Observation.** `ceiling-line` x strictly increases; at each position the two readouts parse to
-  numbers within 0.1 pp of the test's `μ/2 − 1.96σ/√2` and `μ/2` at the interpolated curve
-  point; both readouts' text differs from the previous position's on every step; `point-selected`
-  center x ≤ line x + 1 px; the network log has zero `/api/` entries between the first and last
-  move; one ArrowRight changes `r` by `(NX−1−s_safe)/200` (±1e-6); after `div-slider` is moved to
-  the bottom, `range-typical` ≠ `risk-readout-typical` and the strip's label text includes
+  numbers within 0.1 pp of `frontier.range.bad` and `.typical` interpolated at `s`; both
+  readouts' text differs from the previous position's on every step; `point-selected` center
+  x ≤ line x + 1 px; between the first and last move the network log has no `/api/` entry other
+  than `POST /api/range` whose body names the fixture's generation, hash and lookback with one
+  weight per fund; one ArrowRight changes `r` by `(NX−1−s_safe)/200` (±1e-6); after `div-slider`
+  is moved to the bottom (at the column where the top of the ladder gives up the most of a
+  typical year), `range-typical` is within 0.1 pp of `ladder.range.typical[j][L−1]`, ≠
+  `risk-readout-typical`, and the strip's label text includes
   "Selected mix". **Must-not-contain:** a step where only one readout changes; a request during
   the drag; the point right of the line. Fail = any.
 - **Kind.** property (five positions; keyboard and drag).
@@ -1262,7 +1275,7 @@ Phase 3 · ui (desktop and phone; four themes; both presets of the mock)
 - **Observation.** `document.body.innerText` (details off) matches none of the forbidden
   patterns and contains: "Risk: how much it bounces around in a year", "Expected return per
   year", "How spread out the risk is", "Best-return mix at this risk", "Selected mix", "More
-  return", "More diversified", "Suggested", "Same menu, different years of history", "The mix you
+  return", "More diversified", "Optimized", "Same menu, different years of history", "The mix you
   entered", "Historical math, not investment advice."; the `disclaimer` element's text equals
   the §3.7 paragraph verbatim and its rect is visible with no `aria-expanded="false"` ancestor;
   `footer-cta` contains anchors whose `href`s are exactly the three URLs. Details on:
@@ -1350,14 +1363,14 @@ Phase 3 · static
 ### A-PS-53 — cap edits are validated inline and sent only when valid
 Phase 3 · ui
 - **Claim.** Setting `cap-min-VTI` above `cap-max-VTI` shows an inline error and sends no
-  request; a valid `cap-max-VTI = 10` sends one `POST /api/tensors` whose body carries
+  POST (other than `POST /api/range` for the mix on screen, which carries no limits); a valid `cap-max-VTI = 10` sends one `POST /api/tensors` whose body carries
   `{"id":"VTI","min":null,"max":0.10}` with every other fund `null/null`; `caps-reset` restores
   every field to the rule values `max(0.25, 3/N)` and sends a POST with all-`null` policy; the
   Settings copy states the rule in one sentence with the current N.
 - **Setup.** As A-PS-41 with the mock accepting POSTs (returning 200 with the fixture URL) and
   recording bodies.
 - **Observation.** Invalid: an error element adjacent to the field, the mock's POST log
-  unchanged; valid: exactly one POST, body as stated, `use-menu`/rebuild flow proceeds; reset:
+  unchanged (range requests aside); valid: exactly one POST, body as stated, `use-menu`/rebuild flow proceeds; reset:
   fields read the rule values (25% for N = 23), one POST with all-`null`, the sentence "No single
   fund above 25% (menu of 23)" visible. **Must-not-contain:** a POST on invalid input; a
   non-`null` entry for an unedited fund. Fail = any.

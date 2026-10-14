@@ -8,8 +8,9 @@ false. The approved change: hold risk fixed and maximize the exact ENB (ladders 
 mix to the peak), the balanced point as the default, one-year ranges everywhere, a stationary
 block bootstrap for them, `POST /v1/range`, and the uncapped reference frontier.
 
-The gate was not re-frozen here (`conductor gate freeze` was not run); the coordinator re-freezes
-after review. Until then `conductor gate verify` reports the files below as changed.
+The engine batch did not re-freeze the gate. The page batch (last section) did, on the
+coordinator's instruction, after both batches' changes were in: `.frozen` now holds every file
+below.
 
 ## What changed in the product that the gate reads
 
@@ -54,10 +55,9 @@ seven reworded ids (summary bullets and detailed sections).
 
 - A-PS-15, 16, 20, 22, 23, 25 to 32, 35 to 40, 47, 48, 51, 53: true as written on the new tensor
   (run below).
-- A-PS-45 and the other UI tests still check the six-month readouts the page shows today. The
-  page moves to one-year ranges in the UI batch that ships with this one; those legs change
-  there.
-- `.frozen`: not regenerated.
+- A-PS-45 and the other UI tests still checked the six-month readouts here; the page batch
+  below moved them to one year.
+- `.frozen`: not regenerated in this batch (see the page batch).
 
 ## Runs
 
@@ -78,3 +78,36 @@ painted pixels on a fixed 10 x 5 grid of canvas samples and needs at least 10. A
 painted only each ladder's band (the first form of this batch) left 6 of 50 painted and failed.
 The raster now holds the peak in every cell at or below the peak's return, which is what the
 ladder program answers there (the return floor no longer binds), and A-PS-49 passes unchanged.
+
+## Page batch: the page reads Engine 2
+
+Instruction (the coordinator, for the owner): the page shows one-year Bad / Typical / Good
+everywhere, asks `POST /api/range` for exact weights and falls back to the node ranges, names
+the open circle "Optimized" (no separate Suggested tick), draws the uncapped frontier as a
+"No limits" ghost, adds the "No limits" / "Reset limits" buttons, forwards `POST /api/range` in
+the Worker, accepts `t=grid` and `t=hud` in mailed links, and updates the gate tests that pin
+six-month figures or the old marker wording.
+
+| Gate file | Assertion, leg | Before | After | Property it protects | Why the new form is not weaker |
+|---|---|---|---|---|---|
+| `tests/test_a_ps_34_browser_math_fidelity.py` | A-PS-34, range leg; docstring; `EXPECTED_TITLES` | `range6m(μ, σ)` = `μ/2 ∓ 1.96σ/√2` on random `(μ, σ)` | `yearRange(j, l/(L−1))` equals `ladder.range` at all 48 × 14 nodes and `frontier.range` at level 0 (1e-12); at the same 200 random positions it equals the test's own blend with the hop rule (1e-12) and is ordered; `normalRange(μ, σ)` = `μ ∓ 1.96σ` on 50 random pairs; `range6m` must be gone | The browser's ranges are the engine's | Every node checked exactly, plus the in-between positions against a test-owned reference; the old leg checked one formula on random inputs. One title changed. |
+| `tests/test_a_ps_41` to `_46` (shared `tensorFacts`) | `frontAt(s)` bad and typical | `100·(μ/2 − 1.96σ/√2)` and `100·μ/2` at the curve point | `100·lerp(frontier.range.bad, s)` and `100·lerp(frontier.range.typical, s)` | The readouts are the frontier mix's | Same tolerance (0.1 pp), the engine's figures instead of a formula the spec dropped. |
+| `tests/test_a_ps_45_risk_slider_readouts.py` | A-PS-45, request check | no `/api/` request of any kind during the moves | the only request allowed is `POST /api/range`, and each one must name the tensor on screen (generation, hash, lookback) with one weight per fund; anything else fails | The sliders never wait on the network | The page now asks for the exact range of the mix on screen once it rests (spec 4.9); the readouts are still checked while the gate's mock refuses it (404), so they cannot depend on it. |
+| same | A-PS-45, strip leg | column with the largest mean-return gap between `frontier.w` and `grid.w_div`; strip typical = `μ_div/2`, readout = `μ_front/2` | column with the largest typical-year gap between `frontier.range` and the ladder's top level; strip typical = `ladder.range.typical[j][L−1]`, readout = `frontier.range.typical[j]` | The strip follows the selected mix, the readouts the frontier | Same 0.4 pp gap floor, same tolerance, same "differs" and "Selected mix" checks; one-year figures. Title and docstring now name the one allowed request. |
+| `tests/test_a_ps_48_plain_language_disclaimer.py` | A-PS-48, plain labels | "Suggested" | "Optimized" | The open circle has a plain name | The owner renamed the marker; the label is still required on every viewport, theme and preset. The technical name "Estimated central 95% range" is unchanged: the strip's details text keeps it. |
+| `tests/test_a_ps_53_caps_inline_validation.py` | A-PS-53, invalid input | no POST of any kind | no POST other than `POST /api/range` | Invalid limits are never sent | A range request carries weights only, never limits; every POST to `/api/tensors` is still counted, and the valid and reset legs are unchanged. |
+| `tests/test_a_ps_38_share_validators_template_caps.py` | A-PS-38, new leg; `EXPECTED_TITLES` 6 → 7 | no leg covered `t` beyond `hud`/`light`; no check refused an unknown theme | each of ks-dark, light, hud, grid returns 202 with one mail whose link equals `encode(decode(search))`; seven unknown values (neon, dark, HUD, Grid, grid2, `hud,grid`, empty) return 400 `invalid_url` with no outbound call | A shared link opens the theme it was sent in | Checks only added; every earlier leg unchanged. |
+| `tests/test_a_ps_40_worker_routing_surface.py` | A-PS-40, new leg; route lists; gate-header leg; `EXPECTED_TITLES` 8 → 9 | three forwarded routes | `POST /api/range` forwarded with exactly the four headers (the Worker's own `x-ps-gate`), body byte-equal, upstream status and body (409 too) passed back, 413 over 16 KB with no origin call; `POST /api/range/extra` and `/api/v1/range` 404; `GET`/`DELETE`/`PUT /api/range` refused and not forwarded; the gate-header leg sends a range request carrying a client `x-ps-gate` and requires the secret upstream | The Worker exposes no more than the spec | One route added by decision and held to the same checks as `POST /api/tensors`, plus a size cap the tensors route was never tested for. |
+| `manifest.yaml` | claims of A-PS-34, 38, 40, 45, 53 | as frozen | reworded to say the above | Claim text matches the test | Text only. |
+| `INTERFACES.md` | page math pin; share themes; copy; test ids | `range6m`; three themes in mailed links | `yearRange`, `normalRange`; four themes (the page's codec decides); "Optimized"; `details-bell`, `key-nolimits`, `caps-none` | The contract the product is built to | Names follow the code. |
+
+`docs/specs/2026-10-13-portfoliosight-demo-design.assertions.md` carries the same changes for
+A-PS-34, 38, 40, 45, 46 (summary wording only), 48 and 53.
+
+Left as they are: A-PS-49 passes unchanged; the "No limits" curve is clipped to the chart's own
+extent so the heatmap keeps its size and painted area. The legacy `grid.y_sug` and `grid.w_div`
+stay in the tensor: `web/e2e/smoke.spec.ts` and several gates read them.
+
+Runs (pinned commands, this worktree, 2026-10-13): A-PS-34 and A-PS-38 to A-PS-53 pass (A-PS-52
+with the secret env loaded in a subshell). `conductor gate lint` and `conductor gate freeze`:
+see the commit that carries `.frozen`.

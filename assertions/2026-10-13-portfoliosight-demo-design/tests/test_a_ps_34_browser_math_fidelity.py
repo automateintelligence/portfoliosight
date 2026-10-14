@@ -10,7 +10,9 @@ Pinned interface
   module has no side effects and needs no DOM). It must accept a tensor whose weights are inside
   the §4.11 tolerances (a column whose weights sum to 1 + 5e-7) and whose `frontier_curve` is stale.
 - `web/src/math/portfolio.ts`: `portfolioMath(tensor)` (the value returned by `parseTensor`) with
-  `stats(w) -> {mu, sigma, enb}`, `range6m(mu, sigma) -> {low, typical, high}`,
+  `stats(w) -> {mu, sigma, enb}`, `yearRange(s, t) -> {low, typical, high}` (the bad / typical /
+  good year read off `ladder.range`, blended like `interpolate`), `normalRange(mu, sigma) ->
+  {low, mid, high}`,
   `interpolate(s, t) -> number[]` (walks each neighbouring column's `ladder.w`, level `l` of `L` at
   `t = l / (L - 1)`, straight between levels except across a `ladder.hop`, where the upper level
   holds to the middle of the step; then blends the two columns by the column fraction),
@@ -327,22 +329,45 @@ describe("A-PS-34", () => {
     }
   });
 
-  it("range6m is mu/2 -+ 1.96 sigma/sqrt 2", () => {
-    const rnd = mulberry32(99);
+  it("one-year ranges are the tensor's node figures, blended like the mixes, and the bell-curve figure is mu -+ 1.96 sigma", () => {
+    const L: number = RAW.ladder.w[0].length;
+    const R = RAW.ladder.range;
     let checked = 0;
+    // at every column and level the page shows the tensor's own figure
+    for (let j = 0; j < NX; j++) {
+      for (let l = 0; l < L; l++) {
+        const r = M.yearRange(j, l / (L - 1));
+        expect(close(r.low, R.bad[j][l], 1e-12) && close(r.typical, R.typical[j][l], 1e-12) && close(r.high, R.good[j][l], 1e-12), `level (${j},${l})`).toBe(true);
+        checked += 1;
+      }
+      expect(close(M.yearRange(j, 0).low, RAW.frontier.range.bad[j], 1e-12), `frontier node ${j}`).toBe(true);
+    }
+    expect(checked).toBe(NX * L);
+    // between them: the test's own blend, with the same hop rule as the mixes
+    const blend = (rows: number[][], j: number, t: number) => {
+      const pos = t * (L - 1);
+      const level = Math.min(Math.floor(pos), L - 2);
+      let f = pos - level;
+      if (RAW.ladder.hop[j][level]) f = f < 0.5 ? 0 : 1;
+      return (1 - f) * rows[j][level] + f * rows[j][level + 1];
+    };
+    for (const { s, t } of positions(100)) {
+      const { j, lam } = split(s);
+      const want = (rows: number[][]) => (lam === 0 ? blend(rows, j, t) : (1 - lam) * blend(rows, j, t) + lam * blend(rows, j + 1, t));
+      const r = M.yearRange(s, t);
+      expect(close(r.low, want(R.bad), 1e-12) && close(r.typical, want(R.typical), 1e-12) && close(r.high, want(R.good), 1e-12), `(s=${s}, t=${t})`).toBe(true);
+      expect(r.low < r.typical && r.typical < r.high, `ordered at (s=${s}, t=${t})`).toBe(true);
+    }
+    const rnd = mulberry32(99);
     for (let i = 0; i < 50; i++) {
       const mu = rnd() * 0.3 - 0.05;
       const sigma = rnd() * 0.4;
-      const r = M.range6m(mu, sigma);
-      expect(Math.abs(r.typical - mu / 2)).toBeLessThanOrEqual(1e-12);
-      expect(Math.abs(r.low - (mu / 2 - (1.96 * sigma) / Math.sqrt(2)))).toBeLessThanOrEqual(1e-12);
-      expect(Math.abs(r.high - (mu / 2 + (1.96 * sigma) / Math.sqrt(2)))).toBeLessThanOrEqual(1e-12);
-      checked += 1;
+      const n = M.normalRange(mu, sigma);
+      expect(Math.abs(n.mid - mu)).toBeLessThanOrEqual(1e-15);
+      expect(Math.abs(n.low - (mu - 1.96 * sigma))).toBeLessThanOrEqual(1e-12);
+      expect(Math.abs(n.high - (mu + 1.96 * sigma))).toBeLessThanOrEqual(1e-12);
     }
-    expect(checked).toBe(50);
-    const st = M.stats(RAW.frontier.w[0]);
-    const r0 = M.range6m(st.mu, st.sigma);
-    expect(r0.low).not.toBe(r0.high);
+    expect(typeof (M as Record<string, unknown>).range6m, "no six-month range is left in the page math").toBe("undefined");
   });
 });
 """
@@ -352,7 +377,7 @@ EXPECTED_TITLES = {
     "t=0 is the frontier combination and t=1 the most-diversified combination",
     "collapsed ladders are constant in t and nothing is renormalized",
     "frontierCurve is recomputed and s_safe is the tensor's",
-    "range6m is mu/2 -+ 1.96 sigma/sqrt 2",
+    "one-year ranges are the tensor's node figures, blended like the mixes, and the bell-curve figure is mu -+ 1.96 sigma",
 }
 
 

@@ -351,7 +351,7 @@ async function sampleCanvas(page: Page, points: { x: number; y: number }[], bg: 
   });
 }
 
-// Signed percent in a readout such as "Bad six months −9.4%" -> -9.4 (percentage points).
+// Signed percent in a readout such as "Bad year −9.4%" -> -9.4 (percentage points).
 function parsePercent(text: string, what: string): number {
   const m = text.replace(/[−–]/g, "-").match(/([+-]?)\s?(\d+(?:\.\d+)?)\s*%/);
   if (!m) throw new Error(`${what}: no percent value in "${text}"`);
@@ -379,7 +379,8 @@ function tensorFacts(tensor: any) {
   const frontAt = (s: number) => {
     const sigma = lerp(curve.sigma, s * 8);
     const mu = lerp(curve.mu, s * 8);
-    return { sigma, mu, lowPct: 100 * (mu / 2 - (1.96 * sigma) / Math.SQRT2), typicalPct: 100 * (mu / 2) };
+    // the frontier mix's bad and typical year (spec 4.9): the node figures blended between columns
+    return { sigma, mu, lowPct: 100 * lerp(tensor.frontier.range.bad, s), typicalPct: 100 * lerp(tensor.frontier.range.typical, s) };
   };
   const ceilingAt = (s: number) => lerp(tensor.frontier.x, s);
   // the suggested point's position on each column's ladder (spec 4.8); 0 on a collapsed column

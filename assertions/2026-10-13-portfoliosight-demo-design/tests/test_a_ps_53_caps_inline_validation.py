@@ -430,7 +430,10 @@ test("invalid cap shows an inline error and sends nothing", async ({ page }) => 
   await ruleSentence(page, tensor);
   const quiet = await capErrorText(page);
   const before = mock.tensorPosts().length;
-  const anyPostBefore = mock.calls.filter((c) => c.method === "POST").length;
+  // POST /api/range asks for the one-year range of the mix on screen once the sliders rest; it
+  // carries no limits and is not a send of the cap table
+  const sends = () => mock.calls.filter((c) => c.method === "POST" && c.path !== "/api/range").length;
+  const anyPostBefore = sends();
   const tooHigh = Math.min(100, Math.round(rule * 100) + 5); // above the max field, still <= 100 %
   expect(Math.abs(Number(await page.getByTestId("cap-max-VTI").inputValue()) - rule * 100), "cap-max-VTI starts at the rule value").toBeLessThanOrEqual(1e-6);
   await page.getByTestId("cap-min-VTI").fill(String(tooHigh));
@@ -440,7 +443,7 @@ test("invalid cap shows an inline error and sends nothing", async ({ page }) => 
   // absence of a request needs a bounded wait: longer than the 250 ms URL debounce and any send debounce
   await page.waitForTimeout(1500);
   expect(mock.tensorPosts().length, "POST /api/tensors sent on invalid input").toBe(before);
-  expect(mock.calls.filter((c) => c.method === "POST").length, "no POST of any kind on invalid input").toBe(anyPostBefore);
+  expect(sends(), "no POST of any kind (other than the range of the mix on screen) on invalid input").toBe(anyPostBefore);
 });
 
 test("valid cap sends one POST with VTI max 0.10", async ({ page }) => {
