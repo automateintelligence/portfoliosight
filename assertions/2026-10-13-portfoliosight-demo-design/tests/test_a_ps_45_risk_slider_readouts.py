@@ -1,5 +1,5 @@
-"""A-PS-45 - the risk slider's readouts are the frontier mix's truth and move together without a
-request.
+"""A-PS-45 - the risk slider's readouts are the frontier mix's one-year truth and move together
+with no request but the one-year range of the mix on screen.
 
 Playwright (desktop) run from pytest; stdlib only.
 
@@ -9,7 +9,8 @@ data/holdings/holdings_guide2017_step2.csv in "$", and tsp named "TSP (G, F, C, 
 with a distinct hash and allocation null; six ready lookbacks each), GET /api/tensors/{G}/{hash}/{lb}
 (web/fixtures/guide2017_5y.json with lookback.id patched; for the second hash also universe.hash,
 preset_id, name and the excluded reasons patched), GET /api/symbols, GET /api/health,
-POST /api/tensors, POST /api/share, anything else 404. Every /api/ request is logged.
+POST /api/tensors, POST /api/share, anything else 404 (POST /api/range among them, so the page
+shows its node ranges). Every /api/ request is logged.
 
 Pinned interface (beyond the shared pins of the gate contract):
 - web/ builds with `npm run build` and serves with `vite preview`; web/fixtures/guide2017_5y.json.
@@ -80,7 +81,7 @@ import path from "node:path";
 // Shared helper block (each gate file embeds its own copy; nothing here imports product code).
 // ---------------------------------------------------------------------------------------------
 const ROOT = process.env.PS_GATE_ROOT || "";
-const THEMES = ["ks-dark", "light", "hud"];
+const THEMES = ["ks-dark", "light", "hud", "grid"];
 const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
 const TSP: [string, string][] = [
   ["TSP-G", "G Fund"], ["TSP-F", "F Fund"], ["TSP-C", "C Fund"], ["TSP-S", "S Fund"], ["TSP-I", "I Fund"],
@@ -353,7 +354,7 @@ async function sampleCanvas(page: Page, points: { x: number; y: number }[], bg: 
   });
 }
 
-// Signed percent in a readout such as "Bad six months −9.4%" -> -9.4 (percentage points).
+// Signed percent in a readout such as "Bad year −9.4%" -> -9.4 (percentage points).
 function parsePercent(text: string, what: string): number {
   const m = text.replace(/[−–]/g, "-").match(/([+-]?)\s?(\d+(?:\.\d+)?)\s*%/);
   if (!m) throw new Error(`${what}: no percent value in "${text}"`);
@@ -372,24 +373,21 @@ function tensorFacts(tensor: any) {
   const NX: number = tensor.frontier.x.length;
   const curve = tensor.frontier_curve;
   if (curve.sigma.length !== 8 * (NX - 1) + 1) throw new Error(`fixture frontier_curve has ${curve.sigma.length} points, expected ${8 * (NX - 1) + 1}`);
-  const low = (i: number) => curve.mu[i] / 2 - (1.96 * curve.sigma[i]) / Math.SQRT2;
-  let best = -Infinity;
-  let at = 0;
-  for (let i = 0; i < curve.mu.length; i++) if (low(i) >= best) { best = low(i); at = i; }
-  const sSafe = at / 8;
-  if (Math.abs(sSafe - tensor.frontier.s_safe) > 1e-9) throw new Error(`fixture frontier.s_safe (${tensor.frontier.s_safe}) is not the rightmost maximum of Low_front over frontier_curve (${sSafe})`);
+  // the slider's left end is the engine's (spec 4.9): the rightmost frontier node with the best bad year
+  const bad: number[] = tensor.frontier.range.bad;
+  const sSafe = bad.lastIndexOf(Math.max(...bad));
+  if (sSafe !== tensor.frontier.s_safe) throw new Error(`fixture frontier.s_safe (${tensor.frontier.s_safe}) is not the rightmost frontier node with the best bad year (${sSafe})`);
   const sMax = NX - 1;
   if (!(sMax > sSafe)) throw new Error("fixture risk-slider domain is a single point; these assertions need a real domain");
   const frontAt = (s: number) => {
     const sigma = lerp(curve.sigma, s * 8);
     const mu = lerp(curve.mu, s * 8);
-    return { sigma, mu, lowPct: 100 * (mu / 2 - (1.96 * sigma) / Math.SQRT2), typicalPct: 100 * (mu / 2) };
+    // the frontier mix's bad and typical year (spec 4.9): the node figures blended between columns
+    return { sigma, mu, lowPct: 100 * lerp(tensor.frontier.range.bad, s), typicalPct: 100 * lerp(tensor.frontier.range.typical, s) };
   };
   const ceilingAt = (s: number) => lerp(tensor.frontier.x, s);
-  const tSug = (j: number) => {
-    const span = tensor.frontier.y[j] - tensor.grid.y_div[j];
-    return tensor.grid.k_div[j] < 0 || span <= 0 ? 0 : (tensor.frontier.y[j] - tensor.grid.y_sug[j]) / span;
-  };
+  // the suggested point's position on each column's ladder (spec 4.8); 0 on a collapsed column
+  const tSug = (j: number) => (tensor.ladder.collapsed[j] ? 0 : tensor.ladder.t_suggested[j]);
   const tAuto = (s: number) => {
     const j = Math.min(Math.floor(s), NX - 2);
     const lam = s - j;
@@ -411,7 +409,7 @@ async function readState(page: Page) {
   return { bad, typical, lineX: line.cx, pointX: point.cx };
 }
 
-test("risk slider readouts are the frontier mix's truth at five positions, with no request", async ({ page }) => {
+test("risk slider readouts are the frontier mix's truth at five positions, with no request but the range of the mix on screen", async ({ page }) => {
   const mock = buildMock(readFixture());
   const tensor = mock.tensor;
   const facts = tensorFacts(tensor);
@@ -421,7 +419,7 @@ test("risk slider readouts are the frontier mix's truth at five positions, with 
   const scales = await chartScales(page);
   const handle = await sliderHandle(page, "risk-slider");
 
-  // The readouts must equal Low_front(s) and Typical_front(s) at the position the URL reports.
+  // The readouts must equal the frontier mix's bad and typical year at the position the URL reports.
   const settle = async (s: number, what: string) => {
     let state = await readState(page);
     await expect(async () => {
@@ -429,8 +427,8 @@ test("risk slider readouts are the frontier mix's truth at five positions, with 
       const want = facts.frontAt(s);
       const low = parsePercent(state.bad, "risk-readout-bad");
       const typ = parsePercent(state.typical, "risk-readout-typical");
-      expect(Math.abs(low - want.lowPct), `${what}: risk-readout-bad shows ${low}, Low_front(${s}) is ${want.lowPct.toFixed(3)}`).toBeLessThanOrEqual(TOL_PP);
-      expect(Math.abs(typ - want.typicalPct), `${what}: risk-readout-typical shows ${typ}, Typical_front(${s}) is ${want.typicalPct.toFixed(3)}`).toBeLessThanOrEqual(TOL_PP);
+      expect(Math.abs(low - want.lowPct), `${what}: risk-readout-bad shows ${low}, the bad year at ${s} is ${want.lowPct.toFixed(3)}`).toBeLessThanOrEqual(TOL_PP);
+      expect(Math.abs(typ - want.typicalPct), `${what}: risk-readout-typical shows ${typ}, the typical year at ${s} is ${want.typicalPct.toFixed(3)}`).toBeLessThanOrEqual(TOL_PP);
     }, what).toPass({ timeout: 5000 });
     return state;
   };
@@ -480,24 +478,35 @@ test("risk slider readouts are the frontier mix's truth at five positions, with 
     prevS = s;
   }
   expect(texts.length).toBe(5);
-  expect(mock.log.slice(logStart).map((c) => `${c.method} ${c.path}`), "no /api/ request may fire while the risk slider moves").toEqual([]);
+  // The one request the page may make is the one-year range of the mix on screen, asked once the
+  // slider rests (spec 4.9, 6); the readouts never wait on it. Nothing else may fire.
+  const fired = mock.log.slice(logStart);
+  const isRange = (c: { method: string; path: string }) => c.method === "POST" && c.path === "/api/range";
+  for (const c of fired.filter(isRange)) {
+    const body = JSON.parse(c.body ?? "{}");
+    expect([body.generation, body.hash, body.lookback], "a range request names the tensor on screen").toEqual([tensor.generation, tensor.universe.hash, tensor.lookback.id]);
+    expect(Array.isArray(body.weights) && body.weights.length === tensor.universe.funds.length, "a range request carries one weight per fund").toBe(true);
+  }
+  expect(fired.filter((c) => !isRange(c)).map((c) => `${c.method} ${c.path}`), "no other /api/ request may fire while the risk slider moves").toEqual([]);
 });
 
 test("after the diversification slider moves down the result strip differs and is labelled Selected mix", async ({ page }) => {
   const mock = buildMock(readFixture());
   const tensor = mock.tensor;
   const facts = tensorFacts(tensor);
-  // Integer column where the most-diversified mix gives up the most return (tensor truth, no product code).
+  // Integer column where the most-diversified mix (the top of the ladder) gives up the most of a
+  // typical year (tensor truth, no product code). Both figures are the tensor's own one-year nodes.
+  const top: number = tensor.ladder.w[0].length - 1;
   let j = -1;
   let gap = 0;
   for (let c = Math.ceil(facts.sSafe); c <= facts.sMax; c++) {
-    if (tensor.grid.k_div[c] < 0) continue;
-    const g = dot(tensor.mu_s, tensor.frontier.w[c]) - dot(tensor.mu_s, tensor.grid.w_div[c]);
+    if (tensor.ladder.collapsed[c]) continue;
+    const g = tensor.frontier.range.typical[c] - tensor.ladder.range.typical[c][top];
     if (g > gap) { gap = g; j = c; }
   }
-  expect(gap, "the fixture needs a column in the slider domain whose most-diversified mix gives up at least 0.4 pp of yearly return").toBeGreaterThanOrEqual(0.004);
-  const frontTypical = 100 * (dot(tensor.mu_s, tensor.frontier.w[j]) / 2);
-  const divTypical = 100 * (dot(tensor.mu_s, tensor.grid.w_div[j]) / 2);
+  expect(gap, "the fixture needs a column in the slider domain whose most-diversified mix gives up at least 0.4 pp of a typical year").toBeGreaterThanOrEqual(0.004);
+  const frontTypical = 100 * tensor.frontier.range.typical[j];
+  const divTypical = 100 * tensor.ladder.range.typical[j][top];
 
   await installMock(page, mock);
   await openApp(page, mock, `u=guide2017&lb=5y&r=${j}&d=auto`);
@@ -524,7 +533,7 @@ test("after the diversification slider moves down the result strip differs and i
 });
 """
 EXPECTED_TITLES = {
-    "risk slider readouts are the frontier mix's truth at five positions, with no request",
+    "risk slider readouts are the frontier mix's truth at five positions, with no request but the range of the mix on screen",
     "after the diversification slider moves down the result strip differs and is labelled Selected mix",
 }
 

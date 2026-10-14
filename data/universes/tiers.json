@@ -1,0 +1,24 @@
+{
+  "tiers": [
+    {
+      "tier": 1,
+      "name": "presets",
+      "holdings": "data/holdings/holdings_guide2017_step2.csv",
+      "tsp": true
+    },
+    {
+      "tier": 2,
+      "name": "curated menu staples",
+      "file": "data/universes/portfoliosight.txt"
+    },
+    {
+      "tier": 3,
+      "name": "QSE core stocks",
+      "file": "data/universes/qse_core.txt",
+      "starter_slice": 130
+    }
+  ],
+  "notes": {
+    "FIENX": "converted to an ETF"
+  }
+}

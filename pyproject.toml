@@ -1,24 +1,47 @@
 [project]
 name = "portfoliosight"
-version = "0.0.1"
+version = "0.1.0"
 description = "Portfolio risk/return engine: efficient frontier, diversification surface, risk ranges"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { text = "Proprietary" }
 authors = [{ name = "Jeffrey A. Daniels", email = "jeff@automateintelligence.ai" }]
 dependencies = [
-  "numpy>=1.26",
-  "pandas>=2.2",
-  "scipy>=1.13",
-  "matplotlib>=3.9",
-  "plotly>=5.24",
-  "requests>=2.32",
-  "yfinance>=0.2.50",
+  "numpy>=2.5",
+  "pandas>=3.0",
+  "pyarrow>=26.0",
+  "scipy>=1.18",
+  "scikit-learn>=1.9",
+  "cvxpy>=1.9",
+  "clarabel>=0.11",
+  "requests>=2.34",
+  "pydantic>=2.14",
+  "boto3>=1.43",
+  "exchange_calendars>=4.13",
+  "jsonschema>=4.26",
+  "threadpoolctl>=3.5",
 ]
 
 [project.optional-dependencies]
-research = ["skfolio>=0.10", "scikit-learn>=1.5", "openpyxl>=3.1"]
-dev = ["pytest>=8", "ruff>=0.6"]
+api = ["fastapi>=0.143", "uvicorn[standard]>=0.54"]
+research = [
+  "yfinance>=1.7",
+  "matplotlib>=3.11",
+  "plotly>=7.1",
+  "skfolio>=1.8",
+  "openpyxl>=3.1",
+]
+dev = [
+  "pytest>=9.1",
+  "pytest-cov>=7.1",
+  "ruff>=0.17",
+  "pyright>=1.1.414",
+  "responses>=0.26",
+  "moto[s3]>=5.2",
+  "httpx>=0.28",
+  "pyyaml>=6.0",
+  "freezegun>=1.5",
+]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
@@ -27,5 +50,29 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["portfoliosight*"]
 
+[tool.setuptools.package-data]
+portfoliosight = ["engine/*.json"]
+
 [tool.ruff]
 line-length = 100
+extend-exclude = ["portfoliosight/frontier_cli.py", "assertions", ".worktrees", ".venv", "*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pyright]
+typeCheckingMode = "standard"
+pythonVersion = "3.12"
+include = ["portfoliosight", "scripts", "tests"]
+exclude = ["portfoliosight/frontier_cli.py", "assertions", ".worktrees", ".venv", "web"]
+ignore = ["assertions"]
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: needs ~/.secrets/portfoliosight.env and the network"]
+
+[tool.coverage.run]
+source = ["portfoliosight"]
+omit = ["portfoliosight/frontier_cli.py"]

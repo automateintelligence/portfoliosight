@@ -1,19 +1,19 @@
-"""A-PS-49 — three themes with distinct computed tokens and a repainted canvas; the choice is
+"""A-PS-49 — four themes with distinct computed tokens and a repainted canvas; the choice is
 remembered; HUD references nothing.
 
 Phase 3, ui + static (Playwright against `vite preview` run from pytest, plus a repository scan in
 pytest; standard library only).
 
-UI legs (desktop): `theme-switch` steps ks-dark -> light -> hud -> ks-dark on `html[data-theme]` and
+UI legs (desktop): `theme-switch` steps ks-dark -> light -> hud -> grid -> ks-dark on `html[data-theme]` and
 `localStorage("ps.theme")` follows; per theme the computed `--bg`, `--surface`, `--text`,
 `--accent`, `--frontier` and `--heat-0..4` equal the spec 3.5 table embedded here (any CSS colour
 syntax, normalised to hex by painting it) and none carries another theme's column; an opaque pixel
 of the `--frontier` colour is found in at least 25% of the canvas columns (the frontier stroke); the
 mean RGB of 50 fixed canvas samples (over the theme's `--bg`) differs by more than 20/255 on some
 channel between every pair of themes, on fresh loads and when switching in place; the stored theme
-survives a load without `t=`; `?t=hud` wins over a stored `light`; under
+survives a load without `t=`; `?t=hud` wins over a stored `light` and `?t=grid` over a stored `hud`; under
 `prefers-reduced-motion: reduce` no element (or its ::before/::after) has a non-zero computed
-`transition-duration`, in all three themes with the sections expanded.
+`transition-duration`, in all four themes with the sections expanded.
 Static leg: zero hits of the needle list (kept only in this file) in `web/src`, `web/worker`,
 `data/`, `README.md`, `ROADMAP.md`, `docs/specs`, `docs/plans/*runbook*` (excluding the assertions
 file, the original prompt, `docs/reviews/` and `assertions/`), and at least 20 hits of the word HUD.
@@ -28,8 +28,8 @@ an integer `r` inside the slider domain and `d=0` the selected mix is exactly `f
 as given (it may leave the URL untouched or rewrite the same values).
 
 Pinned interface (beyond the shared pins)
-- `theme-switch` is either one clickable that cycles ks-dark -> light -> hud, or a group holding
-  exactly three `button` / `[role=radio]` segments in that order.
+- `theme-switch` is either one clickable that cycles ks-dark -> light -> hud -> grid, or a group
+  holding exactly four `button` / `[role=radio]` segments in that order.
 - `chart-canvas` is a `<canvas>` that can be read with `drawImage` (2D, or WebGL with
   `preserveDrawingBuffer`); the heatmap and the frontier stroke are painted on it.
 - With no `t=` and empty storage the theme is `ks-dark`.
@@ -89,7 +89,7 @@ import path from "node:path";
 // Fixture, presets body and the /api mock (the gate contract's "UI mock"; no product mock server)
 // ---------------------------------------------------------------------------------------------
 const GATE_ROOT = process.env.PS_GATE_ROOT || "";
-const THEMES = ["ks-dark", "light", "hud"] as const;
+const THEMES = ["ks-dark", "light", "hud", "grid"] as const;
 const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
 const TSP_IDS = [
   "TSP-G", "TSP-F", "TSP-C", "TSP-S", "TSP-I", "TSP-LINCOME", "TSP-L2030", "TSP-L2035", "TSP-L2040",
@@ -324,15 +324,15 @@ async function expandAll(page: Page, hasAllocation: boolean): Promise<void> {
   }
 }
 
-// theme-switch: either one clickable that cycles ks-dark -> light -> hud, or a group holding exactly
-// three button / role=radio segments in that order. Returns the theme that should now be active.
+// theme-switch: either one clickable that cycles ks-dark -> light -> hud -> grid, or a group holding
+// exactly four button / role=radio segments in that order. Returns the theme that should now be active.
 async function advanceTheme(page: Page): Promise<string> {
-  const order = ["ks-dark", "light", "hud"];
+  const order = ["ks-dark", "light", "hud", "grid"];
   const current = (await page.locator("html").getAttribute("data-theme")) ?? "";
-  const next = order[(order.indexOf(current) + 1) % 3];
+  const next = order[(order.indexOf(current) + 1) % 4];
   const control = page.getByTestId("theme-switch");
   const segments = control.locator('button, [role="radio"]');
-  if ((await segments.count()) === 3) await segments.nth(order.indexOf(next)).click();
+  if ((await segments.count()) === 4) await segments.nth(order.indexOf(next)).click();
   else await control.click();
   return next;
 }
@@ -351,6 +351,10 @@ const TOKENS: Record<string, Record<string, string>> = {
     "--heat-0": "#FFFFFF", "--heat-1": "#DCEBF9", "--heat-2": "#8BBDEA", "--heat-3": "#2F86D1", "--heat-4": "#0B5394",
   },
   hud: {
+    "--bg": "#080506", "--surface": "#170D0B", "--text": "#F6EEE3", "--accent": "#D63A18", "--frontier": "#FFF4DC",
+    "--heat-0": "#080506", "--heat-1": "#3D0E08", "--heat-2": "#B02A10", "--heat-3": "#F08A24", "--heat-4": "#FFE39A",
+  },
+  grid: {
     "--bg": "#04070B", "--surface": "#0A1119", "--text": "#D7F3FA", "--accent": "#35C9E8", "--frontier": "#C8F7FF",
     "--heat-0": "#04070B", "--heat-1": "#0B2F3F", "--heat-2": "#1D8FA8", "--heat-3": "#35C9E8", "--heat-4": "#C8F7FF",
   },
@@ -426,19 +430,19 @@ async function columnsWithColour(page: Page, hex: string): Promise<number> {
   }, hexToRgb(hex));
 }
 
-test("theme switch cycles ks-dark light hud and stores the choice", async ({ page }) => {
+test("theme switch cycles ks-dark light hud grid and stores the choice", async ({ page }) => {
   await installMock(page, readFixtureTensor());
   await openApp(page, "");
   await expect(page.locator("html"), "default theme").toHaveAttribute("data-theme", "ks-dark");
   const seen: string[] = [];
-  for (let click = 0; click < 3; click++) {
+  for (let click = 0; click < 4; click++) {
     const next = await advanceTheme(page);
     await expect(page.locator("html")).toHaveAttribute("data-theme", next);
     await expect.poll(() => storedTheme(page), { message: "localStorage ps.theme follows the choice" }).toBe(next);
     seen.push(next);
   }
-  expect(seen).toEqual(["light", "hud", "ks-dark"]);
-  expect(new Set(seen).size, "three distinct themes").not.toBe(1);
+  expect(seen).toEqual(["light", "hud", "grid", "ks-dark"]);
+  expect(new Set(seen).size, "four distinct themes").toBe(4);
 });
 
 for (const theme of THEMES) {
@@ -473,13 +477,13 @@ test("canvas repaints for every theme", async ({ page }) => {
     await openApp(page, `t=${theme}`);
     loaded[theme] = await paintedMean(page, theme);
   }
-  for (const [a, b] of [["ks-dark", "light"], ["light", "hud"], ["ks-dark", "hud"]]) {
+  for (const [a, b] of [["ks-dark", "light"], ["light", "hud"], ["ks-dark", "hud"], ["ks-dark", "grid"], ["light", "grid"], ["hud", "grid"]]) {
     expect(maxChannelGap(loaded[a], loaded[b]), `canvas mean RGB ${a} vs ${b}: ${loaded[a]} / ${loaded[b]}`).toBeGreaterThan(20);
   }
   // and repainted in place when the switch is used (no reload)
   await openApp(page, "t=ks-dark");
   let previous = await paintedMean(page, "ks-dark");
-  for (let click = 0; click < 2; click++) {
+  for (let click = 0; click < 3; click++) {
     const next = await advanceTheme(page);
     await expect(page.locator("html")).toHaveAttribute("data-theme", next);
     const before = previous;
@@ -513,6 +517,13 @@ test("theme choice survives reload and t= wins over storage", async ({ page }) =
   await page.evaluate(() => window.localStorage.setItem("ps.theme", "hud"));
   await openApp(page, "");
   await expect(page.locator("html"), "stored hud restored").toHaveAttribute("data-theme", "hud");
+
+  // hud is stored; ?t=grid must win, and a stored grid comes back without t=
+  await openApp(page, "t=grid");
+  await expect(page.locator("html"), "?t=grid beats storage").toHaveAttribute("data-theme", "grid");
+  await page.evaluate(() => window.localStorage.setItem("ps.theme", "grid"));
+  await openApp(page, "");
+  await expect(page.locator("html"), "stored grid restored").toHaveAttribute("data-theme", "grid");
 });
 
 test("reduced motion leaves no css transition", async ({ page }) => {
@@ -546,10 +557,11 @@ test("reduced motion leaves no css transition", async ({ page }) => {
 });
 """
 EXPECTED_TITLES = {
-    "theme switch cycles ks-dark light hud and stores the choice",
+    "theme switch cycles ks-dark light hud grid and stores the choice",
     "tokens ks-dark",
     "tokens light",
     "tokens hud",
+    "tokens grid",
     "canvas repaints for every theme",
     "theme choice survives reload and t= wins over storage",
     "reduced motion leaves no css transition",

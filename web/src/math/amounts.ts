@@ -1,0 +1,116 @@
+// Amounts typed into the Funds table become the current mix, and the way from it to the selected
+// mix becomes trades (spec 3.3). Arrays are in `universe.funds` order; a blank amount is `null`.
+
+export type Unit = "shares" | "pct" | "usd";
+export type Amount = number | null;
+export type Price = number | null;
+
+export type Allocation =
+  | { status: "ok"; weights: number[]; unknownPrice: number[] }
+  | { status: "empty" | "invalid_total" | "unknown_price"; weights: null; unknownPrice: number[] };
+
+export type TradeRow = { dpp: number; dUsd: number | null; dShares: number | null; unknownPrice: boolean };
+export type Trades = { rows: TradeRow[]; turnover: number; value: number | null };
+
+const PERCENT_BAND = 0.05;
+const SUM_NOISE = 1e-9; // 49.98 + 49.97 is 99.94999999999999 in doubles and still reads 99.95
+
+const sum = (xs: number[]) => xs.reduce((acc, x) => acc + x, 0);
+const cents = (x: number) => Math.round(x * 100) / 100;
+
+/** What each fund's amount is worth: shares at the last close, percentages and dollars as entered. */
+const worth = (amounts: Amount[], unit: Unit, lastClose: Price[]) =>
+  amounts.map((amount, i) => (amount ?? 0) * (unit === "shares" ? (lastClose[i] ?? 0) : 1));
+
+/**
+ * The running total of percentages. `ok` is true exactly within 100 +- 0.05; `message` reads the
+ * total and what is left ("Adds up to 92%: 8% to go"), to two decimals without trailing zeros.
+ */
+export function percentTotal(amounts: Amount[]): { total: number; ok: boolean; message: string } {
+  const total = sum(amounts.map((amount) => amount ?? 0));
+  const shown = cents(total);
+  const gap = cents(Math.abs(100 - shown));
+  const rest = shown < 100 ? `: ${gap}% to go` : shown > 100 ? `: ${gap}% over` : "";
+  return { total, ok: Math.abs(total - 100) <= PERCENT_BAND + SUM_NOISE, message: `Adds up to ${shown}%${rest}` };
+}
+
+/** Decimals an amount field shows (format.ts `amountText`). */
+export const AMOUNT_DECIMALS = 2;
+
+/** Each amount in the field's smallest step (hundredths), rounded as the fields round it (`toFixed`); blank is 0. */
+const steps = (amounts: Amount[], decimals: number) => amounts.map((amount) => Math.round(Number((amount ?? 0).toFixed(decimals)) * 10 ** decimals));
+
+/**
+ * The percentages as the fields show them: their total and whether it is exactly 100. Exact means
+ * the fields add up to 100 to their precision *and* the amounts themselves do (a field can show
+ * 5 for 5.004, and twenty of them are 100.08). `total` is the fields' sum, or the amounts' own sum
+ * (to the same precision) when only that one is off. `entered` is false when no field holds more
+ * than zero.
+ */
+export function percentShown(amounts: Amount[], decimals = AMOUNT_DECIMALS): { total: number; exact: boolean; entered: boolean } {
+  const scale = 10 ** decimals;
+  const fields = sum(steps(amounts, decimals));
+  const own = Math.round(sum(amounts.map((amount) => amount ?? 0)) * scale);
+  const want = 100 * scale;
+  return { total: (fields !== want ? fields : own) / scale, exact: fields === want && own === want, entered: amounts.some((amount) => (amount ?? 0) > 0) };
+}
+
+/**
+ * Rescales the entries in proportion so that, at the fields' precision, they add up to exactly
+ * 100: each gets the floor of its share in hundredths, and the hundredths left over go one each
+ * to the largest remainders (ties to the earlier field). Blank stays blank and zero stays zero.
+ * Entries that add up to nothing are returned unchanged.
+ */
+export function scaleTo100(amounts: Amount[], decimals = AMOUNT_DECIMALS): Amount[] {
+  const total = sum(amounts.map((amount) => amount ?? 0));
+  if (!(total > 0)) return [...amounts];
+  const units = 100 * 10 ** decimals;
+  const exact = amounts.map((amount) => ((amount ?? 0) / total) * units);
+  const floors = exact.map((v) => Math.floor(v + SUM_NOISE));
+  let left = units - sum(floors);
+  const order = exact.map((v, i) => ({ i, rest: v - floors[i] })).sort((a, b) => b.rest - a.rest || a.i - b.i);
+  for (const { i } of order) {
+    if (left <= 0) break;
+    if (!((amounts[i] ?? 0) > 0)) continue;
+    floors[i] += 1;
+    left -= 1;
+  }
+  return amounts.map((amount, i) => (amount === null ? null : floors[i] / 10 ** decimals));
+}
+
+/**
+ * The current mix from entered amounts. `empty`: nothing entered, or it adds up to nothing.
+ * `invalid_total`: percentages outside 100 +- 0.05. `unknown_price`: shares of a fund without a
+ * last close, whose indices are in `unknownPrice`. Otherwise `ok` with weights summing to 1.
+ */
+export function amountsToWeights(amounts: Amount[], unit: Unit, lastClose: Price[]): Allocation {
+  const none = (status: "empty" | "invalid_total"): Allocation => ({ status, weights: null, unknownPrice: [] });
+  if (amounts.every((amount) => amount === null)) return none("empty");
+  if (unit === "pct" && !percentTotal(amounts).ok) return none("invalid_total");
+  const unknownPrice = unit === "shares" ? amounts.flatMap((amount, i) => ((amount ?? 0) > 0 && (lastClose[i] ?? null) === null ? [i] : [])) : [];
+  if (unknownPrice.length > 0) return { status: "unknown_price", weights: null, unknownPrice };
+  const values = worth(amounts, unit, lastClose);
+  const total = sum(values);
+  if (!(total > 0)) return none("empty");
+  return { status: "ok", weights: values.map((value) => value / total), unknownPrice: [] };
+}
+
+/**
+ * Moves from the mix entered (`wNow`) to the selected mix (`wSel`). Per fund: `dpp` the change as
+ * a fraction of the portfolio, `dUsd = dpp * value` (not in % mode), `dShares` whole shares (Shares
+ * mode only; `null` with `unknownPrice` for a fund without a last close). `value` is the
+ * portfolio's worth (`null` in % mode) and `turnover` the one-way total, `sum(max(dpp, 0))`.
+ */
+export function tradeDeltas(input: { wNow: ArrayLike<number>; wSel: ArrayLike<number>; unit: Unit; amounts: Amount[]; lastClose: Price[] }): Trades {
+  const { wNow, wSel, unit, amounts, lastClose } = input;
+  const value = unit === "pct" ? null : sum(worth(amounts, unit, lastClose));
+  const rows = Array.from(wSel, (selected, i): TradeRow => {
+    const dpp = selected - wNow[i];
+    const dUsd = value === null ? null : dpp * value;
+    const close = lastClose[i] ?? null;
+    // `+ 0` turns a rounded -0 into 0
+    const dShares = unit === "shares" && dUsd !== null && close !== null ? Math.round(dUsd / close) + 0 : null;
+    return { dpp, dUsd, dShares, unknownPrice: unit === "shares" && close === null };
+  });
+  return { rows, turnover: sum(rows.map((row) => Math.max(row.dpp, 0))), value };
+}

@@ -43,7 +43,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 const ALLOWED = new Set(["u", "f", "unit", "c", "lb", "g", "r", "d", "t", "x"]);
 const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
 const UNITS = ["pct", "usd", "shares"];
-const THEMES = [null, "ks-dark", "light", "hud"];
+const THEMES = [null, "ks-dark", "light", "hud", "grid"];
 const fixturePath = path.resolve(process.cwd(), "fixtures/guide2017_5y.json");
 let IDS: string[] = [];
 let DOMAIN = { s_safe: 0, s_max: 0 };

@@ -164,7 +164,7 @@ else:
         pool = sorted(
             {f["id"] for f in guide} | {"TSP-G", "TSP-F", "TSP-C", "TSP-S", "TSP-I", "SGOV"}
         )
-        pool += ["VOO", "SPY", "QQQ", "IWM", "EFA", "TLT", "GLD", "VXUS", "BNDX", "SCHD", "VTSAX"]
+        pool += ["VOO", "SPY", "QQQ", "IWM", "FIENX", "TLT", "GLD", "VXUS", "BNDX", "SCHD", "VTSAX"]
         menus = [guide] + [_random_menu(rng, pool) for _ in range(60)]
         seen = set()
         for funds in menus:

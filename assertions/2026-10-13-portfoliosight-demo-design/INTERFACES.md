@@ -83,9 +83,14 @@ the docstring is authoritative for that test.
 ## TypeScript and the page
 
 - **Math** (`web/src/math/portfolio.ts`): `portfolioMath(tensor)` returns an object with
-  `stats(w) -> {mu, sigma, enb}`, `range6m(mu, sigma) -> {low, typical, high}`,
-  `interpolate(s, t) -> number[]`, `frontierCurve() -> {sigma: number[], mu: number[]}`,
-  `riskSliderDomain() -> {s_safe, s_max}`, `tAuto(s) -> number`.
+  `stats(w) -> {mu, sigma, enb}`, `yearRange(s, t) -> {low, typical, high}` (the one-year bad,
+  typical and good year from `ladder.range`, blended between nodes as `interpolate` blends the
+  mixes), `normalRange(mu, sigma) -> {low, mid, high}` (`μ ∓ 1.96σ`, the bell-curve figure shown
+  in details only),
+  `interpolate(s, t) -> number[]` (walks `ladder.w` with `ladder.hop`, spec 4.11),
+  `frontierCurve() -> {sigma: number[], mu: number[]}`, `riskSliderDomain() -> {s_safe, s_max}`
+  (`s_safe` is the tensor's `frontier.s_safe`), `tAuto(s) -> number` (from
+  `ladder.t_suggested`).
 - **Tensor loader**: `parseTensor(json: unknown)` exported from `web/src/api/client.ts` (zod;
   throws on a bad tensor; importing the module has no side effects and needs no DOM).
 - **Worker**: `web/worker/index.ts` is the standard module shape, `export default { fetch(request,
@@ -106,7 +111,8 @@ the docstring is authoritative for that test.
   `scripts/install_backup_cron.sh` read `PS_ENV_FILE`, else `~/.secrets/portfoliosight.env`.
 - Engine: `torsion.min_torsion`, `torsion.effective_number_of_bets`, `optimize.cholesky_factor`,
   `tensor.check_weights`, `tensor.InvariantError`, `tensor.select_window`,
-  `tensor.renormalize_allocation`, `suggest.suggested_floor`, `stats.estimate_moments`,
+  `tensor.renormalize_allocation`, `suggest.balanced_level`, `suggest.suggested_level`,
+  `suggest.DEFAULT_POINT`, `stats.estimate_moments`,
   `stats.ew_weights`, `stats.menu_beta_blend`, `stats.risk_free_rate`, `caps.resolve_bounds`,
   `caps.greedy_fill`, `caps.CapsError`, `stress.stress_returns`; `scripts/make_fixtures.py --out`;
   `portfoliosight/engine/tensor.schema.json`. Engine modules counted by A-PS-25: at least six of
@@ -159,4 +165,86 @@ the docstring is authoritative for that test.
   - A-PS-68 sends 25 GETs and 25 POSTs, then waits 61 s so the limiters are clear.
 - A-PS-66, 67, 68: a withdrawn `Zone WAF Edit` permission fails with a `BLOCKED:` message.
 - A-PS-53: "menu of N" accepts N as the included fund count or included plus excluded.
+- Owner decision 2026-10-13 (the first sanctioned change of the frozen gate in this run): EFA holds
+  FIENX's place in the default menu, so the default 5y tensor (and `web/fixtures/guide2017_5y.json`)
+  has 23 included funds and an empty `universe.excluded`. FIENX stays a tier 2 catalog symbol that
+  is not served, reason `converted to an ETF; no data since 2024-10-30`; `POST /v1/tensors`
+  accepts a menu holding it and the tensor lists it in `universe.excluded`. Excluded-fund handling
+  is asserted where a fund is really set aside:
+  - A-PS-43: the mock's second menu is the 23 funds plus FIENX and its tensors set FIENX aside,
+    with a different reason at 5y and at 10y (reached with `chip-settings` and `lookback-10y`);
+    the default view must show no `excluded-note` on any fund row.
+  - A-PS-56: production; the default tensor sets nothing aside, and the 23 default funds plus
+    FIENX at 5y resolve to a schema-valid tensor that sets exactly FIENX aside with its reason.
+    Same key on every run: one real build per generation, then served as stored.
+  - A-PS-63: production; besides the default menu, a custom menu loaded with `/?f=…&lb=10y` (two
+    of BND, VTI, AGG, VNQ, a served fund too young for the 10y view, SGOV when it qualifies, and
+    FIENX as the not-served case) must list the young fund and FIENX in Settings. Same key on
+    every run: one real build per generation.
+  - A-PS-29: the extra tickers outside the guide menu list FIENX where they listed EFA.
+  The record of every changed leg is `docs/reviews/2026-10-13_gate-change_fienx-to-efa.md`.
+- Owner decision 2026-10-13 (the second sanctioned change of the frozen gate in this run): the
+  default preset is displayed as `Example Portfolio`. Its id `guide2017`, its holdings file, its
+  URL value and its universe hash are unchanged. A-PS-31 asserts `presets[0].name ==
+  "Example Portfolio"`. The record is the section "Preset display name" of the same review file.
 - A-PS-13: the 403 "names the missing scope" leg cannot be forced against the live bucket.
+- Owner feedback 1, 2026-10-13 (the third sanctioned change of the frozen gate in this run). The
+  owner's design notes on the live site changed these pins; every changed test asserts the new
+  truth as strongly as before:
+  - **Four themes.** `html[data-theme]` is `ks-dark | light | hud | grid`. `hud` is the new red
+    and gold look; the look that was `hud` is now `grid` with the same tokens. `theme-switch` is
+    one clickable that cycles ks-dark -> light -> hud -> grid, or a group of exactly four
+    `button` / `[role=radio]` segments in that order. Every per-theme assertion (A-PS-41, 42, 44,
+    47, 48, 49) runs for all four; A-PS-49 holds both token columns and compares all six pairs of
+    canvases. `web/worker/share.ts` accepts exactly the four themes in a mailed link (the
+    page's own URL codec decides), and A-PS-38 checks all four and refuses any other.
+  - **Funds & amounts.** From 1024 px `section-funds` is an `<aside>` beside the chart (it still
+    carries `aria-expanded`, and `chip-funds` still opens it); below 1024 px it is the accordion
+    section as before. `use-menu` exists only while the fund list on screen differs from the
+    list that is plotted, and reads "Recalculate with these funds".
+  - **Copy.** Stress card: "What this mix did: N% (Selected mix)". The diversification and
+    "Suggested" explanations behind details were rewritten (spec 3.6). Engine 2: the open circle
+    (`point-div`) is named "Optimized" (the tensor's `ladder.default_point`), the slider starts
+    there and has no separate Suggested tick; every range on the page is one year (Bad / Typical /
+    Good year), with the bell-curve figure only in details.
+  - **New test ids** (asserted by `web/e2e/local/app.spec.ts` and `web/tests/`, free for later
+    gate assertions): `funds-toggle` (opens and closes the sidebar; `aria-expanded`),
+    `funds-hint`, `amount-head`, `mix-entered-{ID}`, `mix-selected-{ID}`,
+    `frontier-label-{lookback id}` (a `<g>` in the overlay holding a `<text>` and, when the label
+    was moved, a `path.leader`; `data-end-x` / `data-end-y` are the line end in chart pixels),
+    `ghost-tip`, `mix-card` (`data-for` = `selected | current | div | cell`), `mix-card-word`,
+    `trades-export`, `details-words`, `details-suggested` (what "Optimized" means),
+    `details-method`, `details-bell` (the one-year range two ways), `key-nolimits` (legend entry of
+    the "No limits" curve, drawn when some limit binds), `caps-none` (sets every fund to no
+    minimum and a 100% maximum and rebuilds; `caps-reset` reads "Reset limits"). The markers'
+    wrappers carry `data-mark` = `selected | div | current`; `point-*` ids are unchanged and no
+    new `point-` id exists.
+- Light ramp, 2026-10-13 (owner direction). The heatmap reads its ramp per theme from the token
+  `--heat-ramp` on `html`: `turned` (ks-dark, hud, grid) paints a cell at
+  `1 - 0.8 * Z / enb_ref`, `rising` (light) at `Z / enb_ref`, the mapping Light had before owner
+  feedback 1 (palest along the frontier, deepest blue for the most spread-out mixes). The legend
+  bar is the token `--heat-legend` and runs the same way as the map in each theme. A-PS-44 asserts
+  the light position and direction; the other three themes are unchanged.
+- UI round 2, 2026-10-13 (owner direction, issue #69). New test ids, asserted by
+  `web/e2e/local/app.spec.ts` and `web/tests/` and free for later gate assertions:
+  `funds-clear` ("Clear all": empties every amount, keeps the fund list; in every unit, disabled
+  while nothing is entered), `funds-scale100` ("Scale to 100%": rescales the entries in proportion
+  to exactly 100 at the fields' two decimals, largest remainder, zeros stay zero), `funds-total`
+  (now the running total "Total: 92%, 8% to go" beside `funds-scale100`; both exist only in the %
+  unit while some entry is above zero and the entries do not add up to exactly 100.00, never in $
+  or Shares), `funds-entered` (the "$N entered" / "N shares entered" / "No amounts entered: tickers
+  only." line that `funds-total` used to carry), `range-bar` (the strip's bar, `role="img"` with a
+  spoken label, `data-lo` / `data-hi` = its fixed scale for the menu as fractions), `range-mark-low`,
+  `range-mark-typical`, `range-mark-high` (the Bad and Good end caps and the typical dot, each
+  titled), `x-title` (the risk-axis title, under the tick labels and inside the chart frame).
+  Chart margins are 48/16/58/56 (desktop) and 32/12/54/44 (phone); the chart box is 18 px taller
+  than before, so the plot keeps its size. The details line "Yearly figures for this mix" no longer
+  repeats the standard deviation as a "risk ceiling", and neither does the selected mix's card.
+  The family links in `footer-cta` open in a new tab (`target="_blank"`,
+  `rel="noopener noreferrer"`) and say so to a screen reader.
+  Later the same day: the sections and the chips under the strip run `section-funds`,
+  `section-stress`, `section-trades`, `section-settings` (Stress tests above Trades); the No
+  limits curve is named "No allocation limits" at its end (`frontier-label-nolimits`) and in its
+  legend key (`key-nolimits`: "No allocation limits: same funds, no limit on any one fund";
+  `caps-none` still reads "No limits"); the open sidebar is 360 px wide (326 px from 1024 to
+  1279 px).

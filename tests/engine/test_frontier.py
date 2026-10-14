@@ -1,0 +1,247 @@
+"""The conic programs and the frontier (spec 4.5)."""
+
+from __future__ import annotations
+
+import cvxpy as cp
+import numpy as np
+import pytest
+
+from portfoliosight.engine import optimize
+from portfoliosight.engine.caps import greedy_fill
+from portfoliosight.engine.optimize import (
+    MenuPrograms,
+    SolveError,
+    cholesky_factor,
+    frontier,
+)
+
+TOL = 1e-6
+
+
+def _menu(n: int, seed: int):
+    """A seeded SPD menu with random valid bounds: (mu_s, cov, lo, hi)."""
+    rng = np.random.default_rng(seed)
+    load = rng.normal(0.0, 1.0, (n, 3)) * np.array([0.10, 0.05, 0.03]) + np.array([0.06, 0, 0])
+    cov = load @ load.T + np.diag(rng.uniform(0.02, 0.10, n) ** 2)
+    mu = rng.uniform(0.01, 0.10, n)
+    lo = np.where(rng.random(n) < 0.5, rng.uniform(0.0, 0.3 / n, n), 0.0)
+    default = min(max(3.0 / n, 0.25), 1.0)
+    high = rng.uniform(max(1.5 / n, 0.12), min(1.0, max(4.0 / n, 0.30)), n)
+    hi = np.where(rng.random(n) < 0.5, high, default)
+    assert (lo <= hi).all() and lo.sum() <= 1.0 <= hi.sum()
+    return mu, cov, lo, hi
+
+
+def _sigma(w, cov) -> float:
+    return float(np.sqrt(w @ cov @ w))
+
+
+def _own_min_variance(cov, lo, hi) -> float:
+    w = cp.Variable(len(lo))
+    variance = cp.quad_form(w, cp.psd_wrap(cov))
+    menu: list = [cp.sum(w) == 1, w >= lo, w <= hi]
+    problem = cp.Problem(cp.Minimize(variance), menu)
+    problem.solve(solver=cp.CLARABEL, tol_feas=1e-11, tol_gap_abs=1e-11, tol_gap_rel=1e-11)
+    assert problem.status == "optimal"
+    return _sigma(np.array(w.value), cov)
+
+
+def _feasible(w, lo, hi) -> bool:
+    return bool(abs(w.sum() - 1) <= TOL and (w >= lo - TOL).all() and (w <= hi + TOL).all())
+
+
+def test_cholesky_factor_is_upper_and_reproduces_the_variance():
+    rng = np.random.default_rng(3601)
+    n = 15
+    a = rng.normal(size=(n, n))
+    cov = (a @ a.T / n + 0.1 * np.eye(n)) * 0.04
+    c = cholesky_factor(cov)
+    assert np.array_equal(c, np.linalg.cholesky(cov).T)
+    assert np.abs(np.tril(c, -1)).max() == 0.0  # L', not L
+    worst_wrong = 0.0
+    for _ in range(100):
+        w = rng.dirichlet(np.ones(n))
+        assert abs((c @ w) @ (c @ w) - w @ cov @ w) <= 1e-12
+        worst_wrong = max(worst_wrong, abs((c.T @ w) @ (c.T @ w) - w @ cov @ w))
+    assert worst_wrong > 1e-8  # the orientation matters
+
+
+@pytest.mark.parametrize(("n", "seed"), [(2, 3602), (5, 3605), (12, 3612), (23, 3623), (30, 3630)])
+def test_frontier_on_random_menus(n, seed):
+    mu, cov, lo, hi = _menu(n, seed)
+    nx = 48 if n == 23 else 14
+    front = frontier(MenuPrograms(mu, cov, lo, hi), nx=nx)
+    assert front.x.shape == (nx,) and front.y.shape == (nx,) and front.w.shape == (nx, n)
+    top = greedy_fill(mu, lo, hi)
+    assert abs(front.x[0] - _own_min_variance(cov, lo, hi)) <= TOL
+    assert front.x[-1] == _sigma(top, cov) and np.array_equal(front.w[-1], top)
+    assert np.abs(front.x - np.linspace(front.x[0], front.x[-1], nx)).max() <= 1e-12
+    assert front.x[-1] - front.x[0] > 1e-4
+    assert front.pinned.tolist() == [True] + [False] * (nx - 1)
+    sigma = np.array([_sigma(w, cov) for w in front.w])
+    assert (sigma <= front.x + TOL).all()
+    assert np.abs(sigma - front.x)[:-1].max() <= TOL  # every node below sigma_max is on its ceiling
+    assert front.y.tolist() == [float(mu @ w) for w in front.w]
+    assert (np.diff(front.y) >= -1e-9).all() and front.y[-1] - front.y[0] > 1e-6
+    assert all(_feasible(w, lo, hi) for w in front.w)
+    # no feasible mix under a ceiling earns more than the node on it
+    rng = np.random.default_rng(seed)
+    judged = 0
+    for j in range(nx):
+        for _ in range(30):
+            vertex = greedy_fill(rng.normal(size=n), lo, hi)
+            share = rng.uniform()
+            other = share * front.w[rng.integers(0, nx)] + (1.0 - share) * vertex
+            assert _feasible(other, lo, hi)
+            if _sigma(other, cov) <= front.x[j]:
+                assert mu @ other <= front.y[j] + 1e-7
+                judged += 1
+    assert judged > nx
+
+
+def test_frontier_point_solves_its_program():
+    mu, cov, lo, hi = _menu(8, 3608)
+    programs = MenuPrograms(mu, cov, lo, hi)
+    front = frontier(programs, nx=9)
+    x = float(front.x[5])
+    w = programs.frontier_point(x)
+    assert np.abs(w - front.w[5]).max() <= 1e-9  # deterministic
+    assert _feasible(w, lo, hi) and _sigma(w, cov) <= x + TOL
+    v = cp.Variable(8)
+    constraints: list = [cp.sum(v) == 1, v >= lo, v <= hi]
+    constraints.append(cp.quad_form(v, cp.psd_wrap(cov)) <= x**2)
+    own = cp.Problem(cp.Maximize(mu @ v), constraints)
+    own.solve(solver=cp.CLARABEL, tol_feas=1e-10, tol_gap_abs=1e-10, tol_gap_rel=1e-10)
+    assert own.status == "optimal" and abs(mu @ w - mu @ np.array(v.value)) <= 1e-7
+    assert programs.sigma(w) == _sigma(w, cov)
+
+
+def test_infeasible_program_raises_and_names_what_failed():
+    mu, cov, lo, hi = _menu(6, 3606)
+    programs = MenuPrograms(mu, cov, lo, hi)
+    floor_risk = programs.sigma(programs.min_variance())
+    with pytest.raises(SolveError, match=r"frontier point at risk .* infeasible"):
+        programs.frontier_point(0.5 * floor_risk)
+
+
+class _FlakyProblem:
+    """Stands in for a cvxpy problem: fails as scripted, then reports a status."""
+
+    def __init__(self, script: list[object]):
+        self.script = list(script)
+        self.calls: list[dict] = []
+        self.status = "never solved"
+
+    def solve(self, **options):
+        self.calls.append(options)
+        outcome = self.script.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        self.status = outcome
+
+
+class _Value:
+    value = np.array([0.25, 0.75])
+
+
+def test_solver_settings_and_the_retry_ladder():
+    assert optimize.SOLVER_OPTIONS == {
+        "tol_feas": 1e-8,
+        "tol_gap_abs": 1e-8,
+        "tol_gap_rel": 1e-8,
+        "direct_solve_method": "qdldl",
+    }
+    assert optimize.RETRY_OPTIONS[0] == {} and len(optimize.RETRY_OPTIONS) == 3
+    flaky = _FlakyProblem([cp.SolverError("numerical trouble"), "optimal_inaccurate", "optimal"])
+    w = optimize._solve(flaky, _Value(), "a test program")
+    assert w.tolist() == [0.25, 0.75] and len(flaky.calls) == 3
+    for call, extra in zip(flaky.calls, optimize.RETRY_OPTIONS, strict=True):
+        base = {"solver": cp.CLARABEL, "warm_start": False}
+        assert call == {**base, **optimize.SOLVER_OPTIONS, **extra}
+    never = _FlakyProblem([cp.SolverError("x"), "optimal_inaccurate", "user_limit"])
+    with pytest.raises(SolveError, match="a test program: no optimal solution .* user_limit"):
+        optimize._solve(never, _Value(), "a test program")
+    assert len(never.calls) == 3
+
+
+def _near_tied_menu(gap: float):
+    """Four funds whose two best differ in expected return by `gap`: a nearly flat frontier."""
+    mu = np.array([0.03, 0.05, 0.08, 0.08 + gap])
+    cov = np.diag([0.03, 0.08, 0.15, 0.22]) ** 2 + 0.0004
+    return mu, cov, np.zeros(4), np.full(4, 0.75)
+
+
+def _inside(front, cov) -> np.ndarray:
+    """How far each node below sigma_max sits inside its ceiling."""
+    return (front.x - np.array([_sigma(w, cov) for w in front.w]))[:-1]
+
+
+@pytest.mark.parametrize("gap", [1e-5, 1e-7, 1e-10, 0.0])
+def test_nodes_sit_on_their_ceilings_however_flat_the_frontier(gap):
+    """At 1e-8 a node on a flat stretch is found inside its ceiling; it is moved onto it."""
+    mu, cov, lo, hi = _near_tied_menu(gap)
+    programs = MenuPrograms(mu, cov, lo, hi)
+    front = frontier(programs)
+    assert np.abs(_inside(front, cov)).max() <= TOL
+    assert (np.diff(front.y)[:-1] >= 0.0).all() and (np.diff(front.y) >= -1e-9).all()
+    assert all(_feasible(w, lo, hi) for w in front.w)
+    assert np.array_equal(front.w[-1], greedy_fill(mu, lo, hi))
+    solved = [programs.frontier_point(float(x)) for x in front.x[1:-1]]
+    inside = front.x[1:-1] - np.array([_sigma(w, cov) for w in solved])
+    if 0.0 < gap <= 1e-7:  # the plain answers really were inside: by up to points of volatility
+        assert inside.max() > 20 * TOL
+    for node_return, plain in zip(front.y[1:-1], solved, strict=True):
+        assert node_return >= mu @ plain - 1e-15  # moving a node never costs return
+
+
+def test_onto_risk_moves_toward_the_top_mix_until_risk_binds():
+    rng = np.random.default_rng(3640)
+    for _ in range(50):
+        n = int(rng.integers(2, 12))
+        a = rng.normal(size=(n, n))
+        cov = (a @ a.T / n + 0.1 * np.eye(n)) * 0.04
+        inside, top = rng.dirichlet(np.ones(n)), rng.dirichlet(np.ones(n))
+        if _sigma(inside, cov) > _sigma(top, cov):
+            inside, top = top, inside
+        ceiling = rng.uniform(_sigma(inside, cov), _sigma(top, cov))
+        moved = optimize.onto_risk(inside, top, ceiling, cov)
+        assert abs(_sigma(moved, cov) - ceiling) <= 1e-12
+        share = (moved - inside) @ (top - inside) / ((top - inside) @ (top - inside))
+        assert (
+            0.0 <= share <= 1.0 and np.abs(inside + share * (top - inside) - moved).max() <= 1e-12
+        )
+    cov = np.diag([0.01, 0.04])
+    start, top = np.array([1.0, 0.0]), np.array([0.0, 1.0])
+    assert np.array_equal(optimize.onto_risk(start, top, 0.2, cov), top)  # all the way
+    falling = optimize.onto_risk(np.array([0.9, 0.1]), np.array([0.0, 1.0]), 0.15, cov)
+    assert abs(_sigma(falling, cov) - 0.15) <= 1e-12  # risk dips before it rises on this path
+
+
+def test_exactly_tied_top_funds_share_one_return_along_the_top():
+    mu = np.array([0.03, 0.05, 0.08, 0.08])
+    cov = np.diag([0.03, 0.08, 0.22, 0.15]) ** 2 + 0.0004  # the riskier tied fund comes first
+    lo, hi = np.zeros(4), np.full(4, 0.75)
+    front = frontier(MenuPrograms(mu, cov, lo, hi))
+    assert np.array_equal(front.w[-1], [0.0, 0.0, 0.75, 0.25])  # greedy fill, in menu order
+    plateau = np.flatnonzero(front.y >= front.y[-1] - 1e-8)
+    assert len(plateau) > 5 and np.abs(_inside(front, cov)).max() <= TOL
+    assert all(_feasible(w, lo, hi) for w in front.w) and (np.diff(front.y) >= -1e-9).all()
+
+
+def test_a_menu_with_one_possible_mix_is_a_single_point():
+    mu, cov = np.array([0.03, 0.05, 0.08, 0.06]), np.diag([0.02, 0.05, 0.16, 0.10]) ** 2
+    pinned = np.array([0.4, 0.3, 0.2, 0.1])
+    front = frontier(MenuPrograms(mu, cov, pinned, pinned), nx=6)
+    assert np.array_equal(front.w, np.tile(pinned, (6, 1)))
+    assert np.array_equal(front.x, np.full(6, _sigma(pinned, cov)))
+    assert np.abs(front.y - mu @ pinned).max() <= 1e-15 and not front.pinned.any()
+
+
+def test_bad_arguments_are_refused():
+    mu, cov, lo, hi = _menu(4, 3604)
+    with pytest.raises(ValueError, match="at least 2 columns"):
+        frontier(MenuPrograms(mu, cov, lo, hi), nx=1)
+    with pytest.raises(ValueError, match="same number of funds"):
+        MenuPrograms(mu, cov, lo[:3], hi)
+    with pytest.raises(ValueError, match="same number of funds"):
+        MenuPrograms(mu, cov[:3, :3], lo, hi)

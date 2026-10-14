@@ -97,21 +97,21 @@
       }
     },
     "A-PS-17": {
-      "entry": "80822db9d04fb5db648096f83be31428f3f8a1df0e27506112c48a0f637565d4",
+      "entry": "96b87c95e273d49eec778e8adeee10e27c96d1c7c69b698b4819b30f8a94e3dc",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_17_mix_invariants.py": "f119b5b3c9c2fd1f8d3d8a302c7100b5ef5897fef6573cb8100e176ee01dc770"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_17_mix_invariants.py": "a592c09470cb151f7c1f92229bffc7acbc18243db79b2802abd1335f43d949a9"
       }
     },
     "A-PS-18": {
-      "entry": "09fd5bb66423a07250de656f44635a546d6736f6f68645a868ca3c93b7e18fc9",
+      "entry": "90827f50b4220b72d1da7485fc1c7b5b6dac2666ce8a22a45d1d68a9f844e4a6",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_18_surface_monotone.py": "30ef5af156cd843e4457f346b8d81d81b099d6af90014b948bf69fd35652b72d"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_18_surface_monotone.py": "bc71afa695201a38938abe8f7138f252c4037a9351ac6fcabc9628f7b44566fb"
       }
     },
     "A-PS-19": {
-      "entry": "3c3bfaeac1200768024f48ced9957cc047808e5a245932db88848c6ee85a2c87",
+      "entry": "29835530dcdb1531bb48df3ecdd96ac1f073f4577d8d08aba87f7454c6d79291",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_19_suggested_point.py": "e9013d67b8bbec0256b6d9c65cc5863e81ad5b1bf7e90a37f93a24cfc9362ec2"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_19_suggested_point.py": "afea4b9633fb3e74c0b0ec38474057bcb91d52d3ca48a1ecaf3f03d730ff8ddb"
       }
     },
     "A-PS-20": {
@@ -121,9 +121,9 @@
       }
     },
     "A-PS-21": {
-      "entry": "300487d36f381247d96566c5c146ee3521b5a5096907cb00591dda2aaf7691fe",
+      "entry": "f79523b829cf49ea08d2b00f9771da710b72ca24c2503a7c2d73383443ffbe45",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_21_caps.py": "c73e86673525ab2af3d2fda81f81d1697bc05963f57a390549416cccb7f1e1f6"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_21_caps.py": "46093c0f3e7163c976827cddb4706b370aa27708eaadd3523dd7e3da0c829ea3"
       }
     },
     "A-PS-22": {
@@ -139,9 +139,9 @@
       }
     },
     "A-PS-24": {
-      "entry": "cc6ceed36df2fdf49406475349aeba5f3dfaf93a615b614121429968d3fac9db",
+      "entry": "2873df3e1b1801496ebd3da87622f080fdbfbc47d9662a88f030b3a7d6c6be17",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_24_tensor_contract.py": "2ac74fd061a89b8cdd746174c48e4ffe095d9b041b2b2e5791b3ebb6361a0d3e"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_24_tensor_contract.py": "31abed692406fe641e4e180ec99b3a91fcd575e914754af692dae8c37f23b8e6"
       }
     },
     "A-PS-25": {
@@ -171,7 +171,7 @@
     "A-PS-29": {
       "entry": "3666a67f338384d18899e646e9f48597ec28149be0750c2249cfbafc2514687c",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_29_universe_hash_canonical.py": "3ef90fc54197ed83775f6aa554ddd9af5778d7d623cd81dc6b250fa28f1038e8"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_29_universe_hash_canonical.py": "13750db3e292b3ad5adf9f681729235f2181a5273a0bbde031305f0064ad62b7"
       }
     },
     "A-PS-30": {
@@ -183,7 +183,7 @@
     "A-PS-31": {
       "entry": "37f8953ee3e55dc351ebdb3395e04fa8c0b7f6f65dc2e4c7bb505c10ff3ba810",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_31_presets_health_bodies.py": "25d7c395850c73da0e63e723d0a863bdade4e8ef8d6b72b8702c2a6e9e83d6ca"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_31_presets_health_bodies.py": "7bca606f48f42b36295cb65b9356bbf2979248846b7354ebfb10c5c580939031"
       }
     },
     "A-PS-32": {
@@ -193,15 +193,15 @@
       }
     },
     "A-PS-33": {
-      "entry": "3bc8120a8124f9c398c9481407248514316d33ae55cfb0e442dbbf29600fe697",
+      "entry": "c7ace0daa260f21226d9f70956644920dead8466cb2359fde2a446942a4aea47",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_33_api_surface_exact.py": "3994f43d7b4dea225a67026abb09739cd4eeffef894287e72e27f47cfeb3e1d4"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_33_api_surface_exact.py": "f279b923664fc7ef4c9b09d83a3d6f762177923def64adbd8a608a2b0e089654"
       }
     },
     "A-PS-34": {
-      "entry": "d41659284823f25ba0b925a4c470953770e3ff2c086d25e35f69728a4a6807f3",
+      "entry": "5977692579e5adf04529613189c6c3f5e2f417fc7423ee3371e7ede75ab3d0fc",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_34_browser_math_fidelity.py": "39bb2cbf3cdf4ed6ce6eabcece6688136636e1f0bc483f46a1dcf451ddeddefc"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_34_browser_math_fidelity.py": "e2e44476743bd516fa3fc9f4d2b954b6bec2801fed75a8c99997b33c4ace0be0"
       }
     },
     "A-PS-35": {
@@ -213,7 +213,7 @@
     "A-PS-36": {
       "entry": "5d465cf8567114a84be7a8ccb4d18609f5bcf9cbee65604c00cfe0d80e9e5bfc",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_36_url_codec_roundtrip.py": "945ea1eb1093ad950157d01e3a68804fd411c230323ddf7f622901db13e193a7"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_36_url_codec_roundtrip.py": "b08bee66d44e1b40115806821ec122ffe6a0ac5e07596b9fe7ae03a41ce70618"
       }
     },
     "A-PS-37": {
@@ -223,9 +223,9 @@
       }
     },
     "A-PS-38": {
-      "entry": "63921339ee9536f15c626ba80ac0542137a3ad4c46b79500d0c50b20b6457b60",
+      "entry": "99cac40d4243d917eedda2fb7882f8cc2b836086251f65e627db07ee36575d14",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_38_share_validators_template_caps.py": "9f5cac5102f9eba55dc72d321a2f68718b5740f68d6dca5cede9779b9841d9cd"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_38_share_validators_template_caps.py": "71ed306db5bd108eb09dad75e14263090168cfc9e1633760c504c80864e3e614"
       }
     },
     "A-PS-39": {
@@ -235,75 +235,75 @@
       }
     },
     "A-PS-40": {
-      "entry": "948b871618f8149681b6e9f823084f745d92ec0cb1ce8cd760202bbe915596b7",
+      "entry": "318df672891f4a1ea90a0c3ba1e6724136183c4fdb5888a9fc0af5a5d0acea64",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_40_worker_routing_surface.py": "92ea97d92f6392b96d9a9f6733f9f034f405021555d8415938c7146b4987d235"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_40_worker_routing_surface.py": "c13d9451b08037052ef00f90a4e4c9b64645d035bf02fbacfcaccd8ff529884f"
       }
     },
     "A-PS-41": {
-      "entry": "5310d62415d824c44a9c46224c4504b6ffb541ae6ef1e4532604ac67ad821317",
+      "entry": "bd2ef3a17be5a2fe1e3593078ca2d01004a91b3b009023beb10c182617ba1cfe",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_41_first_screen.py": "dbb5e72a8291999ae67b345deb52b8621d455850ee14dc7571f25c9bfde8516d"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_41_first_screen.py": "45ba1104d9afa50a97e38d0d4299e3ae59c9b7a09380d547af7a21dc3c1732ff"
       }
     },
     "A-PS-42": {
-      "entry": "91b104eb1eebee16d8b53db393338f9bf399199d88bb415d45e94f22d81dacbd",
+      "entry": "e137aab5a18aeb419fd42cd41ed87e1991483889a5b327ece5486e9d4c7f20ff",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_42_phone_layout.py": "4e687d06066f290f30e4f9493e8dbe0ee73492d9277b055a27010566b7e4129e"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_42_phone_layout.py": "4b8632c4c4c5b7fe95d177c60cdc2fc134c3017e9a4e204af59fbbfb8fba0ff2"
       }
     },
     "A-PS-43": {
-      "entry": "54d8c03ae6d19679c2297bd06502efa73374513a0c3201d8e2e85ba77f1fe290",
+      "entry": "4c03bea2a0ec96e3d2947ce2def3e1f62a05893d20370a2a3a07352c2cc36852",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_43_default_view_presets.py": "f1aa7dcb7d496cc304bdac0bd9ffd1f8d14416b4dbb8022f78b92d10964f8070"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_43_default_view_presets.py": "632c1a3e9cfa56cf8308aa7bc9ba51ee0794d6e8d3febd5aab3e9a195ab3a188"
       }
     },
     "A-PS-44": {
-      "entry": "d70b6aefea6d299ec3fa41d8323af6f37c3c4b4f5cf18de4f1942a417d4af476",
+      "entry": "911704ec4323d62ec5101878cd04d1bb83270ef733757a30968df07873e68a9f",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_44_heatmap_theme_ramp.py": "11c4bfe3529c6b53870d955f48b2282fa5fd590178b021510db1301a5a6e9699"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_44_heatmap_theme_ramp.py": "62f038b194f0b2d422e9d1e25b9b614c9e0ebdb7edd249da01e150d8d64ee660"
       }
     },
     "A-PS-45": {
-      "entry": "3cef2a405063fe4b13396b4cebecd4c6310c20b51ca75f53dad7a4a7de7b9fbf",
+      "entry": "91aa3e5736025723a5a214aa8b95c6e1ae27445ae5d304d5faf128f0e5b31f64",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_45_risk_slider_readouts.py": "d64503ffab590810f7687a438383484b7a77cf89f0ac3a8879e012bafd8b45a8"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_45_risk_slider_readouts.py": "4c424a91c76f557258c3d90dc6581c381c34bd309fc17c47b148f2a15597c198"
       }
     },
     "A-PS-46": {
       "entry": "bbff7e80579ee4324a840c3b69dc42259b7e7aeed95bb02e7ae2fa07e7d10238",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_46_div_slider_point.py": "c0917799b5a02e7e5d72dbfc7576866aa396c839f2d47bd92d94f6acbb2205b3"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_46_div_slider_point.py": "c9d5cccabc73e5a02a57b5e4df240eced530aa61ed796aecda16025a9505af8b"
       }
     },
     "A-PS-47": {
       "entry": "86ba8b8201e7505e7795e143e25268d0c01909aabce7c5b16a0e763823b4489c",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_47_diversification_word.py": "6513baa2fb2cd4f2594c91fe2d52f21d3b0d00947484aa7418ec6c6e2570ae58"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_47_diversification_word.py": "4041aa385fc26c630f761e603768dea70d10a9d1006fd1d7d6121b585310a520"
       }
     },
     "A-PS-48": {
       "entry": "592d50d9d27d9b042dce0d928a54c89450ea50aa94be4f86fb57c8a9203eabc7",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_48_plain_language_disclaimer.py": "640e87a6e963ab7f1ccf34f0f57c9e52c9e916caffcef08767aef456f33ec7b3"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_48_plain_language_disclaimer.py": "b18a2c05c5e27312f4ba9d1a88f6c473926f219f897a23ad6679d10327ef9e32"
       }
     },
     "A-PS-49": {
-      "entry": "65e33b997e4a56399efcb7ecfd73f895c4cbca2c3785cd20975b608ca162e106",
+      "entry": "743b148c0c5797a785fdcd425ed8df6ce2fdf23720b34f56a1b82f42d4930c18",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_49_themes_tokens_canvas.py": "bef7a5301203d58cb77b04db43653b105a9ab3d716140c8fbeeaea46fbf0f257"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_49_themes_tokens_canvas.py": "cf8395f6e0d19088dfa858103529ce6a81f8660c374b5af35253d0231e955231"
       }
     },
     "A-PS-50": {
       "entry": "bcf2ca1c28f3d9abedfb3fbac1700b93ce3c8c93c44d74fc43b7b3905fcb6710",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_50_stress_cards_coverage.py": "99e58dbd27411455efe1ce98759664ff2d9d13106b59515b2dd636dad99c94f4"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_50_stress_cards_coverage.py": "7d17b16905a84db8383f92decd07ef998009f443d3eace393124a35a64da003f"
       }
     },
     "A-PS-51": {
       "entry": "299a46c91a999c852c409a1011b726e7b41cbfbcbc7bfd1dfb723abecc3fb777",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_51_url_reproduces_view.py": "683ede51c552cfba9e1c88aedc7c2167a1be07e2f3d706c296e9957c754fa10d"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_51_url_reproduces_view.py": "7bfe013f6602829f700a964a603f8dd574e590595c54d14ffdab192a2d741643"
       }
     },
     "A-PS-52": {
@@ -313,9 +313,9 @@
       }
     },
     "A-PS-53": {
-      "entry": "2e7a6ae90cfbc25174816d2a1745e3aeb93028e4624003823722a8457602e1f2",
+      "entry": "797235b6d349863ea7d8833162fac64402dfe2344516d2cf61f1452871725ca8",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_53_caps_inline_validation.py": "30b27c5fcb29239fcdb341a8adc1cd4b85dddb2c916b32c261ae971d13a88cf0"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_53_caps_inline_validation.py": "77bdcc0ff23d6ed2f2cf11eea1d933a830ac4fcf79199142d055e044d7c15640"
       }
     },
     "A-PS-54": {
@@ -331,9 +331,9 @@
       }
     },
     "A-PS-56": {
-      "entry": "2cc1b39a038e3dbaa2bc287b15ddb8bbb8f407cb8998a26186994c7b65dea3b0",
+      "entry": "17dfdf0754510b0a69ece611a83906f7f8614b9a6ee9a6e4b320c3a26d473ec9",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_56_presets_tensors_from_r2.py": "29020e404403ee5ae74f7e72ab0a13b3c39402c1ea38592d21f10523cd728762"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_56_presets_tensors_from_r2.py": "154e2219398336ee18dcf222feeab93337907d30a5354907f03dc52244855995"
       }
     },
     "A-PS-57": {
@@ -373,9 +373,9 @@
       }
     },
     "A-PS-63": {
-      "entry": "5499080c5e6e8ea0f5e76d9f5f7d29ad1e5476c9686dc00f72a74e86658b918f",
+      "entry": "580fde8b95f19e89119a9f5982fed92ef5067de46882ea1c9378be9dd6343b75",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_63_lookbacks_ghosts_caps_prod.py": "73f9a3f3e90f5d1740d5d31138139e5dd20ea0a4763b39983b59e60b98bd9448"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_63_lookbacks_ghosts_caps_prod.py": "06b287ce131a82546a2fbb5e385c4e1fd5220ba1dee3208a46784b6519a72f50"
       }
     },
     "A-PS-64": {
@@ -410,7 +410,7 @@
     }
   },
   "sources": {
-    "docs/specs/2026-10-13-portfoliosight-demo-design.assertions.md": "352cb3419bd354f7e7c0810f529f98d0624b648771dc7c657fd2c13b6ccce374"
+    "docs/specs/2026-10-13-portfoliosight-demo-design.assertions.md": "c5bfe06d80f562c59183af435673612c6ceeddf90768a9b2a74169fa32fee247"
   },
   "sources_via": "gate",
   "version": 1

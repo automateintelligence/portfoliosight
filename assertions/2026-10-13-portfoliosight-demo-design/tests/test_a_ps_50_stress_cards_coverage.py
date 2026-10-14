@@ -30,7 +30,7 @@ Pinned interface (beyond the shared pins)
 - `stressReturn(w: number[], r: (number | null)[]): { value: number | null, covered: number }`
   exported from `web/src/math/portfolio.ts`; `covered` is the covered weight share
   `sum(w_i, R_i not null) / sum(w_i)`; `value` is `null` (the sentinel) when `covered < 0.5`.
-- Card copy (spec 3.6): "What this mix did: N% (...)", the gap note, and the sentence above.
+- Card copy (spec 3.6): "What this mix did: N% (Selected mix)", the gap note, and the sentence above.
 - A page opened with `f=SGOV:50,VTIP:50` requests the menu with `POST /api/tensors` and renders the
   tensor at the returned `url`.
 """
@@ -88,7 +88,7 @@ import path from "node:path";
 // Fixture, presets body and the /api mock (the gate contract's "UI mock"; no product mock server)
 // ---------------------------------------------------------------------------------------------
 const GATE_ROOT = process.env.PS_GATE_ROOT || "";
-const THEMES = ["ks-dark", "light", "hud"] as const;
+const THEMES = ["ks-dark", "light", "hud", "grid"] as const;
 const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
 const TSP_IDS = [
   "TSP-G", "TSP-F", "TSP-C", "TSP-S", "TSP-I", "TSP-LINCOME", "TSP-L2030", "TSP-L2035", "TSP-L2040",
@@ -323,15 +323,15 @@ async function expandAll(page: Page, hasAllocation: boolean): Promise<void> {
   }
 }
 
-// theme-switch: either one clickable that cycles ks-dark -> light -> hud, or a group holding exactly
-// three button / role=radio segments in that order. Returns the theme that should now be active.
+// theme-switch: either one clickable that cycles ks-dark -> light -> hud -> grid, or a group holding
+// exactly four button / role=radio segments in that order. Returns the theme that should now be active.
 async function advanceTheme(page: Page): Promise<string> {
-  const order = ["ks-dark", "light", "hud"];
+  const order = ["ks-dark", "light", "hud", "grid"];
   const current = (await page.locator("html").getAttribute("data-theme")) ?? "";
-  const next = order[(order.indexOf(current) + 1) % 3];
+  const next = order[(order.indexOf(current) + 1) % 4];
   const control = page.getByTestId("theme-switch");
   const segments = control.locator('button, [role="radio"]');
-  if ((await segments.count()) === 3) await segments.nth(order.indexOf(next)).click();
+  if ((await segments.count()) === 4) await segments.nth(order.indexOf(next)).click();
   else await control.click();
   return next;
 }
@@ -385,6 +385,8 @@ async function checkCard(page: Page, id: string, w: number[], r: (number | null)
     const m = text.match(NUMBER_RE);
     expect(m, `${where}: card text "${text}" lacks "What this mix did: N%"`).not.toBeNull();
     const shown = Number(m![1]);
+    // Owner feedback 1: the parenthetical under the number names the mix, not the card's title again.
+    expect(text, `${where}: the number is labelled "(Selected mix)"`).toMatch(/What this mix did:\s*[+-]?\d+(?:\.\d+)?\s*%\s*\(Selected mix\)/i);
     expect(Math.abs(shown - agg.value! * 100), `${where}: shown ${m![1]}% vs own aggregation ${(agg.value! * 100).toFixed(4)}%`).toBeLessThanOrEqual(pctTol(m![1]));
     if (Math.abs(agg.nullAsZero - agg.value!) * 100 > 2 * pctTol(m![1])) {
       expect(Math.abs(shown - agg.nullAsZero * 100), `${where}: the number treats a null fund as 0`).toBeGreaterThan(pctTol(m![1]));
@@ -458,7 +460,6 @@ function buildCustomTensor(fx: any, hash: string): any {
     enbRef = Math.max(enbRef, best.enb, enbAt(aFront[j]));
   }
   const curveSigma: number[] = [], curveMu: number[] = [];
-  let sSafe = 0, bestLow = -Infinity;
   for (let i = 0; i <= (NX - 1) * 8; i++) {
     const s = i / 8;
     const j = Math.min(NX - 2, Math.floor(s));
@@ -466,12 +467,22 @@ function buildCustomTensor(fx: any, hash: string): any {
     const a = (1 - lam) * aFront[j] + lam * aFront[j + 1];
     curveSigma.push(sigmaOf(a));
     curveMu.push(muOf(a));
-    const low = muOf(a) / 2 - (1.96 * sigmaOf(a)) / Math.SQRT2;
-    if (low >= bestLow) {
-      bestLow = low;
-      sSafe = s;
-    }
   }
+  // Two-level ladders (the frontier mix, then the most diversified cell): with two funds their
+  // straight blend is the walk by return. One-year ranges are the normal range (no return
+  // history here), and s_safe is the rightmost frontier node with the best bad year (spec 4.9).
+  const levels = aFront.map((a, j) => [a, wDiv[j][1]]);
+  const rangeAt = (a: number) => {
+    const m = muOf(a), spread = 1.96 * sigmaOf(a);
+    return { bad: m - spread, typical: m, good: m + spread, low: m - spread, mid: m, high: m + spread };
+  };
+  type Pick = (r: ReturnType<typeof rangeAt>) => number;
+  const block = (shape: (number | number[])[]) => {
+    const pick = (f: Pick) => shape.map((row) => (Array.isArray(row) ? row.map((a) => f(rangeAt(a))) : f(rangeAt(row))));
+    return { bad: pick((r) => r.bad), typical: pick((r) => r.typical), good: pick((r) => r.good), normal: { low: pick((r) => r.low), mid: pick((r) => r.mid), high: pick((r) => r.high) } };
+  };
+  const badYear = aFront.map((a) => rangeAt(a).bad);
+  const sSafe = badYear.lastIndexOf(Math.max(...badYear));
   const fund = (id: string, name: string, lastClose: number) => ({
     id, name, kind: "etf", source: "tiingo", adjusted_through: fx.asof, fetched_at: fx.built_at, last_close: lastClose,
   });
@@ -490,8 +501,24 @@ function buildCustomTensor(fx: any, hash: string): any {
     mu_s: mu, mu_sample: mu, sigma: sd, cov: [[v0, 0], [0, v1]],
     torsion: [[1, 0], [0, 1]], torsion_inv_t: [[1, 0], [0, 1]], torsion_lambda: [v0, v1],
     bounds: { requested: [{ min: null, max: null }, { min: null, max: null }], min: [0, 0], max: [1, 1], rule: "max(0.25, 3/N)" },
-    frontier: { x, y: yFront, w: aFront.map(wOf), s_safe: sSafe },
+    frontier_uncapped: { sigma: aFront.map(sigmaOf), mu: [...yFront] },
+    frontier: { x, y: yFront, w: aFront.map(wOf), s_safe: sSafe, range: block(aFront) },
+    ladder: {
+      y: levels.map((pair) => pair.map(muOf)),
+      z: levels.map((pair) => pair.map(enbAt)),
+      w: levels.map((pair) => pair.map(wOf)),
+      hop: levels.map(() => [false]),
+      collapsed: kDiv.map((k) => k < 0),
+      t_balanced: levels.map(() => 0),
+      y_balanced: [...yFront],
+      default_point: "balanced",
+      t_suggested: levels.map(() => 0),
+      y_suggested: [...yFront],
+      range: block(levels),
+    },
     grid: { y: gridY, z, w: gw, k_div: kDiv, y_div: yDiv, w_div: wDiv, y_sug: [...yFront] },
+    entered: null,
+    range_method: fx.range_method,
     enb_ref: enbRef,
     stress: { gfc2008: window("gfc2008", [null, null]), covid2020: window("covid2020", [0.004, -0.021]), rates2022: window("rates2022", [0.009, -0.034]) },
     notes: Array.isArray(fx.notes) ? fx.notes : [],

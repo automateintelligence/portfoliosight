@@ -1,6 +1,6 @@
 """A-PS-44 - the heatmap renders from the theme ramp under the frontier only.
 
-Playwright (desktop, all three themes via ?t=) run from pytest; stdlib only.
+Playwright (desktop, all four themes via ?t=) run from pytest; stdlib only.
 
 Mock (built by the embedded spec, no product mock server): page.route on /api/** serving
 GET /api/presets (two presets: guide2017 with the allocation from
@@ -20,8 +20,13 @@ Pinned interface (beyond the shared pins of the gate contract):
   linear pixel scales from them.
 - custom properties --heat-0..4 and --bg resolve to colours on the chart element.
 - cell (j, k) is painted around (frontier.x[j], grid.y[k]) with interpolateRgbBasis(--heat-0..4)
-  at Z / enb_ref (spec 8); nothing is painted on the canvas above the frontier (a legend or title
-  there must be DOM, not canvas pixels).
+  at a position that depends on the theme (spec 8). ks-dark, hud, grid: 1 - 0.8 * Z / enb_ref
+  (owner feedback 1 turned the ramp round: the least spread-out mixes, which lie along the
+  frontier, take the --heat-4 end, and the most spread-out ones the dark end, stopping a fifth of
+  the way up the ramp so they stay visible). light: Z / enb_ref (owner direction 2026-10-13
+  restored the ramp from before that change: the band along the frontier is the palest, the most
+  spread-out mixes the deepest blue). Nothing is painted on the canvas above the frontier (a
+  legend or title there must be DOM, not canvas pixels).
 - the legend text "How spread out the risk is" is visible DOM text.
 """
 
@@ -80,7 +85,7 @@ import path from "node:path";
 // Shared helper block (each gate file embeds its own copy; nothing here imports product code).
 // ---------------------------------------------------------------------------------------------
 const ROOT = process.env.PS_GATE_ROOT || "";
-const THEMES = ["ks-dark", "light", "hud"];
+const THEMES = ["ks-dark", "light", "hud", "grid"];
 const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
 const TSP: [string, string][] = [
   ["TSP-G", "G Fund"], ["TSP-F", "F Fund"], ["TSP-C", "C Fund"], ["TSP-S", "S Fund"], ["TSP-I", "I Fund"],
@@ -353,7 +358,7 @@ async function sampleCanvas(page: Page, points: { x: number; y: number }[], bg: 
   });
 }
 
-// Signed percent in a readout such as "Bad six months −9.4%" -> -9.4 (percentage points).
+// Signed percent in a readout such as "Bad year −9.4%" -> -9.4 (percentage points).
 function parsePercent(text: string, what: string): number {
   const m = text.replace(/[−–]/g, "-").match(/([+-]?)\s?(\d+(?:\.\d+)?)\s*%/);
   if (!m) throw new Error(`${what}: no percent value in "${text}"`);
@@ -372,24 +377,21 @@ function tensorFacts(tensor: any) {
   const NX: number = tensor.frontier.x.length;
   const curve = tensor.frontier_curve;
   if (curve.sigma.length !== 8 * (NX - 1) + 1) throw new Error(`fixture frontier_curve has ${curve.sigma.length} points, expected ${8 * (NX - 1) + 1}`);
-  const low = (i: number) => curve.mu[i] / 2 - (1.96 * curve.sigma[i]) / Math.SQRT2;
-  let best = -Infinity;
-  let at = 0;
-  for (let i = 0; i < curve.mu.length; i++) if (low(i) >= best) { best = low(i); at = i; }
-  const sSafe = at / 8;
-  if (Math.abs(sSafe - tensor.frontier.s_safe) > 1e-9) throw new Error(`fixture frontier.s_safe (${tensor.frontier.s_safe}) is not the rightmost maximum of Low_front over frontier_curve (${sSafe})`);
+  // the slider's left end is the engine's (spec 4.9): the rightmost frontier node with the best bad year
+  const bad: number[] = tensor.frontier.range.bad;
+  const sSafe = bad.lastIndexOf(Math.max(...bad));
+  if (sSafe !== tensor.frontier.s_safe) throw new Error(`fixture frontier.s_safe (${tensor.frontier.s_safe}) is not the rightmost frontier node with the best bad year (${sSafe})`);
   const sMax = NX - 1;
   if (!(sMax > sSafe)) throw new Error("fixture risk-slider domain is a single point; these assertions need a real domain");
   const frontAt = (s: number) => {
     const sigma = lerp(curve.sigma, s * 8);
     const mu = lerp(curve.mu, s * 8);
-    return { sigma, mu, lowPct: 100 * (mu / 2 - (1.96 * sigma) / Math.SQRT2), typicalPct: 100 * (mu / 2) };
+    // the frontier mix's bad and typical year (spec 4.9): the node figures blended between columns
+    return { sigma, mu, lowPct: 100 * lerp(tensor.frontier.range.bad, s), typicalPct: 100 * lerp(tensor.frontier.range.typical, s) };
   };
   const ceilingAt = (s: number) => lerp(tensor.frontier.x, s);
-  const tSug = (j: number) => {
-    const span = tensor.frontier.y[j] - tensor.grid.y_div[j];
-    return tensor.grid.k_div[j] < 0 || span <= 0 ? 0 : (tensor.frontier.y[j] - tensor.grid.y_sug[j]) / span;
-  };
+  // the suggested point's position on each column's ladder (spec 4.8); 0 on a collapsed column
+  const tSug = (j: number) => (tensor.ladder.collapsed[j] ? 0 : tensor.ladder.t_suggested[j]);
   const tAuto = (s: number) => {
     const j = Math.min(Math.floor(s), NX - 2);
     const lam = s - j;
@@ -426,6 +428,10 @@ function pickCells(tensor: any) {
 }
 
 for (const theme of THEMES) {
+  // light reads the ramp rising with the measure; the other themes read it turned round.
+  const rising = theme === "light";
+  const position = (q: number) => (rising ? Math.max(0, Math.min(1, q)) : 1 - 0.8 * Math.max(0, Math.min(1, q)));
+  const formula = rising ? "Z / enb_ref" : "1 - 0.8 * Z / enb_ref";
   test(`heatmap comes from the theme ramp, under the frontier only: ${theme}`, async ({ page }) => {
     const mock = buildMock(readFixture());
     const tensor = mock.tensor;
@@ -453,11 +459,19 @@ for (const theme of THEMES) {
         const where = `cell (j=${c.j}, k=${c.k}) rgb(${pixel.map((v) => Math.round(v)).join(",")})`;
         const onRamp = Math.min(...fine.map((p) => channelDistance(p, pixel)));
         expect(onRamp, `${where} is ${onRamp.toFixed(1)}/255 off the ${theme} ramp interpolateRgbBasis(--heat-0..4)`).toBeLessThanOrEqual(12);
-        // Spec 8: colour = ramp(Z / enb_ref). Allow the Z range of the 3 x 3 neighbourhood.
+        // Spec 8: colour = ramp(position(Z / enb_ref)) for the theme. Allow the Z range of the 3 x 3 neighbourhood.
         let near = Infinity;
-        for (let s = 0; s <= 50; s++) near = Math.min(near, channelDistance(ramp(Math.min(1, c.qMin + ((c.qMax - c.qMin) * s) / 50)), pixel));
-        expect(near, `${where} is not the ramp colour of its own Z / enb_ref (${c.q.toFixed(3)}; neighbourhood ${c.qMin.toFixed(3)}..${c.qMax.toFixed(3)})`).toBeLessThanOrEqual(12);
+        for (let s = 0; s <= 50; s++) near = Math.min(near, channelDistance(ramp(position(Math.min(1, c.qMin + ((c.qMax - c.qMin) * s) / 50))), pixel));
+        expect(near, `${where} is not the ramp colour of its own ${formula} (${c.q.toFixed(3)}; neighbourhood ${c.qMin.toFixed(3)}..${c.qMax.toFixed(3)})`).toBeLessThanOrEqual(12);
       });
+
+      // Direction: the least spread-out sampled cell sits nearer the frontier's end of the ramp
+      // (--heat-4 when turned, --heat-0 in light) than the most spread-out one.
+      const byQ = cells.map((c, i) => ({ q: c.q, pixel: cellPixels[i] })).sort((a, b) => a.q - b.q);
+      const frontierEnd = ramp(rising ? 0 : 1);
+      const endName = rising ? "--heat-0" : "--heat-4";
+      expect(byQ[byQ.length - 1].q - byQ[0].q, "the samples span a real range of Z / enb_ref").toBeGreaterThan(0.1);
+      expect(channelDistance(frontierEnd, byQ[0].pixel), `the least spread-out cell is nearer ${endName} than the most spread-out cell`).toBeLessThan(channelDistance(frontierEnd, byQ[byQ.length - 1].pixel));
 
       // 5 points above the frontier: the page background, nothing painted.
       const NX = tensor.frontier.x.length;
@@ -487,6 +501,7 @@ EXPECTED_TITLES = {
     "heatmap comes from the theme ramp, under the frontier only: ks-dark",
     "heatmap comes from the theme ramp, under the frontier only: light",
     "heatmap comes from the theme ramp, under the frontier only: hud",
+    "heatmap comes from the theme ramp, under the frontier only: grid",
 }
 
 

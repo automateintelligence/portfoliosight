@@ -3,7 +3,9 @@
 
 Claim: on the default preset, choosing `lookback-10y` loads the 10y tensor and redraws the
 frontier, the Settings exclusion list equals the set the test computes from `/api/symbols`
-`first_date` values and the spec 4.2 rule for that window, toggling `ghost-1y` increments
+`first_date` values and the spec 4.2 rule for that window, the same holds for a custom menu that
+holds a served fund too young for the 10y view (which is listed with its reason) and FIENX, a
+catalog fund that is not served (which is listed too), toggling `ghost-1y` increments
 `data-ghost-count` on `chart` by one and changes sampled canvas pixels, toggling it off restores
 both, and editing `cap-max-VTI` to 10 triggers a rebuild whose tensor has every
 `frontier.w[j][VTI] <= 0.10 + 1e-6`.
@@ -17,6 +19,15 @@ The 10y window bounds are exact XNYS sessions, computed on the pytest side with
 `first_date` is later than the session 252 sessions after `start_10y`; a preset fund that
 `/api/symbols` does not list (not served) is excluded too (spec 4.2: only served funds count).
 
+Owner decision 2026-10-13: EFA holds FIENX's place in the default menu, so the default menu may
+have no excluded fund in the 10y view and the computed set above may be empty. The exclusion list
+is therefore also checked on a custom menu that provably has both kinds of exclusion: two funds
+of the default menu whose history starts before the window (the first two of BND, VTI, AGG, VNQ
+that qualify), one served fund whose `first_date` is after the threshold (SGOV when it qualifies,
+else the first such id in alphabetical order), and FIENX, which the catalog knows and does not
+serve (the not-served case the default menu used to supply). The menu is the same on every run,
+so it costs one real build per generation.
+
 Pinned interface (the product must provide exactly this), beyond the spec 10 test ids:
 - `/api/presets`: the default preset has id `guide2017`, with `funds[].id` and
   `lookbacks[...].url`; `asof` is the generation date; `/api/symbols` rows carry `first_date`;
@@ -28,7 +39,12 @@ Pinned interface (the product must provide exactly this), beyond the spec 10 tes
   (spec 3.6 / 5.6);
 - `chart` carries `data-ghost-count`; `chart-canvas` is (or holds) a 2D <canvas>;
 - the address carries `lb=10y` (spec 8.1); the tensor per spec 7 (`universe.excluded`,
-  `bounds.requested`, `frontier.w`, `grid.w`).
+  `bounds.requested`, `frontier.w`, `grid.w`);
+- opening `/?f=ID,ID,ID,FIENX&lb=10y` (spec 8.1) loads that custom menu in the 10y view by
+  itself: the page requests the build (every fund of the menu is sent; FIENX is a catalog symbol,
+  so the service accepts the menu and sets it aside) and then GETs `/api/tensors/{G}/{hash}/10y`,
+  `hash` being the universe hash of the four funds with default caps (spec 6); the tensor is
+  loaded within 150 s.
 """
 
 from __future__ import annotations
@@ -335,6 +351,7 @@ async function apiJson(page: Page, path: string): Promise<any> {
 }
 
 const ASOF = process.env.PS_GATE_ASOF ?? "";
+const START_10Y = process.env.PS_GATE_START_10Y ?? "";
 const THRESHOLD_10Y = process.env.PS_GATE_THRESHOLD_10Y ?? "";
 const CAP = 0.10;
 
@@ -347,7 +364,9 @@ async function defaultPreset(page: Page) {
 }
 
 test("10y lookback redraws the frontier and lists the computed exclusions", async ({ page }) => {
+  test.setTimeout(300_000);
   expect(/^\d{4}-\d{2}-\d{2}$/.test(THRESHOLD_10Y)).toBe(true);
+  expect(/^\d{4}-\d{2}-\d{2}$/.test(START_10Y) && START_10Y < THRESHOLD_10Y).toBe(true);
   const preset = await defaultPreset(page);
   const fundIds = preset.funds.map((fund) => fund.id);
   const url10 = preset.lookbacks["10y"].url;
@@ -400,6 +419,52 @@ test("10y lookback redraws the frontier and lists the computed exclusions", asyn
     const template = new RegExp(id + "\\b[^\\n]*history starts \\d{4}-\\d{2}-\\d{2}, not enough for the [^\\n]+ view");
     expect(template.test(text), `excluded-note for ${id} follows the spec 5.6 template`).toBe(true);
   }
+
+  // The default menu may have no excluded fund (owner decision 2026-10-13: EFA holds FIENX's
+  // place), which would leave the list above empty. The same rule on a menu that provably has
+  // both kinds of exclusion: two funds of the default menu older than the window, one served
+  // fund whose history starts after the threshold, and FIENX, which is not served.
+  const served = symbols.map((symbol) => ({ id: symbol.id, first: String(symbol.first_date).slice(0, 10) }));
+  const tooYoung = served
+    .filter((symbol) => /^\d{4}-\d{2}-\d{2}$/.test(symbol.first) && symbol.first > THRESHOLD_10Y && !fundIds.includes(symbol.id))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const young = tooYoung.find((symbol) => symbol.id === "SGOV") ?? tooYoung[0];
+  expect(young, `a served fund whose history starts after ${THRESHOLD_10Y}, to exercise the exclusion list`).toBeTruthy();
+  const old = ["BND", "VTI", "AGG", "VNQ"].filter((id) => included.includes(id) && firstDate.get(id)! <= START_10Y).slice(0, 2);
+  expect(old.length, `two of BND, VTI, AGG, VNQ in the 10y tensor with history from ${START_10Y} or earlier`).toBe(2);
+  const menu = [...old, young.id, "FIENX"];
+  const menuExpected = menu.filter((id) => !firstDate.has(id) || firstDate.get(id)! > THRESHOLD_10Y).sort();
+  expect(menuExpected, "the computed exclusions of the custom menu: the young fund, and FIENX as not served").toEqual([young.id, "FIENX"].sort());
+  console.log(`A-PS-63 10y custom menu [${menu.join(",")}]: expected exclusions [${menuExpected.join(",")}] (${young.id} starts ${young.first})`);
+
+  const menuHash = universeHash(menu.map((id) => ({ id })));
+  await page.goto("/?f=" + menu.join(",") + "&lb=10y");
+  // The service must accept the menu: FIENX is a catalog symbol that is not served, not an
+  // unknown one. A refusal is reported here, with its status, instead of as a missing tensor.
+  const menuPost = () => api.posts.find((post) => post.path === "/api/tensors" && post.body?.lookback === "10y" && Array.isArray(post.body?.funds) && post.body.funds.length === menu.length);
+  await expect.poll(() => menuPost()?.status ?? null, { timeout: 30_000, message: "the page must POST the custom menu to /api/tensors" }).not.toBeNull();
+  expect([200, 202], `POST /api/tensors for [${menu.join(",")}] answered ${menuPost()!.status}; FIENX is a catalog symbol, so the menu must be accepted and FIENX set aside`).toContain(menuPost()!.status);
+  const menuLoaded = () => api.tensors.find((entry) => entry.status === 200 && entry.body !== null && entry.path.endsWith("/" + menuHash + "/10y"));
+  await expect.poll(() => menuLoaded() !== undefined, { timeout: 150_000, message: `the page must load the custom menu's 10y tensor (hash ${menuHash})` }).toBe(true);
+  const menuTensor = menuLoaded()!.body;
+  expect(menuTensor.lookback.id).toBe("10y");
+  expect(menuTensor.universe.hash).toBe(menuHash);
+  expect(menuTensor.universe.excluded.map((item: { id: string }) => item.id).sort()).toEqual(menuExpected);
+  expect(menuTensor.universe.funds.map((fund: { id: string }) => fund.id).sort()).toEqual([...old].sort());
+  for (const row of menuTensor.frontier.w as number[][]) expect(row.length, "a frontier weight vector carries the excluded fund").toBe(old.length);
+
+  await expect(page.getByTestId("chart-canvas")).toBeVisible({ timeout: 15_000 });
+  await openSection(page, "settings", "lookback-10y");
+  const menuNotes = page.getByTestId("section-settings").getByTestId("excluded-note");
+  const menuListed = async () => {
+    const shown = (await menuNotes.allInnerTexts()).join("\n");
+    return menu.filter((id) => new RegExp("(^|[^A-Z0-9-])" + id + "($|[^A-Z0-9-])").test(shown)).sort().join(",");
+  };
+  // Must-not-contain: an exclusion list that differs from the computed set.
+  await expect.poll(menuListed, { timeout: 10_000 }).toBe(menuExpected.join(","));
+  const menuText = (await menuNotes.allInnerTexts()).join("\n");
+  const youngTemplate = new RegExp(young.id + "\\b[^\\n]*history starts \\d{4}-\\d{2}-\\d{2}, not enough for the [^\\n]+ view");
+  expect(youngTemplate.test(menuText), `excluded-note for ${young.id} follows the spec 5.6 template`).toBe(true);
 });
 
 test("ghost-1y toggles the ghost count and the canvas, and back", async ({ page }) => {

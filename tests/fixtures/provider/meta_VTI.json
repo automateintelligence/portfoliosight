@@ -1,0 +1,8 @@
+{
+  "description": "The Fund employs an indexing investment approach designed to track the performance of the CRSP US Total Market Index (the \u201cTarget Index\u201d), which represents 100% of the investable U.S. stock market,  as determined by the index provider. The Target Index includes large-, mid-, small-, and micro-cap stocks regularly traded on the New York Stock Exchange and Nasdaq. Under normal circumstances, the Fund invests at least 80% of its net assets, plus the amount of any borrowings for investment purposes, in the stocks that make up the Target Index. The Fund invests by sampling the Target Index, meaning that it holds a range of securities that, in the aggregate, approximates the full Target Index in terms of key risk factors and other characteristics.The Fund may become nondiversified, as defined under the Investment Company Act of 1940, solely as a result of tracking an index.  This could occur due to events such as an index rebalance or market movement. A nondiversified fund may invest a greater percentage of its assets in the securities of particular issuers as compared with diversified funds. In addition, the Fund could become concentrated in an industry or group of industries if the Target Index becomes concentrated due to market conditions or the performance of a single or related group of issuers.",
+  "endDate": "2026-10-12",
+  "exchangeCode": "NYSE",
+  "name": "Vanguard Morningstar Total Stock Market ETF",
+  "startDate": "2001-05-31",
+  "ticker": "VTI"
+}

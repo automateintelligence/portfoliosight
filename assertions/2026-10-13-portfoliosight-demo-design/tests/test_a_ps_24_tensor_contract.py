@@ -1,11 +1,16 @@
 """A-PS-24 - a tensor is deterministic, schema-valid, full-precision, carries a correct
-frontier_curve and s_safe, builds in <= 90 s, and the UI fixture is its unedited output.
+frontier_curve, one-year ranges and s_safe, builds in <= 90 s, and the UI fixture is its unedited
+output.
 
 Claim: building the 23-fund fixture twice from the same inputs yields identical canonical JSON
 after removing built_at and build_seconds; the output validates against
 portfoliosight/engine/tensor.schema.json; floats round-trip exactly; frontier_curve equals the
 actual (sigma, mu) of w_front(s) at 8 sub-steps per gap (377 points) within 1e-9 relative;
-frontier.s_safe is the rightmost maximum of Low_front over that curve; the build takes <= 90 s;
+the one-year ranges of every frontier node, ladder level and the entered mix are ordered
+(bad < typical < good), carry the exact normal range mu -+ 1.96 sigma, sit at a one-year scale
+(typical within 0.25 sigma of exp(mu - sigma^2/2) - 1), and range_method names the stationary block
+bootstrap (2,000 paths of 252 days, mean block 21 days, percentiles 2.5/50/97.5, linear);
+frontier.s_safe is the rightmost frontier node with the best bad year; the build takes <= 90 s;
 and web/fixtures/guide2017_5y.json equals a fresh build from tests/fixtures/synthetic_23.parquet
 with the recorded asof (minus the telemetry fields).
 
@@ -281,7 +286,6 @@ if _OUTER:
 
 else:
     import copy
-    import math
     import re
     import time
 
@@ -413,30 +417,62 @@ else:
         between = got_sigma[4::8] - 0.5 * (x[:-1] + x[1:])
         assert (between <= 1e-9).all() and between.min() < -1e-9  # a real curve, not the chord
 
-    def test_5_s_safe_is_the_rightmost_maximum_of_low_front(tmp_path_factory):
+    def test_5_one_year_ranges_and_s_safe(tmp_path_factory):
         docs, _, _ = _builds(tmp_path_factory)
         doc = docs[0]
-        sig, mu = _curve(doc)
-        low = mu / 2.0 - 1.96 * sig / math.sqrt(2.0)
-        top = low.max()
-        rightmost = int(np.flatnonzero(low == top)[-1])
-        near = np.flatnonzero(low >= top - 1e-12)  # ties within rounding: any of them is honest
+        method = doc["range_method"]
+        assert method == {
+            "name": "stationary block bootstrap",
+            "horizon_days": 252,
+            "paths": 2000,
+            "mean_block_days": 21,
+            "percentiles": [2.5, 50.0, 97.5],
+            "percentile_method": "linear",
+            "seed": method["seed"],
+        }, f"range_method is not the spec 4.9 method: {method}"
+        assert isinstance(method["seed"], int)
+        cov, mu_s = np.array(doc["cov"], float), np.array(doc["mu_s"], float)
+
+        def check(block, mixes, what):
+            """One-year figures of `mixes` (k x n): ordered, normal range exact, one-year scale."""
+            mixes = np.atleast_2d(np.asarray(mixes, float))
+            mu = mixes @ mu_s
+            sig = np.sqrt(np.einsum("ij,jk,ik->i", mixes, cov, mixes))
+            bad, typical, good = (np.atleast_1d(np.asarray(block[k], float)) for k in ("bad", "typical", "good"))
+            normal = {k: np.atleast_1d(np.asarray(v, float)) for k, v in block["normal"].items()}
+            assert set(normal) == {"low", "mid", "high"}, f"{what}: normal range keys"
+            assert bad.shape == typical.shape == good.shape == mu.shape, f"{what}: shapes"
+            assert (bad < typical).all() and (typical < good).all(), f"{what}: bad < typical < good fails"
+            assert np.abs(normal["mid"] - mu).max() <= 1e-12, f"{what}: normal mid is not mu"
+            assert np.abs(normal["low"] - (mu - 1.96 * sig)).max() <= 1e-12, f"{what}: normal low"
+            assert np.abs(normal["high"] - (mu + 1.96 * sig)).max() <= 1e-12, f"{what}: normal high"
+            # one year, not six months: the typical year sits near exp(mu - sigma^2 / 2) - 1
+            drift = np.expm1(mu - sig**2 / 2.0)
+            assert (np.abs(typical - drift) <= 0.25 * sig).all(), f"{what}: typical is not a one-year figure"
+            return bad
+
+        bad = check(doc["frontier"]["range"], doc["frontier"]["w"], "frontier")
+        levels = np.array(doc["ladder"]["w"], float)
+        for key in ("bad", "typical", "good"):
+            assert np.array(doc["ladder"]["range"][key]).shape == levels.shape[:2], f"ladder.range.{key}"
+        for j in range(NX):
+            column = {
+                "bad": doc["ladder"]["range"]["bad"][j],
+                "typical": doc["ladder"]["range"]["typical"][j],
+                "good": doc["ladder"]["range"]["good"][j],
+                "normal": {k: v[j] for k, v in doc["ladder"]["range"]["normal"].items()},
+            }
+            check(column, levels[j], f"ladder column {j}")
+            assert column["bad"][0] == bad[j], f"column {j}: level 0 is the frontier mix, its range differs"
+        check(doc["entered"]["range"], doc["entered"]["w"], "entered mix")
+
+        # s_safe: the rightmost frontier node with the best bad year
         s_safe = doc["frontier"]["s_safe"]
         assert isinstance(s_safe, (int, float)) and 0 <= s_safe <= NX - 1
-        assert abs(s_safe * 8 - round(s_safe * 8)) <= 1e-9, "s_safe is not on the 1/8 sampling grid"
-        index = int(round(s_safe * 8))
-        assert index in near, f"s_safe = {s_safe} is not at the maximum of Low_front"
-        assert index == int(near[-1]), (
-            f"s_safe = {s_safe} is not the rightmost maximum ({near[-1] / 8})"
+        assert s_safe == int(np.flatnonzero(bad == bad.max())[-1]), (
+            f"s_safe = {s_safe} is not the rightmost frontier node with the best bad year"
         )
-        if len(near) == 1:
-            assert s_safe == rightmost / 8.0
-        if index > 0:
-            assert s_safe != float(index)  # s units (index / 8), not a raw sample index
-        low_shipped = np.array(doc["frontier_curve"]["mu"]) / 2.0 - 1.96 * np.array(
-            doc["frontier_curve"]["sigma"]
-        ) / math.sqrt(2.0)
-        assert not (low_shipped[index + 1 :] >= low_shipped[index] + 1e-12).any()
+        assert not (bad[int(s_safe) + 1 :] >= bad[int(s_safe)]).any()
 
     def test_6_the_build_takes_at_most_90_seconds(tmp_path_factory):
         _, _, seconds = _builds(tmp_path_factory)

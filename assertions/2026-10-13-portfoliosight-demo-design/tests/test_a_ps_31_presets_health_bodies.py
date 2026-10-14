@@ -568,7 +568,7 @@ else:
         hashes = _preset_hashes()
 
         first = presets[0]
-        assert first["name"] == "The 2017 guide portfolio"
+        assert first["name"] == "Example Portfolio"
         assert len(first["funds"]) == 23 and {f["id"] for f in first["funds"]} == set(guide)
         assert all(isinstance(f["name"], str) and f["name"] for f in first["funds"])
         assert first["allocation_unit"] == "$"
