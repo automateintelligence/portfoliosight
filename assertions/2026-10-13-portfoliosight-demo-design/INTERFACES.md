@@ -84,8 +84,10 @@ the docstring is authoritative for that test.
 
 - **Math** (`web/src/math/portfolio.ts`): `portfolioMath(tensor)` returns an object with
   `stats(w) -> {mu, sigma, enb}`, `range6m(mu, sigma) -> {low, typical, high}`,
-  `interpolate(s, t) -> number[]`, `frontierCurve() -> {sigma: number[], mu: number[]}`,
-  `riskSliderDomain() -> {s_safe, s_max}`, `tAuto(s) -> number`.
+  `interpolate(s, t) -> number[]` (walks `ladder.w` with `ladder.hop`, spec 4.11),
+  `frontierCurve() -> {sigma: number[], mu: number[]}`, `riskSliderDomain() -> {s_safe, s_max}`
+  (`s_safe` is the tensor's `frontier.s_safe`), `tAuto(s) -> number` (from
+  `ladder.t_suggested`).
 - **Tensor loader**: `parseTensor(json: unknown)` exported from `web/src/api/client.ts` (zod;
   throws on a bad tensor; importing the module has no side effects and needs no DOM).
 - **Worker**: `web/worker/index.ts` is the standard module shape, `export default { fetch(request,
@@ -106,7 +108,8 @@ the docstring is authoritative for that test.
   `scripts/install_backup_cron.sh` read `PS_ENV_FILE`, else `~/.secrets/portfoliosight.env`.
 - Engine: `torsion.min_torsion`, `torsion.effective_number_of_bets`, `optimize.cholesky_factor`,
   `tensor.check_weights`, `tensor.InvariantError`, `tensor.select_window`,
-  `tensor.renormalize_allocation`, `suggest.suggested_floor`, `stats.estimate_moments`,
+  `tensor.renormalize_allocation`, `suggest.balanced_level`, `suggest.suggested_level`,
+  `suggest.DEFAULT_POINT`, `stats.estimate_moments`,
   `stats.ew_weights`, `stats.menu_beta_blend`, `stats.risk_free_rate`, `caps.resolve_bounds`,
   `caps.greedy_fill`, `caps.CapsError`, `stress.stress_returns`; `scripts/make_fixtures.py --out`;
   `portfoliosight/engine/tensor.schema.json`. Engine modules counted by A-PS-25: at least six of

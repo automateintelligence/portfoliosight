@@ -373,12 +373,10 @@ function tensorFacts(tensor: any) {
   const NX: number = tensor.frontier.x.length;
   const curve = tensor.frontier_curve;
   if (curve.sigma.length !== 8 * (NX - 1) + 1) throw new Error(`fixture frontier_curve has ${curve.sigma.length} points, expected ${8 * (NX - 1) + 1}`);
-  const low = (i: number) => curve.mu[i] / 2 - (1.96 * curve.sigma[i]) / Math.SQRT2;
-  let best = -Infinity;
-  let at = 0;
-  for (let i = 0; i < curve.mu.length; i++) if (low(i) >= best) { best = low(i); at = i; }
-  const sSafe = at / 8;
-  if (Math.abs(sSafe - tensor.frontier.s_safe) > 1e-9) throw new Error(`fixture frontier.s_safe (${tensor.frontier.s_safe}) is not the rightmost maximum of Low_front over frontier_curve (${sSafe})`);
+  // the slider's left end is the engine's (spec 4.9): the rightmost frontier node with the best bad year
+  const bad: number[] = tensor.frontier.range.bad;
+  const sSafe = bad.lastIndexOf(Math.max(...bad));
+  if (sSafe !== tensor.frontier.s_safe) throw new Error(`fixture frontier.s_safe (${tensor.frontier.s_safe}) is not the rightmost frontier node with the best bad year (${sSafe})`);
   const sMax = NX - 1;
   if (!(sMax > sSafe)) throw new Error("fixture risk-slider domain is a single point; these assertions need a real domain");
   const frontAt = (s: number) => {
@@ -387,10 +385,8 @@ function tensorFacts(tensor: any) {
     return { sigma, mu, lowPct: 100 * (mu / 2 - (1.96 * sigma) / Math.SQRT2), typicalPct: 100 * (mu / 2) };
   };
   const ceilingAt = (s: number) => lerp(tensor.frontier.x, s);
-  const tSug = (j: number) => {
-    const span = tensor.frontier.y[j] - tensor.grid.y_div[j];
-    return tensor.grid.k_div[j] < 0 || span <= 0 ? 0 : (tensor.frontier.y[j] - tensor.grid.y_sug[j]) / span;
-  };
+  // the suggested point's position on each column's ladder (spec 4.8); 0 on a collapsed column
+  const tSug = (j: number) => (tensor.ladder.collapsed[j] ? 0 : tensor.ladder.t_suggested[j]);
   const tAuto = (s: number) => {
     const j = Math.min(Math.floor(s), NX - 2);
     const lam = s - j;

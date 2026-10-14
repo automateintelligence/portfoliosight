@@ -3,7 +3,9 @@
 Claim: the default bound is max = clamp(3/N, 0.25, 1.0), min = 0, N = funds included in the
 window; validation rejects min > max, any bound outside [0, 1], sum(min) > 1, sum(max) < 1 and
 N < 2; the greedy endpoint fill allocates every minimum first; on the 23-fund fixture no computed
-weight exceeds 0.25 + 1e-6.
+weight (frontier, ladder, raster) exceeds 0.25 + 1e-6, and the uncapped reference frontier the
+tensor carries (frontier_uncapped) lies on or above the capped one: its lowest risk is no higher,
+its top return no lower, and at every capped node it reaches the node's return by the node's risk.
 
 Pinned interface (the product must provide exactly this), in portfoliosight.engine.caps:
 - resolve_bounds(ids, requested=None) -> (min, max) arrays in ids order. requested is the --caps
@@ -387,9 +389,26 @@ else:
         assert np.abs(a.hi - expected).max() <= 1e-15 and not (a.lo != 0.0).any()
         assert not (a.hi < 0.25).any() and not (a.hi > 1.0).any()
         vectors = [np.asarray(w, float) for w in a.wf] + [np.asarray(w, float) for w in a.w_div]
+        levels = [np.asarray(w, float) for column in t["ladder"]["w"] for w in column]
         cells = [np.asarray(w, float) for col in a.gw for w in col if w is not None]
-        vectors += cells
-        assert len(cells) >= 500 and len(vectors) == 96 + len(cells)
+        vectors += levels + cells
+        assert len(levels) >= NX * 10 and len(cells) >= NX
+        assert len(vectors) == 96 + len(levels) + len(cells)
         worst = max(float(w.max()) for w in vectors)
         assert not worst > 0.25 + TOL, f"a fixture weight reaches {worst}"
         assert worst > 0.25 - 1e-3  # the cap really binds somewhere (max-return fill)
+
+        # the uncapped reference frontier dominates the capped one
+        free = t["frontier_uncapped"]
+        sigma, mu = np.array(free["sigma"], float), np.array(free["mu"], float)
+        assert sigma.shape == mu.shape == (NX,)
+        assert not (np.diff(sigma) < 0).any() and not (np.diff(mu) < -1e-9).any(), "not a frontier"
+        capped = np.array([_sigma(w, a.cov) for w in a.wf])
+        assert sigma[0] <= capped.min() + 1e-9, "the uncapped frontier starts at a higher risk"
+        assert mu[-1] >= a.yf.max() - 1e-9, "the uncapped frontier tops out below the capped one"
+        for j in range(NX):
+            # mu never falls along the frontier, so the first uncapped node at or beyond the
+            # capped node's risk earns at least what the uncapped frontier earns at that risk
+            beyond = np.flatnonzero(sigma >= capped[j] - 1e-12)
+            reach = mu[beyond[0]] if len(beyond) else mu[-1]
+            assert reach >= a.yf[j] - 1e-9, f"capped node {j} earns more than the uncapped frontier"

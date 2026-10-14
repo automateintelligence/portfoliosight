@@ -1,14 +1,16 @@
 """A-PS-33 — the API surface is exactly the spec §6 table.
 
 Claim: the FastAPI application's routes under /v1/ are exactly GET /v1/health, GET /v1/presets,
-GET /v1/symbols, POST /v1/tensors, GET /v1/tensors/{G}/{hash}/{lookback}, with the path constraints
-G = \\d{4}-\\d{2}-\\d{2}-[0-9.]+ and hash = [0-9a-f]{16} enforced, and the application registers no
-other route whose path contains login, auth, account, signup, pay or checkout.
+GET /v1/symbols, POST /v1/tensors, GET /v1/tensors/{G}/{hash}/{lookback} and POST /v1/range, with
+the path constraints G = \\d{4}-\\d{2}-\\d{2}-[0-9.]+ and hash = [0-9a-f]{16} enforced, a range
+body whose generation or hash is malformed refused before any call to the store, and the
+application registers no other route whose path contains login, auth, account, signup, pay or
+checkout.
 
 Pinned interface (the product must provide exactly this):
 - `portfoliosight.api.app.create_app(*, store, clock, build_fn, start_worker)` (shared pin);
   `PS_GATE_SECRET` from the environment; requests carry `x-ps-gate` and `CF-Connecting-IP`.
-- The five routes are registered directly on the app (`app.routes`, each with `.path` and
+- The six routes are registered directly on the app (`app.routes`, each with `.path` and
   `.methods`), with GET routes registered for GET only (no HEAD/OPTIONS twin, as FastAPI's
   `@app.get` does). Path parameter names are free: `{name}` / `{name:conv}` is compared as `{}`.
 - No registered route path may contain `auth`: FastAPI's default `/docs/oauth2-redirect` breaks
@@ -316,6 +318,7 @@ EXPECTED_ROUTES = {
     ("GET", "/v1/symbols"),
     ("POST", "/v1/tensors"),
     ("GET", "/v1/tensors/{}/{}/{}"),
+    ("POST", "/v1/range"),
 }
 FORBIDDEN = re.compile(r"login|auth|account|signup|pay|checkout", re.IGNORECASE)
 GOOD_HASH = "0123456789abcdef"
@@ -371,17 +374,17 @@ if _OUTER:
 
 else:
 
-    def test_route_set_is_exactly_the_five(tmp_path, monkeypatch):
+    def test_route_set_is_exactly_the_six(tmp_path, monkeypatch):
         _, g, app = _seeded_app(tmp_path, monkeypatch)
         routes = _route_set(app)
         assert routes == EXPECTED_ROUTES, (
             f"extra: {sorted(routes - EXPECTED_ROUTES)}; missing: {sorted(EXPECTED_ROUTES - routes)}"
         )
-        assert len(routes) == 5 and not (routes - EXPECTED_ROUTES), (
-            "a sixth /v1/ route is registered"
+        assert len(routes) == 6 and not (routes - EXPECTED_ROUTES), (
+            "a seventh /v1/ route is registered"
         )
         paths = [getattr(r, "path", "") or "" for r in app.routes]
-        assert len(paths) >= 5
+        assert len(paths) >= 6
         bad = [p for p in paths if FORBIDDEN.search(p)]
         assert not bad, f"routes with a forbidden token: {bad}"
         with _client(app) as client:
@@ -402,6 +405,8 @@ else:
                 ("GET", "/v1/tensors"),
                 ("GET", f"/v1/tensors/{g}"),
                 ("GET", "/v1/jobs"),
+                ("GET", "/v1/range"),
+                ("PUT", "/v1/range"),
                 ("GET", "/v1/"),
             ]
             for method, path in unlisted:
@@ -452,4 +457,19 @@ else:
                 assert touched == [], f"GET {path} touched the store: {[c[:2] for c in touched]}"
                 assert not [c for c in touched if c[0] == "get"]
                 checked += 1
-        assert checked == len(malformed) >= 16
+            weights = [1 / 3, 1 / 3, 1 / 3]
+            bodies = [
+                {"generation": "bad", "hash": GOOD_HASH, "lookback": "5y", "weights": weights},
+                {"generation": g, "hash": "zz", "lookback": "5y", "weights": weights},
+                {"generation": g, "hash": "0123456789ABCDEF", "lookback": "5y", "weights": weights},
+                {"generation": g, "hash": GOOD_HASH, "lookback": "7y", "weights": weights},
+                {"generation": g, "hash": GOOD_HASH, "lookback": "5y", "weights": [0.5, 0.6]},
+            ]
+            for body in bodies:
+                before = len(store.calls)
+                resp = client.post("/v1/range", json=body, headers=_hdr())
+                assert resp.status_code in (400, 404, 422), f"POST /v1/range {body} -> {resp.status_code}"
+                touched = store.calls[before:]
+                assert touched == [], f"POST /v1/range {body} touched the store: {[c[:2] for c in touched]}"
+                checked += 1
+        assert checked == len(malformed) + len(bodies) >= 21

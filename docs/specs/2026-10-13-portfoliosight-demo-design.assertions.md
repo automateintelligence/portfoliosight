@@ -111,21 +111,23 @@ why it is load-bearing.
 - **A-PS-16 — frontier nodes sit on their ceiling and returns do not decrease.** (S23, §4.5) The
   curve the risk slider walks.
 - **A-PS-17 — every computed mix is real: sums to one, inside bounds, under its ceiling, ENB in
-  range; a bad vector raises.** (S23, §4.11) Checked through the builder, not the solver alone.
-- **A-PS-18 — the surface proxy is monotone and the bottom end is at least as diversified as the
-  top.** (F9, §4.7) Otherwise the "More diversified" end lies.
-- **A-PS-19 — the suggested point is bracketed and the standard-error walk stops at the first
-  failure.** (S4, §4.8) The default position of the second slider.
+  range, ladder levels on their risk line; a bad vector raises.** (S23, §4.11) Checked through the
+  builder, not the solver alone.
+- **A-PS-18 — every ladder holds its risk, gives up return, gains ENB and ends at its peak.** (F9,
+  §4.7) Otherwise the "More diversified" end lies.
+- **A-PS-19 — the suggested point is the balanced point, the knee of ENB gained against return
+  given up.** (S4, §4.8) The default position of the second slider.
 - **A-PS-20 — moments are estimated as specified.** (§4.3) Wrong shrinkage reproduces exactly the
   "85% in one fund" failure (F3).
-- **A-PS-21 — caps scale with the menu and are validated; no 23-fund mix exceeds 25%.** (S12, F3,
-  §4.4) The concentration guard.
+- **A-PS-21 — caps scale with the menu and are validated; no 23-fund mix exceeds 25%; the uncapped
+  frontier lies above the capped one.** (S12, F3, §4.4) The concentration guard.
 - **A-PS-22 — window inclusion, the 126-row floor and the fixed exclusion templates.** (S24, §4.2,
   §5.6) "Says so in one sentence and carries on."
 - **A-PS-23 — stress returns are never fabricated.** (M7, F10, §4.10) `null` when a fund lacks prices
   at a window edge.
 - **A-PS-24 — a tensor is deterministic, schema-valid, full-precision, carries a correct
-  `frontier_curve` and `s_safe`, builds in ≤ 90 s, and the UI fixture is its unedited output.**
+  `frontier_curve`, one-year ranges and `s_safe`, builds in ≤ 90 s, and the UI fixture is its
+  unedited output.**
   (§4.12, §7, §12 Phase 1) The contract between engine, API and browser.
 - **A-PS-25 — the engine is pure and fully covered.** (§4, §10) 100% line coverage on
   `portfoliosight/engine/`; no I/O imports.
@@ -147,11 +149,12 @@ why it is load-bearing.
 - **A-PS-32 — the image, the repository and the compose file hold no holdings, no secrets, no data
   mount, and cap resources.** (M1, M2, M5, DoD 25) Must-nots with irreversible consequences.
 - **A-PS-33 — the API surface is exactly the §6 table.** (M4, M10) No login, no payments, no extra
-  routes.
+  routes; `POST /v1/range` refuses a malformed body before reading the store.
 
 **Phase 3 — front end**
-- **A-PS-34 — browser math reproduces the tensor and interpolation keeps every invariant.** (S22,
-  S23, DoD 24, §4.11) The browser only interpolates; this is the proof it does so faithfully.
+- **A-PS-34 — browser math reproduces the tensor and the ladder interpolation keeps every
+  invariant.** (S22, S23, DoD 24, §4.11) The browser only interpolates; this is the proof it does
+  so faithfully.
 - **A-PS-35 — amounts become weights in all three units, the 100% rule gates, and trades are
   computed per unit.** (S9, S10, DoD 13)
 - **A-PS-36 — the URL codec round-trips every state.** (S17, S22, §8.1)
@@ -591,55 +594,68 @@ Phase 1 · unit
   with `σ > X_j + 1e-6`. Fail = any leg on any menu.
 - **Kind.** property (fixture plus five random menus; every node).
 
-### A-PS-17 — every computed mix is real: sums to one, inside bounds, under its ceiling, ENB in range; a bad vector raises
+### A-PS-17 — every computed mix is real: sums to one, inside bounds, under its ceiling, ENB in range, ladder levels on their risk line; a bad vector raises
 Phase 1 · unit
-- **Claim.** Every weight vector the builder writes (`frontier.w[j]`, every non-null `grid.w[j][k]`,
-  every `grid.w_div[j]`) satisfies `|Σw − 1| ≤ 1e-6`, `min − 1e-6 ≤ w ≤ max + 1e-6` against the
-  tensor's resolved `bounds`, `σ(w) ≤ X_j + 1e-6`, `1 − 1e-6 ≤ ENB(w) ≤ N + 1e-6`; and the
-  builder's post-check raises when handed a vector violating any one of them.
-- **Setup.** The fixture tensor of A-PS-16; the builder's post-check function; four corrupted
-  vectors each violating exactly one invariant by 1e-4.
-- **Observation.** Count every vector checked (must be `48 + 48 + number of non-null cells`, with
-  non-null cells ≥ 500 on the 23-fund fixture so the check is not vacuous); all four invariants
-  hold for each; each corrupted vector raises with the invariant's name. **Must-not-contain:** a
-  weight below `min − 1e-6` or above `max + 1e-6`; a cell whose `σ > X_j + 1e-6`; a post-check
-  that returns normally on any corrupted vector. Fail = any leg.
+- **Claim.** Every weight vector the builder writes (`frontier.w[j]`, every `ladder.w[j][l]`,
+  every non-null `grid.w[j][k]`, every `grid.w_div[j]`, and `entered.w` when the tensor carries an
+  entered mix) satisfies `|Σw − 1| ≤ 1e-6`, `min − 1e-6 ≤ w ≤ max + 1e-6` against the tensor's
+  resolved `bounds` (the entered mix: `[0, 1]`), `σ(w) ≤ X_j + 1e-6`,
+  `1 − 1e-6 ≤ ENB(w) ≤ N + 1e-6`; every ladder level sits on its column's risk line,
+  `|σ(w) − X_j| ≤ 1e-6`; and the builder's post-check raises when handed a vector violating any
+  one of them.
+- **Setup.** The fixture tensor of A-PS-16 (its menu carries the Step 2 allocation, so the tensor
+  holds the entered mix); the builder's post-check function; four corrupted vectors each
+  violating exactly one invariant by 1e-4.
+- **Observation.** Count every vector checked (must be `48 + 48 + 48·L + number of non-null
+  cells`, with `L − 2 ≥ 8` ladder levels between the frontier mix and the peak and at least one
+  cell per column); all invariants hold for each; each corrupted vector raises with the
+  invariant's name. **Must-not-contain:** a weight below `min − 1e-6` or above `max + 1e-6`; a
+  mix whose `σ > X_j + 1e-6`; a ladder level off its risk line; a post-check that returns
+  normally on any corrupted vector. Fail = any leg.
 - **Kind.** property (every vector in the tensor; each invariant's negative case).
 
-### A-PS-18 — the surface proxy is monotone and the bottom end is at least as diversified as the top
+### A-PS-18 — every ladder holds its risk, gives up return, gains ENB and ends at its peak
 Phase 1 · unit
-- **Claim.** In the fixture tensor the optimized Herfindahl `‖w[j][k]‖²` is non-decreasing in
-  ascending `Y_k` within each column and non-increasing in ascending `X_j` within each row
-  (±1e-6); a cell is `null` exactly when `Y_k > y_front[j]`; `1 ≤ Z ≤ N` on every feasible cell;
-  `ENB(w_div[j]) ≥ ENB(w_front[j]) − 1e-9` for every `j`; `y_div[j]` is the return floor of the
-  highest-ENB candidate (ties → highest return) and `enb_ref` equals the maximum over all
-  candidates in all columns.
-- **Setup.** The fixture tensor plus two random menus (N = 5 and N = 12) built the same way.
-- **Observation.** For every column/row the monotonicity inequalities hold; the null pattern
-  equals the predicate `Y_k > y_front[j]` cell for cell (set equality over all 48 × 32 cells);
-  recomputing ENB for every candidate from the tensor's moments reproduces `k_div`, `y_div`,
-  `w_div` and `enb_ref` exactly (`enb_ref` within 1e-9); `k_div[j] = −1` exactly when the
-  frontier mix wins. **Must-not-contain:** a feasible `null` or an infeasible non-null cell; a
-  column where `ENB(w_div) < ENB(w_front)`; an `enb_ref` smaller than any `Z` or any
-  `ENB(w_front[j])`. Fail = any leg on any menu. (Exact ENB is **not** asserted monotone; §4.7.)
-- **Kind.** property (every cell, every column, three menus).
+- **Claim.** In the fixture tensor every column's ladder (`L − 2 ≥ 8` interior levels) starts at
+  the frontier mix, keeps every level on the risk line (`|σ − X_j| ≤ 1e-6`), never rises in
+  return (+1e-8) and never falls in exact ENB from one level to the next, ends at the peak (its
+  highest ENB, at least the frontier mix's), stores each level's own return and ENB, is collapsed
+  exactly when the peak gains no more than 1e-6 ENB (then every level is the frontier mix), keeps
+  every level at or above its evenly spaced return floor, and flags a hop exactly where the
+  midpoint blend of two levels loses more than 1% of the risk; `enb_ref` is the best ENB of all
+  ladders. The heatmap raster is uniform from the lowest peak return to `max(y_front)`, holds the
+  peak in every row at or below the peak's return (the floor no longer binds there) and the
+  ladder's mix (earning at least `Y_k`) above it up to `y_front[j]`, is `null` exactly where
+  `Y_k > y_front[j]`, and its `k_div`, `y_div`, `w_div` name the peak's highest row, its floor
+  and the peak (`k_div = −1`, `y_div = y_front` on a collapsed column).
+- **Setup.** The fixture tensor plus two random menus (N = 5 and N = 12, random caps) built the
+  same way.
+- **Observation.** Every leg above recomputed from the tensor's moments, on every level of every
+  column and every raster cell. **Must-not-contain:** a level off its risk line; a level that
+  earns more or is less diversified than the one above it; a peak below any level of its ladder;
+  a hop flag that disagrees with the midpoint risk; a feasible `null` cell or a non-null cell
+  above the frontier. Fail = any leg on any menu.
+- **Kind.** property (every level, every cell, every column, three menus).
 
-### A-PS-19 — the suggested point is bracketed and the standard-error walk stops at the first failure
+### A-PS-19 — the suggested point is the balanced point, the knee of ENB gained against return given up
 Phase 1 · unit
-- **Claim.** For every column `y_div[j] ≤ y_sug[j] ≤ y_front[j]`; on a collapsed ladder
-  (`k_div[j] = −1`) `y_sug[j] = y_front[j]`; the walk uses `g_k = μ_sᵀ(w_front − w_k)` and
-  `se_k = √252·sd(d) / √(T_eff/252)` with `d_t = (w_front − w_k)ᵀ r_t` (ω-weighted for `ew`), and
-  stops at the first candidate with `g_k > se_k` even if a lower candidate would pass.
-- **Setup.** The fixture tensor; a constructed column (synthetic returns and three candidates)
-  where candidate 1 passes, candidate 2 fails and candidate 3 would pass; an `ew` window where
-  `T_eff` differs from `T`.
-- **Observation.** Bracketing holds for all 48 columns of the fixture; every collapsed column has
-  `y_sug = y_front`; the constructed column yields `y_sug` = candidate 1's floor (not 3's);
-  recomputing `g_k` and `se_k` independently for the fixture's chosen candidate and its successor
-  shows `g ≤ se` for the chosen and `g > se` for the successor (or the successor is `k_div`); in
-  the `ew` case the `se` uses `T_eff` (changing `T_eff` changes the stop). **Must-not-contain:**
-  a `y_sug` below `y_div` or above `y_front`; a walk that skips a failing candidate. Fail = any.
-- **Kind.** property (all columns of the fixture; the constructed stop case; `ew`).
+- **Claim.** On every column's ladder the balanced level maximizes `e − g`, where `e` is the share
+  of the ladder's ENB gain reached and `g` the share of its return span given up (the
+  perpendicular distance above the chord from the frontier mix to the peak, up to a factor); a
+  tie goes to the earlier level; a ladder that gains no more than 1e-6 ENB answers level 0 and
+  one that gains ENB for no more than 1e-6 of return answers the last level. The tensor stores
+  `t_balanced = level/(L − 1)` and `y_balanced`, `default_point = "balanced"`, and
+  `t_suggested`, `y_suggested` equal to the balanced ones; the suggested return lies between the
+  peak's and the frontier's.
+- **Setup.** The fixture tensor; constructed ladders (concave, convex, an exact tie, no gain, gain
+  without return).
+- **Observation.** The test's own knee equals `balanced_level` and the stored `t_balanced` on all
+  48 columns, at least half of them strictly inside the ladder; the constructed ladders give the
+  expected levels, unchanged by rescaling either axis; `suggested_level(..., "peak")` is the last
+  level (0 without gain) and an unknown point raises. **Must-not-contain:** a suggested return
+  outside `[y_peak, y_front]`; a balanced point less diversified than the frontier mix. Fail =
+  any.
+- **Kind.** property (all columns of the fixture; the constructed cases).
 
 ### A-PS-20 — moments are estimated as specified
 Phase 1 · unit
@@ -664,12 +680,13 @@ Phase 1 · unit
   anywhere; a `π_i ≠ r_f` in the non-positive case. Fail = any leg.
 - **Kind.** property (both paths; both premium signs; three `r_f` sources).
 
-### A-PS-21 — caps scale with the menu and are validated; no 23-fund mix exceeds 25%
+### A-PS-21 — caps scale with the menu and are validated; no 23-fund mix exceeds 25%; the uncapped frontier lies above the capped one
 Phase 1 · unit
 - **Claim.** The default bound is `max = clamp(3/N, 0.25, 1.0)`, `min = 0`, with N the funds
   included in the window; validation rejects `min > max`, any bound outside `[0, 1]`,
   `Σmin > 1`, `Σmax < 1`, and `N < 2`; the greedy endpoint fill allocates every minimum first;
-  and on the 23-fund fixture no computed weight exceeds 0.25 + 1e-6.
+  on the 23-fund fixture no computed weight exceeds 0.25 + 1e-6; and the uncapped reference
+  frontier (`frontier_uncapped`) lies on or above the capped one.
 - **Setup.** The caps module; the fixture tensor; a 4-fund menu with `min = (0.3, 0.3, 0, 0)` and
   `max = (0.3, 0.3, 0.4, 0.4)`; the five invalid inputs.
 - **Observation.** `max(N)` for N = 2..30 equals the closed form (spot values: N = 2, 3 → 1.0;
@@ -678,7 +695,9 @@ Phase 1 · unit
   the 4-fund menu gives exactly 0.3, 0.3 to the first two before any remainder is placed; every
   weight in the fixture tensor (same set as A-PS-17) is ≤ 0.25 + 1e-6; the tensor's
   `bounds.rule` string is `"max(0.25, 3/N)"` and `bounds.requested` holds `null` for defaults
-  while `bounds.min/max` hold the resolved numbers. **Must-not-contain:** a resolved `max`
+  while `bounds.min/max` hold the resolved numbers; the uncapped frontier starts at no higher a
+  risk, tops out at no lower a return, and at every capped node its first node at or beyond that
+  node's risk earns at least the node's return. **Must-not-contain:** a resolved `max`
   below 0.25 or above 1.0; a valid-looking result from any invalid input. Fail = any leg.
 - **Kind.** property (N = 2..30; five invalid inputs; every fixture weight).
 
@@ -720,13 +739,15 @@ Phase 1 · unit
   computed from a neighbouring date more than 3 trading days away. Fail = any leg.
 - **Kind.** property (three windows × five coverage situations).
 
-### A-PS-24 — a tensor is deterministic, schema-valid, full-precision, carries a correct `frontier_curve` and `s_safe`, builds in ≤ 90 s, and the UI fixture is its unedited output
+### A-PS-24 — a tensor is deterministic, schema-valid, full-precision, carries a correct `frontier_curve`, one-year ranges and `s_safe`, builds in ≤ 90 s, and the UI fixture is its unedited output
 Phase 1 · unit
 - **Claim.** Building the 23-fund fixture twice from the same inputs yields identical canonical
   JSON after removing `built_at` and `build_seconds`; the output validates against
   `portfoliosight/engine/tensor.schema.json`; floats round-trip exactly; `frontier_curve` equals
   the actual `(σ, μ)` of `w_front(s)` at 8 sub-steps per gap (377 points) within 1e-9 relative;
-  `frontier.s_safe` is the rightmost maximum of `Low_front` over that curve; the build takes
+  the one-year ranges of every frontier node, ladder level and the entered mix are ordered, carry
+  the exact normal range and sit at a one-year scale, and `range_method` names the §4.9 method;
+  `frontier.s_safe` is the rightmost frontier node with the best bad year; the build takes
   ≤ 90 s; and `web/fixtures/guide2017_5y.json` equals a fresh build from
   `tests/fixtures/synthetic_23.parquet` with the recorded `--asof` (minus telemetry fields).
 - **Setup.** `scripts/build_tensor.py` with `--asof` fixed; `tests/fixtures/synthetic_23.parquet`
@@ -736,13 +757,17 @@ Phase 1 · unit
   validation (proves the schema is not permissive). (3) For 50 sampled floats,
   `json.loads(json.dumps(x)) == x` and the file's text for `mu_s[0]` equals `repr(mu_s[0])`.
   (4) Recomputing the locus from `frontier.w` and the moments reproduces `frontier_curve.sigma`
-  and `.mu` within 1e-9 relative at all 377 points. (5) `s_safe` equals the index of the last
-  (rightmost) maximum of `μ/2 − 1.96·σ/√2` over the curve, expressed in `s` units. (6) Wall
-  time ≤ 90 s. (7) `make_fixtures.py` re-run with its seed reproduces `synthetic_23.parquet`
-  byte-for-byte, and the UI fixture equals the fresh build. **Must-not-contain:** a second
-  build that differs; a float printed with fewer digits than `repr`. Fail = any leg.
-- **Kind.** contract (build pre/postconditions) with property legs (every curve point; sampled
-  floats).
+  and `.mu` within 1e-9 relative at all 377 points. (5) For every frontier node, ladder level and
+  the entered mix: `bad < typical < good`; `normal = μ ∓ 1.96σ` and `μ` within 1e-12 of the
+  recomputed values; `|typical − (e^{μ − σ²/2} − 1)| ≤ 0.25σ` (a one-year figure, not a
+  six-month one); level 0's range is the frontier node's; `range_method` is the stationary block
+  bootstrap with 2,000 paths of 252 days, mean block 21 days, percentiles 2.5/50/97.5 (linear);
+  `s_safe` is the last index of the maximum of `frontier.range.bad`. (6) Wall time ≤ 90 s.
+  (7) `make_fixtures.py` re-run with its seed reproduces `synthetic_23.parquet` byte-for-byte,
+  and the UI fixture equals the fresh build. **Must-not-contain:** a second build that differs;
+  a float printed with fewer digits than `repr`. Fail = any leg.
+- **Kind.** contract (build pre/postconditions) with property legs (every curve point; every
+  range; sampled floats).
 
 ### A-PS-25 — the engine is pure and fully covered
 Phase 1 · static + unit
@@ -903,40 +928,46 @@ Phase 2 · static (image build when `docker` is available, else the ignore-rule 
 ### A-PS-33 — the API surface is exactly the §6 table
 Phase 2 · api
 - **Claim.** The FastAPI application's routes under `/v1/` are exactly `GET /v1/health`,
-  `GET /v1/presets`, `GET /v1/symbols`, `POST /v1/tensors`, `GET /v1/tensors/{G}/{hash}/{lookback}`,
-  with the path constraints `G = \d{4}-\d{2}-\d{2}-[0-9.]+` and `hash = [0-9a-f]{16}` enforced,
-  and the application registers no other route whose path contains `login`, `auth`, `account`,
-  `signup`, `pay` or `checkout`.
+  `GET /v1/presets`, `GET /v1/symbols`, `POST /v1/tensors`, `GET /v1/tensors/{G}/{hash}/{lookback}`
+  and `POST /v1/range`, with the constraints `G = \d{4}-\d{2}-\d{2}-[0-9.]+` and
+  `hash = [0-9a-f]{16}` enforced on the path and on the range body (with its lookback and the sum
+  of its weights) before any store read, and the application registers no other route whose path
+  contains `login`, `auth`, `account`, `signup`, `pay` or `checkout`.
 - **Setup.** The app object; `TestClient` with the gate header.
 - **Observation.** `{(m, r.path) for r in app.routes for m in r.methods}` filtered to `/v1/`
-  equals exactly the five-element set; a GET to `/v1/tensors/2026-10-12-0.1.0/zz/5y` (bad hash)
+  equals exactly the six-element set; a GET to `/v1/tensors/2026-10-12-0.1.0/zz/5y` (bad hash)
   and `/v1/tensors/bad/0123456789abcdef/5y` (bad G) return 4xx without touching the store (store
-  `get` counter unchanged); no route path matches the forbidden tokens (case-insensitive).
-  **Must-not-contain:** any sixth `/v1/` route; a store read on a malformed key. Fail = any.
+  `get` counter unchanged), and so do five malformed range bodies (bad G, bad hash, upper-case
+  hash, unknown lookback, weights summing to 1.1); no route path matches the forbidden tokens
+  (case-insensitive). **Must-not-contain:** any seventh `/v1/` route; a store read on a malformed
+  key or body. Fail = any.
 - **Kind.** contract.
 
 ### Phase 3 — front end
 
-### A-PS-34 — browser math reproduces the tensor and interpolation keeps every invariant
+### A-PS-34 — browser math reproduces the tensor and the ladder interpolation keeps every invariant
 Phase 3 · unit (vitest)
 - **Claim.** `stats(w)` in `web/src/math/portfolio.ts` equals the tensor's own values at every
-  grid node and frontier node within 1e-9 relative; `interpolate(s, t)` satisfies the §4.11
-  invariants for 200 random `(s, t)`; `t = 0` reproduces `w_front(s)` and `t = 1` the
-  interpolated most-diversified mix; a pair of collapsed ladders is constant in `t`; the
-  recomputed `frontier_curve` and `riskSliderDomain().s_safe` equal the tensor's.
+  grid node, ladder level and frontier node within 1e-9 relative; `interpolate(s, t)` walks the
+  ladders as §4.11 says and satisfies its invariants for 200 random `(s, t)`; `t = 0` reproduces
+  `w_front(s)` and `t = 1` the interpolated peak; a pair of collapsed ladders is constant in `t`;
+  the recomputed `frontier_curve` equals the tensor's; `riskSliderDomain().s_safe` is the tensor's
+  `frontier.s_safe`.
 - **Setup.** `web/fixtures/guide2017_5y.json` loaded through the `zod` loader; a seeded PRNG for
   the 200 positions; a synthetic mini-tensor with two adjacent collapsed columns.
-- **Observation.** For every `j` and every non-null `(j, k)`: `stats(w).mu`, `.sigma`, `.enb` match
-  `frontier.y[j]`/`X_j`/`Z[j][k]` (and the frontier mix's ENB recomputed in Python) within 1e-9
-  relative; for the 200 positions: `|Σw − 1| ≤ 1e-6`, bounds ±1e-6, `σ(w) ≤ X(s) + 1e-6`,
-  `1 − 1e-6 ≤ ENB ≤ N + 1e-6`; `interpolate(s, 0)` equals `(1−λ)w_front[j] + λw_front[j+1]`
-  exactly; `interpolate(s, 1)` equals the same combination of `w_div`; the collapsed pair gives
-  identical vectors for `t ∈ {0, 0.3, 1}`; the recomputed curve matches all 377 points within
-  1e-9; `s_safe` matches. `range6m` on `(μ, σ)` yields `μ/2 ∓ 1.96σ/√2`. **Must-not-contain:**
-  a `null` cell entering any ladder (assert ladders are built only from non-null cells); any
+- **Observation.** For every `j`, every level `l` and every non-null `(j, k)`: `stats(w).mu`,
+  `.sigma`, `.enb` match `frontier.y[j]`/`X_j`, `ladder.y`/`ladder.z` (with `σ` on `X_j` within
+  1e-6) and `Z[j][k]` (and the frontier mix's ENB recomputed in Python) within 1e-9 relative; for
+  the 200 positions: `|Σw − 1| ≤ 1e-6`, bounds ±1e-6, `σ(w) ≤ X(s) + 1e-6`,
+  `1 − 1e-6 ≤ ENB ≤ N + 1e-6`, and `w` equals the test's own ladder walk within 1e-9;
+  `interpolate(s, 0)` equals `(1−λ)w_front[j] + λw_front[j+1]` exactly; `interpolate(s, 1)` equals
+  the same combination of the peaks; the collapsed pair gives identical vectors for
+  `t ∈ {0, 0.3, 1}`; the recomputed curve matches all 377 points within 1e-9; the domain's left
+  end is `frontier.s_safe`, which is the last maximum of `frontier.range.bad`, and moves when the
+  tensor's does. `range6m` on `(μ, σ)` yields `μ/2 ∓ 1.96σ/√2`. **Must-not-contain:** any
   renormalization (`Σw` must equal exactly the convex combination, not a rescaled value).
   Fail = any leg.
-- **Kind.** property (every node; 200 random positions; collapsed case).
+- **Kind.** property (every node and level; 200 random positions; collapsed case).
 
 ### A-PS-35 — amounts become weights in all three units, the 100% rule gates, and trades are computed per unit
 Phase 3 · unit (vitest)
