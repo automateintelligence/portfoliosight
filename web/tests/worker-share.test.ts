@@ -186,6 +186,34 @@ describe("share by email", () => {
     expect(S.reencodeShareUrl("https://portfoliosight.ai")).toBe(`${SITE}/?lb=5y&d=auto`);
   });
 
+  it("mails a link in every one of the page's four themes and in no other theme", async () => {
+    // spec §8.1: `t` is ks-dark | light | hud | grid
+    const themes = ["ks-dark", "light", "hud", "grid"];
+    for (const theme of themes) {
+      // the page's codec keeps the same four, so the link is the address bar's own
+      expect(decode(`?t=${theme}`).theme, theme).toBe(theme);
+      const canonical = `?u=tsp&lb=5y&d=auto&t=${theme}`;
+      expect(encode(decode(canonical)), theme).toBe(canonical);
+      expect(S.reencodeShareUrl(`${SITE}/?t=${theme}&u=tsp`), theme).toBe(`${SITE}/${canonical}`);
+    }
+    for (const theme of ["dark", "HUD", "Grid", "grid2", "hud,grid", "grid%20", "%20light", "ks_dark", ""]) {
+      expect(S.reencodeShareUrl(`${SITE}/?u=tsp&t=${theme}`), `t=${theme}`).toBeNull();
+    }
+    // end to end: a grid or HUD view is sent, an unknown theme is refused with nothing sent
+    for (const theme of ["grid", "hud"]) {
+      sent = [];
+      const res = await S.handleShare(post({ ...good, url: `${SITE}/?u=tsp&t=${theme}` }), baseEnv(), allow);
+      expect(res.status, theme).toBe(202);
+      expect(sent.length, theme).toBe(1);
+      expect(part(sent[0].json, "text/plain"), theme).toContain(`${SITE}/?u=tsp&lb=5y&d=auto&t=${theme}`);
+    }
+    sent = [];
+    const refused = await S.handleShare(post({ ...good, url: `${SITE}/?u=tsp&t=neon` }), baseEnv(), allow);
+    expect(refused.status).toBe(400);
+    expect(await errorCode(refused)).toBe("invalid_url");
+    expect(sent).toEqual([]);
+  });
+
   it("refuses a URL that is not this site's page with only the contract's keys and value shapes", () => {
     const bad = [
       "http://portfoliosight.ai/?u=tsp",

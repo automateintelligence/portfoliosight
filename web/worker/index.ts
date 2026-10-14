@@ -2,9 +2,9 @@
 //
 //   1. host: `www` is redirected to the apex, any other host is a 404;
 //   2. private preview (spec §9.6): without a credential, a static 403 page and nothing else;
-//   3. `/api/*`: reads come straight from R2; `POST /api/tensors`, `GET /api/health` and a
-//      tensor that R2 does not hold are forwarded to the origin; `POST /api/share` is handled
-//      here; every other `/api/` path or method is a 404;
+//   3. `/api/*`: reads come straight from R2; `POST /api/tensors`, `POST /api/range`,
+//      `GET /api/health` and a tensor that R2 does not hold are forwarded to the origin;
+//      `POST /api/share` is handled here; every other `/api/` path or method is a 404;
 //   4. everything else is a static asset.
 //
 // The host check comes first so that a foreign host learns nothing (not even that a preview
@@ -34,6 +34,8 @@ const CACHE_TENSOR = "public, max-age=86400, immutable";
 const CURRENT_TTL_MS = 60_000;
 // the origin accepts 16 KB (spec §6); a larger body is refused here rather than buffered
 const MAX_FORWARD_BODY_BYTES = 16 * 1024;
+// the POST routes passed to the origin's `/v1/<name>` with their body (spec §9.3)
+const FORWARDED_POSTS: ReadonlySet<string> = new Set(["tensors", "range"]);
 const GENERATION = /^\d{4}-\d{2}-\d{2}-[0-9.]+$/;
 const TENSOR_HASH = /^[0-9a-f]{16}$/;
 const LOOKBACKS: ReadonlySet<string> = new Set(["1y", "2y", "3y", "5y", "10y", "ew"]);
@@ -169,10 +171,10 @@ async function handleApi(request: Request, env: Env, pathname: string): Promise<
   if (route === "GET presets") return servePresets(env);
   if (route === "GET symbols") return serveSymbols(env);
   if (route === "GET health") return forward(request, env, "health");
-  if (route === "POST tensors") {
+  if (request.method === "POST" && FORWARDED_POSTS.has(rest)) {
     const body = await readBodyLimited(request, MAX_FORWARD_BODY_BYTES);
     if (body === null) return jsonError(413, "payload_too_large", "The request body is over 16 KB");
-    return forward(request, env, "tensors", body);
+    return forward(request, env, rest, body);
   }
   if (route === "POST share") return handleShare(request, env, durableLimiter(env));
   if ((request.method === "GET" || request.method === "HEAD") && rest.startsWith("tensors/")) {
