@@ -370,14 +370,25 @@ button {
   overflow: hidden;
 }
 
+/* Narrow enough to give the chart its room: the amount column needs only "1,000,000". */
 .side-open .side {
-  width: clamp(348px, 31vw, 440px);
+  width: 360px;
 }
 
 /* Between 1024 and 1279 px the open sidebar leaves the chart little room: everything tightens. */
 @media (min-width: 1024px) and (max-width: 1279px) {
   .side-open .side {
-    width: 318px;
+    width: 326px;
+  }
+
+  /* Tighter columns, so the amount field still shows a seven-digit amount. */
+  .side-open .side .row {
+    grid-template-columns: 48px minmax(60px, 1fr) 60px 60px 28px;
+    gap: 0 6px;
+  }
+
+  .side-open .side .row .amt {
+    padding: 0 6px;
   }
 
   .app:has(.stage.side-open) {

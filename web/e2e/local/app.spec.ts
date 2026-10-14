@@ -692,3 +692,34 @@ test("the sections and their buttons run Funds & amounts, Stress tests, Trades, 
   expect(sections.filter((id) => id !== "section-funds")).toEqual(["section-stress", "section-trades", "section-settings"]);
 });
 
+test("the sidebar's amount column holds 1,000,000 and the sidebar leaves the chart its room", async ({ page }, testInfo) => {
+  test.skip(isPhone(testInfo.project.name), "no sidebar on a phone");
+  for (const [theme, width] of ["ks-dark", "light", "hud", "grid"].flatMap((t) => [1024, 1280, 1366, 1920].map((w) => [t, w] as const))) {
+    await page.setViewportSize({ width, height: 900 });
+    await open(page, `t=${theme}&f=VTI:1000000,BND:250000&unit=usd`);
+    if ((await page.getByTestId("funds-toggle").getAttribute("aria-expanded")) !== "true") await page.getByTestId("funds-toggle").click();
+    const input = page.getByTestId("fund-row-VTI").locator("input");
+    await expect(input).toHaveValue("1000000");
+    // the field shows the whole number: nothing scrolls inside it
+    const fits = () => input.evaluate((el) => (el as HTMLInputElement).scrollWidth <= (el as HTMLInputElement).clientWidth + 1);
+    expect(await fits(), `${theme} ${width}: 1000000 fits`).toBe(true);
+    if (width >= 1280) {
+      // typed with separators, while the field has focus
+      await input.fill("1,000,000");
+      expect(await fits(), `${theme} ${width}: 1,000,000 fits as typed`).toBe(true);
+      await input.blur();
+    }
+    const side = await boxOf(page, "section-funds");
+    expect(side.width, `${theme} ${width}: sidebar width`).toBeLessThanOrEqual(360);
+    // the amount head stays on one line (two in the tight 1024 px layout, as before); the narrow
+    // percentage heads keep their three lines at most
+    const lines = await page.locator(".side .row-head > span").evaluateAll((els) =>
+      els.map((el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return [el.getAttribute("data-testid") ?? el.className, new Set(Array.from(range.getClientRects()).map((r) => Math.round(r.top))).size] as const;
+      }),
+    );
+    for (const [head, n] of lines) expect(n, `${theme} ${width}: ${head} lines`).toBeLessThanOrEqual(head === "amount-head" ? (width >= 1280 ? 1 : 2) : 3);
+  }
+});
