@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseTensor } from "../src/api/client";
-import { drawHeatmap } from "../src/chart/Heatmap";
+import { drawHeatmap, RAMP_FLOOR, rampPosition } from "../src/chart/Heatmap";
 import { DESKTOP_MARGINS, makeScales, paddedExtent, PHONE_MARGINS } from "../src/chart/scales";
 import { portfolioMath } from "../src/math/portfolio";
 import { ceilingAt, deriveView, frontierMuAt, ladderCollapsedAt, positionOfCeiling } from "../src/math/view";
@@ -51,7 +51,16 @@ describe("heatmap drawing", () => {
   const scales = makeScales(1000, 500, { xMin: 0.02, xMax: 0.18, yMin: 0.01, yMax: 0.13 }, false);
   const feasible = TENSOR.grid.z.flat().filter((z) => z !== null).length;
 
-  it("paints one rectangle per feasible cell, centred on its column and row, coloured by Z / enb_ref", () => {
+  it("puts the least spread-out mix at the bright end of the ramp and stops the most spread-out one short of the dark end", () => {
+    expect(rampPosition(0)).toBe(1);
+    expect(rampPosition(1)).toBeCloseTo(RAMP_FLOOR, 12);
+    expect(rampPosition(0.5)).toBeCloseTo(0.6, 12);
+    expect(rampPosition(0.25)).toBeGreaterThan(rampPosition(0.75));
+    expect(rampPosition(-1)).toBe(1);
+    expect(rampPosition(7)).toBeCloseTo(RAMP_FLOOR, 12);
+  });
+
+  it("paints one rectangle per feasible cell, centred on its column and row, coloured by 1 - 0.8 * Z / enb_ref", () => {
     const { ctx, rects } = recorder();
     expect(drawHeatmap(ctx, TENSOR, [], scales, COLORS, 1)).toBe(feasible);
     expect(rects.length).toBe(feasible);
@@ -63,7 +72,7 @@ describe("heatmap drawing", () => {
     expect(hit.length).toBe(1);
     const q = (TENSOR.grid.z[j][k] as number) / TENSOR.enb_ref;
     const red = Number(/rgb\((\d+)/.exec(hit[0].style)?.[1]);
-    expect(Math.abs(red - 255 * q)).toBeLessThan(12);
+    expect(Math.abs(red - 255 * (1 - 0.8 * q))).toBeLessThan(12);
     // different Z, different colour
     expect(new Set(rects.map((r) => r.style)).size).toBeGreaterThan(10);
   });
