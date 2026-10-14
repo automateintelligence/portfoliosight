@@ -438,7 +438,6 @@ export default function App() {
               enbRef: tensor.enb_ref,
               mu: view.selected.mu,
               sigma: view.selected.sigma,
-              ceiling: view.ceiling,
               lookbackStart: tensor.lookback.start,
               lookbackEnd: tensor.lookback.end,
               rows: tensor.lookback.rows,

@@ -8,7 +8,6 @@ export type DetailFacts = {
   enbRef: number;
   mu: number;
   sigma: number;
-  ceiling: number;
   lookbackStart: string;
   lookbackEnd: string;
   rows: number;
@@ -98,7 +97,7 @@ export function ResultStrip({ low, typical, high, normal, scale, word, details, 
           <dl>
             <dt>Yearly figures for this mix</dt>
             <dd className="num">
-              expected return {pct(facts.mu, 2)} · standard deviation {pct(facts.sigma, 2)} · risk ceiling {pct(facts.ceiling, 2)}
+              expected return {pct(facts.mu, 2)} · standard deviation {pct(facts.sigma, 2)}
             </dd>
           </dl>
           <dl>

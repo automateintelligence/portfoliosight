@@ -106,7 +106,7 @@ export const technical = {
   caps: "Editable default: max = max(0.25, 3/N)",
   cutPoints:
     "The word tells you how evenly this mix's risk is shared out. We look at how many truly different kinds of investment are carrying the risk, and compare that with the most spread-out mix these funds can make. Good: at least three-quarters as spread out as that best mix. Average: at least half. Fair: at least 30%. Poor: less than that, so one or two holdings carry most of the risk.",
-  cellPlace: (ceiling: string, floor: string) => `At risk ${ceiling}, earning at least ${floor}`,
+  cellPlace: (risk: string, floor: string) => `At risk ${risk}, earning at least ${floor}`,
 } as const;
 
 export const disclaimer =

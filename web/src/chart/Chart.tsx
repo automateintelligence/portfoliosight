@@ -219,7 +219,7 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
         divLabel={spoken(plain.optimized, view.optRange, divMix.word)}
         currentLabel={current && curMix ? spoken(plain.currentMix, current.range, curMix.word) : ""}
         cards={{
-          selected: card("selected", plain.selectedMix, selMix, ` Risk ceiling ${pct(view.ceiling)}.`),
+          selected: card("selected", plain.selectedMix, selMix),
           div: card("div", plain.optimized, divMix),
           current: curMix ? card("current", plain.currentMix, curMix, current?.range ? undefined : ` ${technical.rangePending}`) : null,
         }}
