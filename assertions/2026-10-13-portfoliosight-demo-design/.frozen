@@ -259,9 +259,9 @@
       }
     },
     "A-PS-44": {
-      "entry": "cd8db70955eba734fe516f3438594cf725c0c869c6012575e021e18426eb0ada",
+      "entry": "911704ec4323d62ec5101878cd04d1bb83270ef733757a30968df07873e68a9f",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_44_heatmap_theme_ramp.py": "f10b4527ce8becff9f5bd2279452d40caf222f7d3137e873b2041fda25c8715e"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_44_heatmap_theme_ramp.py": "62f038b194f0b2d422e9d1e25b9b614c9e0ebdb7edd249da01e150d8d64ee660"
       }
     },
     "A-PS-45": {
@@ -410,7 +410,7 @@
     }
   },
   "sources": {
-    "docs/specs/2026-10-13-portfoliosight-demo-design.assertions.md": "884551015156d709fc5c9276187016a164d8c67051b0ec5ce870b100306f1072"
+    "docs/specs/2026-10-13-portfoliosight-demo-design.assertions.md": "c5bfe06d80f562c59183af435673612c6ceeddf90768a9b2a74169fa32fee247"
   },
   "sources_via": "gate",
   "version": 1

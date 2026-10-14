@@ -77,6 +77,9 @@
   --page-wash: radial-gradient(90% 60% at 50% -10%, rgba(199,99,70,.07), transparent 70%);
   --canvas-filter: none;
   --cell-gap: 0;
+  /* Ramp direction: turned = the band along the frontier takes --heat-4; the legend bar agrees. */
+  --heat-ramp: turned;
+  --heat-legend: linear-gradient(90deg, var(--heat-4), var(--heat-3), var(--heat-2), var(--heat-1));
   --track: #2F2F34;
   --track-fill: var(--accent);
   --thumb: var(--text);
@@ -139,6 +142,10 @@
   --page-wash: none;
   --canvas-filter: none;
   --cell-gap: 0;
+  /* Ramp direction: rising = the band along the frontier is the palest, the most spread-out mixes
+   * the deepest blue; the legend bar agrees. */
+  --heat-ramp: rising;
+  --heat-legend: linear-gradient(90deg, var(--heat-1), var(--heat-2), var(--heat-3), var(--heat-4));
   --track: #C8C8C8;
   --track-fill: var(--accent);
   --thumb: #FFFFFF;
@@ -201,6 +208,9 @@
   --page-wash: radial-gradient(70% 55% at 86% -6%, rgba(232,64,28,.24), transparent 68%), radial-gradient(60% 50% at 4% 104%, rgba(245,170,60,.12), transparent 70%);
   --canvas-filter: drop-shadow(0 0 7px rgba(255,150,60,.38));
   --cell-gap: 0;
+  /* Ramp direction: turned = the band along the frontier takes --heat-4; the legend bar agrees. */
+  --heat-ramp: turned;
+  --heat-legend: linear-gradient(90deg, var(--heat-4), var(--heat-3), var(--heat-2), var(--heat-1));
   --track: #3A2019;
   --track-fill: var(--accent);
   --thumb: #080506;
@@ -267,6 +277,9 @@
   --page-wash: radial-gradient(80% 50% at 50% 0%, rgba(53,201,232,.07), transparent 70%);
   --canvas-filter: drop-shadow(0 0 6px rgba(53,201,232,.35));
   --cell-gap: 1;
+  /* Ramp direction: turned = the band along the frontier takes --heat-4; the legend bar agrees. */
+  --heat-ramp: turned;
+  --heat-legend: linear-gradient(90deg, var(--heat-4), var(--heat-3), var(--heat-2), var(--heat-1));
   --track: #163041;
   --track-fill: var(--accent);
   --thumb: var(--bg);

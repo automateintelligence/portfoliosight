@@ -500,6 +500,30 @@ test("four looks: the switcher reaches each, and a shared link opens the HUD or 
   expect(await look(), "Grid: the cyan look with its grid").toEqual({ accent: "#35c9e8", gap: "1", gridLines: true, ring: "reticle" });
 });
 
+test("the legend bar reads the way the map does: Light pale at Less, the other looks bright at Less", async ({ page }) => {
+  for (const [theme, lessEnd, moreEnd] of [["ks-dark", "--heat-4", "--heat-1"], ["light", "--heat-1", "--heat-4"], ["hud", "--heat-4", "--heat-1"], ["grid", "--heat-4", "--heat-1"]]) {
+    await open(page, `t=${theme}`);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    const got = await page.evaluate(([less, more]) => {
+      const probe = document.createElement("span");
+      document.body.appendChild(probe);
+      const rgb = (name: string) => {
+        probe.style.color = `var(${name})`;
+        return getComputedStyle(probe).color;
+      };
+      const want = { less: rgb(less), more: rgb(more), ramp: getComputedStyle(document.documentElement).getPropertyValue("--heat-ramp").trim() };
+      probe.remove();
+      const stops = getComputedStyle(document.querySelector(".ramp-bar")!).backgroundImage.match(/rgba?\([^)]*\)/g) ?? [];
+      const labels = [...document.querySelectorAll(".ramp > span:not(.ramp-bar)")].map((s) => s.textContent);
+      return { want, first: stops[0], last: stops[stops.length - 1], labels };
+    }, [lessEnd, moreEnd]);
+    expect(got.labels, `${theme}: Less on the left, More on the right`).toEqual(["Less", "More"]);
+    expect(got.first, `${theme}: the bar starts at ${lessEnd} under Less`).toBe(got.want.less);
+    expect(got.last, `${theme}: the bar ends at ${moreEnd} under More`).toBe(got.want.more);
+    expect(got.want.ramp, `${theme}: the map reads its ramp the same way`).toBe(theme === "light" ? "rising" : "turned");
+  }
+});
+
 test("stress cards name the selected mix and set the entered mix in bold", async ({ page }) => {
   await open(page);
   await section(page, "stress");

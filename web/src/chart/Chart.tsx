@@ -100,7 +100,7 @@ function Legend({ scales, phone, details, hasCurrent, hasGhosts, hasNoLimits }: 
       {details && <p className="legend-tech">{technical.heatLegend}</p>}
       <div className="ramp" aria-hidden="true">
         <span>{plain.heatLess}</span>
-        <span className="ramp-bar" style={{ background: "linear-gradient(90deg, var(--heat-4), var(--heat-3), var(--heat-2), var(--heat-1))" }} />
+        <span className="ramp-bar" style={{ background: "var(--heat-legend)" }} />
         <span>{plain.heatMore}</span>
       </div>
       {!phone && <MarkKeys hasCurrent={hasCurrent} hasGhosts={hasGhosts} hasNoLimits={hasNoLimits} />}

@@ -8,8 +8,15 @@ export type Ghost = { id: string; curve: Curve };
 /** The id of the reference line drawn like a ghost: the same menu with every fund allowed 0% to 100%. */
 export const NO_LIMITS = "nolimits";
 
+/**
+ * Which way a theme reads its ramp. `turned`: the least spread-out mixes, along the frontier, take
+ * the --heat-4 end. `rising`: the ramp follows the measure, so they take the --heat-0 end.
+ */
+export type RampDirection = "turned" | "rising";
+
 export type HeatColors = {
   heat: string[];
+  direction: RampDirection;
   frontier: string;
   backdrop: string;
   /** Gap between cells in CSS px (0 = seamless). */
@@ -22,6 +29,7 @@ export function readHeatColors(el: Element): HeatColors {
   const get = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback;
   return {
     heat: [0, 1, 2, 3, 4].map((i) => get(`--heat-${i}`, "#000000")),
+    direction: get("--heat-ramp", "turned") === "rising" ? "rising" : "turned",
     frontier: get("--frontier", "#ffffff"),
     backdrop: get("--chart-bg", get("--bg", "#000000")),
     gap: Number(get("--cell-gap", "0")) || 0,
@@ -43,19 +51,23 @@ function traceCurve(ctx: Ctx, curve: Curve, scales: ChartScales, dpr: number): v
   }
 }
 
-/** How far up the ramp the most spread-out mix sits, so the darkest cells still stand off the page. */
+/** How far up a turned ramp the most spread-out mix sits, so the darkest cells still stand off the page. */
 export const RAMP_FLOOR = 0.2;
 
 /**
- * Position on the theme's ramp for a mix whose diversification is `q` = Z / enb_ref. The ramp
- * runs the other way from the measure: the least spread-out mixes, which lie along the frontier,
- * take the bright end, so the frontier reads as a lit wall and the well-spread valleys below it
- * are darker.
+ * Position on the theme's ramp for a mix whose diversification is `q` = Z / enb_ref.
+ * `turned` (ks-dark, HUD, Grid): the ramp runs the other way from the measure, so the least
+ * spread-out mixes, which lie along the frontier, take the bright --heat-4 end and the frontier
+ * reads as a lit wall over darker, well-spread valleys. `rising` (Light): the ramp follows the
+ * measure, so the band along the frontier is the palest and the most spread-out mixes the deepest.
  */
-export const rampPosition = (q: number): number => 1 - (1 - RAMP_FLOOR) * Math.max(0, Math.min(1, q));
+export const rampPosition = (q: number, direction: RampDirection = "turned"): number => {
+  const clamped = Math.max(0, Math.min(1, q));
+  return direction === "rising" ? clamped : 1 - (1 - RAMP_FLOOR) * clamped;
+};
 
 /**
- * Draws, in order: one filled rectangle per feasible cell (colour = ramp(rampPosition(Z / enb_ref)), spec 8),
+ * Draws, in order: one filled rectangle per feasible cell (colour = ramp(rampPosition(Z / enb_ref, direction)), spec 8),
  * clipped to the area under the frontier so nothing is painted above it; ghost frontiers at 40%
  * opacity; the primary frontier at 2 px. Works in device pixels for crisp cell edges.
  */
@@ -97,7 +109,7 @@ export function drawHeatmap(ctx: Ctx, tensor: Tensor, ghosts: Ghost[], scales: C
       for (let k = 0; k < NY; k++) if (column[k] !== null && column[k] !== undefined) kTop = k;
       const from = kTop >= 0 ? Math.round((scales.y(grid.y[kTop]) - cellH / 2) * dpr) : Math.round(floorY);
       const upTo = Math.round((scales.y(frontier.y[j]) - cellH) * dpr);
-      ctx.fillStyle = ramp(rampPosition(zTop / tensor.enb_ref));
+      ctx.fillStyle = ramp(rampPosition(zTop / tensor.enb_ref, colors.direction));
       if (from > upTo) ctx.fillRect(left, upTo, Math.max(1, right - left - gapPx), from - upTo - gapPx);
     }
     for (let k = 0; k < NY; k++) {
@@ -106,7 +118,7 @@ export function drawHeatmap(ctx: Ctx, tensor: Tensor, ghosts: Ghost[], scales: C
       const cy = scales.y(grid.y[k]);
       const top = Math.round((cy - cellH / 2) * dpr);
       const bottom = Math.round((cy + cellH / 2) * dpr);
-      ctx.fillStyle = ramp(rampPosition(z / tensor.enb_ref));
+      ctx.fillStyle = ramp(rampPosition(z / tensor.enb_ref, colors.direction));
       ctx.fillRect(left, top, Math.max(1, right - left - gapPx), Math.max(1, bottom - top - gapPx));
       cells += 1;
     }
@@ -128,8 +140,8 @@ export function drawHeatmap(ctx: Ctx, tensor: Tensor, ghosts: Ghost[], scales: C
     ctx.restore();
   }
 
-  // Primary frontier: a backdrop-coloured edge, so the line holds against the bright band of the
-  // map just under it, then the 2 px line.
+  // Primary frontier: a backdrop-coloured edge, so the line holds against the band of the map just
+  // under it, then the 2 px line.
   ctx.save();
   ctx.setLineDash([]);
   ctx.globalAlpha = 0.85;

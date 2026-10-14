@@ -2,14 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseTensor } from "../src/api/client";
-import { drawHeatmap, RAMP_FLOOR, rampPosition } from "../src/chart/Heatmap";
+import { drawHeatmap, type HeatColors, RAMP_FLOOR, rampPosition } from "../src/chart/Heatmap";
 import { clipCurve, DESKTOP_MARGINS, makeScales, paddedExtent, PHONE_MARGINS } from "../src/chart/scales";
 import { portfolioMath } from "../src/math/portfolio";
 import { atNode, ceilingAt, deriveView, frontierMuAt, ladderCollapsedAt, limitsBind, positionOfCeiling } from "../src/math/view";
 
 const TENSOR = parseTensor(JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "fixtures/guide2017_5y.json"), "utf8")));
 const math = portfolioMath(TENSOR);
-const COLORS = { heat: ["#000000", "#400000", "#800000", "#c00000", "#ff0000"], frontier: "#ffffff", backdrop: "#101010", gap: 0 };
+const COLORS: HeatColors = { heat: ["#000000", "#400000", "#800000", "#c00000", "#ff0000"], direction: "turned", frontier: "#ffffff", backdrop: "#101010", gap: 0 };
 
 function recorder() {
   const rects: { style: string; x: number; y: number; w: number; h: number }[] = [];
@@ -51,13 +51,23 @@ describe("heatmap drawing", () => {
   const scales = makeScales(1000, 500, { xMin: 0.02, xMax: 0.18, yMin: 0.01, yMax: 0.13 }, false);
   const feasible = TENSOR.grid.z.flat().filter((z) => z !== null).length;
 
-  it("puts the least spread-out mix at the bright end of the ramp and stops the most spread-out one short of the dark end", () => {
+  it("turned (ks-dark, HUD, Grid): puts the least spread-out mix at the bright end of the ramp and stops the most spread-out one short of the dark end", () => {
+    expect(rampPosition(0, "turned")).toBe(1);
     expect(rampPosition(0)).toBe(1);
     expect(rampPosition(1)).toBeCloseTo(RAMP_FLOOR, 12);
     expect(rampPosition(0.5)).toBeCloseTo(0.6, 12);
     expect(rampPosition(0.25)).toBeGreaterThan(rampPosition(0.75));
     expect(rampPosition(-1)).toBe(1);
     expect(rampPosition(7)).toBeCloseTo(RAMP_FLOOR, 12);
+  });
+
+  it("rising (Light): follows the measure, the least spread-out mix at the pale --heat-0 end and the most spread-out at --heat-4", () => {
+    expect(rampPosition(0, "rising")).toBe(0);
+    expect(rampPosition(1, "rising")).toBe(1);
+    expect(rampPosition(0.5, "rising")).toBeCloseTo(0.5, 12);
+    expect(rampPosition(0.25, "rising")).toBeLessThan(rampPosition(0.75, "rising"));
+    expect(rampPosition(-1, "rising")).toBe(0);
+    expect(rampPosition(7, "rising")).toBe(1);
   });
 
   it("paints one rectangle per feasible cell, centred on its column and row, coloured by 1 - 0.8 * Z / enb_ref", () => {
@@ -77,6 +87,20 @@ describe("heatmap drawing", () => {
     expect(Math.abs(red - 255 * (1 - 0.8 * q))).toBeLessThan(12);
     // different Z, different colour
     expect(new Set(rects.map((r) => r.style)).size).toBeGreaterThan(10);
+  });
+
+  it("with a rising ramp colours the same cell at Z / enb_ref", () => {
+    const { ctx, rects } = recorder();
+    expect(drawHeatmap(ctx, TENSOR, [], scales, { ...COLORS, direction: "rising" }, 1)).toBe(feasible);
+    const j = 20;
+    const k = TENSOR.grid.k_div[j];
+    const cx = scales.x(TENSOR.frontier.x[j]);
+    const cy = scales.y(TENSOR.grid.y[k]);
+    const hit = rects.filter((r) => r.x <= cx && cx <= r.x + r.w && r.y <= cy && cy <= r.y + r.h);
+    expect(hit.length).toBe(1);
+    const q = (TENSOR.grid.z[j][k] as number) / TENSOR.enb_ref;
+    const red = Number(/rgb\((\d+)/.exec(hit[0].style)?.[1]);
+    expect(Math.abs(red - 255 * q)).toBeLessThan(12);
   });
 
   it("draws ghosts thin at 40% and the frontier last at 2 px in the frontier colour", () => {
