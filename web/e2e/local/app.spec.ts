@@ -683,3 +683,12 @@ test("the family links open in a new tab and say so", async ({ page }) => {
     await expect(link).toHaveAccessibleName(/\(opens in a new tab\)$/);
   }
 });
+
+test("the sections and their buttons run Funds & amounts, Stress tests, Trades, Settings", async ({ page }) => {
+  await open(page);
+  const chips = await page.locator(".chips .chip").evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
+  expect(chips).toEqual(["chip-funds", "chip-stress", "chip-trades", "chip-settings"]);
+  const sections = await page.locator('[data-testid^="section-"]').evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
+  expect(sections.filter((id) => id !== "section-funds")).toEqual(["section-stress", "section-trades", "section-settings"]);
+});
+

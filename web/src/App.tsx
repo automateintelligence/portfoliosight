@@ -254,7 +254,8 @@ export default function App() {
   const needSymbols = useCallback(() => dispatch({ type: "loadSymbols" }), [dispatch]);
 
   const hasMix = Boolean(mix?.weights);
-  const sections: SectionId[] = hasMix ? ["funds", "trades", "stress", "settings"] : ["funds", "stress", "settings"];
+  // Stress tests come before Trades, so the cards sit near the chart on a smaller screen.
+  const sections: SectionId[] = hasMix ? ["funds", "stress", "trades", "settings"] : ["funds", "stress", "settings"];
   const presets = state.presets?.presets ?? [];
   const busy = state.build.status === "building";
   const includedAmounts = useMemo(() => {
@@ -495,14 +496,14 @@ export default function App() {
             {fundsTable}
           </Accordion>
         )}
+        <Accordion id="stress" title={plain.chips.stress} open={open.stress} onToggle={() => setOpen((p) => ({ ...p, stress: !p.stress }))}>
+          {tensor && view ? <Stress tensor={tensor} wSel={view.weights} wNow={mix?.weights ?? null} details={state.details} /> : null}
+        </Accordion>
         {hasMix && tensor && view && mix?.weights && (
           <Accordion id="trades" title={plain.chips.trades} open={open.trades} onToggle={() => setOpen((p) => ({ ...p, trades: !p.trades }))}>
             <Trades funds={tensor.universe.funds} wNow={mix.weights} wSel={view.weights} unit={state.unit} amounts={includedAmounts} asof={tensor.asof} />
           </Accordion>
         )}
-        <Accordion id="stress" title={plain.chips.stress} open={open.stress} onToggle={() => setOpen((p) => ({ ...p, stress: !p.stress }))}>
-          {tensor && view ? <Stress tensor={tensor} wSel={view.weights} wNow={mix?.weights ?? null} details={state.details} /> : null}
-        </Accordion>
         <Accordion id="settings" title={plain.chips.settings} open={open.settings} onToggle={() => setOpen((p) => ({ ...p, settings: !p.settings }))}>
           {tensor ? (
             <Settings
