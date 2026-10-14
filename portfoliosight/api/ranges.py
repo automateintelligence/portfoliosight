@@ -61,11 +61,16 @@ class RangeModels:
 def range_body(models: RangeModels, key: Key, weights: Sequence[float]) -> dict:
     """The body of ``POST /v1/range`` for ``weights`` on the tensor ``key``.
 
-    Refusals: 404 ``unknown_tensor`` when no tensor is stored under the key, 409
-    ``range_unavailable`` when its sample cannot be rebuilt or the mix cannot be compounded,
-    422 ``invalid_request`` when the weights are not one per fund of the menu or do not add up
-    to 1.
+    Refusals: 422 ``invalid_request`` when the weights do not add up to 1 (checked before the
+    store is read) or are not one per fund of the menu, 404 ``unknown_tensor`` when no tensor is
+    stored under the key, 409 ``range_unavailable`` when its sample cannot be rebuilt or the mix
+    cannot be compounded.
     """
+    mix = np.asarray(weights, dtype=float)
+    if abs(float(mix.sum()) - 1.0) > WEIGHT_SUM_TOL:
+        raise invalid_request(
+            f"the weights add up to {float(mix.sum()):.6g}; they must add up to 1"
+        )
     try:
         model = models.get(*key)
     except KeyError:
@@ -75,11 +80,6 @@ def range_body(models: RangeModels, key: Key, weights: Sequence[float]) -> dict:
     funds = len(model.mu_s)
     if len(weights) != funds:
         raise invalid_request(f"this menu has {funds} funds; {len(weights)} weights were sent")
-    mix = np.asarray(weights, dtype=float)
-    if abs(float(mix.sum()) - 1.0) > WEIGHT_SUM_TOL:
-        raise invalid_request(
-            f"the weights add up to {float(mix.sum()):.6g}; they must add up to 1"
-        )
     try:
         ranges = one_year_ranges(model, mix)
     except ValueError as exc:

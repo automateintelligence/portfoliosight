@@ -68,8 +68,8 @@ def parse_range_request(body: bytes) -> RangeRequest:
     """The validated request, or a 422 ``invalid_request`` saying what is wrong.
 
     Checks the shape only: a generation and a hash of the right form, a known lookback, and 2
-    to 30 weights, each a number in ``[0, 1]``. Whether there is one per fund of the menu, and
-    whether they add up to 1, is checked against the tensor (``ranges.range_body``).
+    to 30 weights, each a number in ``[0, 1]``. Whether they add up to 1, and whether there is
+    one per fund of the menu, is checked by ``ranges.range_body``.
     """
     try:
         return RangeRequest.model_validate_json(body)
