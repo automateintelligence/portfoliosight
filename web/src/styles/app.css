@@ -117,8 +117,8 @@ button {
   white-space: nowrap;
 }
 
-/* HUD: the wordmark is set in tracked capitals. */
-[data-theme="hud"] .wordmark {
+/* Grid: the wordmark is set in tracked capitals. */
+[data-theme="grid"] .wordmark {
   text-transform: uppercase;
 }
 
@@ -213,8 +213,8 @@ button {
   text-underline-offset: 3px;
 }
 
-/* HUD: buttons are small tracked capitals that glow on hover. */
-[data-theme="hud"] .btn {
+/* Grid: buttons are small tracked capitals that glow on hover. */
+[data-theme="grid"] .btn {
   box-shadow: inset 0 0 0 0 transparent;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -222,11 +222,11 @@ button {
   font-weight: 600;
 }
 
-[data-theme="hud"] .btn:hover:not(:disabled) {
+[data-theme="grid"] .btn:hover:not(:disabled) {
   box-shadow: var(--shadow);
 }
 
-[data-theme="hud"] .btn-link {
+[data-theme="grid"] .btn-link {
   text-transform: none;
   letter-spacing: 0;
 }
@@ -329,8 +329,8 @@ button {
   color: var(--on-accent);
 }
 
-/* HUD: segmented controls use tracked capitals. */
-[data-theme="hud"] .seg-btn {
+/* Grid: segmented controls use tracked capitals. */
+[data-theme="grid"] .seg-btn {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 10.5px;
@@ -340,6 +340,101 @@ button {
 .stage {
   padding-top: 14px;
   padding-bottom: 8px;
+}
+
+.stage-main {
+  min-width: 0;
+}
+
+/* From 1024 px: Funds & amounts is a sidebar on the right of the chart, closed to a slim tab. */
+.stage.has-side {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--hero-gap);
+  align-items: stretch;
+}
+
+.app:has(.stage.side-open) {
+  --maxw: 1760px;
+}
+
+.side {
+  position: relative;
+  width: 44px;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.side-open .side {
+  width: clamp(348px, 31vw, 440px);
+}
+
+.side-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  padding: 14px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
+}
+
+.side-tab svg {
+  flex: 0 0 auto;
+  color: var(--accent-light);
+}
+
+/* Closed, the tab carries an accent edge so it reads as something to open. */
+.side:not([aria-expanded="true"]) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 14%, var(--surface)), var(--surface) 46%);
+}
+
+.side-tab .heading {
+  writing-mode: vertical-rl;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+.side-tab:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.side-tab:focus-visible {
+  outline-offset: -3px;
+}
+
+.side-open .side-tab {
+  flex-direction: row-reverse;
+  justify-content: space-between;
+  height: 46px;
+  padding: 0 14px 0 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 15px;
+}
+
+.side-open .side-tab .heading {
+  writing-mode: horizontal-tb;
+  letter-spacing: var(--heading-tracking);
+}
+
+.side-body {
+  position: absolute;
+  inset: 47px 0 0 0;
+  overflow-y: auto;
+  padding: 12px 14px 18px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
 
 .hero {
@@ -362,8 +457,8 @@ button {
   isolation: isolate;
 }
 
-/* HUD: corner brackets on the frame and a faint 24 px grid behind the heatmap. */
-[data-theme="hud"] .chart::before {
+/* Grid: corner brackets on the frame and a faint 24 px grid behind the heatmap. */
+[data-theme="grid"] .chart::before {
   content: "";
   position: absolute;
   inset: -1px;
@@ -382,7 +477,7 @@ button {
   filter: drop-shadow(0 0 4px rgba(53, 201, 232, 0.8));
 }
 
-[data-theme="hud"] .chart::after {
+[data-theme="grid"] .chart::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -395,8 +490,8 @@ button {
   background-size: 24px 24px;
 }
 
-/* HUD: square frame, so the brackets sit on true corners. */
-[data-theme="hud"] .chart {
+/* Grid: square frame, so the brackets sit on true corners. */
+[data-theme="grid"] .chart {
   border-radius: 2px;
 }
 
@@ -448,9 +543,9 @@ button {
   shape-rendering: crispEdges;
 }
 
-/* HUD: axis lines in the accent colour. */
-[data-theme="hud"] .overlay .tick line,
-[data-theme="hud"] .overlay .domain {
+/* Grid: axis lines in the accent colour. */
+[data-theme="grid"] .overlay .tick line,
+[data-theme="grid"] .overlay .domain {
   stroke: var(--accent-dark);
   opacity: 0.7;
 }
@@ -528,13 +623,99 @@ button {
   stroke-width: 3.5;
 }
 
-.pt-selected .reticle {
+.pt-selected .reticle,
+.pt-selected .reticle-outer {
   display: none;
   fill: none;
 }
 
-/* HUD: a slowly turning reticle around the selected point. */
-[data-theme="hud"] .pt-selected .reticle {
+/* The other two markers answer to hover, tap and keyboard focus with their card. */
+.mark {
+  cursor: pointer;
+  outline: none;
+}
+
+.mark .hit {
+  fill: transparent;
+}
+
+.mark:hover .pt-div,
+.mark:hover .pt-current,
+.mark:focus-visible .pt-div,
+.mark:focus-visible .pt-current {
+  stroke-width: 3.25;
+}
+
+.mark:focus-visible .hit {
+  stroke: var(--focus);
+  stroke-width: 2;
+}
+
+/* The name of each frontier line's history window, at the line's right end. */
+.line-label text {
+  fill: var(--text-2);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  paint-order: stroke;
+  stroke: var(--chart-bg);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  opacity: 0.78;
+  pointer-events: none;
+}
+
+.line-label.is-primary text {
+  fill: var(--frontier);
+  font-weight: 600;
+  opacity: 1;
+}
+
+.line-label.is-hot text {
+  fill: var(--frontier);
+  opacity: 1;
+}
+
+.line-label .leader {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+
+.ghost-hot {
+  fill: none;
+  stroke: var(--frontier);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.ghosttip {
+  position: absolute;
+  z-index: 5;
+  display: grid;
+  gap: 1px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--elevated);
+  box-shadow: var(--shadow);
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.35;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.ghosttip b {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* Grid: a slowly turning reticle around the selected point. */
+[data-theme="grid"] .pt-selected .reticle {
   display: block;
   stroke: var(--accent);
   stroke-width: 1.2;
@@ -551,7 +732,7 @@ button {
   }
 }
 
-[data-theme="hud"] .pt-selected .dot {
+[data-theme="grid"] .pt-selected .dot {
   stroke-width: 2;
   filter: drop-shadow(0 0 6px rgba(255, 179, 71, 0.9));
 }
@@ -609,8 +790,8 @@ button {
   font-size: 10.5px;
 }
 
-/* HUD: chart labels are tracked capitals. */
-[data-theme="hud"] .chart-label {
+/* Grid: chart labels are tracked capitals. */
+[data-theme="grid"] .chart-label {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 10px;
@@ -618,7 +799,7 @@ button {
   color: var(--accent-light);
 }
 
-[data-theme="hud"] .chart-label .tech {
+[data-theme="grid"] .chart-label .tech {
   text-transform: none;
   letter-spacing: 0;
 }
@@ -659,7 +840,7 @@ button {
   letter-spacing: -0.005em;
 }
 
-[data-theme="hud"] .legend-title {
+[data-theme="grid"] .legend-title {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 10.5px;
@@ -688,7 +869,7 @@ button {
   border: 1px solid var(--border);
 }
 
-[data-theme="hud"] .ramp-bar {
+[data-theme="grid"] .ramp-bar {
   border-radius: 0;
   box-shadow: var(--shadow);
 }
@@ -716,10 +897,11 @@ button {
   overflow: visible;
 }
 
-.tooltip {
+.tooltip,
+.celltip {
   position: absolute;
   z-index: 6;
-  width: 232px;
+  width: 248px;
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
@@ -730,27 +912,112 @@ button {
   pointer-events: none;
 }
 
-.tooltip h3 {
-  margin: 0 0 6px;
+.celltip {
+  z-index: 5;
+  width: 232px;
+  padding: 10px 12px;
+}
+
+/* One card for every mix the chart names (the three markers and the spot under the pointer). */
+.mixcard h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 8px;
   font-size: 11px;
-  color: var(--muted);
+  color: var(--text-2);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
 
-.tooltip .tip-range {
-  display: flex;
-  justify-content: space-between;
+.mixcard .mk {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--mark-div);
+}
+
+.mixcard .mk-selected {
+  background: var(--mark-selected-fill);
+  border-color: var(--mark-selected-ring);
+  border-width: 1.5px;
+}
+
+.mixcard .mk-current {
+  border-radius: 2px;
+  border-color: var(--mark-current);
+}
+
+.mixcard .mk-cell {
+  border: 0;
+  border-radius: 2px;
+  background: linear-gradient(135deg, var(--heat-2), var(--heat-3));
+}
+
+.mixcard .tip-range {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
   color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
 }
 
-.tooltip .tip-line {
-  margin: 6px 0 0;
+.mixcard .tip-range small,
+.mixcard dt {
+  display: block;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
 }
 
-.tooltip ul {
+.mixcard .tip-sub {
+  margin: 1px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.mixcard .tip-facts {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--border);
+}
+
+.mixcard h3 + .tip-facts {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.mixcard dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.mixcard .tip-tech {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.tooltip .tip-more {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.mixcard ul {
   margin: 8px 0 0;
   padding: 8px 0 0;
   list-style: none;
@@ -759,7 +1026,7 @@ button {
   gap: 3px;
 }
 
-.tooltip li {
+.mixcard li {
   display: grid;
   grid-template-columns: 54px 1fr auto;
   align-items: center;
@@ -767,28 +1034,11 @@ button {
   color: var(--text);
 }
 
-.tooltip .wbar {
+.mixcard .wbar {
   height: 4px;
   border-radius: 2px;
   background: var(--accent);
   opacity: 0.75;
-}
-
-.celltip {
-  position: absolute;
-  z-index: 5;
-  display: grid;
-  gap: 1px;
-  width: 236px;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--elevated);
-  box-shadow: var(--shadow);
-  color: var(--text-2);
-  font-size: 10.5px;
-  line-height: 1.35;
-  pointer-events: none;
 }
 
 /* Building notice */
@@ -873,9 +1123,10 @@ button {
   min-width: 0;
 }
 
-[data-theme="hud"] .divs,
-[data-theme="hud"] .strip,
-[data-theme="hud"] .acc {
+[data-theme="grid"] .divs,
+[data-theme="grid"] .strip,
+[data-theme="grid"] .side,
+[data-theme="grid"] .acc {
   border-radius: 2px;
   background: color-mix(in srgb, var(--surface) 70%, transparent);
 }
@@ -888,7 +1139,7 @@ button {
   line-height: 1.2;
 }
 
-[data-theme="hud"] .divs-end {
+[data-theme="grid"] .divs-end {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 10px;
@@ -924,8 +1175,8 @@ button {
   opacity: 0.85;
 }
 
-[data-theme="hud"] .v-track,
-[data-theme="hud"] .h-track {
+[data-theme="grid"] .v-track,
+[data-theme="grid"] .h-track {
   border-radius: 0;
   box-shadow: var(--shadow);
 }
@@ -982,19 +1233,19 @@ button {
   outline-offset: 3px;
 }
 
-/* HUD: slider thumbs are diamonds. */
-[data-theme="hud"] .v-thumb,
-[data-theme="hud"] .h-thumb,
-[data-theme="hud"] .r-thumb {
+/* Grid: slider thumbs are diamonds. */
+[data-theme="grid"] .v-thumb,
+[data-theme="grid"] .h-thumb,
+[data-theme="grid"] .r-thumb {
   border-radius: 2px;
   transform: rotate(45deg);
   border-width: 2px;
   box-shadow: var(--shadow);
 }
 
-[data-theme="hud"] .vslider:hover .v-thumb,
-[data-theme="hud"] .hslider:hover .h-thumb,
-[data-theme="hud"] .rslider:hover .r-thumb {
+[data-theme="grid"] .vslider:hover .v-thumb,
+[data-theme="grid"] .hslider:hover .h-thumb,
+[data-theme="grid"] .rslider:hover .r-thumb {
   transform: rotate(45deg) scale(1.1);
 }
 
@@ -1116,13 +1367,13 @@ button {
   background: var(--track-fill);
 }
 
-[data-theme="hud"] .r-domain,
-[data-theme="hud"] .r-fill,
-[data-theme="hud"] .r-rail {
+[data-theme="grid"] .r-domain,
+[data-theme="grid"] .r-fill,
+[data-theme="grid"] .r-rail {
   border-radius: 0;
 }
 
-[data-theme="hud"] .r-fill {
+[data-theme="grid"] .r-fill {
   box-shadow: var(--shadow);
 }
 
@@ -1160,7 +1411,7 @@ button {
   color: var(--muted);
 }
 
-[data-theme="hud"] .readout-cap {
+[data-theme="grid"] .readout-cap {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 9.5px;
@@ -1207,7 +1458,7 @@ button {
   box-shadow: var(--shadow);
 }
 
-[data-theme="hud"] .strip {
+[data-theme="grid"] .strip {
   box-shadow: none;
 }
 
@@ -1242,9 +1493,9 @@ button {
   color: var(--muted);
 }
 
-[data-theme="hud"] .fig-cap,
-[data-theme="hud"] .strip-label .sub,
-[data-theme="hud"] .divword-cap {
+[data-theme="grid"] .fig-cap,
+[data-theme="grid"] .strip-label .sub,
+[data-theme="grid"] .divword-cap {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 9.5px;
@@ -1381,6 +1632,12 @@ button {
   margin: 0;
 }
 
+.details-panel dl.wide dd {
+  max-width: 96ch;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
 .below {
   display: flex;
   align-items: center;
@@ -1423,8 +1680,8 @@ button {
   background: var(--surface);
 }
 
-/* HUD: chips are square tabs in tracked capitals. */
-[data-theme="hud"] .chip {
+/* Grid: chips are square tabs in tracked capitals. */
+[data-theme="grid"] .chip {
   border-radius: 2px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -1478,6 +1735,10 @@ button {
 
 .acc-body {
   padding: 4px 18px 18px;
+}
+
+.toolbar .acc-lead {
+  margin: 0;
 }
 
 .acc-lead {
@@ -1543,11 +1804,112 @@ button {
 
 .row {
   display: grid;
-  grid-template-columns: 78px minmax(0, 1fr) 150px 36px;
+  grid-template-columns: 70px minmax(0, 1fr) 124px 78px 78px 36px;
   align-items: center;
   gap: 4px 12px;
   padding: 7px 0;
   border-bottom: 1px solid var(--border);
+}
+
+.row .pc {
+  text-align: right;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.row .pc-sel {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.row-head .pc-sel {
+  font-weight: 400;
+}
+
+.row-head .tk,
+.row-head .nm,
+.row-head .amt,
+.row-head .pc {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--muted);
+  font-weight: 500;
+  align-self: end;
+}
+
+.row-head .amt,
+.row-head .pc {
+  text-align: right;
+}
+
+/* In the sidebar the fund's name drops under its row, so five columns fit beside the chart. */
+.side .row {
+  grid-template-columns: 54px minmax(60px, 1fr) 60px 60px 28px;
+  grid-template-areas: "tk amt pe ps rm" "nm nm nm nm nm";
+  gap: 0 8px;
+  padding: 5px 0 4px;
+}
+
+.side .row .tk {
+  grid-area: tk;
+}
+
+.side .row .nm {
+  grid-area: nm;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.side .row-head .nm {
+  display: none;
+}
+
+.side .row .amt {
+  grid-area: amt;
+  min-height: 30px;
+  padding: 0 8px;
+}
+
+.side .row .pc-ent {
+  grid-area: pe;
+}
+
+.side .row .pc-sel {
+  grid-area: ps;
+}
+
+.side .row .rm {
+  grid-area: rm;
+  width: 28px;
+  min-height: 28px;
+}
+
+.side .toolbar {
+  margin-bottom: 6px;
+}
+
+.side .adder {
+  max-width: none;
+}
+
+.recalc {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin: 10px 0 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-control);
+  background: var(--selected-bg);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.recalc span {
+  flex: 1 1 180px;
 }
 
 .row-head {
@@ -1717,6 +2079,11 @@ button {
   color: var(--text-2);
 }
 
+.card .entered {
+  font-weight: 700;
+  color: var(--text);
+}
+
 .card .tech {
   color: var(--muted);
   font-size: 11px;
@@ -1830,8 +2197,8 @@ button {
   box-shadow: var(--shadow), 0 30px 80px -30px rgba(0, 0, 0, 0.7);
 }
 
-/* HUD: the dialog keeps the square frame. */
-[data-theme="hud"] .dialog {
+/* Grid: the dialog keeps the square frame. */
+[data-theme="grid"] .dialog {
   border-radius: 2px;
   border-color: var(--accent-dark);
 }
@@ -1945,7 +2312,7 @@ button {
     font-size: calc(var(--wordmark-size) - 4px);
   }
 
-  [data-theme="hud"] .wordmark {
+  [data-theme="grid"] .wordmark {
     font-size: 12.5px;
     letter-spacing: 0.18em;
   }
@@ -1993,7 +2360,7 @@ button {
     border-radius: 8px;
   }
 
-  [data-theme="hud"] .chart {
+  [data-theme="grid"] .chart {
     border-radius: 2px;
   }
 
@@ -2005,7 +2372,7 @@ button {
     font-size: 10.5px;
   }
 
-  [data-theme="hud"] .chart-label {
+  [data-theme="grid"] .chart-label {
     font-size: 8.5px;
     letter-spacing: 0.06em;
   }
@@ -2193,8 +2560,38 @@ button {
   }
 
   .row {
-    grid-template-columns: 64px minmax(0, 1fr) 44px;
-    grid-template-areas: "tk nm rm" "amt amt amt";
+    grid-template-columns: 64px minmax(0, 1fr) 76px 76px;
+    grid-template-areas: "tk nm nm rm" "amt amt pe ps";
+  }
+
+  .row .rm {
+    justify-self: end;
+  }
+
+  .row .pc-ent {
+    grid-area: pe;
+  }
+
+  .row .pc-sel {
+    grid-area: ps;
+  }
+
+  .row .pc {
+    display: grid;
+    gap: 0;
+    line-height: 1.2;
+  }
+
+  .row .pc::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-family: var(--font-ui);
+    font-size: 9.5px;
+    font-weight: 400;
+  }
+
+  .line-label text {
+    font-size: 10px;
   }
 
   .row .tk {
@@ -2274,6 +2671,545 @@ button {
   }
 
   .tooltip {
-    width: 210px;
+    padding: 10px 12px;
+  }
+}
+
+/* ── HUD: red and gold instrument glass ─────────────────────────────────────────
+ * Translucent layered panels over a dark field with dial rings, thin warm hairlines, segmented
+ * gauges and glow. Nothing is drawn over the colour map. */
+[data-theme="hud"] body::before {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  top: -300px;
+  right: -280px;
+  width: 980px;
+  height: 980px;
+  pointer-events: none;
+  background: url("/art/hud-dial.svg") center / contain no-repeat;
+  animation: hud-dial 240s linear infinite;
+}
+
+[data-theme="hud"] body::after {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  left: -330px;
+  bottom: -380px;
+  width: 760px;
+  height: 760px;
+  pointer-events: none;
+  opacity: 0.6;
+  background: url("/art/hud-dial.svg") center / contain no-repeat;
+  animation: hud-dial 320s linear infinite reverse;
+}
+
+@keyframes hud-dial {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+[data-theme="hud"] body {
+  background-attachment: fixed;
+}
+
+[data-theme="hud"] .app {
+  position: relative;
+  z-index: 0;
+}
+
+[data-theme="hud"] .hdr {
+  background: rgba(8, 5, 6, 0.55);
+  backdrop-filter: blur(14px) saturate(1.3);
+  border-bottom: 1px solid transparent;
+  border-image: linear-gradient(90deg, transparent, rgba(255, 210, 150, 0.45) 18%, var(--accent) 50%, rgba(255, 210, 150, 0.45) 82%, transparent) 1;
+}
+
+[data-theme="hud"] .wordmark {
+  text-transform: uppercase;
+  text-shadow: 0 0 18px rgba(255, 150, 60, 0.45);
+}
+
+/* Type: squared instrument capitals for every label; figures stay in the tabular mono. */
+[data-theme="hud"] .heading,
+[data-theme="hud"] .btn,
+[data-theme="hud"] .chip,
+[data-theme="hud"] .seg-btn,
+[data-theme="hud"] .chart-label,
+[data-theme="hud"] .legend-title,
+[data-theme="hud"] .fig-cap,
+[data-theme="hud"] .divword-cap,
+[data-theme="hud"] .strip-label .sub,
+[data-theme="hud"] .divs-end,
+[data-theme="hud"] .readout-cap,
+[data-theme="hud"] .row-head,
+[data-theme="hud"] .mixcard h3,
+[data-theme="hud"] .mixcard dt,
+[data-theme="hud"] .mixcard .tip-range small,
+[data-theme="hud"] .details-panel dt,
+[data-theme="hud"] .card h3,
+[data-theme="hud"] .set-block h3,
+[data-theme="hud"] .dialog h2,
+[data-theme="hud"] .ghosttip b,
+[data-theme="hud"] .v-tick-label,
+[data-theme="hud"] .h-tick-label,
+[data-theme="hud"] .keys,
+[data-theme="hud"] .menu-item {
+  font-family: var(--font-hud);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+[data-theme="hud"] .line-label text {
+  font-family: var(--font-hud);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-size: 10.5px;
+}
+
+[data-theme="hud"] .btn-link {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+[data-theme="hud"] .fig-cap,
+[data-theme="hud"] .divword-cap,
+[data-theme="hud"] .strip-label .sub,
+[data-theme="hud"] .readout-cap,
+[data-theme="hud"] .mixcard dt,
+[data-theme="hud"] .mixcard .tip-range small,
+[data-theme="hud"] .v-tick-label,
+[data-theme="hud"] .h-tick-label {
+  font-size: 9.5px;
+}
+
+[data-theme="hud"] .keys,
+[data-theme="hud"] .divs-end,
+[data-theme="hud"] .chart-label {
+  font-size: 10px;
+  font-weight: 500;
+}
+
+[data-theme="hud"] .chart-label .tech {
+  font-family: var(--font-ui);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+[data-theme="hud"] .menu-item {
+  font-size: 12px;
+}
+
+[data-theme="hud"] .mixcard dt,
+[data-theme="hud"] .mixcard .tip-range small {
+  font-size: 9px;
+  letter-spacing: 0.05em;
+}
+
+/* Glass: every panel is a translucent sheet with a warm hairline and an inner sheen. */
+[data-theme="hud"] .chart,
+[data-theme="hud"] .divs:not(.divs-h),
+[data-theme="hud"] .strip,
+[data-theme="hud"] .acc,
+[data-theme="hud"] .side,
+[data-theme="hud"] .card {
+  background-color: var(--glass);
+  border-color: var(--glass-line);
+  backdrop-filter: blur(3px) saturate(1.35);
+  box-shadow: var(--chart-shadow);
+}
+
+[data-theme="hud"] .card {
+  background-color: rgba(255, 226, 190, 0.035);
+  box-shadow: inset 0 1px 0 rgba(255, 240, 220, 0.06);
+}
+
+/* A red tab and a gold corner mark the edge of each sheet. */
+[data-theme="hud"] .strip,
+[data-theme="hud"] .acc,
+[data-theme="hud"] .side,
+[data-theme="hud"] .divs:not(.divs-h) {
+  background-image:
+    linear-gradient(var(--accent), var(--accent)),
+    linear-gradient(var(--gold), var(--gold)),
+    linear-gradient(var(--gold), var(--gold));
+  background-repeat: no-repeat;
+  background-position: left 14px top -1px, right -1px bottom -1px, right -1px bottom -1px;
+  background-size: 38px 3px, 12px 1px, 1px 12px;
+  background-origin: border-box;
+}
+
+[data-theme="hud"] .chart::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: 4;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--accent), var(--accent)) left 18px top 0 / 54px 3px no-repeat,
+    repeating-linear-gradient(90deg, rgba(255, 226, 190, 0.42) 0 1px, transparent 1px 7px) right 22px top 0 / 218px 5px no-repeat,
+    repeating-linear-gradient(90deg, rgba(255, 226, 190, 0.5) 0 1px, transparent 1px 35px) right 22px top 0 / 218px 9px no-repeat,
+    repeating-linear-gradient(0deg, rgba(255, 226, 190, 0.34) 0 1px, transparent 1px 7px) right 0 top 44px / 5px 120px no-repeat,
+    linear-gradient(var(--gold), var(--gold)) right 0 bottom 0 / 16px 1px no-repeat,
+    linear-gradient(var(--gold), var(--gold)) right 0 bottom 0 / 1px 16px no-repeat,
+    linear-gradient(var(--gold), var(--gold)) left 0 bottom 0 / 16px 1px no-repeat,
+    linear-gradient(var(--gold), var(--gold)) left 0 bottom 0 / 1px 16px no-repeat;
+  filter: drop-shadow(0 0 5px rgba(255, 120, 50, 0.7));
+}
+
+/* The colour map is light on glass: dark cells let the field show through. */
+[data-theme="hud"] .chart-canvas {
+  mix-blend-mode: screen;
+}
+
+[data-theme="hud"] .overlay .tick line,
+[data-theme="hud"] .overlay .domain {
+  stroke: rgba(255, 226, 190, 0.34);
+}
+
+[data-theme="hud"] .chart-label {
+  color: var(--text-2);
+}
+
+[data-theme="hud"] .legend-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--text);
+  text-shadow: 0 0 16px rgba(255, 150, 60, 0.6);
+}
+
+/* Gauges are cut into segments. */
+[data-theme="hud"] .ramp-bar {
+  height: 8px;
+  border: 0;
+  border-radius: 0;
+  -webkit-mask: repeating-linear-gradient(90deg, #000 0 5px, transparent 5px 7px);
+  mask: repeating-linear-gradient(90deg, #000 0 5px, transparent 5px 7px);
+  filter: drop-shadow(0 0 4px rgba(255, 130, 50, 0.6));
+}
+
+[data-theme="hud"] .ceiling {
+  stroke-width: 1.25;
+  stroke-dasharray: 2 4;
+  filter: drop-shadow(0 0 3px rgba(255, 200, 100, 0.9));
+}
+
+/* The selected mix: a gold core inside two rings that turn against each other. */
+[data-theme="hud"] .pt-selected .halo {
+  fill: var(--accent);
+  opacity: 0.3;
+}
+
+[data-theme="hud"] .pt-selected .reticle,
+[data-theme="hud"] .pt-selected .reticle-outer {
+  display: block;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+[data-theme="hud"] .pt-selected .reticle {
+  stroke: var(--accent-light);
+  stroke-width: 2.5;
+  stroke-dasharray: 18 7.13;
+  animation: reticle 12s linear infinite;
+  filter: drop-shadow(0 0 4px rgba(255, 110, 50, 0.9));
+}
+
+[data-theme="hud"] .pt-selected .reticle-outer {
+  stroke: var(--gold);
+  stroke-width: 1;
+  stroke-dasharray: 22 14.13;
+  animation: reticle 20s linear infinite reverse;
+  opacity: 0.9;
+}
+
+[data-theme="hud"] .pt-selected .dot {
+  r: 6px;
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 7px rgba(255, 200, 90, 0.95));
+}
+
+[data-theme="hud"] .pt-selected .dot-back {
+  opacity: 0;
+}
+
+[data-theme="hud"] .pt-div,
+[data-theme="hud"] .pt-current {
+  stroke-width: 1.75;
+  filter: drop-shadow(0 0 4px currentColor) drop-shadow(0 0 1.5px var(--chart-bg));
+}
+
+[data-theme="hud"] .pt-div {
+  color: var(--mark-div);
+}
+
+[data-theme="hud"] .pt-current {
+  color: var(--mark-current);
+}
+
+[data-theme="hud"] .ghost-hot {
+  filter: drop-shadow(0 0 4px rgba(255, 200, 100, 0.9));
+}
+
+/* Floating cards are deeper glass with a brighter edge. */
+[data-theme="hud"] .tooltip,
+[data-theme="hud"] .celltip,
+[data-theme="hud"] .ghosttip,
+[data-theme="hud"] .menu,
+[data-theme="hud"] .adder-list,
+[data-theme="hud"] .dialog {
+  background: var(--glass-deep);
+  border-color: rgba(255, 210, 150, 0.38);
+  backdrop-filter: blur(14px) saturate(1.4);
+  box-shadow: inset 0 1px 0 rgba(255, 240, 220, 0.1), 0 0 22px rgba(232, 64, 28, 0.3), 0 18px 44px -18px rgba(0, 0, 0, 0.8);
+}
+
+[data-theme="hud"] .mixcard h3 {
+  color: var(--gold);
+}
+
+[data-theme="hud"] .mixcard .wbar {
+  border-radius: 0;
+  background: linear-gradient(90deg, var(--accent), var(--gold));
+  opacity: 1;
+  -webkit-mask: repeating-linear-gradient(90deg, #000 0 4px, transparent 4px 6px);
+  mask: repeating-linear-gradient(90deg, #000 0 4px, transparent 4px 6px);
+}
+
+/* Controls */
+[data-theme="hud"] .btn {
+  background: rgba(255, 226, 190, 0.045);
+  border-color: var(--glass-line);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+[data-theme="hud"] .btn:hover:not(:disabled) {
+  border-color: var(--gold);
+  background: rgba(255, 190, 110, 0.1);
+  box-shadow: 0 0 14px rgba(255, 170, 70, 0.35);
+}
+
+[data-theme="hud"] .btn-primary {
+  background: linear-gradient(180deg, #CF3413, var(--accent-dark));
+  border-color: var(--accent-light);
+  box-shadow: 0 0 14px rgba(232, 64, 28, 0.45);
+}
+
+[data-theme="hud"] .btn-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #C03011, #8F220C);
+}
+
+[data-theme="hud"] .btn-quiet {
+  background: transparent;
+  border-color: transparent;
+}
+
+[data-theme="hud"] .seg {
+  background: rgba(0, 0, 0, 0.35);
+  border-color: var(--glass-line);
+}
+
+[data-theme="hud"] .seg-btn {
+  font-size: 10.5px;
+}
+
+[data-theme="hud"] .seg-btn[aria-checked="true"],
+[data-theme="hud"] .seg-btn[aria-pressed="true"] {
+  background: linear-gradient(180deg, #CF3413, var(--accent-dark));
+  box-shadow: 0 0 12px rgba(232, 64, 28, 0.55), inset 0 1px 0 rgba(255, 220, 190, 0.3);
+}
+
+[data-theme="hud"] .chip {
+  border-radius: 0;
+  border-color: var(--glass-line);
+  background: rgba(255, 226, 190, 0.04);
+  font-size: 10.5px;
+  font-weight: 600;
+  clip-path: polygon(9px 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%, 0 9px);
+}
+
+[data-theme="hud"] .chip:hover {
+  background: rgba(255, 190, 110, 0.12);
+  color: var(--gold);
+}
+
+[data-theme="hud"] .chip:focus-visible {
+  outline-offset: -3px;
+}
+
+[data-theme="hud"] .chip svg,
+[data-theme="hud"] .side-tab svg {
+  color: var(--accent-light);
+}
+
+[data-theme="hud"] .field {
+  background: rgba(0, 0, 0, 0.4);
+  border-color: var(--glass-line);
+}
+
+[data-theme="hud"] .opt {
+  background: rgba(0, 0, 0, 0.3);
+  border-color: var(--glass-line);
+}
+
+/* Sliders: hairline tracks against a ruler, ring thumbs with a gold core. */
+[data-theme="hud"] .v-track,
+[data-theme="hud"] .h-track {
+  border-radius: 0;
+  opacity: 1;
+  box-shadow: 0 0 10px rgba(255, 130, 50, 0.55);
+}
+
+[data-theme="hud"] .vslider .v-track {
+  width: 2px;
+  margin-left: -1px;
+  background: linear-gradient(180deg, var(--accent-light), var(--gold) 55%, var(--mark-div));
+}
+
+[data-theme="hud"] .hslider .h-track {
+  height: 2px;
+  margin-top: -1px;
+  background: linear-gradient(90deg, var(--accent-light), var(--gold) 55%, var(--mark-div));
+}
+
+[data-theme="hud"] .vslider::before {
+  content: "";
+  position: absolute;
+  left: calc(50% - 15px);
+  top: 10px;
+  bottom: 10px;
+  width: 9px;
+  background:
+    repeating-linear-gradient(180deg, rgba(255, 226, 190, 0.38) 0 1px, transparent 1px 8px) right / 5px 100% no-repeat,
+    repeating-linear-gradient(180deg, rgba(255, 226, 190, 0.5) 0 1px, transparent 1px 40px) right / 9px 100% no-repeat;
+  pointer-events: none;
+}
+
+[data-theme="hud"] .vslider .v-tick,
+[data-theme="hud"] .hslider .h-tick {
+  background: var(--gold);
+  box-shadow: 0 0 6px rgba(255, 200, 90, 0.9);
+}
+
+[data-theme="hud"] .v-thumb,
+[data-theme="hud"] .h-thumb,
+[data-theme="hud"] .r-thumb {
+  border-width: 1.5px;
+  background: radial-gradient(circle, var(--gold) 0 3px, rgba(8, 5, 6, 0.85) 3.6px);
+  box-shadow: 0 0 0 3px rgba(255, 210, 90, 0.14), 0 0 14px rgba(255, 170, 60, 0.75);
+}
+
+[data-theme="hud"] .r-domain,
+[data-theme="hud"] .r-fill,
+[data-theme="hud"] .r-rail {
+  border-radius: 0;
+  height: 5px;
+  margin-top: -2.5px;
+}
+
+[data-theme="hud"] .r-domain {
+  background: repeating-linear-gradient(90deg, rgba(255, 226, 190, 0.2) 0 4px, transparent 4px 6px);
+}
+
+[data-theme="hud"] .r-fill {
+  background: repeating-linear-gradient(90deg, var(--accent) 0 4px, transparent 4px 6px);
+  filter: drop-shadow(0 0 5px rgba(232, 64, 28, 0.9));
+}
+
+[data-theme="hud"] .readout-cap {
+  color: var(--text-2);
+}
+
+/* Result strip */
+[data-theme="hud"] .fig-val {
+  text-shadow: 0 0 14px rgba(255, 226, 190, 0.22);
+}
+
+[data-theme="hud"] .fig-typ .fig-val {
+  color: var(--gold);
+  text-shadow: 0 0 16px rgba(255, 170, 60, 0.65);
+}
+
+[data-theme="hud"] .rangebar .rb-line {
+  height: 5px;
+  border-radius: 0;
+  background: linear-gradient(90deg, var(--error), var(--accent-light), var(--gold));
+  -webkit-mask: repeating-linear-gradient(90deg, #000 0 4px, transparent 4px 6px);
+  mask: repeating-linear-gradient(90deg, #000 0 4px, transparent 4px 6px);
+}
+
+[data-theme="hud"] .rangebar .rb-dot {
+  background: var(--gold);
+  border-color: var(--bg);
+  box-shadow: 0 0 10px rgba(255, 190, 80, 0.9);
+}
+
+[data-theme="hud"] .divword-val {
+  font-family: var(--font-hud);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+[data-theme="hud"] .card .big b {
+  text-shadow: 0 0 18px currentColor;
+}
+
+[data-theme="hud"] .ring {
+  border-color: rgba(255, 226, 190, 0.18);
+  border-top-color: var(--gold);
+  box-shadow: 0 0 16px rgba(255, 150, 60, 0.4);
+}
+
+[data-theme="hud"] .foot {
+  border-top-color: var(--glass-line);
+}
+
+@media (max-width: 768px) {
+  [data-theme="hud"] .wordmark {
+    font-size: 13px;
+    letter-spacing: 0.16em;
+  }
+
+  [data-theme="hud"] .chart-label {
+    font-size: 8.5px;
+    letter-spacing: 0.06em;
+  }
+
+  [data-theme="hud"] .legend-title {
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+  }
+
+  [data-theme="hud"] .hero > .keys {
+    font-size: 8px;
+    letter-spacing: 0;
+  }
+
+  [data-theme="hud"] .chart {
+    border-radius: 4px;
+  }
+
+  [data-theme="hud"] .hdr .btn {
+    background: transparent;
+    border-color: transparent;
+  }
+
+  [data-theme="hud"] .line-label text {
+    font-size: 9px;
+  }
+
+  [data-theme="hud"] body::before {
+    top: -260px;
+    right: -420px;
+    width: 760px;
+    height: 760px;
+  }
+
+  [data-theme="hud"] body::after {
+    display: none;
   }
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-export const THEMES = ["ks-dark", "light", "hud"] as const;
+export const THEMES = ["ks-dark", "light", "hud", "grid"] as const;
 export type Theme = (typeof THEMES)[number];
 export const DEFAULT_THEME: Theme = "ks-dark";
 export const STORAGE_KEY = "ps.theme";

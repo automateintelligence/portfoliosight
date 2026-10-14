@@ -1,4 +1,4 @@
-/* PortfolioSight design tokens (spec 3.5). Three themes on <html data-theme>.
+/* PortfolioSight design tokens (spec 3.5). Four themes on <html data-theme>.
  * The first block of each theme is the spec table verbatim; the second block holds
  * the theme's own derived tokens (radii, type, chart chrome). */
 
@@ -12,8 +12,11 @@
 @font-face { font-family: "EB Garamond"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/eb-garamond-latin-500-normal.woff2") format("woff2"); }
 @font-face { font-family: "EB Garamond"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/eb-garamond-latin-600-normal.woff2") format("woff2"); }
 @font-face { font-family: "EB Garamond"; font-style: italic; font-weight: 500; font-display: swap; src: url("/fonts/eb-garamond-latin-500-italic.woff2") format("woff2"); }
+@font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/chakra-petch-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Chakra Petch"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/chakra-petch-latin-600-normal.woff2") format("woff2"); }
 
 :root {
+  --font-hud: "Chakra Petch", "Inter", system-ui, sans-serif;
   --font-ui: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --font-serif: "EB Garamond", Georgia, "Times New Roman", serif;
@@ -148,8 +151,74 @@
   --focus: var(--accent);
 }
 
-/* ── HUD (dark heads-up-display look) ─────────────────────────────────────────── */
+/* ── HUD (red and gold instrument glass: translucent panels, hairlines, glow) ── */
 [data-theme="hud"] {
+  --bg: #080506;
+  --surface: #170D0B;
+  --elevated: #1D100D;
+  --input: #0E0807;
+  --text: #F6EEE3;
+  --text-2: #D2BFAB;
+  --muted: #9A8572;
+  --border: #4A2A20;
+  --accent: #D63A18;
+  --accent-dark: #A82A10;
+  --accent-light: #FF8A52;
+  --success: #F5C451;
+  --error: #FF4D3A;
+  --warn: #FFA63D;
+  --link: #FFC96B;
+  --shadow: 0 0 14px rgba(232,64,28,.32);
+  --heat-0: #080506;
+  --heat-1: #3D0E08;
+  --heat-2: #B02A10;
+  --heat-3: #F08A24;
+  --heat-4: #FFE39A;
+  --frontier: #FFF4DC;
+  --mark-selected-fill: #FFD25A;
+  --mark-selected-ring: #FFFFFF;
+  --mark-current: #FFFFFF;
+  --mark-div: #9FE6F2;
+  --risk-line: #FFC96B;
+}
+[data-theme="hud"] {
+  color-scheme: dark;
+  --radius-control: 3px;
+  --radius-card: 4px;
+  --font-wordmark: var(--font-hud);
+  --wordmark-weight: 600;
+  --wordmark-size: 17px;
+  --wordmark-tracking: 0.2em;
+  --heading-transform: uppercase;
+  --heading-tracking: 0.1em;
+  --heading-weight: 600;
+  --font-figure: var(--font-mono);
+  --font-axis: var(--font-mono);
+  --chart-bg: #0C0706;
+  --chart-border: rgba(255,226,190,.2);
+  --chart-shadow: inset 0 1px 0 rgba(255,240,220,.08), inset 0 0 60px rgba(232,64,28,.06), 0 24px 60px -34px rgba(232,64,28,.6);
+  --chart-wash: linear-gradient(140deg, rgba(255,235,215,.075), rgba(255,235,215,.012) 42%, rgba(232,64,28,.06));
+  --page-wash: radial-gradient(70% 55% at 86% -6%, rgba(232,64,28,.24), transparent 68%), radial-gradient(60% 50% at 4% 104%, rgba(245,170,60,.12), transparent 70%);
+  --canvas-filter: drop-shadow(0 0 7px rgba(255,150,60,.38));
+  --cell-gap: 0;
+  --track: #3A2019;
+  --track-fill: var(--accent);
+  --thumb: #080506;
+  --thumb-ring: #FFD25A;
+  --hover: rgba(255,170,90,.1);
+  --selected-bg: rgba(232,64,28,.2);
+  --dim: rgba(8,5,6,.5);
+  --on-accent: #FFFFFF;
+  --overlay: rgba(4,2,2,.74);
+  --focus: #FFD25A;
+  --glass: rgba(34,17,12,.36);
+  --glass-deep: rgba(18,9,7,.86);
+  --glass-line: rgba(255,226,190,.17);
+  --gold: #FFD25A;
+}
+
+/* ── Grid (cyan instrument look on graph paper) ─────────────────────────────── */
+[data-theme="grid"] {
   --bg: #04070B;
   --surface: #0A1119;
   --elevated: #0E1722;
@@ -178,7 +247,7 @@
   --mark-div: var(--success);
   --risk-line: var(--accent);
 }
-[data-theme="hud"] {
+[data-theme="grid"] {
   color-scheme: dark;
   --radius-control: 8px;
   --radius-card: 16px;
