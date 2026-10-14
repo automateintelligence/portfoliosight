@@ -620,7 +620,8 @@ test("Clear all and Scale to 100% work from the keyboard; the total and Scale sh
 });
 
 test("the strip marks Bad, Typical and Good on one scale that holds still as the sliders and the history window move", async ({ page }, testInfo) => {
-  test.skip(isPhone(testInfo.project.name), "the phone strip shows the three figures without the bar");
+  // the phone strip shows the three figures without the bar
+  if (isPhone(testInfo.project.name)) return;
   await open(page, "u=guide2017&lb=5y");
   const bar = page.getByTestId("range-bar");
   const scaleOf = async () => [await bar.getAttribute("data-lo"), await bar.getAttribute("data-hi")];
@@ -697,7 +698,8 @@ test("the sections and their buttons run Funds & amounts, Stress tests, Trades, 
 });
 
 test("the sidebar's amount column holds 1,000,000 and the sidebar leaves the chart its room", async ({ page }, testInfo) => {
-  test.skip(isPhone(testInfo.project.name), "no sidebar on a phone");
+  // no sidebar on a phone
+  if (isPhone(testInfo.project.name)) return;
   for (const [theme, width] of ["ks-dark", "light", "hud", "grid"].flatMap((t) => [1024, 1280, 1366, 1920].map((w) => [t, w] as const))) {
     await page.setViewportSize({ width, height: 900 });
     await open(page, `t=${theme}&f=VTI:1000000,BND:250000&unit=usd`);
