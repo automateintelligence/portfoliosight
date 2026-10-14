@@ -1,10 +1,12 @@
 import { forwardRef, useMemo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import type { Tensor } from "../api/tensor";
-import { plain, technical } from "../copy";
+import { lookbackLine, plain, technical } from "../copy";
 import { pct, signedPct } from "../format";
-import type { View } from "../math/view";
+import { diversificationWord } from "../math/portfolio";
+import type { Range, Stats, View } from "../math/view";
 import { Heatmap, type Ghost } from "./Heatmap";
-import { Overlay, type Mark } from "./Overlay";
+import { MixCard, topHoldings, type CardMix } from "./MixCard";
+import { Overlay, type LineEnd, type MarkId } from "./Overlay";
 import type { ChartScales } from "./scales";
 
 type Props = {
@@ -13,19 +15,33 @@ type Props = {
   scales: ChartScales | null;
   ghosts: Ghost[];
   frontierEnb: number[];
-  current: Mark | null;
+  /** The mix the visitor entered: its statistics, six-month range and weights. */
+  current: { stats: Stats; range: Range; weights: number[] } | null;
   details: boolean;
   phone: boolean;
   themeEpoch: number;
   reveal: boolean;
   notice: ReactNode;
   busy: boolean;
-  /** Actual risk and return of the mix computed for cell (j, k), or null for an empty cell. */
-  cellStats: (j: number, k: number) => { sigma: number; mu: number } | null;
+  /** The mix computed for cell (j, k) and its actual statistics, or null for an empty cell. */
+  cellMix: (j: number, k: number) => { weights: number[]; stats: Stats } | null;
   onRiskPixel: (px: number) => void;
   onDivDrag: (dy: number, start: boolean) => void;
   onNudge: (ds: number, dt: number) => void;
 };
+
+const GHOST_REACH = 7; // px from a ghost line within which the pointer names it
+
+/** Squared distance from (px, py) to the segment a-b. */
+function segDist2(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  const f = len2 > 0 ? Math.min(1, Math.max(0, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0;
+  const qx = ax + f * dx - px;
+  const qy = ay + f * dy - py;
+  return qx * qx + qy * qy;
+}
 
 /** What each mark on the chart is. Inside the chart on desktop, a row under it on a phone. */
 export function MarkKeys({ hasCurrent, hasGhosts }: { hasCurrent: boolean; hasGhosts: boolean }) {
@@ -76,7 +92,7 @@ function Legend({ scales, phone, details, hasCurrent, hasGhosts }: { scales: Cha
       {details && <p className="legend-tech">{technical.heatLegend}</p>}
       <div className="ramp" aria-hidden="true">
         <span>{plain.heatLess}</span>
-        <span className="ramp-bar" style={{ background: "linear-gradient(90deg, var(--heat-1), var(--heat-2), var(--heat-3), var(--heat-4))" }} />
+        <span className="ramp-bar" style={{ background: "linear-gradient(90deg, var(--heat-4), var(--heat-3), var(--heat-2), var(--heat-1))" }} />
         <span>{plain.heatMore}</span>
       </div>
       {!phone && <MarkKeys hasCurrent={hasCurrent} hasGhosts={hasGhosts} />}
@@ -86,7 +102,7 @@ function Legend({ scales, phone, details, hasCurrent, hasGhosts }: { scales: Cha
 
 /** The chart: canvas heatmap and frontier, SVG markers, DOM labels. */
 export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
-  { tensor, view, scales, ghosts, frontierEnb, current, details, phone, themeEpoch, reveal, notice, busy, cellStats, onRiskPixel, onDivDrag, onNudge },
+  { tensor, view, scales, ghosts, frontierEnb, current, details, phone, themeEpoch, reveal, notice, busy, cellMix, onRiskPixel, onDivDrag, onNudge },
   ref,
 ) {
   const funds = useMemo(
@@ -94,20 +110,14 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
     [details, tensor],
   );
   const ready = tensor && view && scales && scales.width > 0;
-  const top = useMemo(() => {
-    if (!tensor || !view) return [];
-    return tensor.universe.funds
-      .map((f, i) => ({ id: f.id, w: view.weights[i] }))
-      .sort((a, b) => b.w - a.w)
-      .slice(0, 5)
-      .filter((f) => f.w > 0.0005);
-  }, [tensor, view]);
 
   // Everything right of the ceiling is beyond the chosen risk: that part of the map recedes.
   const dimPath = useMemo(() => {
     if (!tensor || !view || !scales) return "none";
     const curve = tensor.frontier_curve;
-    const floor = scales.plot.bottom;
+    // The map's own bottom edge (half a cell under the lowest return floor), so nothing is dimmed below it.
+    const ys = tensor.grid.y;
+    const floor = Math.min(scales.plot.bottom, scales.y(ys[0] - (ys.length > 1 ? (ys[1] - ys[0]) / 2 : 0)));
     const x0 = scales.x(view.ceiling);
     const pts: string[] = [`${x0.toFixed(1)}px ${floor.toFixed(1)}px`, `${x0.toFixed(1)}px ${(scales.y(view.ceilingMu) - 2).toFixed(1)}px`];
     let last = x0;
@@ -120,13 +130,46 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
     return `polygon(${pts.join(", ")})`;
   }, [tensor, view, scales]);
 
-  // Details: hovering the map names the cell under the pointer and where its mix really sits.
+  // Every frontier line is named at its right end by the history it was measured over.
+  const lines: LineEnd[] = useMemo(() => {
+    if (!tensor) return [];
+    const end = (curve: { sigma: number[]; mu: number[] }) => ({ sigma: curve.sigma[curve.sigma.length - 1], mu: curve.mu[curve.mu.length - 1] });
+    const name = (id: string) => lookbackLine[id] ?? id;
+    return [
+      { id: tensor.lookback.id, label: name(tensor.lookback.id), primary: true, ...end(tensor.frontier_curve) },
+      ...ghosts.filter((g) => g.curve.sigma.length > 0).map((g) => ({ id: g.id, label: name(g.id), primary: false, ...end(g.curve) })),
+    ];
+  }, [tensor, ghosts]);
+  const ghostPixels = useMemo(
+    () => (scales ? ghosts.map((g) => ({ id: g.id, pts: g.curve.sigma.map((sigma, i) => [scales.x(sigma), scales.y(g.curve.mu[i])] as const) })) : []),
+    [ghosts, scales],
+  );
+
+  // With a mouse, the map names the mix under the pointer, and a ghost line names its history.
   const [cell, setCell] = useState<{ j: number; k: number; px: number; py: number } | null>(null);
+  const [ghostAt, setGhostAt] = useState<{ id: string; px: number; py: number } | null>(null);
+  const clear = () => {
+    setCell(null);
+    setGhostAt(null);
+  };
   const onHover = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!details || !tensor || !scales || e.pointerType === "touch") return;
+    if (!tensor || !scales || e.pointerType === "touch" || phone) return;
+    if (e.buttons !== 0 || (e.target instanceof Element && e.target.closest("[data-mark], .legend, .notice"))) return clear();
     const r = e.currentTarget.getBoundingClientRect();
     const px = e.clientX - r.left;
     const py = e.clientY - r.top;
+    let near: { id: string; d2: number } | null = null;
+    for (const g of ghostPixels) {
+      for (let i = 1; i < g.pts.length; i++) {
+        const d2 = segDist2(px, py, g.pts[i - 1][0], g.pts[i - 1][1], g.pts[i][0], g.pts[i][1]);
+        if (d2 <= GHOST_REACH * GHOST_REACH && (!near || d2 < near.d2)) near = { id: g.id, d2 };
+      }
+    }
+    if (near) {
+      setGhostAt({ id: near.id, px, py });
+      return setCell(null);
+    }
+    setGhostAt(null);
     const xs = tensor.frontier.x;
     const ys = tensor.grid.y;
     const j = Math.round(((scales.x.invert(px) - xs[0]) / (xs[xs.length - 1] - xs[0])) * (xs.length - 1));
@@ -134,10 +177,55 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
     const inside = j >= 0 && j < xs.length && k >= 0 && k < ys.length && tensor.grid.z[j][k] !== null;
     setCell(inside ? { j, k, px, py } : null);
   };
-  const hovered = cell && details && tensor ? cellStats(cell.j, cell.k) : null;
+  const hovered = cell && tensor ? cellMix(cell.j, cell.k) : null;
+  const hot = useMemo(() => {
+    const g = ghostAt ? ghostPixels.find((p) => p.id === ghostAt.id) : null;
+    return g ? { id: g.id, path: g.pts.map(([px, py], i) => `${i === 0 ? "M" : "L"}${px.toFixed(1)} ${py.toFixed(1)}`).join("") } : null;
+  }, [ghostAt, ghostPixels]);
+
+  const cardOf = (stats: Stats, weights: ArrayLike<number>, range?: Range): CardMix | null =>
+    tensor ? { ...stats, word: diversificationWord(stats.enb / tensor.enb_ref), holdings: topHoldings(tensor.universe.funds, weights), range } : null;
+  const spoken = (title: string, range: Range, word: string) =>
+    `${title}: ${plain.rangeLow} ${signedPct(range.low)}, ${plain.rangeTypical} ${signedPct(range.typical)}, ${plain.rangeHigh} ${signedPct(range.high)} ${plain.resultStripSuffix}. ${plain.diversification}: ${word}.`;
+
+  let overlay: ReactNode = null;
+  if (ready) {
+    const selMix = cardOf(view.selected, view.weights, view.range)!;
+    const divMix = cardOf(view.mostDiversified, view.divWeights, view.divRange)!;
+    const curMix = current ? cardOf(current.stats, current.weights, current.range) : null;
+    const card = (kind: MarkId, title: string, mix: CardMix, extra?: ReactNode) => <MixCard kind={kind} title={title} mix={mix} details={details} enbRef={tensor.enb_ref} extra={extra} />;
+    overlay = (
+      <Overlay
+        scales={scales}
+        phone={phone}
+        ceiling={{ sigma: view.ceiling, mu: view.ceilingMu }}
+        selected={view.selected}
+        mostDiversified={view.mostDiversified}
+        current={current?.stats ?? null}
+        funds={funds}
+        selectedLabel={`${plain.selectedMix}: ${plain.rangeLow} ${signedPct(view.range.low)}, ${plain.rangeTypical} ${signedPct(view.range.typical)}, ${plain.rangeHigh} ${signedPct(view.range.high)} ${plain.resultStripSuffix}. Left and right arrows change risk; up and down arrows move between more return and more diversified.`}
+        divLabel={spoken(plain.mostDiversified, view.divRange, divMix.word)}
+        currentLabel={current && curMix ? spoken(plain.currentMix, current.range, curMix.word) : ""}
+        cards={{
+          selected: card("selected", plain.selectedMix, selMix, ` Risk ceiling ${pct(view.ceiling)}.`),
+          div: card("div", plain.mostDiversified, divMix),
+          current: curMix ? card("current", plain.currentMix, curMix) : null,
+        }}
+        lines={lines}
+        hot={hot}
+        onRiskPixel={onRiskPixel}
+        onDivDrag={onDivDrag}
+        busy={busy}
+        position={{ s: view.s, min: view.domain.s_safe, max: view.domain.s_max }}
+        onNudge={onNudge}
+      />
+    );
+  }
+  const cellCard = ready && cell && hovered ? cardOf(hovered.stats, hovered.weights) : null;
+  const flip = (p: number, size: number, room: number) => (p + 18 + size <= room - 4 ? p + 18 : Math.max(4, p - 18 - size));
 
   return (
-    <div ref={ref} className="chart" data-testid="chart" data-ghost-count={ghosts.length} onPointerMove={onHover} onPointerLeave={() => setCell(null)}>
+    <div ref={ref} className="chart" data-testid="chart" data-ghost-count={ghosts.length} onPointerMove={onHover} onPointerLeave={clear} onPointerDown={clear}>
       {ready && (
         <>
           <Heatmap tensor={tensor} frontierEnb={frontierEnb} ghosts={ghosts} scales={scales} themeEpoch={themeEpoch} reveal={reveal} />
@@ -151,58 +239,25 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
             {details && <span className="tech">{technical.xAxis}</span>}
           </p>
           <Legend scales={scales} phone={phone} details={details} hasCurrent={current !== null} hasGhosts={ghosts.length > 0} />
-          <Overlay
-            scales={scales}
-            phone={phone}
-            ceiling={{ sigma: view.ceiling, mu: view.ceilingMu }}
-            selected={view.selected}
-            mostDiversified={view.mostDiversified}
-            current={current}
-            funds={funds}
-            selectedLabel={`${plain.selectedMix}: ${plain.rangeLow} ${signedPct(view.range.low)}, ${plain.rangeTypical} ${signedPct(view.range.typical)}, ${plain.rangeHigh} ${signedPct(view.range.high)} ${plain.resultStripSuffix}. Left and right arrows change risk; up and down arrows move between more return and more diversified.`}
-            tooltip={
-              <>
-                <h3>{plain.selectedMix}</h3>
-                <div className="tip-range num">
-                  <span>
-                    {plain.rangeLow} {signedPct(view.range.low)}
-                  </span>
-                  <span>
-                    {plain.rangeTypical} {signedPct(view.range.typical)}
-                  </span>
-                  <span>
-                    {plain.rangeHigh} {signedPct(view.range.high)}
-                  </span>
-                </div>
-                <p className="tip-line">
-                  {plain.diversification}: {view.word}
-                </p>
-                <p className="tip-line">
-                  Risk ceiling <span className="num">{pct(view.ceiling)}</span> · this mix <span className="num">{pct(view.selected.sigma)}</span>
-                </p>
-                <ul>
-                  {top.map((f) => (
-                    <li key={f.id}>
-                      <span className="num">{f.id}</span>
-                      <span className="wbar" style={{ width: `${Math.max(4, (f.w / (top[0]?.w || 1)) * 100)}%` }} />
-                      <span className="num">{pct(f.w)}</span>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            }
-            onRiskPixel={onRiskPixel}
-            onDivDrag={onDivDrag}
-            busy={busy}
-            position={{ s: view.s, min: view.domain.s_safe, max: view.domain.s_max }}
-            onNudge={onNudge}
-          />
+          {overlay}
         </>
       )}
-      {ready && cell && hovered && (
-        <div className="celltip num" role="status" style={{ left: Math.min(cell.px + 14, scales.width - 250), top: Math.max(8, cell.py - 54) }}>
-          <span>{`Mix computed for risk ceiling ${pct(tensor.frontier.x[cell.j])} and return floor ${pct(tensor.grid.y[cell.k])}`}</span>
-          <span>{`sits at risk ${pct(hovered.sigma, 2)}, return ${pct(hovered.mu, 2)}`}</span>
+      {ready && cell && cellCard && (
+        <div className="celltip" role="status" style={{ left: flip(cell.px, 232, scales.width), top: flip(cell.py, details ? 216 : 168, scales.height) }}>
+          <MixCard
+            kind="cell"
+            title={plain.cellMix}
+            mix={cellCard}
+            details={details}
+            enbRef={tensor.enb_ref}
+            extra={` ${technical.cellPlace(pct(tensor.frontier.x[cell.j]), pct(tensor.grid.y[cell.k]))}.`}
+          />
+        </div>
+      )}
+      {ready && ghostAt && (
+        <div className="ghosttip" data-testid="ghost-tip" role="status" style={{ left: Math.min(ghostAt.px + 14, scales.width - 190), top: Math.max(6, ghostAt.py - 46) }}>
+          <b>{lookbackLine[ghostAt.id] ?? ghostAt.id}</b>
+          <span>{plain.ghosts}</span>
         </div>
       )}
       {notice}

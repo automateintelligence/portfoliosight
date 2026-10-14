@@ -4,7 +4,7 @@ import type { SymbolEntry } from "../api/http";
 import type { Tensor } from "../api/tensor";
 import { plain } from "../copy";
 import { amountText, money, parseAmount, pct } from "../format";
-import { percentTotal } from "../math/amounts";
+import { amountsToWeights, percentTotal } from "../math/amounts";
 import { MAX_FUNDS, MIN_FUNDS, type Row, type Unit } from "../state/store";
 
 type Props = {
@@ -16,6 +16,8 @@ type Props = {
   setAside: number | null;
   menuError: string | null;
   busy: boolean;
+  /** Weights of the point selected in the chart, in the tensor's fund order. */
+  selected: number[] | null;
   onUnit: (unit: Unit) => void;
   onAmount: (id: string, amount: number | null) => void;
   onUseMenu: (rows: Row[]) => void;
@@ -52,8 +54,10 @@ function AmountInput({ id, value, unit, onCommit }: { id: string; value: number 
   );
 }
 
-/** Funds & amounts: the menu, the four ways to enter it, and "Use this menu" (spec 3.3). */
-export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuError, busy, onUnit, onAmount, onUseMenu, onNeedSymbols }: Props) {
+const sameIds = (a: Row[], b: Row[]) => a.length === b.length && [...a.map((r) => r.id)].sort().join(",") === [...b.map((r) => r.id)].sort().join(",");
+
+/** Funds & amounts: the menu, the ways to enter it, and the two mixes side by side (spec 3.3). */
+export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuError, busy, selected, onUnit, onAmount, onUseMenu, onNeedSymbols }: Props) {
   // Adding or removing funds edits a draft; amounts of the menu in use apply as they are typed.
   const [draft, setDraft] = useState<Row[] | null>(null);
   const [query, setQuery] = useState("");
@@ -72,17 +76,32 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
   const countBlocked = list.length < MIN_FUNDS || list.length > MAX_FUNDS;
   const sum = list.reduce((acc, r) => acc + (r.amount ?? 0), 0);
 
+  // The fund list on screen differs from the one plotted: only then is there anything to recalculate.
+  const changed = draft !== null;
+  const edit = (next: Row[]) => setDraft(sameIds(next, rows) ? null : next);
+
+  // "Mix entered %": the amounts as percentages of what was entered, whatever the unit. Funds
+  // this view sets aside are left out, as they are for the square on the chart.
+  const lastClose = useMemo(() => new Map((tensor?.universe.funds ?? []).map((f) => [f.id, f.last_close ?? null])), [tensor]);
+  const entered = useMemo(() => {
+    const counted = list.filter((r) => (changed || !tensor ? !excluded.has(r.id) : included.has(r.id)));
+    const res = amountsToWeights(counted.map((r) => r.amount), unit, counted.map((r) => lastClose.get(r.id) ?? null));
+    return new Map(res.weights ? counted.map((r, i) => [r.id, res.weights[i]]) : []);
+  }, [list, changed, tensor, excluded, included, unit, lastClose]);
+  const selectedById = useMemo(() => new Map((tensor && selected ? tensor.universe.funds : []).map((f, i) => [f.id, selected?.[i] ?? 0])), [tensor, selected]);
+
   const setAmount = (id: string, amount: number | null) => {
     if (draft) setDraft(draft.map((r) => (r.id === id ? { ...r, amount } : r)));
-    else onAmount(id, amount);
+    // Amounts of funds already plotted apply as they are typed, with or without a changed list.
+    if (rows.some((r) => r.id === id)) onAmount(id, amount);
   };
-  const remove = (id: string) => setDraft(list.filter((r) => r.id !== id));
+  const remove = (id: string) => edit(list.filter((r) => r.id !== id));
   const add = (sym: { id: string; name?: string | null }) => {
     setQuery("");
     if (list.some((r) => r.id === sym.id)) return setAddError(`${sym.id} is already in the menu.`);
     if (list.length >= MAX_FUNDS) return setAddError(`A menu holds at most ${MAX_FUNDS} funds.`);
     setAddError("");
-    setDraft([...list, { id: sym.id, name: sym.name ?? sym.id, amount: null }]);
+    edit([...list, { id: sym.id, name: sym.name ?? sym.id, amount: rows.find((r) => r.id === sym.id)?.amount ?? null }]);
   };
   const q = query.trim().toLowerCase();
   const matches = q && symbols ? symbols.filter((s) => s.id.toLowerCase().includes(q.replace(/\s+/g, "")) || (s.name ?? "").toLowerCase().includes(q) || s.id.toLowerCase().replace("-", " ").includes(q)).slice(0, 8) : [];
@@ -117,11 +136,18 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
         <span className={pctBlocked ? "err" : "hint"} data-testid="funds-total" role="status">
           {totalLine}
         </span>
-        <span className="spacer" />
-        <button type="button" className="btn btn-primary" data-testid="use-menu" disabled={pctBlocked || countBlocked || busy} onClick={() => onUseMenu(list)}>
-          Use this menu
-        </button>
       </div>
+      <p className="hint" data-testid="funds-hint">
+        {plain.fundsAsYouType}
+      </p>
+      {changed && (
+        <div className="recalc" role="status">
+          <span>{plain.fundsChanged}</span>
+          <button type="button" className="btn btn-primary" data-testid="use-menu" disabled={pctBlocked || countBlocked || busy} onClick={() => onUseMenu(list)}>
+            {plain.fundsRecalculate}
+          </button>
+        </div>
+      )}
       {countBlocked && <p className="err">{list.length < MIN_FUNDS ? `A menu needs at least ${MIN_FUNDS} funds.` : `A menu holds at most ${MAX_FUNDS} funds.`}</p>}
       {menuError && (
         <p className="err" role="alert">
@@ -135,10 +161,14 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
       )}
       <div className="rows" role="list">
         <div className="row row-head" aria-hidden="true">
-          <span>Ticker</span>
-          <span>Fund</span>
-          <span style={{ textAlign: "right" }}>{unit === "usd" ? "Amount ($)" : unit === "pct" ? "Share (%)" : "Shares"}</span>
-          <span />
+          <span className="tk">Ticker</span>
+          <span className="nm">Fund</span>
+          <span className="amt" data-testid="amount-head">
+            {unit === "usd" ? "Amount ($)" : unit === "pct" ? "Share (%)" : "Shares (Qty)"}
+          </span>
+          <span className="pc pc-ent">{plain.colEntered}</span>
+          <span className="pc pc-sel">{plain.colSelected}</span>
+          <span className="rm" />
         </div>
         {list.map((r) => {
           const reason = excluded.get(r.id) ?? (tensor && !draft && !included.has(r.id) ? "no verified current data" : servedIds && !servedIds.has(r.id) && !included.has(r.id) ? "no verified current data" : null);
@@ -154,6 +184,12 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
                 )}
               </span>
               <AmountInput id={r.id} value={r.amount} unit={unit} onCommit={(amount) => setAmount(r.id, amount)} />
+              <span className="pc pc-ent num" data-testid={`mix-entered-${r.id}`} data-label={plain.colEntered}>
+                {entered.has(r.id) ? pct(entered.get(r.id) ?? 0) : ""}
+              </span>
+              <span className="pc pc-sel num" data-testid={`mix-selected-${r.id}`} data-label={plain.colSelected}>
+                {selectedById.has(r.id) ? pct(selectedById.get(r.id) ?? 0) : "—"}
+              </span>
               <button type="button" className="btn btn-icon btn-quiet rm" aria-label={`Remove ${r.id}`} onClick={() => remove(r.id)}>
                 <X size={15} aria-hidden="true" />
               </button>
@@ -201,7 +237,6 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
           </p>
         )}
         <p className="hint">{plain.symbolsHelp}</p>
-        {draft && <p className="hint">The menu has changed: press “Use this menu” to compute it.</p>}
       </div>
     </div>
   );

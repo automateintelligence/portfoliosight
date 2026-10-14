@@ -1,14 +1,14 @@
-import { BarChart3, ChevronDown, ListChecks, Settings as SettingsIcon, Share2, ArrowLeftRight } from "lucide-react";
+import { BarChart3, ChevronDown, ListChecks, PanelRightClose, PanelRightOpen, Settings as SettingsIcon, Share2, ArrowLeftRight } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Chart, MarkKeys } from "./chart/Chart";
-import { makeScales, paddedExtent, type ChartScales } from "./chart/scales";
+import { DESKTOP_MARGINS, makeScales, paddedExtent, type ChartScales } from "./chart/scales";
 import { DivSlider } from "./controls/DivSlider";
 import { PresetMenu } from "./controls/PresetMenu";
 import { ResultStrip } from "./controls/ResultStrip";
 import { RiskSlider } from "./controls/RiskSlider";
 import { ShareDialog } from "./controls/ShareDialog";
 import { ThemeSwitch } from "./controls/ThemeSwitch";
-import { disclaimer, family, lookbackNames, plain } from "./copy";
+import { disclaimer, family, lookbackLine, lookbackNames, plain } from "./copy";
 import { portfolioMath } from "./math/portfolio";
 import { ceilingAt, deriveView, positionOfCeiling } from "./math/view";
 import { Funds } from "./sections/Funds";
@@ -39,6 +39,16 @@ function useSize(): [React.RefObject<HTMLDivElement | null>, { width: number; he
     return () => ro.disconnect();
   }, []);
   return [ref, size];
+}
+
+const SIDE_KEY = "ps.funds";
+/** Whether the Funds sidebar was left open in this browser (closed unless it says so). */
+function storedSide(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(SIDE_KEY) === "open";
+  } catch {
+    return false;
+  }
 }
 
 function Wordmark() {
@@ -81,6 +91,17 @@ export default function App() {
   useEffect(() => dispatch({ type: "start" }), [dispatch]);
 
   const phone = useMediaQuery("(max-width: 768px)");
+  // From 1024 px up, Funds & amounts is a sidebar beside the chart; below that, a section under it.
+  const wide = useMediaQuery("(min-width: 1024px)");
+  const [sideOpen, setSideOpenState] = useState(storedSide);
+  const setSideOpen = useCallback((next: boolean) => {
+    setSideOpenState(next);
+    try {
+      globalThis.localStorage?.setItem(SIDE_KEY, next ? "open" : "closed");
+    } catch {
+      // storage unavailable: the sidebar simply starts closed next time
+    }
+  }, []);
   const themeEpoch = useThemeEpoch(state.theme);
   const [chartRef, size] = useSize();
   const [open, setOpen] = useState<Record<SectionId, boolean>>({ funds: false, trades: false, stress: false, settings: false });
@@ -91,15 +112,19 @@ export default function App() {
   const math = useMemo(() => (tensor ? portfolioMath(tensor) : null), [tensor]);
   const view = useMemo(() => (tensor && math ? deriveView(tensor, math, state.s, state.t) : null), [tensor, math, state.s, state.t]);
   const mix = useMemo(() => (tensor ? currentMix({ rows: state.rows, unit: state.unit }, tensor) : null), [tensor, state.rows, state.unit]);
-  const cellStats = useCallback(
+  const cellMix = useCallback(
     (j: number, k: number) => {
       const w = tensor?.grid.w[j]?.[k];
-      return math && w ? math.stats(w) : null;
+      return math && w ? { weights: w, stats: math.stats(w) } : null;
     },
     [tensor, math],
   );
   const frontierEnb = useMemo(() => (tensor && math ? tensor.frontier.w.map((w) => math.stats(w).enb) : []), [tensor, math]);
   const currentStats = useMemo(() => (math && mix?.weights ? math.stats(mix.weights) : null), [math, mix]);
+  const current = useMemo(
+    () => (math && mix?.weights && currentStats ? { stats: currentStats, range: math.range6m(currentStats.mu, currentStats.sigma), weights: mix.weights } : null),
+    [math, mix, currentStats],
+  );
 
   const ghostCurves = useMemo(
     () => state.ghosts.flatMap((id) => (state.ghostTensors[id] ? [{ id, curve: state.ghostTensors[id]!.frontier_curve }] : [])),
@@ -121,7 +146,18 @@ export default function App() {
     if (currentStats) pts.push(currentStats);
     for (const g of ghostCurves) g.curve.sigma.forEach((sigma, i) => pts.push({ sigma, mu: g.curve.mu[i] }));
     if (state.details) tensor.sigma.forEach((sigma, i) => pts.push({ sigma, mu: tensor.mu_s[i] }));
-    return makeScales(size.width, size.height, paddedExtent(pts, { dx: dx / 2, dy: dy / 2 }), phone);
+    const extent = paddedExtent(pts, { dx: dx / 2, dy: dy / 2 });
+    if (!phone) {
+      // Room to the right of every frontier line for the name of its history window.
+      const plotW = size.width - DESKTOP_MARGINS.left - DESKTOP_MARGINS.right;
+      const ends = [{ id: tensor.lookback.id as string, curve }, ...ghostCurves].filter((l) => l.curve.sigma.length > 0);
+      for (const line of ends) {
+        const need = 20 + (lookbackLine[line.id] ?? line.id).length * 6.3 - (DESKTOP_MARGINS.right - 4);
+        const reach = line.curve.sigma[line.curve.sigma.length - 1] - extent.xMin;
+        if (plotW - need > 120) extent.xMax = Math.max(extent.xMax, extent.xMin + (reach * plotW) / (plotW - need));
+      }
+    }
+    return makeScales(size.width, size.height, extent, phone);
   }, [tensor, size.width, size.height, currentStats, ghostCurves, state.details, phone]);
 
   // The first paint of a chart wipes in once; later redraws (theme, ghosts) are immediate.
@@ -161,15 +197,20 @@ export default function App() {
     [view, setS, setT, clampS, domain.s_max, domain.s_safe],
   );
 
-  const showSection = useCallback((id: SectionId) => {
-    setOpen((prev) => ({ ...prev, [id]: true }));
-    setScrollTo((prev) => ({ id, n: (prev?.n ?? 0) + 1 }));
-  }, []);
+  const showSection = useCallback(
+    (id: SectionId) => {
+      if (id === "funds" && wide) setSideOpen(true);
+      else setOpen((prev) => ({ ...prev, [id]: true }));
+      setScrollTo((prev) => ({ id, n: (prev?.n ?? 0) + 1 }));
+    },
+    [wide, setSideOpen],
+  );
   useEffect(() => {
     if (!scrollTo) return;
     const el = document.getElementById(`section-${scrollTo.id}`);
     const calm = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    el?.scrollIntoView?.({ behavior: calm ? "auto" : "smooth", block: "start" });
+    const beside = scrollTo.id === "funds" && el?.tagName === "ASIDE";
+    el?.scrollIntoView?.({ behavior: calm ? "auto" : "smooth", block: beside ? "nearest" : "start" });
   }, [scrollTo]);
 
   const openShare = useCallback(() => {
@@ -248,6 +289,24 @@ export default function App() {
     );
   }
 
+  const fundsTable = (
+    <Funds
+      rows={state.rows}
+      unit={state.unit}
+      tensor={tensor}
+      symbols={state.symbols}
+      mixStatus={mix?.status ?? "empty"}
+      setAside={mix?.setAside ?? null}
+      menuError={state.menuError}
+      busy={busy}
+      selected={view?.weights ?? null}
+      onUnit={(unit) => dispatch({ type: "setUnit", unit })}
+      onAmount={(id, amount) => dispatch({ type: "setAmount", id, amount })}
+      onUseMenu={(rows) => dispatch({ type: "useMenu", rows })}
+      onNeedSymbols={needSymbols}
+    />
+  );
+
   return (
     <div className="app">
       <header className="hdr">
@@ -269,7 +328,8 @@ export default function App() {
         </div>
       </header>
 
-      <main className="wrap stage">
+      <main className={`wrap stage${wide ? " has-side" : ""}${wide && sideOpen ? " side-open" : ""}`}>
+        <div className="stage-main">
         <div className="hero">
           <Chart
             ref={chartRef}
@@ -278,14 +338,14 @@ export default function App() {
             scales={scales}
             ghosts={ghostCurves}
             frontierEnb={frontierEnb}
-            current={currentStats}
+            current={current}
             details={state.details}
             phone={phone}
             themeEpoch={themeEpoch}
             reveal={reveal}
             notice={notice}
             busy={busy}
-            cellStats={cellStats}
+            cellMix={cellMix}
             onRiskPixel={onRiskPixel}
             onDivDrag={onDivDrag}
             onNudge={onNudge}
@@ -371,28 +431,40 @@ export default function App() {
           </nav>
           <p className="advice">{plain.advice}</p>
         </div>
+        </div>
+        {wide && (
+          <aside className="side" id="section-funds" data-testid="section-funds" aria-expanded={sideOpen} aria-label={plain.chips.funds}>
+            <button
+              type="button"
+              className="side-tab"
+              data-testid="funds-toggle"
+              aria-expanded={sideOpen}
+              aria-controls="section-funds-body"
+              aria-label={sideOpen ? plain.fundsClose : plain.fundsOpen}
+              title={sideOpen ? plain.fundsClose : plain.fundsOpen}
+              onClick={() => setSideOpen(!sideOpen)}
+            >
+              {sideOpen ? <PanelRightClose size={17} aria-hidden="true" /> : <PanelRightOpen size={17} aria-hidden="true" />}
+              <span className="heading">{plain.chips.funds}</span>
+            </button>
+            {sideOpen && (
+              <div className="side-body" id="section-funds-body">
+                {fundsTable}
+              </div>
+            )}
+          </aside>
+        )}
       </main>
 
       <div className="wrap sections">
-        <Accordion id="funds" title={plain.chips.funds} open={open.funds} onToggle={() => setOpen((p) => ({ ...p, funds: !p.funds }))}>
-          <Funds
-            rows={state.rows}
-            unit={state.unit}
-            tensor={tensor}
-            symbols={state.symbols}
-            mixStatus={mix?.status ?? "empty"}
-            setAside={mix?.setAside ?? null}
-            menuError={state.menuError}
-            busy={busy}
-            onUnit={(unit) => dispatch({ type: "setUnit", unit })}
-            onAmount={(id, amount) => dispatch({ type: "setAmount", id, amount })}
-            onUseMenu={(rows) => dispatch({ type: "useMenu", rows })}
-            onNeedSymbols={needSymbols}
-          />
-        </Accordion>
+        {!wide && (
+          <Accordion id="funds" title={plain.chips.funds} open={open.funds} onToggle={() => setOpen((p) => ({ ...p, funds: !p.funds }))}>
+            {fundsTable}
+          </Accordion>
+        )}
         {hasMix && tensor && view && mix?.weights && (
           <Accordion id="trades" title={plain.chips.trades} open={open.trades} onToggle={() => setOpen((p) => ({ ...p, trades: !p.trades }))}>
-            <Trades funds={tensor.universe.funds} wNow={mix.weights} wSel={view.weights} unit={state.unit} amounts={includedAmounts} />
+            <Trades funds={tensor.universe.funds} wNow={mix.weights} wSel={view.weights} unit={state.unit} amounts={includedAmounts} asof={tensor.asof} />
           </Accordion>
         )}
         <Accordion id="stress" title={plain.chips.stress} open={open.stress} onToggle={() => setOpen((p) => ({ ...p, stress: !p.stress }))}>
