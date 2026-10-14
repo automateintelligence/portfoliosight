@@ -87,3 +87,21 @@ describe("the percentages as the fields show them", () => {
     expect(percentShown([0, 0]).entered).toBe(false);
   });
 });
+
+describe("the fields and the amounts agree on exactly 100", () => {
+  it("rounds each entry the way its field shows it", () => {
+    // 1.335 shows as 1.33 (toFixed), so the fields read 99.99: not exact
+    expect(percentShown([1.335, 98.66])).toEqual({ total: 99.99, exact: false, entered: true });
+  });
+
+  it("is not exact when the fields read 100 but the amounts add up to more", () => {
+    const twenty = Array.from({ length: 20 }, () => 5.004);
+    const shown = percentShown(twenty);
+    expect(shown.exact).toBe(false);
+    expect(shown.total).toBe(100.08);
+    // and Scale to 100% brings both to exactly 100
+    const scaled = scaleTo100(twenty);
+    expect(scaled.every((v) => v === 5)).toBe(true);
+    expect(percentShown(scaled).exact).toBe(true);
+  });
+});

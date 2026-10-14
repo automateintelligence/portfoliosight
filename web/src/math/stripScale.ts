@@ -59,6 +59,19 @@ export function widenSeen(prev: StripSeen | null, tensors: Tensor[]): StripSeen 
 }
 
 /**
+ * Widens what was seen by figures shown on the strip that lie outside it (an exact range from the
+ * service can step past the node figures), so the bar keeps that width for the rest of the menu
+ * instead of shrinking back. Values inside change nothing (the same object comes back).
+ */
+export function widenBy(seen: StripSeen | null, values: number[]): StripSeen | null {
+  if (!seen) return seen;
+  const vs = values.filter(Number.isFinite);
+  const min = Math.min(seen.bounds.min, ...vs);
+  const max = Math.max(seen.bounds.max, ...vs);
+  return min === seen.bounds.min && max === seen.bounds.max ? seen : { ...seen, bounds: { min, max } };
+}
+
+/**
  * The bar's scale: the menu's bounds and 0% (always on the bar), widened by any shown value that
  * lies outside them (an exact range from the service can step past the node figures), with
  * `STRIP_PAD` of the span added at each end.

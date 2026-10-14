@@ -219,3 +219,11 @@ it("Clear all and Scale to 100% also act on a changed fund list before it is rec
   expect((screen.getByLabelText("ZZNEW amount in percent") as HTMLInputElement).value).toBe("");
   expect(screen.getByTestId("use-menu")).toBeTruthy();
 });
+
+it("Scale to 100% hands keyboard focus to Clear all as it goes away", () => {
+  show({ unit: "pct", amounts: [60, 32] });
+  const scale = screen.getByTestId("funds-scale100");
+  scale.focus();
+  fireEvent.click(scale);
+  expect(document.activeElement).toBe(screen.getByTestId("funds-clear"));
+});

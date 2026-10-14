@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { parseTensor } from "../src/api/client";
 import type { Tensor } from "../src/api/tensor";
 import { portfolioMath } from "../src/math/portfolio";
-import { STRIP_PAD, stripAt, stripScale, tensorBounds, widenSeen } from "../src/math/stripScale";
+import { STRIP_PAD, stripAt, stripScale, tensorBounds, widenBy, widenSeen } from "../src/math/stripScale";
 import { deriveView } from "../src/math/view";
 
 const RAW = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "fixtures/guide2017_5y.json"), "utf8"));
@@ -96,5 +96,18 @@ describe("the strip's fixed scale", () => {
     expect(other!.hash).toBe("ffffffffffffffff");
     expect(other!.bounds.min).toBeCloseTo(tensorBounds(T5).min + 0.01, 12);
     expect(other!.bounds.max).toBeCloseTo(tensorBounds(T5).max + 0.01, 12);
+  });
+});
+
+describe("figures shown outside the bounds", () => {
+  it("widen what was seen and it stays widened", () => {
+    const seen = widenSeen(null, [T5])!;
+    expect(widenBy(seen, [seen.bounds.min + 0.01, seen.bounds.max - 0.01])).toBe(seen);
+    const wider = widenBy(seen, [seen.bounds.min - 0.05, 0.1])!;
+    expect(wider.bounds.min).toBeCloseTo(seen.bounds.min - 0.05, 12);
+    expect(wider.bounds.max).toBe(seen.bounds.max);
+    // a later figure inside, or the same tensor again, does not shrink it back
+    expect(widenBy(widenSeen(wider, [T5]), [0])).toBe(wider);
+    expect(widenBy(null, [1])).toBeNull();
   });
 });

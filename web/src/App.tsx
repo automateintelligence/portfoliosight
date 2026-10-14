@@ -120,6 +120,9 @@ export default function App() {
   // column's level the tensor's own figure is already exact, so nothing is asked.
   const selectedExact = useExactRange(rangeKey, tensor && nodeView && !atNode(tensor, nodeView.s, nodeView.t) ? nodeView.weights : null);
   const view = useMemo(() => (nodeView && selectedExact ? { ...nodeView, range: selectedExact } : nodeView), [nodeView, selectedExact]);
+  // The strip's bar keeps one scale per menu, over every history window loaded for it and every
+  // figure it has shown.
+  const stripBounds = useStripBounds(tensor, state.ghostTensors, view ? [view.range.low, view.range.high] : []);
   const mix = useMemo(() => (tensor ? currentMix({ rows: state.rows, unit: state.unit }, tensor) : null), [tensor, state.rows, state.unit]);
   const cellMix = useCallback(
     (j: number, k: number) => {
@@ -145,8 +148,6 @@ export default function App() {
     return { stats: currentStats, range: builtIn ?? enteredExact, weights: mix.weights };
   }, [math, mix, currentStats, builtIn, enteredExact]);
 
-  // The strip's bar keeps one scale per menu, over every history window loaded for it.
-  const stripBounds = useStripBounds(tensor, state.ghostTensors);
 
   const lookbackGhosts = useMemo(
     () => state.ghosts.flatMap((id) => (state.ghostTensors[id] ? [{ id, curve: state.ghostTensors[id]!.frontier_curve }] : [])),

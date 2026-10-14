@@ -37,17 +37,22 @@ export function percentTotal(amounts: Amount[]): { total: number; ok: boolean; m
 /** Decimals an amount field shows (format.ts `amountText`). */
 export const AMOUNT_DECIMALS = 2;
 
-/** Each amount in the field's smallest step (hundredths), as the fields show them; blank is 0. */
-const steps = (amounts: Amount[], decimals: number) => amounts.map((amount) => Math.round((amount ?? 0) * 10 ** decimals));
+/** Each amount in the field's smallest step (hundredths), rounded as the fields round it (`toFixed`); blank is 0. */
+const steps = (amounts: Amount[], decimals: number) => amounts.map((amount) => Math.round(Number((amount ?? 0).toFixed(decimals)) * 10 ** decimals));
 
 /**
- * The percentages as the fields show them: their total (to the fields' precision) and whether it
- * is exactly 100. `entered` is false when no field holds more than zero.
+ * The percentages as the fields show them: their total and whether it is exactly 100. Exact means
+ * the fields add up to 100 to their precision *and* the amounts themselves do (a field can show
+ * 5 for 5.004, and twenty of them are 100.08). `total` is the fields' sum, or the amounts' own sum
+ * (to the same precision) when only that one is off. `entered` is false when no field holds more
+ * than zero.
  */
 export function percentShown(amounts: Amount[], decimals = AMOUNT_DECIMALS): { total: number; exact: boolean; entered: boolean } {
-  const parts = steps(amounts, decimals);
-  const units = sum(parts);
-  return { total: units / 10 ** decimals, exact: units === 100 * 10 ** decimals, entered: amounts.some((amount) => (amount ?? 0) > 0) };
+  const scale = 10 ** decimals;
+  const fields = sum(steps(amounts, decimals));
+  const own = Math.round(sum(amounts.map((amount) => amount ?? 0)) * scale);
+  const want = 100 * scale;
+  return { total: (fields !== want ? fields : own) / scale, exact: fields === want && own === want, entered: amounts.some((amount) => (amount ?? 0) > 0) };
 }
 
 /**

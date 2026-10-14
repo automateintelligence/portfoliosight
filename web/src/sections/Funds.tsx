@@ -1,5 +1,5 @@
 import { Eraser, Percent, Plus, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SymbolEntry } from "../api/http";
 import type { Tensor } from "../api/tensor";
 import { fundsTotal, plain } from "../copy";
@@ -134,8 +134,19 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
       if (next[i] !== r.amount && rows.some((p) => p.id === r.id)) onAmount(r.id, next[i]);
     });
   };
-  const clearAll = () => setAll(list.map(() => null));
-  const scaleAll = () => setAll(scaleTo100(list.map((r) => r.amount)));
+  // Each button goes away (Scale) or turns off (Clear all) once used, so keyboard focus moves on to
+  // a control that stays: Clear all after scaling, the first amount after clearing.
+  const clearRef = useRef<HTMLButtonElement>(null);
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const clearAll = () => {
+    setAll(list.map(() => null));
+    // after the emptied fields have rendered: a focused field keeps the text it had
+    requestAnimationFrame(() => rowsRef.current?.querySelector<HTMLInputElement>("input.amt")?.focus());
+  };
+  const scaleAll = () => {
+    clearRef.current?.focus();
+    setAll(scaleTo100(list.map((r) => r.amount)));
+  };
 
   return (
     <div>
@@ -164,7 +175,7 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
           </span>
         )}
         <span className="spacer" />
-        <button type="button" className="btn btn-quiet" data-testid="funds-clear" title={plain.fundsClearHint} aria-label={`${plain.fundsClear}: ${plain.fundsClearHint.toLowerCase()}`} disabled={!anyAmount} onClick={clearAll}>
+        <button ref={clearRef} type="button" className="btn btn-quiet" data-testid="funds-clear" title={plain.fundsClearHint} aria-label={`${plain.fundsClear}: ${plain.fundsClearHint.toLowerCase()}`} disabled={!anyAmount} onClick={clearAll}>
           <Eraser size={14} aria-hidden="true" />
           <span>{plain.fundsClear}</span>
         </button>
@@ -191,7 +202,7 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
       {mixStatus === "ok" && setAside !== null && setAside > 0.0005 && (
         <p className="hint">{`${pct(setAside)} of the mix you entered is in funds set aside in this view; the rest is scaled up to 100%.`}</p>
       )}
-      <div className="rows" role="list">
+      <div className="rows" role="list" ref={rowsRef}>
         <div className="row row-head" aria-hidden="true">
           <span className="tk">Ticker</span>
           <span className="nm">Fund</span>

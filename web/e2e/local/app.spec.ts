@@ -588,6 +588,8 @@ test("Clear all and Scale to 100% work from the keyboard; the total and Scale sh
   await expect(total).toHaveText("Total: 98.9%, 1.1% to go");
   await scale.focus();
   await page.keyboard.press("Enter");
+  // the button goes away; focus moves on to Clear all, not to the page
+  await expect(clear).toBeFocused();
   await expect(amount("SGOV")).toHaveValue("60.67");
   await expect(amount("VTIP")).toHaveValue("39.33");
   await expect(total).toHaveCount(0);
@@ -600,6 +602,8 @@ test("Clear all and Scale to 100% work from the keyboard; the total and Scale sh
   await page.keyboard.press("Space");
   await expect(amount("SGOV")).toHaveValue("");
   await expect(amount("VTIP")).toHaveValue("");
+  // Clear all turns off; focus moves to the first amount
+  await expect(amount("SGOV")).toBeFocused();
   await expect(page.getByTestId("fund-row-SGOV")).toBeVisible();
   await expect(page.getByTestId("fund-row-VTIP")).toBeVisible();
   await expect(page.getByTestId("point-current")).toHaveCount(0);
