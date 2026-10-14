@@ -1182,14 +1182,19 @@ Phase 3 · ui
 ### A-PS-44 — the heatmap renders from the theme ramp under the frontier only
 Phase 3 · ui (all four themes)
 - **Claim.** Sampling the canvas at 20 points inside feasible cells yields ≥ 3 distinct colors,
-  every sampled color lies on the theme's `--heat-0..4` ramp, points above the frontier equal the
-  page background, and the plain legend text is present.
+  every sampled color lies on the theme's `--heat-0..4` ramp at the theme's position for
+  `Z/enb_ref` (Light: `Z/enb_ref`, palest along the frontier; ks-dark, HUD, Grid:
+  `1 − 0.8·Z/enb_ref`, brightest along it), points above the frontier equal the page background,
+  and the plain legend text is present.
 - **Setup.** As A-PS-41; the test computes cell centers from the tensor's `frontier.x`,
   `grid.y` and the chart's margins/scales (read from the overlay's axis ticks), picking 20
   feasible cells spread over `Z/enb_ref` and 5 points above the curve.
 - **Observation.** For each theme: `getImageData` at the 20 cell centers gives ≥ 3 distinct RGB
   triples; each triple is within ΔE-like distance 12 (per-channel ≤ 12/255) of some point on
-  `interpolateRgbBasis(heat-0..4)` evaluated from the theme's computed custom properties; the 5
+  `interpolateRgbBasis(heat-0..4)` evaluated from the theme's computed custom properties, and
+  within 12/255 of that ramp at the theme's position for its own `Z/enb_ref` (the 3 × 3
+  neighbourhood's range allowed); the least spread-out sample is nearer the frontier's end of the
+  ramp (`--heat-0` in Light, `--heat-4` otherwise) than the most spread-out one; the 5
   above-frontier samples equal the computed `--bg` (±2/255); the legend text "How spread out the
   risk is" is visible. **Must-not-contain:** a sampled cell color off the ramp (for instance a
   stale ramp from another theme); a colored pixel above the frontier. Fail = any theme.

@@ -111,3 +111,20 @@ stay in the tensor: `web/e2e/smoke.spec.ts` and several gates read them.
 Runs (pinned commands, this worktree, 2026-10-13): A-PS-34 and A-PS-38 to A-PS-53 pass (A-PS-52
 with the secret env loaded in a subshell). `conductor gate lint` and `conductor gate freeze`:
 see the commit that carries `.frozen`.
+
+## Light ramp
+
+Owner direction (2026-10-13): put the Light theme's colour map back the way it was before owner
+feedback 1 turned the ramp round: palest at the frontier, deepest blue for the most spread-out
+mixes far below it. ks-dark, HUD and Grid keep the turned ramp. Before that change (commit
+`77866de` and earlier) every theme painted a cell at `ramp(Z / enb_ref)` and drew the legend
+from `--heat-1` at "Less" to `--heat-4` at "More"; `d0d337a` turned both for all themes.
+
+| Gate file | Assertion, leg | Before | After | Property it protects | Why the new form is not weaker |
+|---|---|---|---|---|---|
+| `tests/test_a_ps_44_heatmap_theme_ramp.py` | A-PS-44, position leg (light); docstring | every theme: colour = `ramp(1 - 0.8 * Z / enb_ref)` | light: `ramp(Z / enb_ref)`; ks-dark, hud, grid unchanged | Each cell shows its own diversification on the theme's ramp | Same tolerance (12/255), same neighbourhood allowance; only the light formula changed. |
+| same | A-PS-44, direction leg (light) | least spread-out sample nearer `--heat-4` than the most spread-out one | light: nearer `--heat-0`; other themes unchanged | The map reads the way the theme's legend says | Same strict comparison, pointed at the light ramp's frontier end. |
+| `manifest.yaml`, `docs/specs/…assertions.md` | A-PS-44 claim and observation | "lie on the theme's ramp" | names each theme's position and which end sits at the frontier | Claim text matches the test | Text only; the claim now states the direction the test already checked. |
+| `INTERFACES.md` | pins | turned ramp for all themes | `--heat-ramp` (`turned` / `rising`) and `--heat-legend` per theme | The contract the product is built to | Names follow the code. |
+
+A-PS-49 does not assert a ramp direction and is unchanged.

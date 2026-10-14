@@ -219,3 +219,9 @@ the docstring is authoritative for that test.
     minimum and a 100% maximum and rebuilds; `caps-reset` reads "Reset limits"). The markers'
     wrappers carry `data-mark` = `selected | div | current`; `point-*` ids are unchanged and no
     new `point-` id exists.
+- Light ramp, 2026-10-13 (owner direction). The heatmap reads its ramp per theme from the token
+  `--heat-ramp` on `html`: `turned` (ks-dark, hud, grid) paints a cell at
+  `1 - 0.8 * Z / enb_ref`, `rising` (light) at `Z / enb_ref`, the mapping Light had before owner
+  feedback 1 (palest along the frontier, deepest blue for the most spread-out mixes). The legend
+  bar is the token `--heat-legend` and runs the same way as the map in each theme. A-PS-44 asserts
+  the light position and direction; the other three themes are unchanged.

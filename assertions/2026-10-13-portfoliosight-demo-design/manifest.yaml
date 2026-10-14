@@ -347,7 +347,7 @@ assertions:
     level: spec
     kind: example
   - id: A-PS-44
-    claim: "In all four themes, 20 canvas samples inside feasible cells show at least 3 distinct colors that all lie on the theme's --heat-0..4 ramp, 5 samples above the frontier equal the page background, and the plain legend text is present."
+    claim: "In all four themes, 20 canvas samples inside feasible cells show at least 3 distinct colors that all lie on the theme's --heat-0..4 ramp at the theme's position for Z / enb_ref (Light: Z / enb_ref, palest along the frontier; ks-dark, HUD, Grid: 1 - 0.8 * Z / enb_ref, brightest along it), 5 samples above the frontier equal the page background, and the plain legend text is present."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_44_heatmap_theme_ramp.py"
     setup: ""
     teardown: ""

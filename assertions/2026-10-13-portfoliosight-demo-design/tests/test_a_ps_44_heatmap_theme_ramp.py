@@ -20,10 +20,13 @@ Pinned interface (beyond the shared pins of the gate contract):
   linear pixel scales from them.
 - custom properties --heat-0..4 and --bg resolve to colours on the chart element.
 - cell (j, k) is painted around (frontier.x[j], grid.y[k]) with interpolateRgbBasis(--heat-0..4)
-  at 1 - 0.8 * Z / enb_ref (spec 8; owner feedback 1 turned the ramp round: the least spread-out
-  mixes, which lie along the frontier, take the --heat-4 end, and the most spread-out ones the
-  dark end, stopping a fifth of the way up the ramp so they stay visible); nothing is painted on the canvas above the frontier (a legend or title
-  there must be DOM, not canvas pixels).
+  at a position that depends on the theme (spec 8). ks-dark, hud, grid: 1 - 0.8 * Z / enb_ref
+  (owner feedback 1 turned the ramp round: the least spread-out mixes, which lie along the
+  frontier, take the --heat-4 end, and the most spread-out ones the dark end, stopping a fifth of
+  the way up the ramp so they stay visible). light: Z / enb_ref (owner direction 2026-10-13
+  restored the ramp from before that change: the band along the frontier is the palest, the most
+  spread-out mixes the deepest blue). Nothing is painted on the canvas above the frontier (a
+  legend or title there must be DOM, not canvas pixels).
 - the legend text "How spread out the risk is" is visible DOM text.
 """
 
@@ -425,6 +428,10 @@ function pickCells(tensor: any) {
 }
 
 for (const theme of THEMES) {
+  // light reads the ramp rising with the measure; the other themes read it turned round.
+  const rising = theme === "light";
+  const position = (q: number) => (rising ? Math.max(0, Math.min(1, q)) : 1 - 0.8 * Math.max(0, Math.min(1, q)));
+  const formula = rising ? "Z / enb_ref" : "1 - 0.8 * Z / enb_ref";
   test(`heatmap comes from the theme ramp, under the frontier only: ${theme}`, async ({ page }) => {
     const mock = buildMock(readFixture());
     const tensor = mock.tensor;
@@ -452,17 +459,19 @@ for (const theme of THEMES) {
         const where = `cell (j=${c.j}, k=${c.k}) rgb(${pixel.map((v) => Math.round(v)).join(",")})`;
         const onRamp = Math.min(...fine.map((p) => channelDistance(p, pixel)));
         expect(onRamp, `${where} is ${onRamp.toFixed(1)}/255 off the ${theme} ramp interpolateRgbBasis(--heat-0..4)`).toBeLessThanOrEqual(12);
-        // Spec 8: colour = ramp(1 - 0.8 * Z / enb_ref). Allow the Z range of the 3 x 3 neighbourhood.
+        // Spec 8: colour = ramp(position(Z / enb_ref)) for the theme. Allow the Z range of the 3 x 3 neighbourhood.
         let near = Infinity;
-        for (let s = 0; s <= 50; s++) near = Math.min(near, channelDistance(ramp(1 - 0.8 * Math.min(1, c.qMin + ((c.qMax - c.qMin) * s) / 50)), pixel));
-        expect(near, `${where} is not the ramp colour of its own 1 - 0.8 * Z / enb_ref (${c.q.toFixed(3)}; neighbourhood ${c.qMin.toFixed(3)}..${c.qMax.toFixed(3)})`).toBeLessThanOrEqual(12);
+        for (let s = 0; s <= 50; s++) near = Math.min(near, channelDistance(ramp(position(Math.min(1, c.qMin + ((c.qMax - c.qMin) * s) / 50))), pixel));
+        expect(near, `${where} is not the ramp colour of its own ${formula} (${c.q.toFixed(3)}; neighbourhood ${c.qMin.toFixed(3)}..${c.qMax.toFixed(3)})`).toBeLessThanOrEqual(12);
       });
 
-      // Direction: the least spread-out sampled cell sits nearer the --heat-4 end than the most spread-out one.
+      // Direction: the least spread-out sampled cell sits nearer the frontier's end of the ramp
+      // (--heat-4 when turned, --heat-0 in light) than the most spread-out one.
       const byQ = cells.map((c, i) => ({ q: c.q, pixel: cellPixels[i] })).sort((a, b) => a.q - b.q);
-      const top = ramp(1);
+      const frontierEnd = ramp(rising ? 0 : 1);
+      const endName = rising ? "--heat-0" : "--heat-4";
       expect(byQ[byQ.length - 1].q - byQ[0].q, "the samples span a real range of Z / enb_ref").toBeGreaterThan(0.1);
-      expect(channelDistance(top, byQ[0].pixel), "the least spread-out cell is nearer --heat-4 than the most spread-out cell").toBeLessThan(channelDistance(top, byQ[byQ.length - 1].pixel));
+      expect(channelDistance(frontierEnd, byQ[0].pixel), `the least spread-out cell is nearer ${endName} than the most spread-out cell`).toBeLessThan(channelDistance(frontierEnd, byQ[byQ.length - 1].pixel));
 
       // 5 points above the frontier: the page background, nothing painted.
       const NX = tensor.frontier.x.length;
