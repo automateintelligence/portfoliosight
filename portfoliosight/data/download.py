@@ -34,7 +34,7 @@ from portfoliosight.data.returns import provider_rows_to_record, splice_tail
 from portfoliosight.data.secrets import RedactingFilter, install_redaction
 from portfoliosight.data.universe import SymbolInfo, is_tsp, load_tiers, priority_order
 
-__all__ = ["MODES", "RunReport", "main", "plan_refresh", "run"]
+__all__ = ["DEADLINE_REACHED", "MODES", "RunReport", "main", "plan_refresh", "run"]
 
 logger = logging.getLogger(__name__)
 install_redaction([logger.name])
@@ -49,6 +49,7 @@ DEFAULT_TIER = 3
 # is one download for all TSP funds and may change format); elsewhere the dates decide.
 STALE_ON_FAILED_FETCH = frozenset({TSP_PROVIDER})
 MAX_ERROR_CHARS = 300
+DEADLINE_REACHED = "deadline reached"
 
 Clock = Callable[[], datetime]
 Sleep = Callable[[float], None]
@@ -74,10 +75,13 @@ def run(
     symbols: Iterable[str] | None = None,
     tiers: Iterable[int] | None = None,
     report: RunReport | None = None,
+    deadline: datetime | None = None,
 ) -> int:
     """One downloader run; returns the exit code (0 also when a budget stopped it cleanly).
 
-    ``report``, when given, is filled with what a catch-up or refresh run did.
+    ``report``, when given, is filled with what a catch-up or refresh run did. ``deadline``,
+    when given, ends a catch-up or refresh walk cleanly at the first symbol that would start at
+    or after it (``clock()`` decides; a symbol already started is finished).
 
     ``providers`` maps ``"tiingo"`` (every id not starting with ``TSP-``) and ``"tsp"`` to
     provider objects. ``clock()`` is the only source of time and ``sleep(seconds)`` the only
@@ -104,6 +108,7 @@ def run(
         order=order,
         info=info,
         report=report,
+        deadline=deadline,
     )
     if report is not None:
         report.exit_code = code
@@ -120,6 +125,7 @@ def _execute(
     order: list[str],
     info: Mapping[str, SymbolInfo],
     report: RunReport | None = None,
+    deadline: datetime | None = None,
 ) -> int:
     ledger = BudgetLedger(store, clock, sleep, load_limits(store))
     budgeted: Any = providers.get(BUDGETED_PROVIDER)
@@ -156,6 +162,7 @@ def _execute(
             info=info,
             account=not hooked,
             report=report if report is not None else RunReport(),
+            deadline=deadline,
         )
         return ingest.walk(order)
     finally:
@@ -175,6 +182,7 @@ class _Ingest:
     info: Mapping[str, SymbolInfo]
     account: bool
     report: RunReport = field(default_factory=RunReport)
+    deadline: datetime | None = None
     manifest: Manifest = field(init=False)
     d_g: date = field(init=False)
     retry_unavailable: bool = field(init=False)
@@ -194,6 +202,14 @@ class _Ingest:
         group: tuple[int, bool] | None = None
         try:
             for symbol in order:
+                if self.deadline is not None and self.clock() >= self.deadline:
+                    logger.info(
+                        "deadline %s reached: stopping at %s, resuming next run",
+                        self.deadline.isoformat(),
+                        symbol,
+                    )
+                    self.report.stopped = DEADLINE_REACHED
+                    break
                 this_group = self._group(symbol)
                 if group is not None and this_group != group:
                     self._write_catalog()

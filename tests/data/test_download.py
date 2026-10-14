@@ -419,6 +419,59 @@ def test_daily_budget_stops_cleanly_and_the_next_day_continues(tmp_path, monkeyp
     assert sorted(_listed(store)) == symbols
 
 
+class _SlowProvider(FakeProvider):
+    """Each daily fetch takes ``minutes`` on ``clock``."""
+
+    def __init__(self, clock: Clock, minutes: int, **kwargs):
+        super().__init__(**kwargs)
+        self.clock, self.minutes = clock, minutes
+
+    def fetch_daily(self, symbol, start, end=None):
+        self.clock.now += timedelta(minutes=self.minutes)
+        return super().fetch_daily(symbol, start, end)
+
+
+def test_deadline_stops_the_walk_between_symbols_and_the_next_run_continues(tmp_path, caplog):
+    symbols = [f"S{i}" for i in range(1, 6)]
+    behind = date(2026, 3, 6)
+    store = _seed_store(
+        tmp_path,
+        {s: _entry("tiingo", "stale", behind, behind) for s in symbols},
+        dict.fromkeys(symbols, (behind, behind)),
+    )
+    clock = Clock(date(2026, 3, 14), 12, 5)
+    provider = _SlowProvider(clock, 10, default_available=date(2026, 3, 13))
+    report = download.RunReport()
+    caplog.set_level(logging.INFO)
+    # S3 starts at 12:25, before the deadline, and runs past it: it is finished, not cut off.
+    deadline = clock.now + timedelta(minutes=25)
+    code, calls = _go("refresh", store, provider, clock, symbols, report=report, deadline=deadline)
+    assert code == 0 and report.exit_code == 0
+    assert [c[1] for c in calls] == ["S1", "S2", "S3"]
+    assert report.stopped == download.DEADLINE_REACHED
+    assert "deadline" in caplog.text and "stopping at S4" in caplog.text
+    assert sorted(_listed(store)) == ["S1", "S2", "S3"]
+    assert _manifest(store)["S3"]["adjusted_through"] == "2026-03-13"
+    report = download.RunReport()
+    later = clock.now + timedelta(days=1)
+    code, calls = _go("refresh", store, provider, clock, symbols, report=report, deadline=later)
+    assert code == 0 and [c[1] for c in calls] == ["S4", "S5"] and report.stopped is None
+    assert sorted(_listed(store)) == symbols
+
+
+def test_a_deadline_already_passed_visits_nothing_and_still_writes_the_catalog(tmp_path):
+    behind = date(2026, 3, 6)
+    store = _seed_store(
+        tmp_path, {"S1": _entry("tiingo", "stale", behind, behind)}, {"S1": (behind, behind)}
+    )
+    clock = Clock(date(2026, 3, 14))
+    provider = FakeProvider(default_available=date(2026, 3, 13))
+    report = download.RunReport()
+    code, calls = _go("refresh", store, provider, clock, ["S1"], report=report, deadline=clock.now)
+    assert code == 0 and calls == [] and report.stopped == download.DEADLINE_REACHED
+    assert store.exists("meta/symbols.json")
+
+
 def test_monthly_budget_skips_new_symbols_but_refreshes_seen_ones(tmp_path, monkeypatch, caplog):
     for name, value in zip(ENV_NAMES, ("50", "50", "2"), strict=True):
         monkeypatch.setenv(name, value)
