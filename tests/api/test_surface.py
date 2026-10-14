@@ -1,4 +1,4 @@
-"""The API surface is the five routes of spec 6 and nothing else."""
+"""The API surface is the six routes of spec 6 and nothing else."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class _Counting:
         return attribute
 
 
-def test_routes_are_exactly_the_five(make_client):
+def test_routes_are_exactly_the_six(make_client):
     client = make_client(start_worker=False)
     routes = set()
     for route in client.app.routes:
@@ -37,6 +37,7 @@ def test_routes_are_exactly_the_five(make_client):
         ("GET", "/v1/symbols"),
         ("POST", "/v1/tensors"),
         ("GET", "/v1/tensors/{}/{}/{}"),
+        ("POST", "/v1/range"),
     }
     forbidden = re.compile(r"login|auth|account|signup|pay|checkout", re.IGNORECASE)
     assert not [route.path for route in client.app.routes if forbidden.search(route.path)]
@@ -48,6 +49,8 @@ def test_routes_are_exactly_the_five(make_client):
         ("GET", "/v1/tensors", 405),
         ("DELETE", "/v1/tensors", 405),
         ("POST", "/v1/health", 405),
+        ("GET", "/v1/range", 405),
+        ("POST", "/v1/ranges", 404),
         ("PUT", f"/v1/tensors/2026-10-12-0.1.0/{GOOD_HASH}/5y", 405),
         ("GET", "/v1/jobs", 404),
         ("GET", "/v1/", 404),

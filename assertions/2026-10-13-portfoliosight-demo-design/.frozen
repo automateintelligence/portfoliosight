@@ -97,21 +97,21 @@
       }
     },
     "A-PS-17": {
-      "entry": "80822db9d04fb5db648096f83be31428f3f8a1df0e27506112c48a0f637565d4",
+      "entry": "96b87c95e273d49eec778e8adeee10e27c96d1c7c69b698b4819b30f8a94e3dc",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_17_mix_invariants.py": "f119b5b3c9c2fd1f8d3d8a302c7100b5ef5897fef6573cb8100e176ee01dc770"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_17_mix_invariants.py": "a592c09470cb151f7c1f92229bffc7acbc18243db79b2802abd1335f43d949a9"
       }
     },
     "A-PS-18": {
-      "entry": "09fd5bb66423a07250de656f44635a546d6736f6f68645a868ca3c93b7e18fc9",
+      "entry": "90827f50b4220b72d1da7485fc1c7b5b6dac2666ce8a22a45d1d68a9f844e4a6",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_18_surface_monotone.py": "30ef5af156cd843e4457f346b8d81d81b099d6af90014b948bf69fd35652b72d"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_18_surface_monotone.py": "bc71afa695201a38938abe8f7138f252c4037a9351ac6fcabc9628f7b44566fb"
       }
     },
     "A-PS-19": {
-      "entry": "3c3bfaeac1200768024f48ced9957cc047808e5a245932db88848c6ee85a2c87",
+      "entry": "29835530dcdb1531bb48df3ecdd96ac1f073f4577d8d08aba87f7454c6d79291",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_19_suggested_point.py": "e9013d67b8bbec0256b6d9c65cc5863e81ad5b1bf7e90a37f93a24cfc9362ec2"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_19_suggested_point.py": "afea4b9633fb3e74c0b0ec38474057bcb91d52d3ca48a1ecaf3f03d730ff8ddb"
       }
     },
     "A-PS-20": {
@@ -121,9 +121,9 @@
       }
     },
     "A-PS-21": {
-      "entry": "300487d36f381247d96566c5c146ee3521b5a5096907cb00591dda2aaf7691fe",
+      "entry": "f79523b829cf49ea08d2b00f9771da710b72ca24c2503a7c2d73383443ffbe45",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_21_caps.py": "c73e86673525ab2af3d2fda81f81d1697bc05963f57a390549416cccb7f1e1f6"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_21_caps.py": "46093c0f3e7163c976827cddb4706b370aa27708eaadd3523dd7e3da0c829ea3"
       }
     },
     "A-PS-22": {
@@ -139,9 +139,9 @@
       }
     },
     "A-PS-24": {
-      "entry": "cc6ceed36df2fdf49406475349aeba5f3dfaf93a615b614121429968d3fac9db",
+      "entry": "2873df3e1b1801496ebd3da87622f080fdbfbc47d9662a88f030b3a7d6c6be17",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_24_tensor_contract.py": "2ac74fd061a89b8cdd746174c48e4ffe095d9b041b2b2e5791b3ebb6361a0d3e"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_24_tensor_contract.py": "31abed692406fe641e4e180ec99b3a91fcd575e914754af692dae8c37f23b8e6"
       }
     },
     "A-PS-25": {
@@ -193,15 +193,15 @@
       }
     },
     "A-PS-33": {
-      "entry": "3bc8120a8124f9c398c9481407248514316d33ae55cfb0e442dbbf29600fe697",
+      "entry": "c7ace0daa260f21226d9f70956644920dead8466cb2359fde2a446942a4aea47",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_33_api_surface_exact.py": "3994f43d7b4dea225a67026abb09739cd4eeffef894287e72e27f47cfeb3e1d4"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_33_api_surface_exact.py": "f279b923664fc7ef4c9b09d83a3d6f762177923def64adbd8a608a2b0e089654"
       }
     },
     "A-PS-34": {
-      "entry": "d41659284823f25ba0b925a4c470953770e3ff2c086d25e35f69728a4a6807f3",
+      "entry": "5977692579e5adf04529613189c6c3f5e2f417fc7423ee3371e7ede75ab3d0fc",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_34_browser_math_fidelity.py": "39bb2cbf3cdf4ed6ce6eabcece6688136636e1f0bc483f46a1dcf451ddeddefc"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_34_browser_math_fidelity.py": "e2e44476743bd516fa3fc9f4d2b954b6bec2801fed75a8c99997b33c4ace0be0"
       }
     },
     "A-PS-35": {
@@ -223,9 +223,9 @@
       }
     },
     "A-PS-38": {
-      "entry": "63921339ee9536f15c626ba80ac0542137a3ad4c46b79500d0c50b20b6457b60",
+      "entry": "99cac40d4243d917eedda2fb7882f8cc2b836086251f65e627db07ee36575d14",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_38_share_validators_template_caps.py": "9f5cac5102f9eba55dc72d321a2f68718b5740f68d6dca5cede9779b9841d9cd"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_38_share_validators_template_caps.py": "71ed306db5bd108eb09dad75e14263090168cfc9e1633760c504c80864e3e614"
       }
     },
     "A-PS-39": {
@@ -235,45 +235,45 @@
       }
     },
     "A-PS-40": {
-      "entry": "948b871618f8149681b6e9f823084f745d92ec0cb1ce8cd760202bbe915596b7",
+      "entry": "318df672891f4a1ea90a0c3ba1e6724136183c4fdb5888a9fc0af5a5d0acea64",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_40_worker_routing_surface.py": "92ea97d92f6392b96d9a9f6733f9f034f405021555d8415938c7146b4987d235"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_40_worker_routing_surface.py": "c13d9451b08037052ef00f90a4e4c9b64645d035bf02fbacfcaccd8ff529884f"
       }
     },
     "A-PS-41": {
       "entry": "bd2ef3a17be5a2fe1e3593078ca2d01004a91b3b009023beb10c182617ba1cfe",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_41_first_screen.py": "ab661fa9175a71d1957264870518b5509337b6265ae0652d5c53abad4e3dc418"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_41_first_screen.py": "45ba1104d9afa50a97e38d0d4299e3ae59c9b7a09380d547af7a21dc3c1732ff"
       }
     },
     "A-PS-42": {
       "entry": "e137aab5a18aeb419fd42cd41ed87e1991483889a5b327ece5486e9d4c7f20ff",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_42_phone_layout.py": "b23123401da873c6a7b552f5041a0df70bfea303fc865eedad1077aa5a6c6ccb"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_42_phone_layout.py": "4b8632c4c4c5b7fe95d177c60cdc2fc134c3017e9a4e204af59fbbfb8fba0ff2"
       }
     },
     "A-PS-43": {
       "entry": "4c03bea2a0ec96e3d2947ce2def3e1f62a05893d20370a2a3a07352c2cc36852",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_43_default_view_presets.py": "bbb0160c9214ef28253525fc9dc4f3b50e2bf1396590d19bca5d3b1aa01e7303"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_43_default_view_presets.py": "632c1a3e9cfa56cf8308aa7bc9ba51ee0794d6e8d3febd5aab3e9a195ab3a188"
       }
     },
     "A-PS-44": {
       "entry": "cd8db70955eba734fe516f3438594cf725c0c869c6012575e021e18426eb0ada",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_44_heatmap_theme_ramp.py": "2e5cdef63ec13f79ba0e56baa2f737c98fbe367497a63fe422f710c4c6580943"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_44_heatmap_theme_ramp.py": "f10b4527ce8becff9f5bd2279452d40caf222f7d3137e873b2041fda25c8715e"
       }
     },
     "A-PS-45": {
-      "entry": "3cef2a405063fe4b13396b4cebecd4c6310c20b51ca75f53dad7a4a7de7b9fbf",
+      "entry": "91aa3e5736025723a5a214aa8b95c6e1ae27445ae5d304d5faf128f0e5b31f64",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_45_risk_slider_readouts.py": "70314fba13293be3ee42b231b08df174a4d0030ab38f48cbbee650a5a881626b"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_45_risk_slider_readouts.py": "4c424a91c76f557258c3d90dc6581c381c34bd309fc17c47b148f2a15597c198"
       }
     },
     "A-PS-46": {
       "entry": "bbff7e80579ee4324a840c3b69dc42259b7e7aeed95bb02e7ae2fa07e7d10238",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_46_div_slider_point.py": "1a132ff393be29765a21dee6b5143e31754550a57c6bf4c3a384890573389010"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_46_div_slider_point.py": "c9d5cccabc73e5a02a57b5e4df240eced530aa61ed796aecda16025a9505af8b"
       }
     },
     "A-PS-47": {
@@ -285,7 +285,7 @@
     "A-PS-48": {
       "entry": "592d50d9d27d9b042dce0d928a54c89450ea50aa94be4f86fb57c8a9203eabc7",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_48_plain_language_disclaimer.py": "3f290f94ec27739559c98ea81cf3cf6794a47beea788c65b8f3f01f3885e09c5"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_48_plain_language_disclaimer.py": "b18a2c05c5e27312f4ba9d1a88f6c473926f219f897a23ad6679d10327ef9e32"
       }
     },
     "A-PS-49": {
@@ -297,7 +297,7 @@
     "A-PS-50": {
       "entry": "bcf2ca1c28f3d9abedfb3fbac1700b93ce3c8c93c44d74fc43b7b3905fcb6710",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_50_stress_cards_coverage.py": "3c8a856cbd5fcd42c67d18879c8e6c47563c56897498d6b91a104753e3cf7b22"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_50_stress_cards_coverage.py": "7d17b16905a84db8383f92decd07ef998009f443d3eace393124a35a64da003f"
       }
     },
     "A-PS-51": {
@@ -313,9 +313,9 @@
       }
     },
     "A-PS-53": {
-      "entry": "2e7a6ae90cfbc25174816d2a1745e3aeb93028e4624003823722a8457602e1f2",
+      "entry": "797235b6d349863ea7d8833162fac64402dfe2344516d2cf61f1452871725ca8",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_53_caps_inline_validation.py": "8a7311e1a930a115289f6a2c017aa0f7cd3da5789b1fb3cc5627b0020bc2d874"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_53_caps_inline_validation.py": "77bdcc0ff23d6ed2f2cf11eea1d933a830ac4fcf79199142d055e044d7c15640"
       }
     },
     "A-PS-54": {
@@ -410,7 +410,7 @@
     }
   },
   "sources": {
-    "docs/specs/2026-10-13-portfoliosight-demo-design.assertions.md": "baf579b37ef4a02b6a5e52021470393291029532d619a8b77aded809ee571351"
+    "docs/specs/2026-10-13-portfoliosight-demo-design.assertions.md": "884551015156d709fc5c9276187016a164d8c67051b0ec5ce870b100306f1072"
   },
   "sources_via": "gate",
   "version": 1

@@ -85,6 +85,8 @@ export function Settings({ tensor, lookback, ghosts, caps, unavailable, details,
     }
     onCaps(overrides);
   };
+  // "No limits" is on when every fund may go from 0% to 100%.
+  const noLimits = ids.length > 0 && ids.every((id) => caps.some((c) => c.id === id && (c.min ?? 0) === 0 && c.max === 100));
   const edit = (id: string, side: "min" | "max", value: string) => setDraft({ ...draft, [id]: { ...draft[id], [side]: value } });
   const excluded = tensor.universe.excluded ?? [];
 
@@ -201,8 +203,12 @@ export function Settings({ tensor, lookback, ghosts, caps, unavailable, details,
           })}
         </div>
         <div className="toolbar" style={{ marginTop: 12, marginBottom: 0 }}>
+          {/* every fund allowed from 0% to 100%: the menu's frontier with no limit on any one fund */}
+          <button type="button" className="btn" data-testid="caps-none" disabled={busy || noLimits} aria-pressed={noLimits} onClick={() => onCaps(ids.map((id) => ({ id, min: null, max: 100 })))}>
+            {plain.noLimits}
+          </button>
           <button type="button" className="btn" data-testid="caps-reset" disabled={busy} onClick={() => onCaps([])}>
-            Reset to default rule
+            {plain.resetLimits}
           </button>
         </div>
       </div>

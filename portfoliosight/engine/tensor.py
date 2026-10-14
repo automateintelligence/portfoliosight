@@ -10,7 +10,7 @@ from .builder import (
     universe_hash,
     validate_tensor,
 )
-from .invariants import InvariantError, check_floor, check_weights
+from .invariants import InvariantError, check_floor, check_risk_line, check_weights
 from .windows import WindowSelection, renormalize_allocation, select_window
 
 __all__ = [
@@ -22,6 +22,7 @@ __all__ = [
     "build_tensor",
     "canonical_json",
     "check_floor",
+    "check_risk_line",
     "check_weights",
     "load_schema",
     "renormalize_allocation",

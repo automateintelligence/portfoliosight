@@ -1,8 +1,9 @@
 """The invariants every computed mix satisfies before it is written (spec 4.11).
 
 One tolerance everywhere, 1e-6: weights sum to 1, respect their bounds, sit at or below their
-risk ceiling, and have an effective number of bets between 1 and N. A vector that fails is an
-error, never something to clip or renormalize.
+risk ceiling, and have an effective number of bets between 1 and N; a mix of a ladder also sits
+on its column's risk line and earns its level's return. A vector that fails is an error, never
+something to clip or renormalize.
 """
 
 from __future__ import annotations
@@ -43,8 +44,16 @@ def check_weights(w, *, lo, hi, cov, ceiling: float, enb: float) -> None:
         raise InvariantError("enb", f"effective number of bets {enb!r} is outside [1, {len(w)}]")
 
 
+def check_risk_line(w, *, cov, risk: float) -> None:
+    """Raise unless the mix has its column's risk (spec 4.7), within the tolerance either way."""
+    w = np.asarray(w, dtype=float)
+    sigma = float(np.sqrt(w @ np.asarray(cov, dtype=float) @ w))
+    if not abs(sigma - risk) <= TOL:
+        raise InvariantError("risk_line", f"risk {sigma!r} is not its column's risk {risk!r}")
+
+
 def check_floor(w, *, mu, floor: float) -> None:
-    """Raise unless the mix earns its cell's return floor (spec 4.7), within the tolerance."""
+    """Raise unless the mix earns its level's return floor (spec 4.7), within the tolerance."""
     earned = float(np.asarray(mu, dtype=float) @ np.asarray(w, dtype=float))
     if not earned >= floor - TOL:
         raise InvariantError("floor", f"return {earned!r} is below its floor {floor!r}")

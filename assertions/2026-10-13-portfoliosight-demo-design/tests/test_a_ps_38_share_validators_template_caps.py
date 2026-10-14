@@ -31,6 +31,9 @@ Pinned interface
   dkim_private_key}], from: {email, name}, reply_to: {email}, subject, content: [{type:
   "text/plain", value}, {type: "text/html", value}]}`. The link is
   `"https://portfoliosight.ai/" + encode(decode(search))` with the codec of `web/src/state/url.ts`.
+- Themes (spec 8.1, four themes since 2026-10-13): a link with `t` equal to any of `ks-dark`,
+  `light`, `hud`, `grid` is sent with that theme in the link; any other `t` value is refused with
+  `400 invalid_url` and nothing is sent.
 - `web/src/controls/ShareDialog.tsx`: `ShareDialog` with props `{open: boolean, url: string,
   privatePreview: boolean, onClose: () => void}`, renderable with `react-dom/server` when `open`
   (no portal); the notice mentions "private preview" when `privatePreview` is true.
@@ -293,6 +296,32 @@ describe("A-PS-38", () => {
     for (const m of sent) expect(m.text).not.toContain("VISITOR-MARKER");
   });
 
+  it("a link in any of the four themes is sent and an unknown theme is refused", async () => {
+    const to = "reader@example.org";
+    let checked = 0;
+    for (const theme of ["ks-dark", "light", "hud", "grid"]) {
+      stubFetch();
+      const url = `${SITE}/?t=${theme}&d=auto&lb=5y&u=tsp`;
+      const res: Response = await S.handleShare(post({ to, url }), baseEnv(), allow);
+      expect(res.status, `t=${theme}`).toBe(202);
+      expect(sent.length, `t=${theme}`).toBe(1);
+      const link = lines(textPart(sent[0].json))[1];
+      expect(link, `t=${theme}`).toBe(`${SITE}/` + codec.encode(codec.decode(new URL(url).search)));
+      expect(new URL(link).searchParams.get("t"), `t=${theme}`).toBe(theme);
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+    for (const theme of ["neon", "dark", "HUD", "Grid", "grid2", "hud,grid", ""]) {
+      stubFetch();
+      const res: Response = await S.handleShare(post({ to, url: `${SITE}/?u=tsp&lb=5y&d=auto&t=${theme}` }), baseEnv(), allow);
+      expect(res.status, `t=${theme}`).toBe(400);
+      expect(await codeOf(res), `t=${theme}`).toBe("invalid_url");
+      expect(outbound, `t=${theme}: something was sent`).toBe(0);
+      checked += 1;
+    }
+    expect(checked).toBe(11);
+  });
+
   it("the caps refuse the 2nd per IP per minute, the 4th per IP per day and the 51st per day", async () => {
     // the per-IP sequences below carry no x-ps-gate header
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -429,6 +458,7 @@ EXPECTED_TITLES = {
     "a valid share sends one fixed-template message carrying the re-encoded link",
     "every invalid input is refused with its code and nothing is sent",
     "keys outside the URL contract and visitor text never reach the message",
+    "a link in any of the four themes is sent and an unknown theme is refused",
     "the caps refuse the 2nd per IP per minute, the 4th per IP per day and the 51st per day",
     "the test key is a logged no-op",
     "the dialog shows the preview notice only while preview is on",

@@ -39,12 +39,15 @@ from portfoliosight.api.models import (
     HASH_PATTERN,
     MAX_BODY_BYTES,
     LookbackId,
+    RangeRequest,
     TensorRequest,
+    parse_range_request,
     parse_tensor_request,
     payload_too_large,
 )
 from portfoliosight.api.presets import presets_body, tensor_key
 from portfoliosight.api.queue import BuildQueue, JobState, QueueBusy, build_job
+from portfoliosight.api.ranges import RangeModels, range_body
 from portfoliosight.api.settings import Settings
 from portfoliosight.data import manifest as manifest_mod
 from portfoliosight.data import store as store_mod
@@ -161,6 +164,7 @@ def create_app(
     )
     requests_limiter = RateLimiter(REQUESTS_PER_MINUTE, now)
     posts_limiter = RateLimiter(POSTS_PER_MINUTE, now)
+    range_models = RangeModels(the_store)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -263,6 +267,15 @@ def create_app(
             return _rate_limited()
         parsed = parse_tensor_request(await _read_body(request))
         return await run_in_threadpool(_submit, parsed)
+
+    def _range(request: RangeRequest) -> JSONResponse:
+        key = (request.generation, request.hash, request.lookback)
+        return JSONResponse(range_body(range_models, key, request.weights), headers=NO_STORE)
+
+    @app.post("/v1/range")
+    async def post_range(request: Request) -> JSONResponse:
+        parsed = parse_range_request(await _read_body(request))
+        return await run_in_threadpool(_range, parsed)
 
     @app.get("/v1/tensors/{generation}/{uhash}/{lookback}")
     def get_tensor(

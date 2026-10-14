@@ -1,16 +1,21 @@
-"""A-PS-18 - the surface proxy is monotone and the bottom end is at least as diversified as the top.
+"""A-PS-18 - every ladder holds its risk, gives up return and gains ENB, and ends at its peak.
 
-Claim: the optimized Herfindahl |w[j][k]|^2 is non-decreasing in ascending Y_k within each column
-and non-increasing in ascending X_j within each row (+-1e-6); a cell is null exactly when
-Y_k > y_front[j]; 1 <= Z <= N on every feasible cell; ENB(w_div[j]) >= ENB(w_front[j]) - 1e-9;
-y_div[j] is the return floor of the highest-ENB candidate (ties -> highest return) and enb_ref is
-the maximum over all candidates in all columns.
+Claim: every column's ladder (at least 8 interior levels) starts at the frontier mix, keeps every
+level on the column's risk line (|sigma - X_j| <= 1e-6), never rises in return (+1e-8) and never
+falls in exact ENB from one level to the next, ends at the peak (the highest ENB on the ladder,
+at least the frontier mix's), stores each level's own return and ENB, is collapsed exactly when
+the peak gains no more than 1e-6 ENB (then every level is the frontier mix), keeps every level at
+or above its evenly spaced return floor, and flags a hop exactly where the midpoint blend of two
+levels loses more than 1% of the risk; enb_ref is the best ENB of all ladders; the heatmap raster
+is uniform from the lowest peak return to max(y_front), holds the peak in every row at or below
+the peak's return and the ladder's mix (earning at least Y_k) above it up to y_front, is null
+exactly where Y_k > y_front[j], and its k_div, y_div and w_div name the peak's highest row, its
+floor and the peak.
 
 Pinned interface (the product must provide exactly this): scripts/build_tensor.py (shared CLI
 pin, including --caps) and tests/fixtures/synthetic_23.parquet. Everything else is the test's own
 numpy recomputation from the tensor's cov, mu_s, bounds, torsion_inv_t, torsion_lambda, frontier
-and grid fields. Three menus: the fixture and two simulated SPD menus (N = 5 and N = 12).
-Exact ENB is not asserted monotone (spec 4.7).
+grid and ladder fields. Three menus: the fixture and two simulated SPD menus (N = 5 and N = 12).
 """
 
 from __future__ import annotations
@@ -199,17 +204,6 @@ def _enb(w, a) -> float:
     return float(np.exp(-(nz * np.log(nz)).sum()))
 
 
-def _greedy(mu, lo, hi, ascending: bool = False):
-    """Spec 4.4 endpoint fill: every minimum first, then the remainder in mu order to each max."""
-    w = np.array(lo, float)
-    rest = 1.0 - w.sum()
-    for i in np.argsort(mu if ascending else -np.asarray(mu), kind="stable"):
-        add = min(hi[i] - w[i], rest)
-        w[i] += add
-        rest -= add
-    return w
-
-
 def _default_max(n: int) -> float:
     return min(max(3.0 / n, 0.25), 1.0)
 
@@ -280,96 +274,85 @@ else:
         a = _arrays(t)
         _check_torsion_fields(a)
         n = a.n
-        # return floors: uniform from the lowest-mu greedy fill to max(y_front)
-        y_min = float(a.mu @ _greedy(a.mu, a.lo, a.hi, ascending=True))
-        assert abs(a.gy[0] - y_min) <= 1e-9, (
-            f"{label}: Y_min {a.gy[0]} != lowest-return fill {y_min}"
-        )
-        assert a.gy[-1] == a.yf.max(), f"{label}: Y_max != max(y_front)"
-        assert np.abs(a.gy - np.linspace(a.gy[0], a.gy[-1], NY)).max() <= 1e-9, (
-            f"{label}: Y not uniform"
-        )
+        ladder = t["ladder"]
+        lw = np.array(ladder["w"], float)
+        ly = np.array(ladder["y"], float)
+        lz = np.array(ladder["z"], float)
+        hop = np.array(ladder["hop"], bool)
+        collapsed = np.array(ladder["collapsed"], bool)
+        levels = lw.shape[1]
+        assert lw.shape == (NX, levels, n) and ly.shape == lz.shape == (NX, levels), f"{label}: ladder shapes"
+        assert hop.shape == (NX, levels - 1) and collapsed.shape == (NX,), f"{label}: hop / collapsed shapes"
+        assert levels - 2 >= 8, f"{label}: {levels - 2} interior levels, at least 8 expected"
 
-        herf = np.full((NX, NY), np.nan)
-        enb = np.full((NX, NY), np.nan)
+        enb_front = np.array([_enb(w, a) for w in a.wf])
+        for j in range(NX):
+            assert np.array_equal(lw[j, 0], a.wf[j]), f"{label}: ladder {j} does not start at the frontier mix"
+            for level in range(levels):
+                w = lw[j, level]
+                where = f"{label}: level ({j},{level})"
+                sig = _sigma(w, a.cov)
+                assert abs(sig - a.x[j]) <= TOL, f"{where}: sigma {sig} off the risk line {a.x[j]}"
+                assert abs(float(a.mu @ w) - ly[j, level]) <= 1e-12, f"{where}: y is not its mix's return"
+                value = _enb(w, a)
+                assert abs(lz[j, level] - value) <= 1e-9 * value, f"{where}: z is not its mix's ENB"
+                assert 1 - TOL <= value <= n + TOL, f"{where}: ENB {value} outside [1, N]"
+            # down the ladder the return never rises and the ENB never falls (spec 4.7)
+            assert not (np.diff(ly[j]) > 1e-8).any(), f"{label}: return rises down ladder {j}"
+            assert not (np.diff(lz[j]) < 0).any(), f"{label}: ENB falls down ladder {j}"
+            assert lz[j, -1] == lz[j].max() >= enb_front[j] - 1e-9, f"{label}: the peak of column {j} is not its best mix"
+            assert collapsed[j] == bool(lz[j, -1] <= lz[j, 0] + TOL), f"{label}: collapsed[{j}] disagrees with the ENB gain"
+            if collapsed[j]:
+                assert all(np.array_equal(w, a.wf[j]) for w in lw[j]), f"{label}: collapsed column {j} holds another mix"
+            elif ly[j, 0] - ly[j, -1] > TOL:
+                floors = np.linspace(ly[j, 0], ly[j, -1], levels)
+                assert not (ly[j] < floors - 1e-8).any(), f"{label}: a level of column {j} earns less than its floor"
+            for level in range(levels - 1):
+                upper, lower = lw[j, level], lw[j, level + 1]
+                middle = _sigma((upper + lower) / 2.0, a.cov)
+                if hop[j, level]:
+                    assert middle < 0.99 * a.x[j], f"{label}: hop ({j},{level}) on a blend that keeps the risk"
+                else:
+                    assert middle >= 0.99 * a.x[j] - 1e-12, f"{label}: blend ({j},{level}) leaves the risk line"
+        enb_ref = float(t["enb_ref"])
+        assert enb_ref == lz.max(), f"{label}: enb_ref {enb_ref} != the best ladder ENB {lz.max()}"
+
+        # the raster: the ladders resampled on uniform floors from the lowest peak to the top
+        assert abs(a.gy[0] - ly[:, -1].min()) <= 1e-12, f"{label}: Y_min is not the lowest peak return"
+        assert a.gy[-1] == a.yf.max(), f"{label}: Y_max != max(y_front)"
+        assert np.abs(a.gy - np.linspace(a.gy[0], a.gy[-1], NY)).max() <= 1e-9, f"{label}: Y not uniform"
         feasible = nulls = 0
         for j in range(NX):
+            bottom = int(np.flatnonzero(a.gy <= ly[j, -1])[-1])
             for k in range(NY):
                 w, z = a.gw[j][k], a.gz[j][k]
                 want_null = bool(a.gy[k] > a.yf[j])
-                assert (w is None) == want_null, (
-                    f"{label}: cell ({j},{k}) null={w is None} but Y_k > y_front[j] is {want_null}"
-                )
-                assert (z is None) == want_null, (
-                    f"{label}: grid.z null pattern differs at ({j},{k})"
-                )
+                assert (w is None) == want_null, f"{label}: cell ({j},{k}) null={w is None}, expected {want_null}"
+                assert (z is None) == want_null, f"{label}: grid.z null pattern differs at ({j},{k})"
                 if want_null:
                     nulls += 1
                     continue
                 w = np.asarray(w, float)
-                assert w.shape == (n,)
-                herf[j, k] = w @ w
-                enb[j, k] = _enb(w, a)
-                assert abs(z - enb[j, k]) <= 1e-9 * enb[j, k], (
-                    f"{label}: Z({j},{k}) != ENB of its mix"
-                )
+                value = _enb(w, a)
+                assert abs(z - value) <= 1e-9 * value, f"{label}: Z({j},{k}) != ENB of its mix"
                 assert 1 - TOL <= z <= n + TOL, f"{label}: Z({j},{k}) = {z} outside [1, N]"
+                assert not _sigma(w, a.cov) > a.x[j] + TOL, f"{label}: cell ({j},{k}) above its ceiling"
+                if k <= bottom:  # the floor does not bind: the most diversified mix is the peak
+                    assert np.array_equal(w, lw[j, -1]), f"{label}: cell ({j},{k}) is not the peak"
+                else:
+                    assert float(a.mu @ w) >= a.gy[k] - 1e-9, f"{label}: cell ({j},{k}) earns less than Y_k"
                 feasible += 1
+            assert a.k_div[j] == (-1 if collapsed[j] else bottom), f"{label}: k_div[{j}] = {a.k_div[j]}"
+            assert np.array_equal(a.w_div[j], lw[j, -1]), f"{label}: w_div[{j}] is not the peak"
+            want_div = a.yf[j] if collapsed[j] else a.gy[bottom]
+            assert a.y_div[j] == want_div, f"{label}: y_div[{j}] = {a.y_div[j]}, expected {want_div}"
         assert feasible + nulls == NX * NY == 1536
         assert feasible >= NX and nulls >= 1, f"{label}: {feasible} feasible / {nulls} null cells"
-
-        for j in range(NX):  # ascending Y within a column: the feasible set shrinks
-            col = herf[j][~np.isnan(herf[j])]
-            assert not (np.diff(col) < -TOL).any(), (
-                f"{label}: Herfindahl falls with Y in column {j}"
-            )
-        for k in range(NY):  # ascending X within a row: the feasible set grows
-            row = herf[:, k][~np.isnan(herf[:, k])]
-            assert not (np.diff(row) > TOL).any(), f"{label}: Herfindahl rises with X in row {k}"
-
-        enb_front = np.array([_enb(w, a) for w in a.wf])
-        best_overall = -np.inf
-        candidates = 0
-        for j in range(NX):
-            ks = [k for k in range(NY) if not np.isnan(enb[j, k])]
-            cand = [(enb_front[j], NY, -1)] + [
-                (enb[j, k], k, k) for k in ks
-            ]  # (ENB, return rank, id)
-            candidates += len(cand)
-            top = max(c[0] for c in cand)
-            best_overall = max(best_overall, top)
-            kd = a.k_div[j]
-            assert kd == -1 or kd in ks, f"{label}: k_div[{j}] = {kd} is not a feasible cell"
-            chosen = enb_front[j] if kd == -1 else enb[j, kd]
-            chosen_rank = NY if kd == -1 else kd
-            assert chosen >= top - 1e-9, (
-                f"{label}: k_div[{j}] = {kd} is not the highest-ENB candidate"
-            )
-            clear = [c for c in cand if c[0] >= top - 1e-9]
-            if len(clear) == 1:
-                assert kd == clear[0][2], f"{label}: k_div[{j}] = {kd}, expected {clear[0][2]}"
-            ties_above = [c for c in cand if c[0] == chosen and c[1] > chosen_rank]
-            assert not ties_above, f"{label}: column {j} tie not broken toward the highest return"
-            if kd == -1:
-                assert a.y_div[j] == a.yf[j], f"{label}: collapsed column {j} must store y_front"
-                assert np.array_equal(a.w_div[j], a.wf[j])
-            else:
-                assert a.y_div[j] == a.gy[kd], f"{label}: y_div[{j}] is not the floor of cell {kd}"
-                assert np.array_equal(a.w_div[j], np.asarray(a.gw[j][kd], float))
-            enb_div = _enb(a.w_div[j], a)
-            assert not enb_div < enb_front[j] - 1e-9, (
-                f"{label}: ENB(w_div) < ENB(w_front) in column {j}"
-            )
-        enb_ref = float(t["enb_ref"])
-        assert abs(enb_ref - best_overall) <= 1e-9, f"{label}: enb_ref {enb_ref} != {best_overall}"
-        assert not enb_ref < np.nanmax(enb) - 1e-9
-        assert not enb_ref < enb_front.max() - 1e-9
-        assert candidates == NX + feasible
         return feasible
 
     def test_fixture_surface(tmp_path_factory):
         feasible = _check_surface(_fixture_tensor(tmp_path_factory), "fixture")
-        assert feasible >= 500
+        assert feasible >= 2 * NX
 
     def test_two_random_menus(tmp_path):
         done = []

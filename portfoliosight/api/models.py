@@ -1,13 +1,15 @@
-"""The request body of ``POST /v1/tensors`` and its validation (spec 6, 4.4)."""
+"""The request bodies of ``POST /v1/tensors`` and ``POST /v1/range`` and their validation
+(spec 6, 4.4)."""
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from portfoliosight.api.errors import ApiError, invalid_request
 from portfoliosight.engine.caps import CapsError, resolve_bounds
+from portfoliosight.engine.invariants import TOL
 
 MIN_FUNDS = 2
 MAX_FUNDS = 30
@@ -40,6 +42,44 @@ class TensorRequest(BaseModel):
         return [{"id": fund.id, "min": fund.min, "max": fund.max} for fund in self.funds]
 
 
+# A weight is in [0, 1] within the tolerance of spec 4.11: a mix the page interpolates between
+# solved mixes can sit a rounding error outside, and is sent as it is.
+Weight = Annotated[float, Field(ge=-TOL, le=1.0 + TOL, allow_inf_nan=False)]
+
+
+class RangeRequest(BaseModel):
+    """A mix on a built menu: one weight per fund of the tensor, in the tensor's fund order."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    generation: str = Field(pattern=GENERATION_PATTERN)
+    hash: str = Field(pattern=HASH_PATTERN)
+    lookback: LookbackId
+    weights: list[Weight] = Field(min_length=MIN_FUNDS, max_length=MAX_FUNDS)
+
+
+def _shape_error(exc: ValidationError) -> ApiError:
+    """A 422 naming where the body is wrong and why; the body itself is never echoed."""
+    problems = [
+        {"where": ".".join(str(part) for part in error["loc"]), "problem": error["msg"]}
+        for error in exc.errors(include_input=False, include_url=False, include_context=False)
+    ]
+    return invalid_request("The request is not valid.", problems)
+
+
+def parse_range_request(body: bytes) -> RangeRequest:
+    """The validated request, or a 422 ``invalid_request`` saying what is wrong.
+
+    Checks the shape only: a generation and a hash of the right form, a known lookback, and 2
+    to 30 weights, each a number in ``[0, 1]`` within 1e-6. Whether they add up to 1, and
+    whether there is one per fund of the menu, is checked by ``ranges.range_body``.
+    """
+    try:
+        return RangeRequest.model_validate_json(body)
+    except ValidationError as exc:
+        raise _shape_error(exc) from None
+
+
 def parse_tensor_request(body: bytes) -> TensorRequest:
     """The validated request, or a 422 ``invalid_request`` saying what is wrong.
 
@@ -50,11 +90,7 @@ def parse_tensor_request(body: bytes) -> TensorRequest:
     try:
         request = TensorRequest.model_validate_json(body)
     except ValidationError as exc:
-        problems = [
-            {"where": ".".join(str(part) for part in error["loc"]), "problem": error["msg"]}
-            for error in exc.errors(include_input=False, include_url=False, include_context=False)
-        ]
-        raise invalid_request("The request is not valid.", problems) from None
+        raise _shape_error(exc) from None
     ids = [fund.id for fund in request.funds]
     repeated = sorted({fund for fund in ids if ids.count(fund) > 1})
     if repeated:

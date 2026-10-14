@@ -5,8 +5,12 @@
 //   GET  /api/presets, /api/symbols, /api/health, /api/tensors/{G}/{hash}/{lookback}
 //   POST /api/tensors            (bodies are recorded)
 //   POST /api/share              (always 202; nothing is sent)
+//   POST /api/range              409 range_unavailable (the page keeps its own figure), or the
+//                                stand-in one-year range of the posted weights (below) while the
+//                                "ranges" switch is on
 //   GET  /__mock/posts           recorded POST /api/tensors bodies
-//   POST /__mock/config          {"stale": 3, "unavailable": "10y", "challenge": 1, "build409": 2,
+//   GET  /__mock/ranges          recorded POST /api/range bodies
+//   POST /__mock/config          {"stale": 3, "unavailable": "10y", "challenge": 1, "build409": 2, "ranges": true,
 //                                 "noGeneration": true}
 //   POST /__mock/reset           clears the switches and the recorded bodies
 import fs from "node:fs";
@@ -126,8 +130,6 @@ function twoFundTensor(lookback) {
   }
   const curveSigma = [];
   const curveMu = [];
-  let sSafe = 0;
-  let bestLow = -Infinity;
   for (let i = 0; i <= (NX - 1) * 8; i++) {
     const s = i / 8;
     const j = Math.min(NX - 2, Math.floor(s));
@@ -135,12 +137,23 @@ function twoFundTensor(lookback) {
     const a = (1 - lam) * aFront[j] + lam * aFront[j + 1];
     curveSigma.push(sigmaOf(a));
     curveMu.push(muOf(a));
-    const low = muOf(a) / 2 - (1.96 * sigmaOf(a)) / Math.SQRT2;
-    if (low >= bestLow) {
-      bestLow = low;
-      sSafe = s;
-    }
   }
+  // Each column's ladder has two levels, the frontier mix and the most diversified cell: with two
+  // funds a straight blend of the two is the walk by return. The one-year range of a mix is its
+  // normal range (the mock has no return history to resample), and the slider starts at the
+  // rightmost frontier node with the best bad year, as the engine's rule reads.
+  const levels = aFront.map((a, j) => [a, wDiv[j][1]]);
+  const rangeAt = (a) => {
+    const m = muOf(a);
+    const spread = 1.96 * sigmaOf(a);
+    return { bad: m - spread, typical: m, good: m + spread, normal: { low: m - spread, mid: m, high: m + spread } };
+  };
+  const block = (shape) => {
+    const pick = (f) => shape.map((row) => (Array.isArray(row) ? row.map((a) => f(rangeAt(a))) : f(rangeAt(row))));
+    return { bad: pick((r) => r.bad), typical: pick((r) => r.typical), good: pick((r) => r.good), normal: { low: pick((r) => r.normal.low), mid: pick((r) => r.normal.mid), high: pick((r) => r.normal.high) } };
+  };
+  const bad = aFront.map((a) => rangeAt(a).bad);
+  const sSafe = bad.lastIndexOf(Math.max(...bad));
   const fund = (id, name, lastClose) => ({ id, name, kind: "etf", source: "tiingo", adjusted_through: fixture.asof, fetched_at: fixture.built_at, last_close: lastClose });
   const win = (id, r) => ({ label: fixture.stress[id].label, start: fixture.stress[id].start, end: fixture.stress[id].end, r });
   return {
@@ -168,8 +181,24 @@ function twoFundTensor(lookback) {
     torsion_inv_t: [[1, 0], [0, 1]],
     torsion_lambda: [v0, v1],
     bounds: { requested: [{ min: null, max: null }, { min: null, max: null }], min: [0, 0], max: [1, 1], rule: "max(0.25, 3/N)" },
-    frontier: { x, y: yFront, w: aFront.map(wOf), s_safe: sSafe },
+    frontier_uncapped: { sigma: aFront.map(sigmaOf), mu: [...yFront] },
+    frontier: { x, y: yFront, w: aFront.map(wOf), s_safe: sSafe, range: block(aFront) },
+    ladder: {
+      y: levels.map((pair) => pair.map(muOf)),
+      z: levels.map((pair) => pair.map(enbAt)),
+      w: levels.map((pair) => pair.map(wOf)),
+      hop: levels.map(() => [false]),
+      collapsed: kDiv.map((k) => k < 0),
+      t_balanced: levels.map(() => 0),
+      y_balanced: [...yFront],
+      default_point: "balanced",
+      t_suggested: levels.map(() => 0),
+      y_suggested: [...yFront],
+      range: block(levels),
+    },
     grid: { y: gridY, z, w: gw, k_div: kDiv, y_div: yDiv, w_div: wDiv, y_sug: [...yFront] },
+    entered: null,
+    range_method: fixture.range_method,
     enb_ref: enbRef,
     stress: { gfc2008: win("gfc2008", [null, null]), covid2020: win("covid2020", [0.004, -0.021]), rates2022: win("rates2022", [0.009, -0.034]) },
     notes: fixture.notes ?? [],
@@ -197,12 +226,29 @@ function tensorFor(hash, lookback) {
   return copy;
 }
 
-const DEFAULTS = { stale: 0, unavailable: null, challenge: 0, build409: 0, noGeneration: false };
+const DEFAULTS = { stale: 0, unavailable: null, challenge: 0, build409: 0, ranges: false, noGeneration: false };
 let config = { ...DEFAULTS };
 // As the service does: an unusable window is a failed build that is not retried (409).
 const windowUnavailable = (lookback) => ({ status: "failed", error: "window_unavailable", attempts: 1, retry: false, details: { lookback, reason: "not enough shared history", rows: 61 } });
 const noGeneration = { error: { code: "no_generation", message: "No generation has been published yet.", details: null } };
 let posts = [];
+let rangePosts = [];
+
+// The service resamples the menu's daily history; the mock has none, so its stand-in for the
+// one-year range of a mix is mu -+ 1.96 sigma around mu, from the tensor's own moments. It is
+// enough for the page to tell the service's figure from its own blend of the node ranges.
+function standInRange(tensor, weights) {
+  const n = tensor.mu_s.length;
+  let mu = 0;
+  let variance = 0;
+  for (let i = 0; i < n; i++) {
+    mu += tensor.mu_s[i] * weights[i];
+    for (let k = 0; k < n; k++) variance += weights[i] * tensor.cov[i][k] * weights[k];
+  }
+  const spread = 1.96 * Math.sqrt(variance);
+  const normal = { low: mu - spread, mid: mu, high: mu + spread };
+  return { bad: normal.low, typical: mu, good: normal.high, normal };
+}
 
 const send = (res, status, body, headers = {}) => {
   const text = typeof body === "string" ? body : JSON.stringify(body);
@@ -223,9 +269,11 @@ const server = http.createServer(async (req, res) => {
   const method = req.method ?? "GET";
 
   if (where === "/__mock/posts" && method === "GET") return send(res, 200, posts);
+  if (where === "/__mock/ranges" && method === "GET") return send(res, 200, rangePosts);
   if (where === "/__mock/reset" && method === "POST") {
     config = { ...DEFAULTS };
     posts = [];
+    rangePosts = [];
     return send(res, 200, { ok: true });
   }
   if (where === "/__mock/config" && method === "POST") {
@@ -280,6 +328,25 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, { status: "ready", generation: G, hash, url: `/api/tensors/${G}/${hash}/${lookback}` });
   }
   if (method === "POST" && where === "/api/share") return send(res, 202, { ok: true });
+  if (method === "POST" && where === "/api/range") {
+    let body = null;
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+      return send(res, 422, { error: { code: "invalid_request", message: "body is not JSON", details: null } });
+    }
+    rangePosts.push(body);
+    if (body?.generation !== G || !/^[0-9a-f]{16}$/.test(String(body?.hash)) || !LOOKBACKS.includes(body?.lookback)) {
+      return send(res, 404, { error: { code: "unknown_tensor", message: "No tensor was built under this address.", details: null } });
+    }
+    const tensor = tensorFor(body.hash, body.lookback);
+    const weights = Array.isArray(body.weights) ? body.weights.map(Number) : [];
+    if (weights.length !== tensor.mu_s.length || weights.some((w) => !Number.isFinite(w))) {
+      return send(res, 422, { error: { code: "invalid_request", message: "one weight per fund", details: null } });
+    }
+    if (!config.ranges) return send(res, 409, { error: { code: "range_unavailable", message: "the price history behind this tensor changed after it was built", details: null } });
+    return send(res, 200, standInRange(tensor, weights));
+  }
   return send(res, 404, { error: { code: hit ? "unknown_tensor" : "not_found", message: "not found", details: null } });
 });
 

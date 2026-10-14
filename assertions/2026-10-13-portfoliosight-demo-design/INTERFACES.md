@@ -83,9 +83,14 @@ the docstring is authoritative for that test.
 ## TypeScript and the page
 
 - **Math** (`web/src/math/portfolio.ts`): `portfolioMath(tensor)` returns an object with
-  `stats(w) -> {mu, sigma, enb}`, `range6m(mu, sigma) -> {low, typical, high}`,
-  `interpolate(s, t) -> number[]`, `frontierCurve() -> {sigma: number[], mu: number[]}`,
-  `riskSliderDomain() -> {s_safe, s_max}`, `tAuto(s) -> number`.
+  `stats(w) -> {mu, sigma, enb}`, `yearRange(s, t) -> {low, typical, high}` (the one-year bad,
+  typical and good year from `ladder.range`, blended between nodes as `interpolate` blends the
+  mixes), `normalRange(mu, sigma) -> {low, mid, high}` (`μ ∓ 1.96σ`, the bell-curve figure shown
+  in details only),
+  `interpolate(s, t) -> number[]` (walks `ladder.w` with `ladder.hop`, spec 4.11),
+  `frontierCurve() -> {sigma: number[], mu: number[]}`, `riskSliderDomain() -> {s_safe, s_max}`
+  (`s_safe` is the tensor's `frontier.s_safe`), `tAuto(s) -> number` (from
+  `ladder.t_suggested`).
 - **Tensor loader**: `parseTensor(json: unknown)` exported from `web/src/api/client.ts` (zod;
   throws on a bad tensor; importing the module has no side effects and needs no DOM).
 - **Worker**: `web/worker/index.ts` is the standard module shape, `export default { fetch(request,
@@ -106,7 +111,8 @@ the docstring is authoritative for that test.
   `scripts/install_backup_cron.sh` read `PS_ENV_FILE`, else `~/.secrets/portfoliosight.env`.
 - Engine: `torsion.min_torsion`, `torsion.effective_number_of_bets`, `optimize.cholesky_factor`,
   `tensor.check_weights`, `tensor.InvariantError`, `tensor.select_window`,
-  `tensor.renormalize_allocation`, `suggest.suggested_floor`, `stats.estimate_moments`,
+  `tensor.renormalize_allocation`, `suggest.balanced_level`, `suggest.suggested_level`,
+  `suggest.DEFAULT_POINT`, `stats.estimate_moments`,
   `stats.ew_weights`, `stats.menu_beta_blend`, `stats.risk_free_rate`, `caps.resolve_bounds`,
   `caps.greedy_fill`, `caps.CapsError`, `stress.stress_returns`; `scripts/make_fixtures.py --out`;
   `portfoliosight/engine/tensor.schema.json`. Engine modules counted by A-PS-25: at least six of
@@ -190,20 +196,26 @@ the docstring is authoritative for that test.
     one clickable that cycles ks-dark -> light -> hud -> grid, or a group of exactly four
     `button` / `[role=radio]` segments in that order. Every per-theme assertion (A-PS-41, 42, 44,
     47, 48, 49) runs for all four; A-PS-49 holds both token columns and compares all six pairs of
-    canvases. `web/worker/share.ts` still accepts only `t=ks-dark|light|hud` in a mailed link
-    (the Worker's validators were out of scope for this change), so A-PS-38 is unchanged.
+    canvases. `web/worker/share.ts` accepts exactly the four themes in a mailed link (the
+    page's own URL codec decides), and A-PS-38 checks all four and refuses any other.
   - **Funds & amounts.** From 1024 px `section-funds` is an `<aside>` beside the chart (it still
     carries `aria-expanded`, and `chip-funds` still opens it); below 1024 px it is the accordion
     section as before. `use-menu` exists only while the fund list on screen differs from the
     list that is plotted, and reads "Recalculate with these funds".
   - **Copy.** Stress card: "What this mix did: N% (Selected mix)". The diversification and
-    "Suggested" explanations behind details were rewritten (spec 3.6).
+    "Suggested" explanations behind details were rewritten (spec 3.6). Engine 2: the open circle
+    (`point-div`) is named "Optimized" (the tensor's `ladder.default_point`), the slider starts
+    there and has no separate Suggested tick; every range on the page is one year (Bad / Typical /
+    Good year), with the bell-curve figure only in details.
   - **New test ids** (asserted by `web/e2e/local/app.spec.ts` and `web/tests/`, free for later
     gate assertions): `funds-toggle` (opens and closes the sidebar; `aria-expanded`),
     `funds-hint`, `amount-head`, `mix-entered-{ID}`, `mix-selected-{ID}`,
     `frontier-label-{lookback id}` (a `<g>` in the overlay holding a `<text>` and, when the label
     was moved, a `path.leader`; `data-end-x` / `data-end-y` are the line end in chart pixels),
     `ghost-tip`, `mix-card` (`data-for` = `selected | current | div | cell`), `mix-card-word`,
-    `trades-export`, `details-words`, `details-suggested`, `details-method`. The markers'
+    `trades-export`, `details-words`, `details-suggested` (what "Optimized" means),
+    `details-method`, `details-bell` (the one-year range two ways), `key-nolimits` (legend entry of
+    the "No limits" curve, drawn when some limit binds), `caps-none` (sets every fund to no
+    minimum and a 100% maximum and rebuilds; `caps-reset` reads "Reset limits"). The markers'
     wrappers carry `data-mark` = `selected | div | current`; `point-*` ids are unchanged and no
     new `point-` id exists.

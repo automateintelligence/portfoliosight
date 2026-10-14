@@ -22,6 +22,8 @@ Pinned interface
   returned with `x-ps-source: origin`.
 - Tensor segments: `G` = `\\d{4}-\\d{2}-\\d{2}-[0-9.]+`, `hash` = 16 lowercase hex, `lookback` in
   `1y, 2y, 3y, 5y, 10y, ew`; anything else is a 4xx with no `DATA.get` and no origin fetch.
+- `POST /api/tensors` and `POST /api/range` are forwarded to `/v1/tensors` and `/v1/range` with the
+  body as sent; a body over 16 KB is refused with `413` before any origin fetch.
 - Unknown `/api/` paths answer `404`; a known path with another method answers 4xx; neither is
   forwarded nor sent to `ASSETS`. `POST /api/share` validates its input before it consults
   `SHARE_LIMITER`, and errors use the envelope `{"error": {"code"}}`.
@@ -348,6 +350,46 @@ describe("A-PS-40", () => {
     expect(e.assetCalls).toEqual([]);
   });
 
+  it("POST /api/range is forwarded with the four headers and a body over 16 KB is refused", async () => {
+    const worker = await loadWorker();
+    const e = makeEnv("0");
+    const body = JSON.stringify({ generation: G, hash: HASH, lookback: "5y", weights: [0.6, 0.4] });
+    const answer = JSON.stringify({ bad: -0.081, typical: 0.05, good: 0.25, normal: { low: -0.09, mid: 0.06, high: 0.21 } });
+    originResponse = () => new Response(answer, { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    const post = await call(worker, e.env, `${SITE}/api/range`, { method: "POST", headers: { ...GATE, "content-type": "application/json", "cf-connecting-ip": IP }, body });
+    expect(originCalls.length).toBe(1);
+    expect(originCalls[0].url).toBe(`${API_ORIGIN}/v1/range`);
+    expect(originCalls[0].method).toBe("POST");
+    expect(originCalls[0].body).toBe(body);
+    expect(originCalls[0].headers.get("x-ps-gate")).toBe(SECRET);
+    expect(originCalls[0].headers.get("content-type")).toBe("application/json");
+    expect(originCalls[0].headers.get("accept")).toBe("application/json");
+    expect(originCalls[0].headers.get("cf-connecting-ip")).toBe(IP);
+    expect(post.status).toBe(200);
+    expect(post.text).toBe(answer);
+    expect(post.headers.get("cache-control")).toBe("no-store");
+    expect(post.headers.get("x-ps-source")).toBe("origin");
+    // an upstream refusal is passed on as it is
+    originCalls.length = 0;
+    originResponse = () => new Response('{"error":{"code":"range_unavailable","message":"x","details":null}}', { status: 409, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    const refused = await call(worker, e.env, `${SITE}/api/range`, { method: "POST", headers: { ...GATE, "content-type": "application/json" }, body });
+    expect(refused.status).toBe(409);
+    expect(JSON.parse(refused.text).error.code).toBe("range_unavailable");
+    expect(refused.headers.get("x-ps-source")).toBe("origin");
+    // the 16 KB body limit of spec 6 is applied before the origin is asked
+    originCalls.length = 0;
+    originResponse = () => new Response(answer, { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    const big = JSON.stringify({ generation: G, hash: HASH, lookback: "5y", weights: [], pad: "p".repeat(17_000) });
+    const tooBig = await call(worker, e.env, `${SITE}/api/range`, { method: "POST", headers: { ...GATE, "content-type": "application/json" }, body: big });
+    expect(tooBig.status).toBe(413);
+    expect(originCalls.length, "an over-16 KB range body reached the origin").toBe(0);
+    const fits = JSON.stringify({ generation: G, hash: HASH, lookback: "5y", weights: [], pad: "p".repeat(15_000) });
+    expect((await call(worker, e.env, `${SITE}/api/range`, { method: "POST", headers: { ...GATE, "content-type": "application/json" }, body: fits })).status).toBe(200);
+    expect(originCalls.map((c) => c.body)).toEqual([fits]);
+    expect(e.dataGets).toEqual([]);
+    expect(e.assetCalls).toEqual([]);
+  });
+
   it("malformed tensor segments are refused without a DATA read or an origin fetch", async () => {
     const worker = await loadWorker();
     const e = makeEnv("0");
@@ -392,6 +434,8 @@ describe("A-PS-40", () => {
       ["GET", "/api/presets/extra"],
       ["GET", "/api/health/extra"],
       ["GET", "/api/share"],
+      ["POST", "/api/range/extra"],
+      ["POST", "/api/v1/range"],
     ];
     for (const [method, path] of none) {
       const r = await call(worker, e.env, SITE + path, { method, headers: { ...GATE, "content-type": "application/json" }, body: method === "POST" ? "{}" : undefined });
@@ -399,14 +443,14 @@ describe("A-PS-40", () => {
       expect(r.text, `${method} ${path}`).not.toContain("ASSETS-MARKER");
     }
     // the right paths with the wrong method are not forwarded either
-    const wrongMethod: Array<[string, string]> = [["POST", "/api/health"], ["DELETE", "/api/tensors"], ["GET", "/api/tensors"], ["PUT", `${TENSOR_PATH}`], ["POST", "/api/presets"]];
+    const wrongMethod: Array<[string, string]> = [["POST", "/api/health"], ["DELETE", "/api/tensors"], ["GET", "/api/tensors"], ["PUT", `${TENSOR_PATH}`], ["POST", "/api/presets"], ["GET", "/api/range"], ["DELETE", "/api/range"], ["PUT", "/api/range"]];
     for (const [method, path] of wrongMethod) {
       const r = await call(worker, e.env, SITE + path, { method, headers: { ...GATE, "content-type": "application/json" }, body: method === "GET" ? undefined : "{}" });
       expect(r.status, `${method} ${path}`).toBeGreaterThanOrEqual(400);
       expect(r.status, `${method} ${path}`).toBeLessThan(500);
       expect(r.text).not.toContain("ASSETS-MARKER");
     }
-    expect(originCalls.map((c) => `${c.method} ${c.url}`), "a path outside the three forwarded ones reached the origin").toEqual([]);
+    expect(originCalls.map((c) => `${c.method} ${c.url}`), "a path outside the four forwarded ones reached the origin").toEqual([]);
     expect(e.assetCalls, "an /api/ path fell through to the static assets").toEqual([]);
     expect(e.dataGets).toEqual([]);
 
@@ -446,6 +490,7 @@ describe("A-PS-40", () => {
     const requests: Array<[string, RequestInit]> = [
       [`${SITE}/api/health`, {}],
       [`${SITE}/api/tensors`, { method: "POST", headers: { "content-type": "application/json" }, body: '{"funds":[],"lookback":"5y"}' }],
+      [`${SITE}/api/range`, { method: "POST", headers: { "content-type": "application/json", "x-ps-gate": "client-supplied-value" }, body: `{"generation":"${G}","hash":"${HASH}","lookback":"5y","weights":[1]}` }],
       [`${SITE}/api/tensors/${G}/${HASH}/1y`, {}],
       [`${SITE}/api/tensors/${G}/${HASH}/ew`, { headers: { "x-ps-gate": "client-supplied-value" } }],
     ];
@@ -455,7 +500,7 @@ describe("A-PS-40", () => {
       expect(originCalls.length, url).toBe(1);
       all.push(...originCalls);
     }
-    expect(all.length).toBe(4);
+    expect(all.length).toBe(5);
     for (const c of all) {
       expect(c.headers.get("x-ps-gate"), c.url).toBe(SECRET);
       expect(c.headers.get("x-ps-gate"), c.url).not.toBe("client-supplied-value");
@@ -469,6 +514,7 @@ EXPECTED_TITLES = {
     "presets and symbols are read from R2",
     "a tensor is served from R2 on a hit and forwarded to the origin on a miss",
     "POST /api/tensors and GET /api/health are forwarded with the four headers",
+    "POST /api/range is forwarded with the four headers and a body over 16 KB is refused",
     "malformed tensor segments are refused without a DATA read or an origin fetch",
     "no other /api/ path exists and the share route stays in the Worker",
     "every other path goes to ASSETS",

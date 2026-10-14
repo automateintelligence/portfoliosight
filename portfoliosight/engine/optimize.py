@@ -1,13 +1,13 @@
-"""The conic programs behind the frontier and the diversification surface (spec 4.5, 4.7).
+"""The conic programs behind the frontier (spec 4.5).
 
-Three second-order-cone programs share the menu's constraints `1'w = 1`, `min <= w <= max`:
+Two second-order-cone programs share the menu's constraints `1'w = 1`, `min <= w <= max`:
 
     minimum variance   minimize |C w|
     frontier point     maximize mu_s' w   s.t. |C w| <= X
-    surface cell       minimize |w|^2     s.t. |C w| <= X,  mu_s' w >= Y
 
 with `C = cholesky(cov)'`, so `|C w|^2 = w' cov w`. Each is one DPP-parametrized cvxpy problem,
-built once per menu and re-solved with new parameter values; Clarabel runs at 1e-8.
+built once per menu and re-solved with new parameter values; Clarabel runs at 1e-8. The mixes
+below the frontier are not convex programs; they are in `ladder.py`.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def cholesky_factor(cov) -> np.ndarray:
 
 
 class MenuPrograms:
-    """The three programs of one menu: moments and bounds fixed, `X` and `Y` free."""
+    """The two programs of one menu: moments and bounds fixed, `X` free."""
 
     def __init__(self, mu_s, cov, lo, hi):
         self.mu = np.asarray(mu_s, dtype=float)
@@ -68,15 +68,10 @@ class MenuPrograms:
         mu = cp.Parameter(n, value=self.mu)
         factor = cp.Parameter((n, n), value=cholesky_factor(self.cov))
         self._x = cp.Parameter(nonneg=True)
-        self._y = cp.Parameter()
         risk = cp.norm(factor @ self._w, 2)
         menu = [cp.sum(self._w) == 1, self._w >= self.lo, self._w <= self.hi]
         self._min_variance = cp.Problem(cp.Minimize(risk), menu)
         self._frontier = cp.Problem(cp.Maximize(mu @ self._w), [risk <= self._x, *menu])
-        self._cell = cp.Problem(
-            cp.Minimize(cp.sum_squares(self._w)),
-            [risk <= self._x, mu @ self._w >= self._y, *menu],
-        )
 
     def sigma(self, w) -> float:
         """Annual risk of a mix, from the covariance the browser also holds."""
@@ -89,12 +84,6 @@ class MenuPrograms:
         """The highest-return mix with risk at most `x`, to the solver's tolerance."""
         self._x.value = x
         return _solve(self._frontier, self._w, f"frontier point at risk {x!r}")
-
-    def cell(self, x: float, y: float) -> np.ndarray:
-        """The least concentrated mix with risk at most `x` and return at least `y`."""
-        self._x.value = x
-        self._y.value = y
-        return _solve(self._cell, self._w, f"cell at risk {x!r}, return floor {y!r}")
 
 
 def frontier(programs: MenuPrograms, nx: int = NX) -> Frontier:
@@ -114,8 +103,7 @@ def frontier(programs: MenuPrograms, nx: int = NX) -> Frontier:
 
     When the two ends are within the 1e-6 tolerance in risk there is no risk axis to grid: no
     ceiling between them can be told from sigma_max, under which the greedy fill is feasible
-    and earns the most. Every column then holds the greedy fill at `X = sigma_max`. Less
-    concentrated mixes of such a menu still appear below it, as surface cells.
+    and earns the most. Every column then holds the greedy fill at `X = sigma_max`.
     """
     if nx < 2:
         raise ValueError("a frontier needs at least 2 columns")
@@ -134,7 +122,7 @@ def frontier(programs: MenuPrograms, nx: int = NX) -> Frontier:
             if programs.mu @ mix < programs.mu @ nodes[-1]:
                 mix = nodes[-1]
             if ceiling - programs.sigma(mix) > TOL:
-                mix = _onto_ceiling(mix, top, float(ceiling), programs.cov)
+                mix = onto_risk(mix, top, float(ceiling), programs.cov)
             nodes.append(mix)
         w = np.vstack([*nodes, top])
         pinned = np.arange(nx) == 0
@@ -142,11 +130,11 @@ def frontier(programs: MenuPrograms, nx: int = NX) -> Frontier:
     return Frontier(x=x, y=y, w=w, pinned=pinned)
 
 
-def _onto_ceiling(mix: np.ndarray, top: np.ndarray, x: float, cov: np.ndarray) -> np.ndarray:
-    """The point between `mix` (risk below `x`) and `top` (risk at least `x`) with risk `x`.
+def onto_risk(mix: np.ndarray, top: np.ndarray, x: float, cov: np.ndarray) -> np.ndarray:
+    """The point between `mix` (risk at most `x`) and `top` (risk at least `x`) with risk `x`.
 
-    Risk along the line is `sqrt(a t^2 + b t + sigma(mix)^2)`; with `mix` inside the ceiling
-    exactly one `t > 0` reaches it.
+    Risk along the line is `sqrt(a t^2 + b t + sigma(mix)^2)`; with `mix` inside the risk level
+    exactly one `t >= 0` reaches it.
     """
     step = top - mix
     a = float(step @ cov @ step)

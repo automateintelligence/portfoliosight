@@ -336,6 +336,54 @@ describe("worker routing", () => {
     expect(originCalls[0].body).toBe(fits);
   });
 
+  it("POST /api/range is forwarded to /v1/range with the gate header and the body as sent", async () => {
+    const worker = await loadWorker();
+    const e = makeEnv();
+    const body = JSON.stringify({ generation: G, hash: HASH, lookback: "5y", weights: [0.6, 0.4] });
+    const answer = JSON.stringify({ bad: -0.08, typical: 0.05, good: 0.25, normal: { low: -0.09, mid: 0.06, high: 0.21 } });
+    originResponse = () => new Response(answer, { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    const res = await call(worker, e.env, `${SITE}/api/range?debug=1`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.50", "x-ps-gate": "client-supplied", cookie: "ps_preview=abc" },
+      body,
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(answer);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("x-ps-source")).toBe("origin");
+    expect(originCalls.map((c) => `${c.method} ${c.url}`)).toEqual([`POST ${API_ORIGIN}/v1/range`]);
+    const headers = new Map(originCalls[0].headers);
+    expect(Array.from(headers.keys()).sort()).toEqual(["accept", "cf-connecting-ip", "content-type", "x-ps-gate"]);
+    expect(headers.get("x-ps-gate")).toBe(SECRET);
+    expect(headers.get("accept")).toBe("application/json");
+    expect(headers.get("content-type")).toBe("application/json");
+    expect(headers.get("cf-connecting-ip")).toBe("203.0.113.50");
+    expect(originCalls[0].body).toBe(body);
+    // an origin refusal comes back as it is
+    originCalls.length = 0;
+    originResponse = () => new Response('{"error":{"code":"range_unavailable"}}', { status: 409, headers: { "content-type": "application/json" } });
+    const refused = await call(worker, e.env, `${SITE}/api/range`, { method: "POST", headers: { "content-type": "application/json" }, body });
+    expect(refused.status).toBe(409);
+    expect(await errorCode(refused)).toBe("range_unavailable");
+    expect(originCalls.length).toBe(1);
+    expect(e.dataGets).toEqual([]);
+    expect(e.assetCalls).toEqual([]);
+  });
+
+  it("an oversized POST /api/range body is refused before the origin is called", async () => {
+    const worker = await loadWorker();
+    const e = makeEnv();
+    const big = JSON.stringify({ generation: G, hash: HASH, lookback: "5y", weights: [], pad: "p".repeat(17_000) });
+    const res = await call(worker, e.env, `${SITE}/api/range`, { method: "POST", headers: { "content-type": "application/json" }, body: big });
+    expect(res.status).toBe(413);
+    expect(await errorCode(res)).toBe("payload_too_large");
+    expect(originCalls).toEqual([]);
+    const fits = JSON.stringify({ generation: G, hash: HASH, lookback: "5y", weights: [], pad: "p".repeat(15_000) });
+    await call(worker, e.env, `${SITE}/api/range`, { method: "POST", headers: { "content-type": "application/json" }, body: fits });
+    expect(originCalls.map((c) => c.url)).toEqual([`${API_ORIGIN}/v1/range`]);
+    expect(originCalls[0].body).toBe(fits);
+  });
+
   it("a stored tensor is served with its ETag and the immutable policy", async () => {
     const worker = await loadWorker();
     const e = makeEnv();
@@ -403,6 +451,12 @@ describe("worker routing", () => {
       ["GET", "/api/share", 404],
       ["HEAD", "/api/presets", 404],
       ["POST", "/api/symbols", 404],
+      ["GET", "/api/range", 404],
+      ["HEAD", "/api/range", 404],
+      ["PUT", "/api/range", 404],
+      ["POST", "/api/range/", 404],
+      ["POST", "/api/range/extra", 404],
+      ["POST", "/api/Range", 404],
       ["GET", "/api/Presets", 404],
       ["GET", "/api//presets", 404],
     ];

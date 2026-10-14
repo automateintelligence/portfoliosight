@@ -7,6 +7,7 @@ price records it needs, uses rows up to ``D_G``, and never writes over a tensor 
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time
@@ -19,10 +20,12 @@ from portfoliosight.data import cache as cache_mod
 from portfoliosight.data import manifest as manifest_mod
 from portfoliosight.data import store as store_mod
 from portfoliosight.data.manifest import ManifestEntry
-from portfoliosight.data.returns import build_returns
+from portfoliosight.data.returns import build_returns, window_sample
 from portfoliosight.engine import ENGINE_VERSION
 from portfoliosight.engine.caps import CapsError
+from portfoliosight.engine.ladder import LEVELS
 from portfoliosight.engine.optimize import NX
+from portfoliosight.engine.ranges import METHOD, RangeModel, frame_digest, range_model
 from portfoliosight.engine.stats import RISK_FREE_SOURCES
 from portfoliosight.engine.surface import NY
 from portfoliosight.engine.tensor import (
@@ -54,6 +57,10 @@ class GenerationGone(BuildRefused):
 
 class KeyExists(Exception):
     """The tensor key is already written; the first tensor of a key is the one served."""
+
+
+class RangeUnavailable(Exception):
+    """A stored tensor's lookback sample can no longer be rebuilt from the price records."""
 
 
 def generation_key(generation: str) -> str:
@@ -164,12 +171,15 @@ def build_from_store(
     cache_dir: str | os.PathLike[str],
     universe_name: str = CUSTOM_MENU_NAME,
     preset_id: str | None = None,
+    allocation: Mapping[str, float] | None = None,
     nx: int = NX,
     ny: int = NY,
+    levels: int = LEVELS,
 ) -> dict[str, Any]:
     """The tensor of one (generation, menu, lookback), from the store as it is now.
 
-    ``funds`` is the requested policy, ``[{"id", "min", "max"}]`` in display order. Raises
+    ``funds`` is the requested policy, ``[{"id", "min", "max"}]`` in display order;
+    ``allocation`` is the entered mix of a preset, amounts by fund id, when it has one. Raises
     ``GenerationGone`` when the generation's metadata is absent, and ``BuildRefused`` when the
     window has too little shared history, the caps cannot be met by the funds in the window, or
     the generation belongs to another engine version.
@@ -217,9 +227,11 @@ def build_from_store(
         ],
         tr_index={fund: _tr_series(record) for fund, record in priced.items()},
         rf_series=rf_series,
+        allocation=allocation,
         engine_version=ENGINE_VERSION,
         nx=nx,
         ny=ny,
+        levels=levels,
     )
     try:
         tensor = build_tensor(inputs)
@@ -231,3 +243,58 @@ def build_from_store(
     if tensor["generation"] != generation:
         raise RuntimeError(f"built {tensor['generation']}, not the requested {generation}")
     return tensor
+
+
+def range_model_from_store(
+    store: store_mod.Store, tensor_key: str, *, cache_dir: str | os.PathLike[str]
+) -> RangeModel:
+    """The range model (spec 4.9) of a stored tensor, with its lookback sample rebuilt.
+
+    The sample is not in the tensor: fund-level daily returns never leave the service. It is
+    read back from the price records, on the same calendar the build used (the menu's served
+    funds, the ones a view set aside included), between the window's stored first and last day,
+    for the funds the tensor uses; the moments are the tensor's own. Raises ``KeyError`` when
+    the store has no tensor under ``tensor_key`` and ``RangeUnavailable`` when a fund's record
+    is gone, the window no longer holds two shared days, the tensor was made with another range
+    method, or the rebuilt sample is not the build's (its digest, ``lookback.sample_sha256``).
+    """
+    tensor = json.loads(store.get(tensor_key))
+    asof = datetime.combine(date.fromisoformat(tensor["asof"]), time())
+    catalog = manifest_mod.load_manifest(store).symbols
+    root = Path(cache_dir)
+    ids = [fund["id"] for fund in tensor["universe"]["funds"]]
+    set_aside = [fund["id"] for fund in tensor["universe"]["excluded"]]
+
+    def stored_record(fund: str, served_only: bool) -> pd.DataFrame | None:
+        entry = catalog.get(fund)
+        if entry is None or (served_only and entry.status != "ok"):
+            return None
+        record = _cached_record(store, root, fund, entry.fetched_at or "")
+        return None if record is None else _upto(record, asof)
+
+    records: dict[str, pd.DataFrame] = {}
+    for fund in ids:
+        record = stored_record(fund, served_only=False)
+        if record is None:
+            raise RangeUnavailable(f"{fund}: its price record is no longer stored")
+        records[fund] = record
+    for fund in set_aside:
+        record = stored_record(fund, served_only=True)
+        if record is not None:
+            records[fund] = record
+    window = tensor["lookback"]
+    sample = window_sample(
+        build_returns(records),
+        ids,
+        date.fromisoformat(window["start"]),
+        date.fromisoformat(window["end"]),
+    )
+    if len(sample) < 2:
+        raise RangeUnavailable("the window no longer holds two shared days of prices")
+    if tensor["range_method"] != dict(METHOD):
+        raise RangeUnavailable("this tensor's ranges were made with another method")
+    # the very sample of the build, or nothing: a record corrected or a calendar changed since
+    # changes the digest, and the endpoint refuses rather than answer from other history
+    if frame_digest(sample) != window["sample_sha256"]:
+        raise RangeUnavailable("the price history behind this tensor changed after it was built")
+    return range_model(sample.to_numpy(), tensor["mu_s"], tensor["cov"])

@@ -1,7 +1,8 @@
 import { BarChart3, ChevronDown, ListChecks, PanelRightClose, PanelRightOpen, Settings as SettingsIcon, Share2, ArrowLeftRight } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Chart, MarkKeys } from "./chart/Chart";
-import { DESKTOP_MARGINS, makeScales, paddedExtent, type ChartScales } from "./chart/scales";
+import { NO_LIMITS } from "./chart/Heatmap";
+import { clipCurve, DESKTOP_MARGINS, makeScales, paddedExtent, type ChartScales } from "./chart/scales";
 import { DivSlider } from "./controls/DivSlider";
 import { PresetMenu } from "./controls/PresetMenu";
 import { ResultStrip } from "./controls/ResultStrip";
@@ -9,13 +10,14 @@ import { RiskSlider } from "./controls/RiskSlider";
 import { ShareDialog } from "./controls/ShareDialog";
 import { ThemeSwitch } from "./controls/ThemeSwitch";
 import { disclaimer, family, lookbackLine, lookbackNames, plain } from "./copy";
-import { portfolioMath } from "./math/portfolio";
-import { ceilingAt, deriveView, positionOfCeiling } from "./math/view";
+import { portfolioMath, type YearRange } from "./math/portfolio";
+import { atNode, ceilingAt, deriveView, limitsBind, positionOfCeiling } from "./math/view";
 import { Funds } from "./sections/Funds";
 import { Settings } from "./sections/Settings";
 import { Stress } from "./sections/Stress";
 import { Trades } from "./sections/Trades";
 import { createStore, currentMix, LOOKBACKS, type LookbackId } from "./state/store";
+import { useExactRange } from "./state/useExactRange";
 import { applyTheme, useMediaQuery, useThemeEpoch } from "./theme/useTheme";
 
 type SectionId = "funds" | "trades" | "stress" | "settings";
@@ -110,7 +112,12 @@ export default function App() {
 
   const { tensor } = state;
   const math = useMemo(() => (tensor ? portfolioMath(tensor) : null), [tensor]);
-  const view = useMemo(() => (tensor && math ? deriveView(tensor, math, state.s, state.t) : null), [tensor, math, state.s, state.t]);
+  const nodeView = useMemo(() => (tensor && math ? deriveView(tensor, math, state.s, state.t) : null), [tensor, math, state.s, state.t]);
+  const rangeKey = useMemo(() => (tensor ? { generation: tensor.generation, hash: tensor.universe.hash, lookback: tensor.lookback.id } : null), [tensor]);
+  // The selected mix's exact one-year range comes from the service once the sliders rest; at a
+  // column's level the tensor's own figure is already exact, so nothing is asked.
+  const selectedExact = useExactRange(rangeKey, tensor && nodeView && !atNode(tensor, nodeView.s, nodeView.t) ? nodeView.weights : null);
+  const view = useMemo(() => (nodeView && selectedExact ? { ...nodeView, range: selectedExact } : nodeView), [nodeView, selectedExact]);
   const mix = useMemo(() => (tensor ? currentMix({ rows: state.rows, unit: state.unit }, tensor) : null), [tensor, state.rows, state.unit]);
   const cellMix = useCallback(
     (j: number, k: number) => {
@@ -121,12 +128,22 @@ export default function App() {
   );
   const frontierEnb = useMemo(() => (tensor && math ? tensor.frontier.w.map((w) => math.stats(w).enb) : []), [tensor, math]);
   const currentStats = useMemo(() => (math && mix?.weights ? math.stats(mix.weights) : null), [math, mix]);
-  const current = useMemo(
-    () => (math && mix?.weights && currentStats ? { stats: currentStats, range: math.range6m(currentStats.mu, currentStats.sigma), weights: mix.weights } : null),
-    [math, mix, currentStats],
-  );
+  // The entered mix's range: the tensor's own when it is the menu's allocation (presets), else the
+  // service's for these weights; until then, or if it cannot answer, none (the bell-curve figure
+  // stays in the details).
+  const builtIn = useMemo((): YearRange | null => {
+    const entered = tensor?.entered;
+    const w = mix?.weights;
+    if (!entered || !w || entered.w.length !== w.length || entered.w.some((v, i) => Math.abs(v - w[i]) > 1e-9)) return null;
+    return { low: entered.range.bad, typical: entered.range.typical, high: entered.range.good };
+  }, [tensor, mix]);
+  const enteredExact = useExactRange(rangeKey, builtIn === null && mix?.weights ? mix.weights : null);
+  const current = useMemo(() => {
+    if (!math || !mix?.weights || !currentStats) return null;
+    return { stats: currentStats, range: builtIn ?? enteredExact, weights: mix.weights };
+  }, [math, mix, currentStats, builtIn, enteredExact]);
 
-  const ghostCurves = useMemo(
+  const lookbackGhosts = useMemo(
     () => state.ghosts.flatMap((id) => (state.ghostTensors[id] ? [{ id, curve: state.ghostTensors[id]!.frontier_curve }] : [])),
     [state.ghosts, state.ghostTensors],
   );
@@ -144,13 +161,13 @@ export default function App() {
     const pts = curve.sigma.map((sigma, i) => ({ sigma, mu: curve.mu[i] }));
     pts.push({ sigma: frontier.x[0], mu: grid.y[0] - dy / 2 });
     if (currentStats) pts.push(currentStats);
-    for (const g of ghostCurves) g.curve.sigma.forEach((sigma, i) => pts.push({ sigma, mu: g.curve.mu[i] }));
+    for (const g of lookbackGhosts) g.curve.sigma.forEach((sigma, i) => pts.push({ sigma, mu: g.curve.mu[i] }));
     if (state.details) tensor.sigma.forEach((sigma, i) => pts.push({ sigma, mu: tensor.mu_s[i] }));
     const extent = paddedExtent(pts, { dx: dx / 2, dy: dy / 2 });
     if (!phone) {
       // Room to the right of every frontier line for the name of its history window.
       const plotW = size.width - DESKTOP_MARGINS.left - DESKTOP_MARGINS.right;
-      const ends = [{ id: tensor.lookback.id as string, curve }, ...ghostCurves].filter((l) => l.curve.sigma.length > 0);
+      const ends = [{ id: tensor.lookback.id as string, curve }, ...lookbackGhosts].filter((l) => l.curve.sigma.length > 0);
       for (const line of ends) {
         const need = 20 + (lookbackLine[line.id] ?? line.id).length * 6.3 - (DESKTOP_MARGINS.right - 4);
         const reach = line.curve.sigma[line.curve.sigma.length - 1] - extent.xMin;
@@ -158,7 +175,18 @@ export default function App() {
       }
     }
     return makeScales(size.width, size.height, extent, phone);
-  }, [tensor, size.width, size.height, currentStats, ghostCurves, state.details, phone]);
+  }, [tensor, size.width, size.height, currentStats, lookbackGhosts, state.details, phone]);
+
+  // The same menu with every limit lifted, drawn like a ghost whenever the limits bind. It does not
+  // widen the chart: where it rises above the view it is cut at the edge and named there.
+  const chartGhosts = useMemo(() => {
+    if (!tensor || !scales) return lookbackGhosts;
+    if (!limitsBind(tensor)) return lookbackGhosts;
+    const [xMin, xMax] = scales.x.domain();
+    const [yMin, yMax] = scales.y.domain();
+    const curve = clipCurve(tensor.frontier_uncapped, { xMin, xMax, yMin, yMax });
+    return curve.sigma.length >= 2 ? [...lookbackGhosts, { id: NO_LIMITS, curve }] : lookbackGhosts;
+  }, [tensor, scales, lookbackGhosts]);
 
   // The first paint of a chart wipes in once; later redraws (theme, ghosts) are immediate.
   const [reveal, setReveal] = useState(true);
@@ -182,7 +210,7 @@ export default function App() {
     (dy: number, start: boolean) => {
       if (!scales || !view || view.disabled) return;
       if (start) dragT0.current = view.t;
-      const span = scales.y(view.mostDiversified.mu) - scales.y(view.front.mu);
+      const span = scales.y(view.peak.mu) - scales.y(view.front.mu);
       if (span < 3 || start) return;
       setT(Math.min(1, Math.max(0, dragT0.current + dy / span)));
     },
@@ -336,7 +364,7 @@ export default function App() {
             tensor={tensor}
             view={view}
             scales={scales}
-            ghosts={ghostCurves}
+            ghosts={chartGhosts}
             frontierEnb={frontierEnb}
             current={current}
             details={state.details}
@@ -350,11 +378,10 @@ export default function App() {
             onDivDrag={onDivDrag}
             onNudge={onNudge}
           />
-          {view && phone && <MarkKeys hasCurrent={currentStats !== null} hasGhosts={ghostCurves.length > 0} />}
+          {view && phone && <MarkKeys hasCurrent={currentStats !== null} hasGhosts={lookbackGhosts.length > 0} hasNoLimits={chartGhosts.length > lookbackGhosts.length} compact />}
           {view && !phone && (
             <DivSlider
               t={view.t}
-              tSuggested={view.tAuto}
               moved={view.moved}
               disabled={view.disabled || busy}
               horizontal={false}
@@ -382,7 +409,6 @@ export default function App() {
           {view && phone && (
             <DivSlider
               t={view.t}
-              tSuggested={view.tAuto}
               moved={view.moved}
               disabled={view.disabled || busy}
               horizontal
@@ -398,6 +424,7 @@ export default function App() {
             low={view.range.low}
             typical={view.range.typical}
             high={view.range.high}
+            normal={view.normal}
             word={view.word}
             details={state.details}
             facts={{
@@ -411,6 +438,7 @@ export default function App() {
               rows: tensor.lookback.rows,
               asof: tensor.asof,
               notes: tensor.notes ?? [],
+              defaultPoint: tensor.ladder.default_point,
             }}
             staleAsof={state.staleness?.asof ?? null}
             onToggleDetails={() => dispatch({ type: "setDetails", details: !state.details })}

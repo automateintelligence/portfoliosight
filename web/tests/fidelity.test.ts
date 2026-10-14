@@ -59,44 +59,71 @@ function seeded(seed: number) {
 // Funds A and B are uncorrelated with volatilities 10% and 20% and returns 2% and 10%, so the
 // torsion is the identity and a mix [a, 1 - a] returns 10% - 8% * a.
 const FLOORS = [0.02, 0.06, 0.1];
-type Column = { front: number[]; yFront: number; cells: (number[] | null)[]; kDiv: number; ySug?: number };
-// the frontier mix, then cells at floors 10%, 6% and 2%; the most diversified one is the 2% cell
-const FULL: Column = { front: [0, 1], yFront: 0.1, cells: [[1, 0], [0.5, 0.5], [0, 1]], kDiv: 0, ySug: 0.06 };
-// the frontier return sits between two floors and the ladder stops at the 6% cell
-const SHORT: Column = { front: [0.25, 0.75], yFront: 0.08, cells: [[1, 0], [0.5, 0.5], null], kDiv: 1 };
-const COLLAPSED: Column = { front: [0.5, 0.5], yFront: 0.06, cells: [[1, 0], [0.5, 0.5], null], kDiv: -1 };
-// not collapsed, yet the most diversified mix costs no return: the top cell is another mix
-const NO_SPAN: Column = { front: [0, 1], yFront: 0.1, cells: [[1, 0], [0.5, 0.5], [0.2, 0.8]], kDiv: 2 };
+// A column's ladder of three levels (at t = 0, 0.5 and 1): the frontier mix first, the peak last.
+type Column = { levels: number[][]; hop?: boolean[]; collapsed?: boolean; tSug?: number };
+const FULL: Column = { levels: [[0, 1], [0.5, 0.5], [1, 0]], tSug: 0.5 };
+const SHORT: Column = { levels: [[0.25, 0.75], [0.375, 0.625], [0.5, 0.5]], tSug: 1 };
+const COLLAPSED: Column = { levels: [[0.5, 0.5], [0.5, 0.5], [0.5, 0.5]], collapsed: true };
+// the first step is a hop: its two levels must not be blended
+const HOP: Column = { levels: [[0, 1], [0.5, 0.5], [1, 0]], hop: [true, false] };
+// the peak was reached one level early: the last two levels are the same mix
+const PLATEAU: Column = { levels: [[0, 1], [0.2, 0.8], [0.2, 0.8]] };
 
-function tiny(columns: Column[]) {
+const muOf = (w: number[]) => 0.02 * w[0] + 0.1 * w[1];
+// a range block of the right shape; the browser math does not read it
+const rangeOf = <T>(value: T) => ({ bad: value, typical: value, good: value, normal: { low: value, mid: value, high: value } });
+
+function tiny(columns: Column[], sSafe = 0) {
   const nx = columns.length;
   const fund = (id: string) => ({ id, name: `Fund ${id}`, kind: "etf", source: "tiingo", adjusted_through: "2026-10-12", fetched_at: "2026-10-13T09:05:11Z", last_close: 100 });
   const stale = Array(8 * (nx - 1) + 1).fill(0.5);
   const window = { label: "A window", start: "2008-09-01", end: "2009-03-09", r: [0.1, null] };
+  const fronts = columns.map((c) => c.levels[0]);
+  const peaks = columns.map((c) => c.levels[c.levels.length - 1]);
+  const yFront = fronts.map(muOf);
+  // the raster is only drawn, never read by the math: every row holds the column's peak
+  const kDiv = columns.map((c) => (c.collapsed ? -1 : 0));
   return {
     schema: 2, engine_version: "0.1.0", generation: "2026-10-12-0.1.0", built_at: "2026-10-13T09:31:02Z", build_seconds: 0.1, asof: "2026-10-12",
     frontier_curve: { sigma: stale, mu: stale },
     universe: { hash: "0123456789abcdef", name: "Two funds", preset_id: null, funds: [fund("AAA"), fund("BBB")], excluded: [] },
-    lookback: { id: "5y", start: "2021-10-13", end: "2026-10-12", rows: 1257, t_eff: 1257, ew_halflife_days: null },
+    lookback: { id: "5y", start: "2021-10-13", end: "2026-10-12", rows: 1257, t_eff: 1257, ew_halflife_days: null, sample_sha256: "0".repeat(64) },
     rf: 0.04, mu_s: [0.02, 0.1], mu_sample: [0.02, 0.1], sigma: [0.1, 0.2], cov: [[0.01, 0], [0, 0.04]],
     torsion: [[1, 0], [0, 1]], torsion_inv_t: [[1, 0], [0, 1]], torsion_lambda: [0.01, 0.04],
     bounds: { requested: [{ min: null, max: null }, { min: null, max: null }], min: [0, 0], max: [1, 1], rule: "max(0.25, 3/N)" },
-    frontier: { x: columns.map((_, j) => 0.1 + (0.1 * j) / (nx - 1)), y: columns.map((c) => c.yFront), w: columns.map((c) => c.front), s_safe: 0 },
+    frontier_uncapped: { sigma: Array(nx).fill(0.5), mu: Array(nx).fill(0.5) },
+    frontier: { x: columns.map((_, j) => 0.1 + (0.1 * j) / (nx - 1)), y: yFront, w: fronts, s_safe: sSafe, range: rangeOf(Array(nx).fill(0)) },
+    ladder: {
+      y: columns.map((c) => c.levels.map(muOf)),
+      z: columns.map((c) => c.levels.map(() => 1.5)),
+      w: columns.map((c) => c.levels),
+      hop: columns.map((c) => c.hop ?? [false, false]),
+      collapsed: columns.map((c) => c.collapsed ?? false),
+      t_balanced: columns.map((c) => c.tSug ?? 0),
+      y_balanced: columns.map((c, j) => (c.tSug === undefined ? yFront[j] : muOf(c.levels[2 * c.tSug]))),
+      default_point: "balanced",
+      t_suggested: columns.map((c) => c.tSug ?? 0),
+      y_suggested: columns.map((c, j) => (c.tSug === undefined ? yFront[j] : muOf(c.levels[2 * c.tSug]))),
+      range: rangeOf(columns.map(() => [0, 0, 0])),
+    },
     grid: {
       y: FLOORS,
-      z: columns.map((c) => c.cells.map((cell) => (cell === null ? null : 1.5))),
-      w: columns.map((c) => c.cells),
-      k_div: columns.map((c) => c.kDiv),
-      y_div: columns.map((c) => (c.kDiv < 0 ? c.yFront : FLOORS[c.kDiv])),
-      w_div: columns.map((c) => (c.kDiv < 0 ? c.front : (c.cells[c.kDiv] as number[]))),
-      y_sug: columns.map((c) => c.ySug ?? c.yFront),
+      z: columns.map(() => FLOORS.map(() => 1.5)),
+      w: peaks.map((peak) => FLOORS.map(() => peak)),
+      k_div: kDiv,
+      y_div: columns.map((_, j) => (kDiv[j] < 0 ? yFront[j] : FLOORS[0])),
+      w_div: peaks,
+      y_sug: yFront,
     },
+    entered: null,
+    range_method: RAW.range_method,
     enb_ref: 2,
     stress: { gfc2008: window, covid2020: window, rates2022: window },
     notes: [],
   };
 }
 const tinyMath = (...columns: Column[]) => portfolioMath(parseTensor(tiny(columns)));
+const peaksOf = (T: { ladder: { w: number[][][] } }) => T.ladder.w.map((levels) => levels[levels.length - 1]);
 
 // the test's own statistics of a mix on the fixture (spec 4.6)
 function ownStats(T: Pick<Tensor, "mu_s" | "cov" | "torsion_inv_t" | "torsion_lambda">, w: number[]) {
@@ -153,7 +180,7 @@ describe("parseTensor", () => {
         checked += 1;
       }
     }
-    expect(OBJECTS.length).toBe(14);
+    expect(OBJECTS.length).toBe(21);
     expect(checked).toBeGreaterThan(70);
   });
 
@@ -182,6 +209,7 @@ describe("parseTensor", () => {
       [["lookback", "rows"], 1260.5],
       [["lookback", "t_eff"], 0],
       [["lookback", "ew_halflife_days"], 252.5],
+      [["lookback", "sample_sha256"], "4E5EFE"],
       [["rf"], "0.04"],
       [["mu_s", 0], "0.1"],
       [["cov", 0, 0], null],
@@ -193,6 +221,13 @@ describe("parseTensor", () => {
       [["grid", "k_div", 0], 0.5],
       [["grid", "z", 0, 0], "high"],
       [["grid", "w", 5, NY - 1], 0],
+      [["ladder", "t_suggested", 3], 1.5],
+      [["ladder", "default_point"], "knee"],
+      [["ladder", "hop", 3, 0], 1],
+      [["ladder", "collapsed", 3], "no"],
+      [["frontier", "range", "bad", 3], null],
+      [["entered", "set_aside"], 2],
+      [["range_method", "percentile_method"], "nearest"],
       [["enb_ref"], 0.5],
       [["stress", "covid2020", "r", 0], "n/a"],
       [["stress", "covid2020", "label"], ""],
@@ -211,13 +246,17 @@ describe("parseTensor", () => {
       ["bounds", "requested"], ["bounds", "min"], ["bounds", "max"],
       ["frontier", "y"], ["frontier", "w"], ["frontier", "w", 3],
       ["grid", "z"], ["grid", "z", 2], ["grid", "w"], ["grid", "w", 2], ["grid", "w", 2, 0], ["grid", "k_div"], ["grid", "y_div"], ["grid", "w_div"], ["grid", "w_div", 7], ["grid", "y_sug"],
-      ["frontier_curve", "sigma"], ["frontier_curve", "mu"],
+      ["frontier_curve", "sigma"], ["frontier_curve", "mu"], ["frontier_uncapped", "sigma"], ["frontier_uncapped", "mu"],
+      ["frontier", "range", "bad"], ["frontier", "range", "normal", "high"],
+      ["ladder", "y"], ["ladder", "y", 3], ["ladder", "z", 3], ["ladder", "w"], ["ladder", "w", 3], ["ladder", "w", 3, 2], ["ladder", "hop"], ["ladder", "hop", 3],
+      ["ladder", "collapsed"], ["ladder", "t_balanced"], ["ladder", "y_balanced"], ["ladder", "t_suggested"], ["ladder", "y_suggested"],
+      ["ladder", "range", "typical", 4], ["ladder", "range", "normal", "low", 4], ["entered", "w"],
       ["stress", "gfc2008", "r"], ["stress", "covid2020", "r"], ["stress", "rates2022", "r"],
     ];
     for (const at of vectors) expect(() => parseTensor(short(at)), `${at.join(".")} one entry short`).toThrow();
     expect(() => parseTensor(patched(["grid", "k_div", 5], NY)), "k_div beyond the last row").toThrow();
     expect(() => parseTensor(patched(["grid", "w", 5, RAW.grid.k_div[5]], null)), "k_div on an empty cell").toThrow();
-    expect(() => parseTensor(patched(["grid", "z", 5, 0], null)), "a mix without its ENB").toThrow();
+    expect(() => parseTensor(patched(["grid", "z", 5, RAW.grid.k_div[5]], null)), "a mix without its ENB").toThrow();
     expect(() => parseTensor(patched(["frontier", "s_safe"], NX)), "s_safe beyond the last column").toThrow();
   });
 
@@ -228,11 +267,11 @@ describe("parseTensor", () => {
     T.universe.funds[0].last_close = null;
     T.lookback.ew_halflife_days = 252;
     expect(parseTensor(T).frontier.w[10]).toEqual(T.frontier.w[10]);
-    expect(() => parseTensor(tiny([FULL, SHORT, COLLAPSED, NO_SPAN]))).not.toThrow();
+    expect(() => parseTensor(tiny([FULL, SHORT, COLLAPSED, HOP, PLATEAU]))).not.toThrow();
   });
 });
 
-describe("stats and range6m", () => {
+describe("stats and one-year ranges", () => {
   const M = portfolioMath(parseTensor(clone()));
 
   it("reproduces the spec 4.6 identities on two uncorrelated funds", () => {
@@ -247,8 +286,9 @@ describe("stats and range6m", () => {
     expect(m.stats(Float64Array.of(0.5, 0.5))).toEqual(half);
   });
 
-  it("equals the tensor at every frontier node and grid cell to 1e-9 relative", () => {
+  it("equals the tensor at every frontier node, ladder level and grid cell to 1e-9 relative", () => {
     let cells = 0;
+    let levels = 0;
     for (let j = 0; j < NX; j++) {
       const st = M.stats(RAW.frontier.w[j]);
       expect(rel(st.mu, RAW.frontier.y[j]), `mu of frontier ${j}`).toBeLessThanOrEqual(1e-9);
@@ -263,8 +303,17 @@ describe("stats and range6m", () => {
         expect(rel(cell.mu, own.mu) + rel(cell.sigma, own.sigma), `cell (${j}, ${k})`).toBeLessThanOrEqual(1e-12);
         cells += 1;
       }
+      RAW.ladder.w[j].forEach((w: number[], l: number) => {
+        const level = M.stats(w);
+        expect(rel(level.mu, RAW.ladder.y[j][l]), `return of level (${j}, ${l})`).toBeLessThanOrEqual(1e-9);
+        expect(rel(level.enb, RAW.ladder.z[j][l]), `ENB of level (${j}, ${l})`).toBeLessThanOrEqual(1e-9);
+        // every level of a column holds the column's risk (spec 4.7)
+        expect(Math.abs(level.sigma - RAW.frontier.x[j]), `risk of level (${j}, ${l})`).toBeLessThanOrEqual(1e-6);
+        levels += 1;
+      });
     }
     expect(cells).toBeGreaterThan(NX * 5);
+    expect(levels).toBe(NX * RAW.ladder.y[0].length);
   });
 
   it("has no answer for a vector of the wrong length or without variance", () => {
@@ -272,21 +321,51 @@ describe("stats and range6m", () => {
     expect(M.stats(Array(N).fill(0)).enb).toBeNaN();
   });
 
-  it("range6m is mu/2 -+ 1.96 sigma/sqrt 2", () => {
-    const r = M.range6m(0.08, 0.2);
-    expect(r.typical).toBeCloseTo(0.04, 15);
-    // 1.96 * 0.2 / sqrt(2) = 0.2771858582...
-    expect(r.low).toBeCloseTo(-0.2371858582, 9);
-    expect(r.high).toBeCloseTo(0.3171858582, 9);
-    expect(r.high - r.typical).toBeCloseTo(r.typical - r.low, 15);
-    expect(M.range6m(0.05, 0)).toEqual({ low: 0.025, typical: 0.025, high: 0.025 });
+  it("the bell-curve figure is mu -+ 1.96 sigma around mu", () => {
+    const r = M.normalRange(0.08, 0.2);
+    expect(r.mid).toBe(0.08);
+    expect(r.low).toBeCloseTo(0.08 - 0.392, 15);
+    expect(r.high).toBeCloseTo(0.08 + 0.392, 15);
+    expect(M.normalRange(0.05, 0)).toEqual({ low: 0.05, mid: 0.05, high: 0.05 });
+  });
+
+  it("yearRange is the tensor's own figure at every column and level, and blends like interpolate between them", () => {
+    const L = RAW.ladder.w[0].length;
+    const R = RAW.ladder.range;
+    for (const j of [0, 2, 17, 24, NX - 1]) {
+      for (let l = 0; l < L; l++) {
+        const r = M.yearRange(j, l / (L - 1));
+        expect(r.low, `bad (${j}, ${l})`).toBeCloseTo(R.bad[j][l], 14);
+        expect(r.typical, `typical (${j}, ${l})`).toBeCloseTo(R.typical[j][l], 14);
+        expect(r.high, `good (${j}, ${l})`).toBeCloseTo(R.good[j][l], 14);
+      }
+      // level 0 is the frontier mix: the risk slider's readout at a column
+      expect(M.yearRange(j, 0).low).toBe(RAW.frontier.range.bad[j]);
+    }
+    // between two columns and two levels: the same blend as the mixes (no hop on the fixture)
+    const s = 20.25;
+    const t = 4.5 / (L - 1);
+    const at = (rows: number[][], j: number) => 0.5 * rows[j][4] + 0.5 * rows[j][5];
+    expect(M.yearRange(s, t).low).toBeCloseTo(0.75 * at(R.bad, 20) + 0.25 * at(R.bad, 21), 14);
+    expect(M.yearRange(s, t).high).toBeCloseTo(0.75 * at(R.good, 20) + 0.25 * at(R.good, 21), 14);
+    expect(() => M.yearRange(3, 1.5)).toThrow(RangeError);
+    expect(() => M.yearRange(-1, 0.5)).toThrow(RangeError);
+  });
+
+  it("yearRange does not blend across a hop", () => {
+    const T = tiny([HOP, HOP]) as ReturnType<typeof tiny> & { ladder: { range: { bad: number[][] } } };
+    T.ladder.range.bad = [[-0.1, -0.2, -0.3], [-0.1, -0.2, -0.3]];
+    const m = portfolioMath(parseTensor(T));
+    expect(m.yearRange(0, 0.2).low).toBe(-0.1);
+    expect(m.yearRange(0, 0.25).low).toBe(-0.2);
+    expect(m.yearRange(0, 0.75).low).toBeCloseTo(-0.25, 15);
   });
 });
 
 describe("interpolate", () => {
   const M = portfolioMath(parseTensor(clone()));
 
-  it("walks a column's ladder by return and reaches both ends exactly", () => {
+  it("walks a column's ladder level by level and reaches both ends exactly", () => {
     const m = tinyMath(FULL, FULL);
     expect(m.interpolate(0, 0)).toEqual([0, 1]);
     expectMix(m.interpolate(0, 0.25), [0.25, 0.75]);
@@ -296,18 +375,21 @@ describe("interpolate", () => {
     expect(m.interpolate(1, 1)).toEqual([1, 0]);
   });
 
-  it("starts at the frontier return, skips empty cells and stops at the most diversified cell", () => {
-    const m = tinyMath(SHORT, SHORT);
-    expect(m.interpolate(0, 0)).toEqual([0.25, 0.75]);
-    expectMix(m.interpolate(0, 0.5), [0.375, 0.625]);
-    // the 2% cell [1, 0] lies below k_div and never enters
-    expect(m.interpolate(0, 1)).toEqual([0.5, 0.5]);
+  it("does not blend across a hop: the upper level holds to the middle of the step", () => {
+    const m = tinyMath(HOP, HOP);
+    expect(m.interpolate(0, 0.2)).toEqual([0, 1]);
+    expect(m.interpolate(0, 0.249)).toEqual([0, 1]);
+    expect(m.interpolate(0, 0.25)).toEqual([0.5, 0.5]);
+    expect(m.interpolate(0, 0.5)).toEqual([0.5, 0.5]);
+    // the next step is no hop and blends as usual
+    expectMix(m.interpolate(0, 0.75), [0.75, 0.25]);
+    expect(m.interpolate(0, 1)).toEqual([1, 0]);
   });
 
-  it("blends the two ends of a ladder that has no return span", () => {
-    const m = tinyMath(NO_SPAN, NO_SPAN);
-    expect(m.interpolate(0, 0)).toEqual([0, 1]);
-    expectMix(m.interpolate(0, 0.3), [0.06, 0.94]);
+  it("stays on the peak where the ladder has a plateau", () => {
+    const m = tinyMath(PLATEAU, PLATEAU);
+    expectMix(m.interpolate(0, 0.25), [0.1, 0.9]);
+    expect(m.interpolate(0, 0.75)).toEqual([0.2, 0.8]);
     expect(m.interpolate(0, 1)).toEqual([0.2, 0.8]);
     expect(m.ladderCollapsed(0.5)).toBe(false);
   });
@@ -323,7 +405,7 @@ describe("interpolate", () => {
   });
 
   it("is constant in t where the ladders are collapsed, without renormalizing", () => {
-    const heavy: Column = { ...COLLAPSED, front: [0.5, 0.5000005] };
+    const heavy: Column = { levels: Array(3).fill([0.5, 0.5000005]), collapsed: true };
     const m = tinyMath(COLLAPSED, heavy, FULL);
     for (const s of [0, 0.25, 0.5, 1]) {
       const at0 = m.interpolate(s, 0);
@@ -336,16 +418,16 @@ describe("interpolate", () => {
   it("equals the Python reference on the fixture", () => {
     // sum((i + 1) * w_i) of portfoliosight.engine.surface.interpolate(tensor, s, t)
     const reference: [number, number, number][] = [
-      [0.625, 0.5, 13.168792621436776],
-      [1.0, 1.0, 13.204042868515188],
-      [3.25, 0.2, 12.657862313542706],
-      [10.5, 0.75, 13.481115919080183],
-      [12.0, 0.4, 12.49209903071043],
-      [19.25, 0.333, 11.425961559333823],
-      [30.875, 0.9, 11.87513856503161],
-      [46.5, 0.05, 6.869791047470344],
+      [0.625, 0.5, 13.562826330688583],
+      [1.0, 1.0, 13.337987608148868],
+      [3.25, 0.2, 13.779159052339946],
+      [10.5, 0.75, 14.136803856701988],
+      [12.0, 0.4, 15.176797417988647],
+      [19.25, 0.333, 13.161744353629249],
+      [30.875, 0.9, 8.158569927140386],
+      [46.5, 0.05, 5.78180799298763],
       [47.0, 0.0, 6.0],
-      [47.0, 0.6, 10.041322913401507],
+      [47.0, 0.6, 4.426989033071524],
     ];
     for (const [s, t, want] of reference) {
       const got = M.interpolate(s, t).reduce((acc, v, i) => acc + (i + 1) * v, 0);
@@ -368,8 +450,8 @@ describe("interpolate", () => {
       expect(st.enb >= 1 - 1e-6 && st.enb <= N + 1e-6, `${where} ENB ${st.enb}`).toBe(true);
       // both ends are the plain combinations of the tensor's own columns
       expect(maxDiff(M.interpolate(s, 0), nodeMix(RAW.frontier.w, s)), where).toBeLessThanOrEqual(1e-12);
-      expect(maxDiff(M.interpolate(s, 1), nodeMix(RAW.grid.w_div, s)), where).toBeLessThanOrEqual(1e-12);
-      expect(maxDiff(M.mostDiversified(s), nodeMix(RAW.grid.w_div, s)), where).toBeLessThanOrEqual(1e-15);
+      expect(maxDiff(M.interpolate(s, 1), nodeMix(peaksOf(RAW), s)), where).toBeLessThanOrEqual(1e-12);
+      expect(maxDiff(M.mostDiversified(s), nodeMix(peaksOf(RAW), s)), where).toBeLessThanOrEqual(1e-15);
     }
   });
 
@@ -378,8 +460,7 @@ describe("interpolate", () => {
     const m = portfolioMath(T);
     for (const w of [m.interpolate(0, 0.5), m.interpolate(5, 0), m.interpolate(5, 1), m.mostDiversified(5)]) w.fill(9);
     expect(T.frontier.w).toEqual(RAW.frontier.w);
-    expect(T.grid.w).toEqual(RAW.grid.w);
-    expect(T.grid.w_div).toEqual(RAW.grid.w_div);
+    expect(T.ladder.w).toEqual(RAW.ladder.w);
   });
 
   it("refuses a position outside [0, nx - 1] x [0, 1]", () => {
@@ -413,39 +494,37 @@ describe("frontier curve and risk slider domain", () => {
     expect(curve.sigma[8]).toBeCloseTo(Math.sqrt(0.25 ** 2 * 0.01 + 0.75 ** 2 * 0.04), 15);
   });
 
-  it("starts the domain at the rightmost maximum of the frontier's bad six months", () => {
-    const curve = M.frontierCurve();
-    const low = curve.mu.map((mu, i) => mu / 2 - (1.96 * curve.sigma[i]) / Math.sqrt(2));
-    expect(M.riskSliderDomain()).toEqual({ s_safe: low.lastIndexOf(Math.max(...low)) / 8, s_max: NX - 1 });
-    expect(M.riskSliderDomain().s_safe).toBe(RAW.frontier.s_safe);
-    // a flat curve is one long tie: the rightmost point wins and the domain is a single point
-    expect(tinyMath(COLLAPSED, COLLAPSED, COLLAPSED).riskSliderDomain()).toEqual({ s_safe: 2, s_max: 2 });
-    // risk falls from [0, 1] toward [0.25, 0.75] faster than return does: the best point is the far end
-    expect(tinyMath(FULL, SHORT).riskSliderDomain()).toEqual({ s_safe: 1, s_max: 1 });
-    expect(tinyMath(SHORT, FULL).riskSliderDomain()).toEqual({ s_safe: 0, s_max: 1 });
+  it("takes the domain's left end from the tensor: the engine reads it off the one-year range", () => {
+    expect(M.riskSliderDomain()).toEqual({ s_safe: RAW.frontier.s_safe, s_max: NX - 1 });
+    // the rule is the engine's (spec 4.9): the rightmost frontier node with the best bad year
+    const bad: number[] = RAW.frontier.range.bad;
+    expect(RAW.frontier.s_safe).toBe(bad.lastIndexOf(Math.max(...bad)));
+    expect(portfolioMath(parseTensor(tiny([FULL, SHORT, COLLAPSED], 1.5))).riskSliderDomain()).toEqual({ s_safe: 1.5, s_max: 2 });
+    expect(tinyMath(COLLAPSED, COLLAPSED, COLLAPSED).riskSliderDomain()).toEqual({ s_safe: 0, s_max: 2 });
   });
 });
 
 describe("slider helpers", () => {
   const M = portfolioMath(parseTensor(clone()));
 
-  it("tSug is the suggested fraction of a column's return span", () => {
-    const m = tinyMath(FULL, { ...SHORT, ySug: 0.06 }, SHORT, COLLAPSED, NO_SPAN);
-    expect(m.tSug(0)).toBeCloseTo(0.5, 14);
-    expect(m.tSug(1)).toBeCloseTo(1, 14);
+  it("tSug is the suggested point's position on its column's ladder", () => {
+    const m = tinyMath(FULL, SHORT, { ...SHORT, tSug: undefined }, { ...COLLAPSED, tSug: 0.5 }, PLATEAU);
+    expect(m.tSug(0)).toBe(0.5);
+    expect(m.tSug(1)).toBe(1);
     expect(m.tSug(2)).toBe(0);
     expect(m.tSug(3), "a collapsed ladder").toBe(0);
-    expect(m.tSug(4), "a ladder with no return span").toBe(0);
+    expect(m.tSug(4)).toBe(0);
+    expect(() => m.tSug(5)).toThrow(RangeError);
     for (let j = 0; j < NX; j++) {
-      const span = RAW.frontier.y[j] - RAW.grid.y_div[j];
-      const want = RAW.grid.k_div[j] < 0 ? 0 : (RAW.frontier.y[j] - RAW.grid.y_sug[j]) / span;
-      expect(M.tSug(j), `column ${j}`).toBeCloseTo(want, 12);
-      expect(M.tSug(j) >= 0 && M.tSug(j) <= 1, `column ${j}`).toBe(true);
+      const want = RAW.ladder.collapsed[j] ? 0 : RAW.ladder.t_suggested[j];
+      expect(M.tSug(j), `column ${j}`).toBe(want);
+      // the suggested point is a ladder level: its mix earns the stored return
+      expect(rel(M.stats(M.interpolate(j, M.tSug(j))).mu, RAW.ladder.y_suggested[j]), `column ${j}`).toBeLessThanOrEqual(1e-9);
     }
   });
 
   it("tAuto interpolates tSug between the neighbouring columns", () => {
-    const m = tinyMath(FULL, COLLAPSED, { ...SHORT, ySug: 0.06 });
+    const m = tinyMath(FULL, COLLAPSED, SHORT);
     expect(m.tAuto(0)).toBeCloseTo(0.5, 14);
     expect(m.tAuto(0.5)).toBeCloseTo(0.25, 14);
     expect(m.tAuto(1)).toBe(0);

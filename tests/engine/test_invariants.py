@@ -5,7 +5,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from portfoliosight.engine.invariants import TOL, InvariantError, check_floor, check_weights
+from portfoliosight.engine.invariants import (
+    TOL,
+    InvariantError,
+    check_floor,
+    check_risk_line,
+    check_weights,
+)
 
 
 def _sigma(w, cov) -> float:
@@ -70,3 +76,17 @@ def test_return_floor_check():
     with pytest.raises(InvariantError, match="floor") as caught:
         check_floor(w, mu=mu, floor=0.05 + 1e-4)
     assert caught.value.invariant == "floor"
+
+
+def test_risk_line_check_is_two_sided():
+    w, _, _, cov, _, _ = _case()
+    risk = _sigma(w, cov)
+    assert check_risk_line(w, cov=cov, risk=risk) is None
+    check_risk_line(w, cov=cov, risk=risk + 5e-7)
+    check_risk_line(w, cov=cov, risk=risk - 5e-7)
+    for off in (2e-6, -2e-6, float("nan")):  # above the line, below it, or nowhere
+        with pytest.raises(InvariantError) as caught:
+            check_risk_line(w, cov=cov, risk=risk + off)
+        assert caught.value.invariant == "risk_line"
+    with pytest.raises(InvariantError):
+        check_risk_line(np.full(4, np.nan), cov=cov, risk=risk)

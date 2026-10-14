@@ -9,8 +9,9 @@ so no view of this menu sets a fund aside.
 
 The file is the returns parquet of the tensor build CLI (`DatetimeIndex` named `date`, one float
 column per fund, NaN where the fund has no return). Its schema metadata carries, under the key
-`portfoliosight`, the universe name and the per-fund catalog facts a build needs, so
-`scripts/build_tensor.py --returns <this file>` reproduces the UI fixture with no other input.
+`portfoliosight`, the universe name, the Example Portfolio's dollar allocation (the entered mix,
+from `data/holdings/holdings_guide2017_step2.csv`) and the per-fund catalog facts a build needs,
+so `scripts/build_tensor.py --returns <this file>` reproduces the UI fixture with no other input.
 
 Usage: python scripts/make_fixtures.py [--out PATH]
 """
@@ -18,6 +19,7 @@ Usage: python scripts/make_fixtures.py [--out PATH]
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,7 +33,9 @@ import pyarrow.parquet as pq
 SEED = 20171013
 FIRST_SESSION = "2005-01-03"
 LAST_SESSION = "2026-10-12"
-DEFAULT_OUT = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "synthetic_23.parquet"
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_OUT = ROOT / "tests" / "fixtures" / "synthetic_23.parquet"
+HOLDINGS = ROOT / "data" / "holdings" / "holdings_guide2017_step2.csv"
 METADATA_KEY = b"portfoliosight"
 TRADING_DAYS = 252
 FETCHED_AT = "2026-10-13T09:05:11Z"
@@ -165,8 +169,18 @@ def build_frame() -> pd.DataFrame:
     return pd.DataFrame(columns, index=index, dtype="float64")
 
 
+def allocation() -> dict[str, float]:
+    """The Example Portfolio's dollar amounts, `Qty x Price` per fund of the Step 2 holdings."""
+    with HOLDINGS.open(newline="", encoding="utf-8") as handle:
+        amounts = {
+            row["Symbol"].strip().upper(): round(float(row["Qty"]) * float(row["Price"]), 2)
+            for row in csv.DictReader(handle)
+        }
+    return {fund.id: amounts[fund.id] for fund in FUNDS}
+
+
 def build_metadata(frame: pd.DataFrame) -> dict:
-    """Universe name and per-fund catalog facts, as the build CLI reads them."""
+    """Universe name, entered mix and per-fund catalog facts, as the build CLI reads them."""
     funds = {}
     for fund in FUNDS:
         growth = float(np.prod(1.0 + frame[fund.id].dropna().to_numpy()))
@@ -180,7 +194,7 @@ def build_metadata(frame: pd.DataFrame) -> dict:
             "served": True,
             "catalog_reason": None,
         }
-    return {"universe": UNIVERSE, "funds": funds}
+    return {"universe": {**UNIVERSE, "allocation": allocation()}, "funds": funds}
 
 
 def write(out: Path) -> None:

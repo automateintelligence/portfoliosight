@@ -460,7 +460,6 @@ function buildCustomTensor(fx: any, hash: string): any {
     enbRef = Math.max(enbRef, best.enb, enbAt(aFront[j]));
   }
   const curveSigma: number[] = [], curveMu: number[] = [];
-  let sSafe = 0, bestLow = -Infinity;
   for (let i = 0; i <= (NX - 1) * 8; i++) {
     const s = i / 8;
     const j = Math.min(NX - 2, Math.floor(s));
@@ -468,12 +467,22 @@ function buildCustomTensor(fx: any, hash: string): any {
     const a = (1 - lam) * aFront[j] + lam * aFront[j + 1];
     curveSigma.push(sigmaOf(a));
     curveMu.push(muOf(a));
-    const low = muOf(a) / 2 - (1.96 * sigmaOf(a)) / Math.SQRT2;
-    if (low >= bestLow) {
-      bestLow = low;
-      sSafe = s;
-    }
   }
+  // Two-level ladders (the frontier mix, then the most diversified cell): with two funds their
+  // straight blend is the walk by return. One-year ranges are the normal range (no return
+  // history here), and s_safe is the rightmost frontier node with the best bad year (spec 4.9).
+  const levels = aFront.map((a, j) => [a, wDiv[j][1]]);
+  const rangeAt = (a: number) => {
+    const m = muOf(a), spread = 1.96 * sigmaOf(a);
+    return { bad: m - spread, typical: m, good: m + spread, low: m - spread, mid: m, high: m + spread };
+  };
+  type Pick = (r: ReturnType<typeof rangeAt>) => number;
+  const block = (shape: (number | number[])[]) => {
+    const pick = (f: Pick) => shape.map((row) => (Array.isArray(row) ? row.map((a) => f(rangeAt(a))) : f(rangeAt(row))));
+    return { bad: pick((r) => r.bad), typical: pick((r) => r.typical), good: pick((r) => r.good), normal: { low: pick((r) => r.low), mid: pick((r) => r.mid), high: pick((r) => r.high) } };
+  };
+  const badYear = aFront.map((a) => rangeAt(a).bad);
+  const sSafe = badYear.lastIndexOf(Math.max(...badYear));
   const fund = (id: string, name: string, lastClose: number) => ({
     id, name, kind: "etf", source: "tiingo", adjusted_through: fx.asof, fetched_at: fx.built_at, last_close: lastClose,
   });
@@ -492,8 +501,24 @@ function buildCustomTensor(fx: any, hash: string): any {
     mu_s: mu, mu_sample: mu, sigma: sd, cov: [[v0, 0], [0, v1]],
     torsion: [[1, 0], [0, 1]], torsion_inv_t: [[1, 0], [0, 1]], torsion_lambda: [v0, v1],
     bounds: { requested: [{ min: null, max: null }, { min: null, max: null }], min: [0, 0], max: [1, 1], rule: "max(0.25, 3/N)" },
-    frontier: { x, y: yFront, w: aFront.map(wOf), s_safe: sSafe },
+    frontier_uncapped: { sigma: aFront.map(sigmaOf), mu: [...yFront] },
+    frontier: { x, y: yFront, w: aFront.map(wOf), s_safe: sSafe, range: block(aFront) },
+    ladder: {
+      y: levels.map((pair) => pair.map(muOf)),
+      z: levels.map((pair) => pair.map(enbAt)),
+      w: levels.map((pair) => pair.map(wOf)),
+      hop: levels.map(() => [false]),
+      collapsed: kDiv.map((k) => k < 0),
+      t_balanced: levels.map(() => 0),
+      y_balanced: [...yFront],
+      default_point: "balanced",
+      t_suggested: levels.map(() => 0),
+      y_suggested: [...yFront],
+      range: block(levels),
+    },
     grid: { y: gridY, z, w: gw, k_div: kDiv, y_div: yDiv, w_div: wDiv, y_sug: [...yFront] },
+    entered: null,
+    range_method: fx.range_method,
     enb_ref: enbRef,
     stress: { gfc2008: window("gfc2008", [null, null]), covid2020: window("covid2020", [0.004, -0.021]), rates2022: window("rates2022", [0.009, -0.034]) },
     notes: Array.isArray(fx.notes) ? fx.notes : [],

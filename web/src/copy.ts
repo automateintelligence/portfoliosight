@@ -9,26 +9,28 @@ export const plain = {
   heatLess: "Less",
   heatMore: "More",
   riskSlider: "Best-return mix at this risk",
-  riskBad: "Bad six months",
-  riskTypical: "Typical six months",
+  riskBad: "Bad year",
+  riskTypical: "Typical year",
   riskDisabled: "this menu has only one sensible risk level",
   resultStrip: "Selected mix",
-  resultStripSuffix: "over six months",
-  rangeLow: "Low",
+  resultStripSuffix: "over one year",
+  rangeLow: "Bad",
   rangeTypical: "Typical",
-  rangeHigh: "High",
+  rangeHigh: "Good",
   diversification: "Diversification",
   words: ["Good", "Average", "Fair", "Poor"] as const,
   divMoreReturn: "More return",
   divMoreDiversified: "More diversified",
   divDisabled: "At this risk, the best-return mix is already the most diversified one found.",
-  suggested: "Suggested",
-  resetSuggested: "Reset to suggested",
+  optimized: "Optimized",
+  resetOptimized: "Back to Optimized",
   frontier: "Best return at each level of risk",
   ghosts: "Same menu, different years of history",
+  noLimits: "No limits",
+  noLimitsLine: "Same funds, no limit on any one fund",
+  resetLimits: "Reset limits",
   currentMix: "The mix you entered",
   selectedMix: "Selected mix",
-  mostDiversified: "Most diversified at this risk",
   cellMix: "The mix at this spot",
   cardRisk: "Risk",
   cardReturn: "Expected return",
@@ -70,23 +72,36 @@ export const plain = {
 export const technical = {
   xAxis: "Standard deviation of yearly return",
   yAxis: "Shrunk expected return (50/50 sample mean and menu-beta heuristic), annualized",
-  heatLegend: "ENB (minimum torsion) of the computed mix at each risk ceiling / return floor",
-  riskSlider: "2.5th percentile and mean of the frontier mix's six-month return, normal approximation",
-  resultStrip: "Estimated central 95% range, normal, additive: μ/2 ± 1.96·σ/√2",
+  heatLegend: "ENB (minimum torsion) of the most diversified mix found at each risk that earns at least each return",
+  riskSlider:
+    "2.5th percentile and median of the frontier mix's one-year return over 2,000 one-year paths resampled in blocks from this window's own daily history (stationary block bootstrap, mean block 21 days)",
+  resultStrip:
+    "Estimated central 95% range of the one-year return: its 2.5th, 50th and 97.5th percentiles over 2,000 one-year paths resampled in blocks from this window's own daily history, at constant weights, compounded (stationary block bootstrap, mean block 21 days)",
+  /** The normal figure, shown in the details only. */
+  bellCurve: (low: string, mid: string, high: string) => `Textbook bell-curve figure (normal, μ ± 1.96σ): ${low} to ${high} around ${mid}`,
   enbName: "effective number of bets, minimum torsion",
-  divSlider: "Return floor along the column at risk ceiling X; bottom end = the column's highest-ENB computed mix",
-  // The "Suggested" rule, kept in these two strings only (the rule may change).
-  suggested:
-    "Suggested is the most diversified mix at this risk that still earns about as much as the best-return mix: what it gives up in return is too small to tell apart from the ordinary day-to-day noise in the two mixes' returns.",
-  suggestedMethod:
-    "Lowest return floor whose give-up versus the frontier mix is within one standard error of the paired daily return difference (a heuristic, not a significance test)",
+  divSlider:
+    "Walks the mixes that keep the risk at X: every step down gives up return for diversification; the bottom end is the most diversified mix found at that risk",
+  // The "Optimized" rule, kept in these strings only (the tensor says which one applies).
+  optimized: {
+    balanced:
+      "Optimized is the balanced point: going from the best-return mix toward the most diversified mix at this risk, it is where each further step starts buying less diversification than the return it gives up.",
+    peak: "Optimized is the most diversified mix found at this risk.",
+  },
+  optimizedMethod: {
+    balanced:
+      "the knee of diversification (ENB) gained against return given up along the mixes at this risk, both scaled to run from 0 to 1 (the level farthest above the straight line from the best-return mix to the most diversified one)",
+    peak: "the highest ENB found among mixes with exactly this risk",
+  },
+  noLimits: "The same frontier with every fund allowed from 0% to 100%",
+  rangePending: "The one-year range of this mix comes from the service and is not available right now.",
   frontier:
     "Long-only mean-variance efficient frontier with caps; drawn as the locus of interpolated frontier mixes' actual risk and return",
   ghosts: "Frontier estimated over the 1y/2y/3y/10y/EW window",
   caps: "Editable default: max = max(0.25, 3/N)",
   cutPoints:
     "The word tells you how evenly this mix's risk is shared out. We look at how many truly different kinds of investment are carrying the risk, and compare that with the most spread-out mix these funds can make. Good: at least three-quarters as spread out as that best mix. Average: at least half. Fair: at least 30%. Poor: less than that, so one or two holdings carry most of the risk.",
-  cellPlace: (ceiling: string, floor: string) => `Computed for risk ceiling ${ceiling} and return floor ${floor}`,
+  cellPlace: (ceiling: string, floor: string) => `At risk ${ceiling}, earning at least ${floor}`,
 } as const;
 
 export const disclaimer =
@@ -118,6 +133,8 @@ export const lookbackLine: Record<string, string> = {
   "5y": "5 years",
   "10y": "10 years",
   ew: "Weighted recent",
+  // not a history window: the same menu with every fund allowed 0% to 100% (owner's wording)
+  nolimits: "No limits",
 };
 
 export const lookbackShort: Record<string, string> = {

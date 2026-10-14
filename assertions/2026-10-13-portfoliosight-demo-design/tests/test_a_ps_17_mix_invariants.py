@@ -1,9 +1,11 @@
 """A-PS-17 - every computed mix is real, and a bad vector raises.
 
-Claim: every weight vector the builder writes (frontier.w[j], every non-null grid.w[j][k], every
-grid.w_div[j]) satisfies |sum(w) - 1| <= 1e-6, min - 1e-6 <= w <= max + 1e-6 against the tensor's
-resolved bounds, sigma(w) <= X_j + 1e-6 and 1 - 1e-6 <= ENB(w) <= N + 1e-6; and the builder's
-post-check raises when handed a vector violating any one of them.
+Claim: every weight vector the builder writes (frontier.w[j], every ladder.w[j][l], every non-null
+grid.w[j][k], every grid.w_div[j], and entered.w when the tensor carries an entered mix) satisfies
+|sum(w) - 1| <= 1e-6, min - 1e-6 <= w <= max + 1e-6 against the tensor's resolved bounds,
+sigma(w) <= X_j + 1e-6 and 1 - 1e-6 <= ENB(w) <= N + 1e-6; every ladder level lies on its
+column's risk line, |sigma(w) - X_j| <= 1e-6; and the builder's post-check raises when handed a
+vector violating any one of them.
 
 Pinned interface (the product must provide exactly this):
 - scripts/build_tensor.py (shared CLI pin) and tests/fixtures/synthetic_23.parquet.
@@ -160,6 +162,8 @@ def _arrays(t: dict):
             y_div=np.array(t["grid"]["y_div"], float),
             w_div=np.array(t["grid"]["w_div"], float),
             y_sug=np.array(t["grid"]["y_sug"], float),
+            lw=np.array(t["ladder"]["w"], float),
+            entered=t["entered"],
             tor=np.array(t["torsion"], float),
             tor_inv_t=np.array(t["torsion_inv_t"], float),
             lam=np.array(t["torsion_lambda"], float),
@@ -174,6 +178,7 @@ def _arrays(t: dict):
     assert all(len(col) == NY for col in a.gw) and all(len(col) == NY for col in a.gz)
     assert len(a.k_div) == NX and a.y_div.shape == (NX,) and a.w_div.shape == (NX, n)
     assert a.y_sug.shape == (NX,)
+    assert a.lw.ndim == 3 and a.lw.shape[0] == NX and a.lw.shape[2] == n
     assert a.tor.shape == (n, n) and a.tor_inv_t.shape == (n, n) and a.lam.shape == (n,)
     return a
 
@@ -296,18 +301,30 @@ else:
             value = _enb(w, a)
             assert 1 - TOL <= value <= a.n + TOL, f"{what}: ENB {value} out of [1, N]"
 
+        levels = a.lw.shape[1]
+        assert levels - 2 >= 8, f"the ladders have {levels - 2} interior levels; at least 8 expected"
         for j in range(NX):
             check(a.wf[j], j, f"frontier.w[{j}]")
             check(a.w_div[j], j, f"grid.w_div[{j}]")
             checked += 2
+            for level, w in enumerate(a.lw[j]):
+                check(w, j, f"ladder.w[{j}][{level}]")
+                sig = _sigma(w, a.cov)
+                assert abs(sig - a.x[j]) <= TOL, f"ladder.w[{j}][{level}]: sigma {sig} off the risk line {a.x[j]}"
+                checked += 1
             for k in range(NY):
                 if a.gw[j][k] is not None:
                     check(a.gw[j][k], j, f"grid.w[{j}][{k}]")
                     cells += 1
         checked += cells
-        assert cells >= 500, f"only {cells} non-null cells: the check would be vacuous"
-        assert checked == 48 + 48 + cells
-        assert cells != NX * NY  # some cells must be infeasible (null) on a real surface
+        assert a.entered is not None, "the fixture menu carries an allocation: the tensor must hold the entered mix"
+        entered = np.asarray(a.entered["w"], float)
+        assert entered.shape == (a.n,) and abs(entered.sum() - 1) <= TOL, "entered.w: wrong length or sum"
+        assert not (entered < -TOL).any() and not (entered > 1 + TOL).any(), "entered.w: weight outside [0, 1]"
+        assert 1 - TOL <= _enb(entered, a) <= a.n + TOL, "entered.w: ENB out of [1, N]"
+        assert cells >= NX, f"only {cells} non-null cells: every column has at least its bottom cell"
+        assert checked == 48 + 48 + 48 * levels + cells
+        assert cells != NX * NY  # some cells must be empty (above the frontier or below the peak)
 
     def _case():
         cov = np.diag([0.02, 0.05, 0.08, 0.12]) ** 2 + 1e-4

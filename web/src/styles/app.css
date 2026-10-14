@@ -693,6 +693,11 @@ button {
   outline: none;
 }
 
+/* A press on a marker that moves drags the selected point, so the page must not pan from it. */
+.mark.drags {
+  touch-action: none;
+}
+
 .mark .hit {
   fill: transparent;
 }

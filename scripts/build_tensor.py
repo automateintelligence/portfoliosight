@@ -2,20 +2,22 @@
 
 Usage, from the repo root:
     python scripts/build_tensor.py --returns <parquet> --lookback <id> --asof YYYY-MM-DD
-        --out <json> [--caps <json file>] [--nx N --ny N]
+        --out <json> [--caps <json file>] [--nx N --ny N --levels N]
 
 The returns parquet has a DatetimeIndex named `date` and one float column per fund id of daily
 simple returns, NaN where the fund has no return. Its schema metadata may carry, under the key
-`portfoliosight`, the universe name and per-fund catalog facts (as `scripts/make_fixtures.py`
-writes them). The metadata's `last_close` is the close on the file's last day, so it is used
+`portfoliosight`, the universe name, the entered mix (`universe.allocation`, amounts by fund id)
+and per-fund catalog facts (as `scripts/make_fixtures.py` writes them). The metadata's
+`last_close` is the close on the file's last day, so it is used
 only when `--asof` is that day; for any other day the close is not known. A file without that
 metadata still builds: every fund is taken as served and described as an ETF from the seed,
 verified through its own last return, with no last close. Whether a fund is served is the
 catalog's to say (spec 5.2); without one, a fund whose returns have stopped stays in the menu
 and the window ends where the shared history does, or is unavailable.
 
-`--caps` is a JSON list of {"id", "min", "max"} with null for the default rule. `--nx/--ny`
-select the grid (48 x 32; the one fallback of spec 4.12 is 32 x 24).
+`--caps` is a JSON list of {"id", "min", "max"} with null for the default rule. `--nx` is the
+number of risk columns (48), `--levels` the ladder levels between each column's frontier mix and
+its peak (12) and `--ny` the rows of the heatmap raster (32).
 
 Exit status 0 with a canonical-JSON tensor at --out; 2 with one line on stderr and no file when
 the window is unavailable or the caps are invalid.
@@ -34,6 +36,7 @@ import pyarrow.parquet as pq
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # this checkout's package
 
 from portfoliosight.engine.caps import CapsError  # noqa: E402
+from portfoliosight.engine.ladder import LEVELS  # noqa: E402
 from portfoliosight.engine.optimize import NX  # noqa: E402
 from portfoliosight.engine.stats import RISK_FREE_SOURCES  # noqa: E402
 from portfoliosight.engine.surface import NY  # noqa: E402
@@ -51,7 +54,13 @@ DEFAULT_UNIVERSE = {"name": "Custom menu", "preset_id": None}
 
 
 def read_inputs(
-    returns: Path, lookback: str, asof: str, caps: Path | None, nx: int, ny: int
+    returns: Path,
+    lookback: str,
+    asof: str,
+    caps: Path | None,
+    nx: int,
+    ny: int,
+    levels: int = LEVELS,
 ) -> TensorInputs:
     """Everything a build needs, from the parquet and its metadata alone."""
     frame = pd.read_parquet(returns)
@@ -93,8 +102,10 @@ def read_inputs(
         preset_id=universe["preset_id"],
         requested_bounds=None if caps is None else json.loads(caps.read_text(encoding="utf-8")),
         rf_series=rf_series,
+        allocation=universe.get("allocation"),
         nx=nx,
         ny=ny,
+        levels=levels,
     )
 
 
@@ -106,9 +117,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True, help="tensor JSON to write")
     parser.add_argument("--caps", type=Path, help='JSON list of {"id", "min", "max"}')
     parser.add_argument("--nx", type=int, default=NX, help="risk columns")
-    parser.add_argument("--ny", type=int, default=NY, help="return floors")
+    parser.add_argument("--ny", type=int, default=NY, help="rows of the heatmap raster")
+    parser.add_argument("--levels", type=int, default=LEVELS, help="ladder levels per column")
     args = parser.parse_args(argv)
-    inputs = read_inputs(args.returns, args.lookback, args.asof, args.caps, args.nx, args.ny)
+    inputs = read_inputs(
+        args.returns, args.lookback, args.asof, args.caps, args.nx, args.ny, args.levels
+    )
     try:
         tensor = build_tensor(inputs)
     except WindowUnavailable as exc:

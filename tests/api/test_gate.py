@@ -75,18 +75,19 @@ def test_settings_never_show_the_secret(monkeypatch):
 
 
 def test_grid_settings(monkeypatch):
-    monkeypatch.delenv("PS_GRID_NX", raising=False)
-    monkeypatch.delenv("PS_GRID_NY", raising=False)
-    assert settings_mod.GridSettings.from_env().model_dump() == {"nx": 48, "ny": 32}
+    for name in ("PS_GRID_NX", "PS_GRID_NY", "PS_GRID_LEVELS"):
+        monkeypatch.delenv(name, raising=False)
+    default = {"nx": 48, "ny": 32, "levels": 12}
+    assert settings_mod.GridSettings.from_env().model_dump() == default
     monkeypatch.setenv("PS_GRID_NX", "32")
     monkeypatch.setenv("PS_GRID_NY", "24")
-    assert settings_mod.GridSettings.from_env().model_dump() == {"nx": 32, "ny": 24}
-    monkeypatch.setenv("PS_GRID_NX", "many")
-    with pytest.raises(SettingsError):
-        settings_mod.GridSettings.from_env()
-    monkeypatch.setenv("PS_GRID_NX", "1")
-    with pytest.raises(SettingsError):
-        settings_mod.GridSettings.from_env()
+    monkeypatch.setenv("PS_GRID_LEVELS", "8")
+    assert settings_mod.GridSettings.from_env().model_dump() == {"nx": 32, "ny": 24, "levels": 8}
+    for name, bad in (("PS_GRID_NX", "many"), ("PS_GRID_NX", "1"), ("PS_GRID_LEVELS", "0")):
+        monkeypatch.setenv(name, bad)
+        with pytest.raises(SettingsError, match="PS_GRID_LEVELS an integer >= 1"):
+            settings_mod.GridSettings.from_env()
+        monkeypatch.setenv(name, "8")
 
 
 def test_module_app_is_built_from_the_environment_on_first_use(monkeypatch, store):

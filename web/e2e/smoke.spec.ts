@@ -10,7 +10,7 @@ import path from "node:path";
 import {
   ARTIFACTS, DRY_RUN, REPO, RUNBOOK, WEB, benchmarkRecords, canvasPixels, canvasPrint, channelDistance, chartScales, choosePreset, collapsedPosition,
   decisionDates, env, expect, frontAt, fundRowIds, gateContext, generationDate, idleQueue, losAngelesHour, mixStats, nudge, openApp, openSection,
-  pageWords, param, parsePercent, pickCells, pressDivEnd, python, range6mPct, readmeProblems, rectOf, rgbBasis, riskPosition, ruleMaxPct, run,
+  levelRangePct, pageWords, param, parsePercent, pickCells, pressDivEnd, python, readmeProblems, rectOf, rgbBasis, riskPosition, ruleMaxPct, run,
   samePrint, secretValues, sessionWindow, setMenu, settledPrint, shownTensor, sliderDomain, stressOf, test, themeColors, towardDiversified, typeFund,
   universeHash, walkableColumn, watchApi, wordFor, ROADMAP_ITEMS, type TensorLike,
 } from "./helpers";
@@ -341,8 +341,8 @@ test("DoD-08 risk slider: the ceiling moves, both readouts follow the frontier, 
     const own = frontAt(tensor, s);
     const low = await shownPercent(page, "risk-readout-bad");
     const typical = await shownPercent(page, "risk-readout-typical");
-    expect(Math.abs(low - own.low), `bad six months at s=${s}: page ${low}, own ${own.low.toFixed(2)}`).toBeLessThanOrEqual(0.1);
-    expect(Math.abs(typical - own.typical), `typical six months at s=${s}: page ${typical}, own ${own.typical.toFixed(2)}`).toBeLessThanOrEqual(0.1);
+    expect(Math.abs(low - own.low), `bad year at s=${s}: page ${low}, own ${own.low.toFixed(2)}`).toBeLessThanOrEqual(0.1);
+    expect(Math.abs(typical - own.typical), `typical year at s=${s}: page ${typical}, own ${own.typical.toFixed(2)}`).toBeLessThanOrEqual(0.1);
     const line = (await rectOf(page.getByTestId("ceiling-line"))).cx;
     // The line is the risk ceiling X(s) on the chart's own axis.
     const ceiling = (1 - (s - Math.floor(s))) * tensor.frontier.x[Math.min(Math.floor(s), sMax - 1)] + (s - Math.floor(s)) * tensor.frontier.x[Math.min(Math.floor(s), sMax - 1) + 1];
@@ -351,8 +351,8 @@ test("DoD-08 risk slider: the ceiling moves, both readouts follow the frontier, 
     if (previous) {
       expect(line, "the ceiling line moves right").toBeGreaterThan(previous.line);
       const ownBefore = frontAt(tensor, previous.s);
-      if (Math.abs(own.low - ownBefore.low) >= 0.15) expect(low, "the bad-six-months readout changes with the move").not.toBe(previous.low);
-      if (Math.abs(own.typical - ownBefore.typical) >= 0.15) expect(typical, "the typical-six-months readout changes with the move").not.toBe(previous.typical);
+      if (Math.abs(own.low - ownBefore.low) >= 0.15) expect(low, "the bad-year readout changes with the move").not.toBe(previous.low);
+      if (Math.abs(own.typical - ownBefore.typical) >= 0.15) expect(typical, "the typical-year readout changes with the move").not.toBe(previous.typical);
       if (low !== previous.low && typical !== previous.typical) movedTogether += 1;
     }
     previous = { s, line, low, typical };
@@ -368,7 +368,8 @@ test("DoD-08 risk slider: the ceiling moves, both readouts follow the frontier, 
   expect(await shownPercent(page, "range-low")).toBe(readouts.low);
   expect(await shownPercent(page, "range-typical")).toBe(readouts.typical);
   await pressDivEnd(page.getByTestId("div-slider"), "diversified");
-  const bottom = range6mPct(mixStats(tensor, tensor.grid.w_div[column]).mu, mixStats(tensor, tensor.grid.w_div[column]).sigma);
+  // at a column and its last level the strip shows the tensor's own figure for the peak
+  const bottom = levelRangePct(tensor, column, tensor.ladder.w[column].length - 1);
   await expect.poll(() => shownPercent(page, "range-typical")).toBeCloseTo(bottom.typical, 0);
   expect(Math.abs((await shownPercent(page, "range-low")) - bottom.low)).toBeLessThanOrEqual(0.1);
   expect(Math.abs((await shownPercent(page, "range-typical")) - bottom.typical)).toBeLessThanOrEqual(0.1);
@@ -376,13 +377,13 @@ test("DoD-08 risk slider: the ceiling moves, both readouts follow the frontier, 
   expect({ low: await shownPercent(page, "risk-readout-bad"), typical: await shownPercent(page, "risk-readout-typical") }, "the readouts still describe the frontier mix").toEqual(readouts);
 });
 
-test("DoD-09 diversification slider: suggested by default, moves the point down, ends on the frontier", async ({ page }) => {
+test("DoD-09 diversification slider: starts at Optimized, moves the point down, ends on the frontier", async ({ page }) => {
   const api = watchApi(page);
   await openApp(page);
   const tensor = await shownTensor(api);
-  await expect(page.getByTestId("div-reset"), "no reset link at the suggested position").toHaveCount(0);
+  await expect(page.getByTestId("div-reset"), "no reset link at the Optimized position").toHaveCount(0);
   await expect.poll(() => param(page, "d")).toBe("auto");
-  await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-valuetext", "Suggested");
+  await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-valuetext", "Optimized");
 
   const column = walkableColumn(tensor);
   await openApp(page, `u=guide2017&lb=5y&r=${column}&d=0&x=1`);
@@ -417,16 +418,17 @@ test("DoD-09 diversification slider: suggested by default, moves the point down,
   await pressDivEnd(slider, "diversified");
   await expect(slider).toHaveAttribute("aria-valuetext", /^100 of 100/);
   const enbBottom = (await shownMeasure(page)).enb;
-  expect(near(enbBottom, mixStats(tensor, tensor.grid.w_div[column]).enb), `the measure at the bottom end (${enbBottom}) is the most diversified mix's own`).toBe(true);
+  const peak = tensor.ladder.w[column][tensor.ladder.w[column].length - 1];
+  expect(near(enbBottom, mixStats(tensor, peak).enb), `the measure at the bottom end (${enbBottom}) is the most diversified mix's own`).toBe(true);
   expect(enbBottom, "ENB at the bottom end against the top end").toBeGreaterThanOrEqual(enbTop);
-  const bottom = await rectOf(point);
-  const div = await rectOf(page.getByTestId("point-div"));
-  expect(Math.hypot(bottom.cx - div.cx, bottom.cy - div.cy), "at the bottom end the point is the most diversified marker").toBeLessThanOrEqual(1);
 
-  // Reset returns to the suggested position.
+  // Back to Optimized: the point returns to the open circle.
   await page.getByTestId("div-reset").click();
   await expect(page.getByTestId("div-reset")).toHaveCount(0);
   await expect.poll(() => param(page, "d")).toBe("auto");
+  const home = await rectOf(point);
+  const circle = await rectOf(page.getByTestId("point-div"));
+  expect(Math.hypot(home.cx - circle.cx, home.cy - circle.cy), "at Optimized the point sits on the open circle").toBeLessThanOrEqual(1);
 
   await test.step("a position with collapsed ladders disables the slider", async (step) => {
     const collapsed = collapsedPosition(tensor);

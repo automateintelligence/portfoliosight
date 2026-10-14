@@ -135,6 +135,29 @@ export async function getTensor(url: string, lookback: string): Promise<TensorAn
   return tensorAnswer(await call(url), lookback);
 }
 
+const rangeSchema = z.object({ bad: z.number(), typical: z.number(), good: z.number() }).passthrough();
+
+/** Where a tensor lives: the three parts of its key (spec 6). */
+export type TensorKey = { generation: string; hash: string; lookback: string };
+
+/**
+ * `POST /api/range` (spec 6): the one-year bad / typical / good year of exact weights on a built
+ * tensor. `null` whenever the service cannot answer (409 when the history behind the tensor has
+ * changed, any refusal, a challenge, a network failure): the caller then keeps the figures it
+ * has. Never throws, so a missing range never interrupts the page.
+ */
+export async function postRange(key: TensorKey, weights: ArrayLike<number>, signal?: AbortSignal): Promise<{ low: number; typical: number; high: number } | null> {
+  try {
+    const body = JSON.stringify({ generation: key.generation, hash: key.hash, lookback: key.lookback, weights: Array.from(weights) });
+    const res = await call("/api/range", { method: "POST", headers: { "content-type": "application/json" }, body, signal });
+    if (res.status !== 200) return null;
+    const range = rangeSchema.safeParse(await jsonOf(res));
+    return range.success ? { low: range.data.bad, typical: range.data.typical, high: range.data.good } : null;
+  } catch {
+    return null;
+  }
+}
+
 export type ShareResult = "sent" | "invalid_recipient" | "invalid_url" | "rate_limited" | "failed";
 
 /** `POST /api/share` (spec 9.3). The Worker re-encodes the URL; nothing but these two fields is sent. */

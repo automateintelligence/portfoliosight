@@ -62,7 +62,8 @@ export type TensorLike = {
   lookback: { id: string };
   universe: { hash: string; funds: { id: string; last_close?: number | null }[]; excluded?: { id: string; reason: string }[] };
   bounds: { requested: { min: number | null; max: number | null }[]; min: number[]; max: number[] };
-  frontier: { x: number[]; y: number[]; w: number[][] };
+  frontier: { x: number[]; y: number[]; w: number[][]; s_safe: number; range: { bad: number[]; typical: number[]; good: number[] } };
+  ladder: { w: number[][][]; range: { bad: number[][]; typical: number[][]; good: number[][] } };
   frontier_curve: { sigma: number[]; mu: number[] };
   grid: { y: number[]; z: (number | null)[][]; w: (number[] | null)[][]; k_div: number[]; y_div: number[]; w_div: number[][] };
   stress: Record<string, { label: string; r: (number | null)[] }>;
@@ -77,39 +78,35 @@ export const lerp = (arr: number[], pos: number): number => {
   return (1 - f) * arr[i] + f * arr[i + 1];
 };
 
-/** Signed percent in a text such as "Bad six months −9.4%" → −9.4 (percentage points). */
+/** Signed percent in a text such as "Bad year −9.4%" → −9.4 (percentage points). */
 export function parsePercent(text: string, what = "text"): number {
   const m = text.replace(/[−–]/g, "-").match(/([+-]?)\s?(\d[\d,]*(?:\.\d+)?)\s*%/);
   if (!m) throw new Error(`${what}: no percent value in "${text}"`);
   return (m[1] === "-" ? -1 : 1) * Number(m[2].replace(/,/g, ""));
 }
 
-/** Six-month figures of a mix with yearly (mu, sigma), in percentage points (spec 4.9). */
-export function range6mPct(mu: number, sigma: number): { low: number; typical: number; high: number } {
-  const spread = (RANGE_Z * sigma) / Math.SQRT2;
-  return { low: 100 * (mu / 2 - spread), typical: 100 * (mu / 2), high: 100 * (mu / 2 + spread) };
+/** The bell-curve figure of a mix with yearly (mu, sigma), in percentage points: mu -+ 1.96 sigma. */
+export function bellCurvePct(mu: number, sigma: number): { low: number; mid: number; high: number } {
+  return { low: 100 * (mu - RANGE_Z * sigma), mid: 100 * mu, high: 100 * (mu + RANGE_Z * sigma) };
 }
 
-/** The frontier mix at position `s`, read off `frontier_curve` (8 sub-steps per column gap). */
+/** One-year figures (bad / typical / good year) of column `j`'s ladder level `level`, in percentage points (spec 4.9). */
+export function levelRangePct(tensor: TensorLike, j: number, level: number): { low: number; typical: number; high: number } {
+  const r = tensor.ladder.range;
+  return { low: 100 * r.bad[j][level], typical: 100 * r.typical[j][level], high: 100 * r.good[j][level] };
+}
+
+/** The frontier mix at position `s`: risk and return off `frontier_curve`, the one-year figures blended between the two nodes. */
 export function frontAt(tensor: TensorLike, s: number) {
   const sigma = lerp(tensor.frontier_curve.sigma, s * SUBSTEPS);
   const mu = lerp(tensor.frontier_curve.mu, s * SUBSTEPS);
-  return { sigma, mu, ...range6mPct(mu, sigma) };
+  const r = tensor.frontier.range;
+  return { sigma, mu, low: 100 * lerp(r.bad, s), typical: 100 * lerp(r.typical, s), high: 100 * lerp(r.good, s) };
 }
 
-/** The risk slider's domain: `s_safe` is the rightmost maximum of the bad six months over the curve. */
+/** The risk slider's domain: from the tensor's `frontier.s_safe` (the engine's rule, spec 4.9) to the last column. */
 export function sliderDomain(tensor: TensorLike): { sSafe: number; sMax: number } {
-  const curve = tensor.frontier_curve;
-  let best = -Infinity;
-  let at = 0;
-  for (let i = 0; i < curve.mu.length; i++) {
-    const low = curve.mu[i] / 2 - (RANGE_Z * curve.sigma[i]) / Math.SQRT2;
-    if (low >= best) {
-      best = low;
-      at = i;
-    }
-  }
-  return { sSafe: at / SUBSTEPS, sMax: tensor.frontier.x.length - 1 };
+  return { sSafe: tensor.frontier.s_safe, sMax: tensor.frontier.x.length - 1 };
 }
 
 /** Yearly return, yearly risk and ENB (minimum torsion, spec 4.6) of weights `w`. */

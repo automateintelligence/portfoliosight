@@ -16,7 +16,8 @@ type Props = {
   /** The selected risk ceiling X(s) and the frontier's return there (top of the dashed line). */
   ceiling: Mark;
   selected: Mark;
-  mostDiversified: Mark;
+  /** The Optimized mix (the open circle): where the diversification slider starts. */
+  optimized: Mark;
   current: Mark | null;
   /** Fund dots with ticker labels: details only. */
   funds: (Mark & { id: string })[] | null;
@@ -94,12 +95,14 @@ export function placeLabels(lines: LineEnd[], scales: ChartScales, phone: boolea
  * frontier lines and the markers, each drawn at its mix's actual risk and return. Updates on
  * every slider tick.
  */
-export function Overlay({ scales, phone, ceiling, selected, mostDiversified, current, funds, selectedLabel, divLabel, currentLabel, position, busy, cards, lines, hot, onRiskPixel, onDivDrag, onNudge }: Props) {
+export function Overlay({ scales, phone, ceiling, selected, optimized, current, funds, selectedLabel, divLabel, currentLabel, position, busy, cards, lines, hot, onRiskPixel, onDivDrag, onNudge }: Props) {
   const xAxisRef = useRef<SVGGElement>(null);
   const yAxisRef = useRef<SVGGElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ x0: number; y0: number; grabDx: number; axis: "x" | "y" | null } | null>(null);
+  // `fromMark`: the press began on the square or the open circle (phone), so it is a tap on that
+  // marker unless it moves far enough to be a drag of the selected point.
+  const drag = useRef<{ x0: number; y0: number; grabDx: number; axis: "x" | "y" | null; fromMark: boolean } | null>(null);
   const fresh = useRef(false); // focus has just shown a card: the click that follows must not turn it over
   const [dragging, setDragging] = useState(false);
   const [tip, setTip] = useState<MarkId | null>(null);
@@ -137,7 +140,7 @@ export function Overlay({ scales, phone, ceiling, selected, mostDiversified, cur
   const cTop = Math.min(plot.bottom, y(ceiling.mu));
   const at: Record<MarkId, { px: number; py: number } | null> = {
     selected: { px: sx, py: sy },
-    div: { px: x(mostDiversified.sigma), py: y(mostDiversified.mu) },
+    div: { px: x(optimized.sigma), py: y(optimized.mu) },
     current: current ? { px: x(current.sigma), py: y(current.mu) } : null,
   };
 
@@ -145,19 +148,21 @@ export function Overlay({ scales, phone, ceiling, selected, mostDiversified, cur
     const r = svgRef.current?.getBoundingClientRect();
     return { px: e.clientX - (r?.left ?? 0), py: e.clientY - (r?.top ?? 0) };
   };
-  const onPointerDown = (e: ReactPointerEvent<SVGGElement>) => {
+  const startDrag = (e: ReactPointerEvent<SVGGElement>, fromMark: boolean) => {
     if (busy || (e.pointerType === "mouse" && e.button !== 0)) return;
     const p = local(e);
     // Remember where the pointer grabbed, so the ceiling and the point do not jump under it.
-    drag.current = { x0: p.px, y0: p.py, grabDx: cx - p.px, axis: null };
+    drag.current = { x0: p.px, y0: p.py, grabDx: cx - p.px, axis: null, fromMark };
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
       // capture is a convenience only
     }
+    if (fromMark) return; // a tap opens the marker's own card; only a real move drags
     setDragging(true);
     setTip("selected");
   };
+  const onPointerDown = (e: ReactPointerEvent<SVGGElement>) => startDrag(e, false);
   const onPointerMove = (e: ReactPointerEvent<SVGGElement>) => {
     const d = drag.current;
     if (!d) return;
@@ -167,6 +172,10 @@ export function Overlay({ scales, phone, ceiling, selected, mostDiversified, cur
       const dy = Math.abs(p.py - d.y0);
       if (Math.max(dx, dy) < AXIS_LOCK) return;
       d.axis = dx >= dy ? "x" : "y";
+      if (d.fromMark) {
+        setDragging(true);
+        setTip("selected");
+      }
       if (d.axis === "y") {
         // Movement is measured from here, so the point leaves from where it is without a jump.
         d.y0 = p.py;
@@ -188,13 +197,15 @@ export function Overlay({ scales, phone, ceiling, selected, mostDiversified, cur
     onNudge(move[0], move[1]);
   };
 
-  // The square and the open circle can sit on top of each other; then only the upper one can be
-  // reached, so a second tap or click on it turns the card over to the marker underneath.
+  // The square and the open circle can sit on top of each other; once the square's hit area (drawn
+  // above the circle) covers the circle's centre, a press there reaches the square only, so a
+  // second tap or click on it turns the card over to the marker underneath.
+  const squareHit = phone ? HIT : 14;
   const under = (id: MarkId): MarkId | null => {
     const other = id === "current" ? "div" : id === "div" ? "current" : null;
     const a = at[id];
     const b = other ? at[other] : null;
-    return other && a && b && Math.hypot(a.px - b.px, a.py - b.py) < 16 ? other : null;
+    return other && a && b && Math.hypot(a.px - b.px, a.py - b.py) < squareHit ? other : null;
   };
   // Hover shows a marker's card with a mouse; a tap or keyboard focus shows it too.
   const show = (id: MarkId) => ({
@@ -223,6 +234,15 @@ export function Overlay({ scales, phone, ceiling, selected, mostDiversified, cur
     },
   });
 
+  // On a phone the selected point is a drag handle 44 px across and the open circle starts under
+  // it, with the square often close by. So there both markers are drawn above the handle: a tap
+  // on either opens its card, and a press on either that moves drags the selected point.
+  // The square is above the handle everywhere: with a mouse too it can sit right beside the
+  // selected point, and its card must open on hover.
+  const fromMark = { onPointerDown: (e: ReactPointerEvent<SVGGElement>) => startDrag(e, true), onPointerMove, onPointerUp: endDrag, onPointerCancel: endDrag, onLostPointerCapture: endDrag };
+  const markDrag = phone ? fromMark : {};
+  const squareDrag = fromMark;
+
   // The card sits beside its marker, on the side with room, and never leaves the chart.
   const where = tip ? at[tip] : null;
   const cardW = phone ? CARD_W.phone : CARD_W.desktop;
@@ -233,6 +253,39 @@ export function Overlay({ scales, phone, ceiling, selected, mostDiversified, cur
     cardLeft = Math.max(4, Math.min(cardLeft, scales.width - cardW - 4));
     cardTop = Math.max(4, Math.min(where.py - cardH / 2, scales.height - cardH - 4));
   }
+
+  const selectedEl = (
+    <g
+            className={dragging ? "pt-selected dragging" : "pt-selected"}
+            data-testid="point-selected"
+            data-mark="selected"
+            transform={`translate(${sx},${sy})`}
+            tabIndex={0}
+            role="slider"
+            aria-label={selectedLabel}
+            aria-orientation="horizontal"
+            aria-valuemin={Number(position.min.toFixed(4))}
+            aria-valuemax={Number(position.max.toFixed(4))}
+            aria-valuenow={Number(position.s.toFixed(4))}
+            aria-valuetext={selectedLabel}
+            aria-disabled={busy || undefined}
+            aria-describedby={tip === "selected" ? CARD_ID : undefined}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+            onLostPointerCapture={endDrag}
+            {...show("selected")}
+            onKeyDown={onKeyDown}
+          >
+            <circle className="hit" r={HIT} />
+            <circle className="halo" r={16} />
+            <circle className="reticle-outer" r={23} />
+            <circle className="reticle" r={16} />
+            <circle className="dot-back" r={10.5} />
+            <circle className="dot" r={8} />
+          </g>
+  );
 
   return (
     <>
@@ -262,46 +315,18 @@ export function Overlay({ scales, phone, ceiling, selected, mostDiversified, cur
             </text>
           </g>
         ))}
-        <g className="mark" data-mark="div" tabIndex={0} role="img" aria-label={divLabel} aria-describedby={tip === "div" ? CARD_ID : undefined} {...show("div")} {...tapToggle("div")}>
+        {phone && selectedEl}
+        <g className={phone ? "mark drags" : "mark"} data-mark="div" tabIndex={0} role="img" aria-label={divLabel} aria-describedby={tip === "div" ? CARD_ID : undefined} {...show("div")} {...tapToggle("div")} {...markDrag}>
           <circle className="hit" cx={at.div!.px} cy={at.div!.py} r={phone ? HIT : 13} />
           <circle className="pt-div" data-testid="point-div" cx={at.div!.px} cy={at.div!.py} r={4.5} />
         </g>
+        {!phone && selectedEl}
         {at.current && (
-          <g className="mark" data-mark="current" tabIndex={0} role="img" aria-label={currentLabel} aria-describedby={tip === "current" ? CARD_ID : undefined} {...show("current")} {...tapToggle("current")}>
-            <circle className="hit" cx={at.current.px} cy={at.current.py} r={phone ? HIT : 14} />
+          <g className="mark drags" data-mark="current" tabIndex={0} role="img" aria-label={currentLabel} aria-describedby={tip === "current" ? CARD_ID : undefined} {...show("current")} {...tapToggle("current")} {...squareDrag}>
+            <circle className="hit" cx={at.current.px} cy={at.current.py} r={squareHit} />
             <rect className="pt-current" data-testid="point-current" x={at.current.px - 6.5} y={at.current.py - 6.5} width={13} height={13} rx={2} />
           </g>
         )}
-        <g
-          className={dragging ? "pt-selected dragging" : "pt-selected"}
-          data-testid="point-selected"
-          data-mark="selected"
-          transform={`translate(${sx},${sy})`}
-          tabIndex={0}
-          role="slider"
-          aria-label={selectedLabel}
-          aria-orientation="horizontal"
-          aria-valuemin={Number(position.min.toFixed(4))}
-          aria-valuemax={Number(position.max.toFixed(4))}
-          aria-valuenow={Number(position.s.toFixed(4))}
-          aria-valuetext={selectedLabel}
-          aria-disabled={busy || undefined}
-          aria-describedby={tip === "selected" ? CARD_ID : undefined}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={endDrag}
-          onPointerCancel={endDrag}
-          onLostPointerCapture={endDrag}
-          {...show("selected")}
-          onKeyDown={onKeyDown}
-        >
-          <circle className="hit" r={HIT} />
-          <circle className="halo" r={16} />
-          <circle className="reticle-outer" r={23} />
-          <circle className="reticle" r={16} />
-          <circle className="dot-back" r={10.5} />
-          <circle className="dot" r={8} />
-        </g>
       </svg>
       {tip && where && cards[tip] && (
         <div ref={cardRef} id={CARD_ID} className="tooltip" role="tooltip" style={{ left: cardLeft, top: cardTop, width: cardW }}>

@@ -19,6 +19,7 @@ dependencies = [
   "boto3>=1.43",
   "exchange_calendars>=4.13",
   "jsonschema>=4.26",
+  "threadpoolctl>=3.5",
 ]
 
 [project.optional-dependencies]

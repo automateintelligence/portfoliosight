@@ -101,19 +101,24 @@ const LOOKBACK = "(?:1y|2y|3y|5y|10y|ew)";
 const FUND_ID = "[A-Z0-9][A-Z0-9.-]{0,11}";
 const listOf = (item: string, max: number) => new RegExp(`^${item}(?:,${item}){0,${max - 1}}$`);
 
+type Shape = (value: string) => boolean;
+const matching = (pattern: RegExp): Shape => (value) => pattern.test(value);
+// a theme is one the page's own codec keeps, so the mailed themes cannot drift from the page's
+const pageTheme: Shape = (value) => decode(new URLSearchParams([["t", value]]).toString()).theme === value;
+
 // The spec §8.1 keys in the order the page writes them, each with the only value shape it may
 // take. A value is mailed only if it matches, so a link cannot carry free text.
-const URL_KEYS: ReadonlyArray<readonly [string, RegExp]> = [
-  ["u", /^(?:guide2017|tsp)$/],
-  ["f", listOf(`${FUND_ID}(?::\\d{1,12}(?:\\.\\d{1,6})?)?`, MAX_FUNDS)],
-  ["unit", /^(?:pct|usd|shares)$/],
-  ["c", listOf(`${FUND_ID}:(?:\\d{1,3})?:(?:\\d{1,3})?`, MAX_FUNDS)],
-  ["lb", new RegExp(`^${LOOKBACK}$`)],
-  ["g", listOf(LOOKBACK, 6)],
-  ["r", /^-?\d{1,4}(?:\.\d{1,12})?$/],
-  ["d", /^(?:auto|0(?:\.\d{1,12})?|1(?:\.0{1,12})?)$/],
-  ["t", /^(?:ks-dark|light|hud)$/],
-  ["x", /^1$/],
+const URL_KEYS: ReadonlyArray<readonly [string, Shape]> = [
+  ["u", matching(/^(?:guide2017|tsp)$/)],
+  ["f", matching(listOf(`${FUND_ID}(?::\\d{1,12}(?:\\.\\d{1,6})?)?`, MAX_FUNDS))],
+  ["unit", matching(/^(?:pct|usd|shares)$/)],
+  ["c", matching(listOf(`${FUND_ID}:(?:\\d{1,3})?:(?:\\d{1,3})?`, MAX_FUNDS))],
+  ["lb", matching(new RegExp(`^${LOOKBACK}$`))],
+  ["g", matching(listOf(LOOKBACK, 6))],
+  ["r", matching(/^-?\d{1,4}(?:\.\d{1,12})?$/)],
+  ["d", matching(/^(?:auto|0(?:\.\d{1,12})?|1(?:\.0{1,12})?)$/)],
+  ["t", pageTheme],
+  ["x", matching(/^1$/)],
 ];
 // Written by the page even at their defaults; `unit=pct` is the default the page leaves out.
 
@@ -137,7 +142,7 @@ export function reencodeShareUrl(submitted: unknown): string | null {
   const values = new Map<string, string>();
   for (const [key, value] of url.searchParams) {
     const shape = shapes.get(key);
-    if (shape === undefined || values.has(key) || !shape.test(value)) return null;
+    if (shape === undefined || values.has(key) || !shape(value)) return null;
     values.set(key, value);
   }
   // The mailed link is the page's own canonical form of the view (the codec of spec 8.1), so it
