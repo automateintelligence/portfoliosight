@@ -27,7 +27,7 @@ from .caps import RULE, requested_caps, resolve_bounds
 from .invariants import TOL, InvariantError, check_floor, check_risk_line, check_weights
 from .ladder import LEVELS, EnbProgram
 from .optimize import NX, Frontier, MenuPrograms, frontier
-from .ranges import METHOD, RangeModel, one_year_ranges, range_model
+from .ranges import METHOD, RangeModel, frame_digest, one_year_ranges, range_model
 from .stats import EW_HALFLIFE_DAYS, estimate_moments, menu_beta_blend, risk_free_rate
 from .stress import segments_from_returns, stress_returns
 from .suggest import DEFAULT_POINT, balanced_level, suggested_level
@@ -250,6 +250,7 @@ def _build(inputs: TensorInputs) -> dict:
             "rows": selection.rows,
             "t_eff": float(moments.t_eff),
             "ew_halflife_days": None if selection.omega is None else EW_HALFLIFE_DAYS,
+            "sample_sha256": frame_digest(selection.sample),
         },
         "rf": rf,
         "mu_s": mu_s.tolist(),

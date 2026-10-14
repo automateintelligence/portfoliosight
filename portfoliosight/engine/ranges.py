@@ -33,6 +33,8 @@ returns, so all paths of all mixes come from one matrix product. The normal rang
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -107,6 +109,30 @@ def path_counts(rows: int) -> np.ndarray:
     np.add.at(counts, (np.arange(len(index))[:, None], index), 1.0)
     counts.setflags(write=False)
     return counts
+
+
+def sample_digest(funds: Sequence[str], days: Sequence[str], sample) -> str:
+    """SHA-256 of a window's sample: its fund ids, its days and every return, in order.
+
+    The tensor carries it (``lookback.sample_sha256``) so that a range asked for later can be
+    proved to come from the very sample the build used; it says nothing about the returns.
+    """
+    values = np.ascontiguousarray(np.asarray(sample, dtype="<f8"))
+    if values.shape != (len(days), len(funds)):
+        raise ValueError("a sample has one row per day and one column per fund")
+    digest = hashlib.sha256()
+    digest.update("\x1f".join(funds).encode())
+    digest.update(b"\x1e")
+    digest.update("\x1f".join(days).encode())
+    digest.update(b"\x1e")
+    digest.update(values.tobytes())
+    return digest.hexdigest()
+
+
+def frame_digest(sample) -> str:
+    """`sample_digest` of a window sample held as a frame: dated rows, one column per fund."""
+    days = [stamp.date().isoformat() for stamp in sample.index]
+    return sample_digest([str(fund) for fund in sample.columns], days, sample.to_numpy())
 
 
 def range_model(sample, mu_s, cov) -> RangeModel:

@@ -54,6 +54,7 @@ const schema = z.strictObject({
     rows: z.int().min(126),
     t_eff: z.number().gt(0),
     ew_halflife_days: z.int().nullable(),
+    sample_sha256: z.string().regex(/^[0-9a-f]{64}$/),
   }),
   rf: z.number(),
   mu_s: vector,

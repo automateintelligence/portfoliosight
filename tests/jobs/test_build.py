@@ -313,9 +313,18 @@ def _corrected(store, fund: str, day: str, by: float) -> None:
 def test_range_model_refuses_history_that_changed_after_the_build(store, generation, tmp_path):
     """The endpoint answers from the build's own sample or not at all."""
     key, tensor = _stored(store, generation, tmp_path)
-    middle = (date.fromisoformat(tensor["lookback"]["start"]) + timedelta(days=180)).isoformat()
-    # one restated day of one fund: its sample mean and the frontier ranges move
-    _corrected(store, "BND", middle, 1e-4)
+    start = date.fromisoformat(tensor["lookback"]["start"])
+    _corrected(store, "BND", (start + timedelta(days=180)).isoformat(), 1e-4)  # one restated day
+    with pytest.raises(RangeUnavailable, match="changed after it was built"):
+        range_model_from_store(store, key, cache_dir=tmp_path / "cache")
+
+
+def test_a_restatement_that_keeps_every_mean_is_still_refused(store, generation, tmp_path):
+    """Two opposite restatements leave the fund's mean where it was; the digest still moves."""
+    key, tensor = _stored(store, generation, tmp_path)
+    start = date.fromisoformat(tensor["lookback"]["start"])
+    _corrected(store, "VTI", (start + timedelta(days=90)).isoformat(), 2e-3)
+    _corrected(store, "VTI", (start + timedelta(days=95)).isoformat(), 1 / (1 + 2e-3) - 1)
     with pytest.raises(RangeUnavailable, match="changed after it was built"):
         range_model_from_store(store, key, cache_dir=tmp_path / "cache")
 
@@ -327,14 +336,10 @@ def test_range_model_refuses_a_tensor_made_with_another_method(store, generation
     )
     with pytest.raises(RangeUnavailable, match="another method"):
         range_model_from_store(store, key + ".other", cache_dir=tmp_path / "cache")
-    shifted = {
-        **tensor,
-        "frontier": {**tensor["frontier"], "range": {**tensor["frontier"]["range"]}},
-    }
-    shifted["frontier"]["range"]["bad"] = [v + 1e-6 for v in tensor["frontier"]["range"]["bad"]]
-    put_tensor(store, key + ".shifted", shifted)
+    other = {**tensor, "lookback": {**tensor["lookback"], "sample_sha256": "0" * 64}}
+    put_tensor(store, key + ".other-sample", other)
     with pytest.raises(RangeUnavailable, match="changed after it was built"):
-        range_model_from_store(store, key + ".shifted", cache_dir=tmp_path / "cache")
+        range_model_from_store(store, key + ".other-sample", cache_dir=tmp_path / "cache")
 
 
 def test_missing_generation_is_generation_gone(store, generation, tmp_path):

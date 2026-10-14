@@ -76,14 +76,15 @@
     "lookback": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "start", "end", "rows", "t_eff", "ew_halflife_days"],
+      "required": ["id", "start", "end", "rows", "t_eff", "ew_halflife_days", "sample_sha256"],
       "properties": {
         "id": {"enum": ["1y", "2y", "3y", "5y", "10y", "ew"]},
         "start": {"$ref": "#/$defs/date"},
         "end": {"$ref": "#/$defs/date"},
         "rows": {"type": "integer", "minimum": 126},
         "t_eff": {"type": "number", "exclusiveMinimum": 0},
-        "ew_halflife_days": {"type": ["integer", "null"]}
+        "ew_halflife_days": {"type": ["integer", "null"]},
+        "sample_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
     },
     "rf": {"type": "number"},

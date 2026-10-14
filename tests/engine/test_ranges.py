@@ -198,6 +198,22 @@ def test_model_and_mix_are_checked(model):
     assert np.isfinite(one_year_ranges(broken, np.eye(4)[0])["bad"]).all()  # another mix is fine
 
 
+def test_sample_digest_names_the_exact_sample():
+    funds, days = ["AAA", "BBB"], ["2026-01-02", "2026-01-05", "2026-01-06"]
+    sample = np.array([[0.01, -0.02], [0.0, 0.003], [0.004, 0.001]])
+    digest = ranges.sample_digest(funds, days, sample)
+    assert len(digest) == 64 and int(digest, 16) >= 0
+    assert ranges.sample_digest(funds, days, sample.copy()) == digest
+    nudged = sample.copy()
+    nudged[1, 1] = np.nextafter(nudged[1, 1], 1.0)  # one bit of one return
+    assert ranges.sample_digest(funds, days, nudged) != digest
+    assert ranges.sample_digest(funds, days, sample[::-1]) != digest  # the order of the days
+    assert ranges.sample_digest(["BBB", "AAA"], days, sample[:, ::-1]) != digest  # of the funds
+    assert ranges.sample_digest(funds, ["2026-01-02", "2026-01-05", "2026-01-07"], sample) != digest
+    with pytest.raises(ValueError, match="one row per day"):
+        ranges.sample_digest(funds, days[:2], sample)
+
+
 def test_method_is_declared():
     assert ranges.METHOD == {
         "name": "stationary block bootstrap",

@@ -17,7 +17,7 @@ import pytest
 from portfoliosight.engine import ENGINE_VERSION, builder
 from portfoliosight.engine.caps import CapsError
 from portfoliosight.engine.optimize import MenuPrograms
-from portfoliosight.engine.ranges import bootstrap_index
+from portfoliosight.engine.ranges import bootstrap_index, frame_digest
 from portfoliosight.engine.stats import ew_weights
 from portfoliosight.engine.surface import interpolate
 from portfoliosight.engine.tensor import (
@@ -252,6 +252,7 @@ def test_lookback_block_describes_the_sample(fixture_tensor, fixture_frame, arra
     assert lookback["start"] == fixture_frame.index[-1260].date().isoformat()
     window = fixture_frame.loc[lookback["start"] : lookback["end"], arrays.ids].dropna()
     assert len(window) == lookback["rows"]
+    assert lookback["sample_sha256"] == frame_digest(window)  # the very sample of the build
     sample = window.to_numpy()
     assert np.abs(np.array(fixture_tensor["mu_sample"]) - 252.0 * sample.mean(axis=0)).max() < 1e-12
     sigma = np.sqrt(252.0) * sample.std(axis=0, ddof=1)
