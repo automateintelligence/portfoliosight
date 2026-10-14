@@ -28,6 +28,8 @@ export const plain = {
   ghosts: "Same menu, different years of history",
   noLimits: "No limits",
   noLimitsLine: "Same funds, no limit on any one fund",
+  /** The legend's and the line's name for the No limits curve (owner direction 2026-10-13). */
+  noAllocationLimits: "No allocation limits",
   resetLimits: "Reset limits",
   currentMix: "The mix you entered",
   selectedMix: "Selected mix",
@@ -140,7 +142,7 @@ export const lookbackLine: Record<string, string> = {
   "10y": "10 years",
   ew: "Weighted recent",
   // not a history window: the same menu with every fund allowed 0% to 100% (owner's wording)
-  nolimits: "No limits",
+  nolimits: "No allocation limits",
 };
 
 export const lookbackShort: Record<string, string> = {

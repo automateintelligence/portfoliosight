@@ -296,7 +296,7 @@ test("every frontier line is named at its right end and the names do not collide
   await open(page, "g=10y,ew,1y");
   await expect(page.getByTestId("chart")).toHaveAttribute("data-ghost-count", "3");
   // the No limits line is named like the history windows, and is not one of them in the count
-  const want: Record<string, string> = { "5y": "5 years", "10y": "10 years", ew: "Weighted recent", "1y": "1 year", nolimits: "No limits" };
+  const want: Record<string, string> = { "5y": "5 years", "10y": "10 years", ew: "Weighted recent", "1y": "1 year", nolimits: "No allocation limits" };
   for (const [id, text] of Object.entries(want)) await expect(page.getByTestId(`frontier-label-${id}`)).toHaveText(text);
   const chart = await boxOf(page, "chart");
   const boxes = await Promise.all(Object.keys(want).map(async (id) => ({ id, box: (await page.getByTestId(`frontier-label-${id}`).locator("text").boundingBox())! })));
@@ -315,6 +315,8 @@ test("every frontier line is named at its right end and the names do not collide
   await expect(page.getByTestId("frontier-label-ew").locator("path.leader")).toHaveCount(1);
   await expect(page.getByTestId("frontier-label-5y").locator("path.leader")).toHaveCount(0);
   if (isPhone(testInfo.project.name)) return;
+  // the legend names the curve the same way, with what it means
+  await expect(page.getByTestId("key-nolimits")).toHaveText("No allocation limits: same funds, no limit on any one fund");
   // hovering a ghost line names it; the primary line does not need it
   const end = page.getByTestId("frontier-label-10y");
   const x = chart.x + Number(await end.getAttribute("data-end-x"));

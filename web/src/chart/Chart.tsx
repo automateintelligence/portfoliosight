@@ -86,7 +86,7 @@ export function MarkKeys({ hasCurrent, hasGhosts, hasNoLimits, compact = false }
             <svg viewBox="0 0 18 12" aria-hidden="true">
               <path d="M1 10 C5 5 10 3.5 17 3" fill="none" stroke="var(--frontier)" strokeWidth="1.2" strokeDasharray="3 2.5" opacity="0.55" />
             </svg>
-            <span>{compact ? plain.noLimits : `${plain.noLimits}: ${plain.noLimitsLine.toLowerCase()}`}</span>
+            <span>{compact ? plain.noLimits : `${plain.noAllocationLimits}: ${plain.noLimitsLine.toLowerCase()}`}</span>
           </li>
         )}
       </ul>
