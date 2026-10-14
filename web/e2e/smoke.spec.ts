@@ -1310,7 +1310,7 @@ test("DoD-28 store gate: the bucket verifies, holds the seeded symbols and the l
   const mirror = "/mnt/d/portfoliosight-data";
   expect(fs.readdirSync(path.join(mirror, "prices")).filter((name) => name.endsWith(".parquet")).length, "price files in the mirror").toBeGreaterThanOrEqual(1400);
   const restore = run("aws", ["s3", "sync", mirror, "s3://portfoliosight-data", "--dryrun", "--endpoint-url", `https://${env("CLOUDFLARE_ACCOUNT_ID")}.r2.cloudflarestorage.com`], {
-    env: { AWS_ACCESS_KEY_ID: env("CLOUDFLARE_R2_ACCESS_KEY_ID"), AWS_SECRET_ACCESS_KEY: env("CLOUDFLARE_R2_SECRET_ACCESS_KEY"), AWS_DEFAULT_REGION: "auto", AWS_PROFILE: "", AWS_SESSION_TOKEN: "" },
+    env: { AWS_ACCESS_KEY_ID: env("CLOUDFLARE_R2_ACCESS_KEY_ID"), AWS_SECRET_ACCESS_KEY: env("CLOUDFLARE_R2_SECRET_ACCESS_KEY"), AWS_DEFAULT_REGION: "auto" },
     timeoutMs: 600_000,
   });
   expect(restore.status, `the restore dry run: ${restore.stderr.slice(-400)}`).toBe(0);
