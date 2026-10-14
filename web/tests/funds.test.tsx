@@ -229,10 +229,16 @@ it("Scale to 100% hands keyboard focus to Clear all as it goes away", () => {
 });
 
 it("keeps one live region mounted for the total, empty while there is nothing to say", () => {
-  show({ unit: "pct", amounts: [60, 40] });
+  const rows = (amounts: number[]): Row[] => funds.slice(0, amounts.length).map((f, i) => ({ id: f.id, name: f.name ?? f.id, amount: amounts[i] }));
+  const props = { unit: "pct" as const, tensor, symbols: null, mixStatus: "ok" as const, setAside: 0, menuError: null, busy: false, selected: null, onUnit: noop, onAmount: noop, onUseMenu: noop, onNeedSymbols: noop };
+  const { rerender } = render(<Funds {...props} rows={rows([60, 40])} />);
   const live = screen.getByRole("status");
   expect(live.textContent).toBe("");
-  cleanup();
-  show({ unit: "pct", amounts: [60, 32] });
-  expect(screen.getByRole("status").textContent).toBe("Total: 92%, 8% to go");
+  // the total goes off 100: the same region, now with the message
+  rerender(<Funds {...props} rows={rows([60, 32])} />);
+  expect(screen.getByRole("status")).toBe(live);
+  expect(live.textContent).toBe("Total: 92%, 8% to go");
+  rerender(<Funds {...props} rows={rows([60, 40])} />);
+  expect(screen.getByRole("status")).toBe(live);
+  expect(live.textContent).toBe("");
 });

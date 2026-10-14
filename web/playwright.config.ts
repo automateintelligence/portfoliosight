@@ -40,7 +40,8 @@ export default defineConfig({
   use: { baseURL: localURL, ...quiet },
   projects: [
     { name: "local-desktop", testDir: "e2e/local", testIgnore: /screenshots\.spec\.ts/, use: desktop },
-    { name: "local-phone", testDir: "e2e/local", testIgnore: /screenshots\.spec\.ts/, use: phone },
+    // Checks of desktop-only layout (the strip's bar, the sidebar) carry @desktop-only in their title.
+    { name: "local-phone", testDir: "e2e/local", testIgnore: /screenshots\.spec\.ts/, grepInvert: /@desktop-only/, use: phone },
     { name: "shots-desktop", testDir: "e2e/local", testMatch: /screenshots\.spec\.ts/, use: desktop },
     // The owner-feedback views are desktop views; the phone project takes the first screens only.
     { name: "shots-phone", testDir: "e2e/local", testMatch: /screenshots\.spec\.ts/, grepInvert: /owner feedback 1 views/, use: phone },
