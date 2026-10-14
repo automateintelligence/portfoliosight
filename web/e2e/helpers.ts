@@ -119,7 +119,10 @@ export const test = base.extend<Fixtures>({
       const foreign = await gateContext(context, baseURL as string);
       await provide(foreign);
       // Fonts are self-hosted and the page names no other origin (run rule 15, INTERFACES.md).
-      expect([...foreign], "origins other than the site's own that a page contacted").toEqual([]);
+      // Cloudflare's edge injects its analytics beacon into browser requests; the page does not
+      // name it. Allowed during the private preview (owner, 2026-10-13); revisit before public launch.
+      const edgeInjected = new Set(["https://static.cloudflareinsights.com"]);
+      expect([...foreign].filter((o) => !edgeInjected.has(o)), "origins other than the site's own that a page contacted").toEqual([]);
     },
     { auto: true },
   ],
