@@ -227,3 +227,12 @@ it("Scale to 100% hands keyboard focus to Clear all as it goes away", () => {
   fireEvent.click(scale);
   expect(document.activeElement).toBe(screen.getByTestId("funds-clear"));
 });
+
+it("keeps one live region mounted for the total, empty while there is nothing to say", () => {
+  show({ unit: "pct", amounts: [60, 40] });
+  const live = screen.getByRole("status");
+  expect(live.textContent).toBe("");
+  cleanup();
+  show({ unit: "pct", amounts: [60, 32] });
+  expect(screen.getByRole("status").textContent).toBe("Total: 92%, 8% to go");
+});

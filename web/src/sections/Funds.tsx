@@ -158,21 +158,24 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
             </button>
           ))}
         </div>
-        {offTotal && (
-          <>
-            <span className="funds-total" data-testid="funds-total" role="status">
+        {/* One live region, always mounted, so a reader hears the total as soon as it appears. */}
+        <span className="funds-live" role="status">
+          {offTotal && (
+            <span className="funds-total" data-testid="funds-total">
               {fundsTotal(String(shown.total), String(gap), shown.total > 100)}
             </span>
-            <button type="button" className="btn" data-testid="funds-scale100" title={plain.fundsScaleHint} aria-label={`${plain.fundsScale}: ${plain.fundsScaleHint.toLowerCase()}`} onClick={scaleAll}>
-              <Percent size={14} aria-hidden="true" />
-              <span>{plain.fundsScale}</span>
-            </button>
-          </>
-        )}
-        {enteredLine && (
-          <span className="hint" data-testid="funds-entered" role="status">
-            {enteredLine}
-          </span>
+          )}
+          {enteredLine && (
+            <span className="hint" data-testid="funds-entered">
+              {enteredLine}
+            </span>
+          )}
+        </span>
+        {offTotal && (
+          <button type="button" className="btn" data-testid="funds-scale100" title={plain.fundsScaleHint} aria-label={`${plain.fundsScale}: ${plain.fundsScaleHint.toLowerCase()}`} onClick={scaleAll}>
+            <Percent size={14} aria-hidden="true" />
+            <span>{plain.fundsScale}</span>
+          </button>
         )}
         <span className="spacer" />
         <button ref={clearRef} type="button" className="btn btn-quiet" data-testid="funds-clear" title={plain.fundsClearHint} aria-label={`${plain.fundsClear}: ${plain.fundsClearHint.toLowerCase()}`} disabled={!anyAmount} onClick={clearAll}>

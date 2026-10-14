@@ -1903,6 +1903,15 @@ button {
   flex: 1 1 auto;
 }
 
+/* Funds: the live region of the total line takes no room while it is empty (it stays mounted). */
+.funds-live:empty {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
 /* Funds: the running total while the percentages are not exactly 100%, a gentle warning. */
 .funds-total {
   padding: 2px 8px;
