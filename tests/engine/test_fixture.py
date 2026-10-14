@@ -101,7 +101,14 @@ def test_moments_are_realistic(frame):
 
 def test_metadata_describes_the_guide_universe(frame):
     meta = fixture_metadata()
-    assert meta["universe"] == {"name": "Example Portfolio", "preset_id": "guide2017"}
+    universe = meta["universe"]
+    assert set(universe) == {"name", "preset_id", "allocation"}
+    assert universe["name"] == "Example Portfolio" and universe["preset_id"] == "guide2017"
+    with HOLDINGS.open(newline="") as handle:  # the entered mix: Qty x Price of the Step 2 file
+        rows = list(csv.DictReader(handle))
+    held = {row["Symbol"]: float(row["Qty"]) * float(row["Price"]) for row in rows}
+    assert universe["allocation"] == held and sum(v > 0 for v in held.values()) == 18
+    assert sorted(universe["allocation"]) == sorted(frame.columns)
     funds = meta["funds"]
     assert sorted(funds) == sorted(frame.columns)  # fund order is the frame's column order
     keys = {

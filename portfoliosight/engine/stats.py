@@ -1,4 +1,4 @@
-"""Moments, the expected-return blend, the risk-free rate and the six-month range (spec 4.3, 4.9).
+"""Moments, the expected-return blend and the risk-free rate (spec 4.3).
 
 Everything leaves this module in annual units: `mu = 252 * mean(r)`, `sigma = sqrt(252) * sd(r)`.
 Correlations are shrunk, not covariances, so a fund with almost no volatility keeps its own
@@ -20,7 +20,7 @@ EW_HALFLIFE_DAYS = 252
 EW_SHRINKAGE = 0.2
 RISK_FREE_SOURCES = ("SGOV", "TSP-G")
 RISK_FREE_FALLBACK = 0.04
-RANGE_Z = 1.96
+RANGE_Z = 1.96  # half-width of the normal one-year range, in standard deviations
 ROUNDING_NOISE = 1e3 * np.finfo(float).eps  # a deviation this small, relative to the returns
 
 
@@ -109,13 +109,6 @@ def risk_free_rate(returns_by_symbol: Mapping[str, object]) -> float:
         if len(values) >= TRADING_DAYS:
             return float(np.prod(1.0 + values[-TRADING_DAYS:]) - 1.0)
     return RISK_FREE_FALLBACK
-
-
-def range6m(mu: float, sigma: float) -> tuple[float, float, float]:
-    """`(low, typical, high)` over six months: `mu/2 -+ 1.96 * sigma/sqrt(2)` (spec 4.9)."""
-    typical = mu / 2.0
-    spread = RANGE_Z * sigma / np.sqrt(2.0)
-    return float(typical - spread), float(typical), float(typical + spread)
 
 
 def _observation_weights(omega, rows: int) -> np.ndarray:

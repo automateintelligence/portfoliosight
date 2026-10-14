@@ -1,10 +1,10 @@
-"""The diversification surface, the drawn frontier curve and the reference interpolation
-(spec 4.7, 4.9, 4.11).
+"""The diversification surface, the heatmap raster, the drawn frontier curve and the reference
+interpolation (spec 4.7, 4.9, 4.11).
 
-Cell `(j, k)` holds the least concentrated mix (smallest `|w|^2`, a convex proxy) with risk at
-most `X_j` and return at least `Y_k`; its colour is the exact ENB of that mix. Per column the
-frontier mix and the feasible cells are candidates, and the highest-ENB one is the column's
-"most diversified" end.
+Every risk column holds a ladder of mixes on its own risk line, from the frontier mix at the top
+down to the most diversified mix found there, the peak (`ladder.py`). Nothing below a peak is
+computed: such a mix would earn less and be less diversified. The raster resamples the ladders
+on shared return floors, with no further solving, so a chart can paint rectangles.
 """
 
 from __future__ import annotations
@@ -15,11 +15,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .caps import greedy_fill, greedy_is_unique
-from .invariants import TOL
+from .ladder import LEVELS, EnbProgram, column, peak_pools, spread_peaks
 from .optimize import Frontier, MenuPrograms
-from .stats import RANGE_Z
-from .torsion import TorsionBasis, enb
+from .torsion import enb
 
 NY = 32
 SUBSTEPS = 8
@@ -27,83 +25,92 @@ SUBSTEPS = 8
 
 @dataclass(frozen=True)
 class Surface:
-    """The grid of one (menu, lookback): `nx` risk columns by `ny` return floors."""
+    """`nx` risk columns, each a ladder of `levels + 2` mixes with risk `X_j`."""
+
+    w: np.ndarray  # nx x (levels + 2) x n, the frontier mix first and the peak last
+    y: np.ndarray  # nx x (levels + 2), expected return of each mix, never rising down a column
+    z: np.ndarray  # nx x (levels + 2), ENB of each mix, never falling down a column
+    hop: np.ndarray  # nx x (levels + 1), True where two neighbouring levels must not be blended
+    collapsed: np.ndarray  # True where the frontier mix is the most diversified one found
+    enb_ref: float  # highest ENB among all mixes of all columns
+
+
+@dataclass(frozen=True)
+class Raster:
+    """The ladders resampled on `ny` shared return floors, for drawing."""
 
     y: np.ndarray  # return floors Y_k, ascending
-    w: list[list[np.ndarray | None]]  # nx x ny mixes, None where Y_k > y_front[j]
+    w: list[list[np.ndarray | None]]  # nx x ny mixes, None outside the column's span
     z: np.ndarray  # nx x ny ENB of each mix, NaN where there is none
-    enb_front: np.ndarray  # ENB of each frontier mix
-    k_div: np.ndarray  # row of the column's highest-ENB candidate, -1 = the frontier mix
-    y_div: np.ndarray  # its return floor (y_front[j] when k_div = -1)
-    w_div: np.ndarray  # nx x n, its mix
-    enb_ref: float  # highest ENB among all candidates of all columns
+    k_div: np.ndarray  # row holding the column's peak, -1 for a collapsed column
+    y_div: np.ndarray  # that row's floor (y_front[j] for a collapsed column)
 
 
-def surface(programs: MenuPrograms, front: Frontier, basis: TorsionBasis, ny: int = NY) -> Surface:
-    """Solve every feasible cell and pick each column's most diversified candidate.
+def surface(
+    program: EnbProgram, programs: MenuPrograms, front: Frontier, levels: int = LEVELS
+) -> Surface:
+    """Find every column's peak, then lay out and solve its ladder.
 
-    Two kinds of cell are not solved for, because their answer is exact without a solve.
+    A ladder can come across a mix more diversified than the peak it started from. Once all
+    ladders are solved, each column's best is offered to its neighbours once more, and a column
+    that gains from it has its ladder laid out again.
+    """
+    pools = peak_pools(program, programs, front)
+    risks = [float(risk) for risk in front.x]
+    columns = [column(program, risks[j], pool, levels) for j, pool in enumerate(pools)]
+    for j in spread_peaks(program, programs, front, pools):
+        columns[j] = column(program, risks[j], pools[j], levels)
+    z = np.array([entry.z for entry in columns])
+    return Surface(
+        w=np.array([entry.w for entry in columns]),
+        y=np.array([entry.y for entry in columns]),
+        z=z,
+        hop=np.array([entry.hop for entry in columns]),
+        collapsed=np.array([entry.collapsed for entry in columns]),
+        enb_ref=float(z.max()),
+    )
 
-    A cell that can hold nothing but the frontier mix is that mix: every cell of the
-    minimum-risk column, and a cell whose floor equals its column's frontier return, provided
-    that frontier mix is the only one with that return. It is the only one below the menu's top
-    return (two such mixes would average to one strictly inside the ceiling, which could then
-    earn more), and at the top return when the greedy fill is unique; with tied expected returns
-    it is not, and the cell is solved like any other.
 
-    Once a solved mix earns more than its floor asks, the floor is slack, so the same mix is
-    the answer for every lower floor of the column. This is what makes "ties go to the highest
-    return" pick the top of such a run.
+def raster(surf: Surface, front: Frontier, program: EnbProgram, ny: int = NY) -> Raster:
+    """Resample the ladders on `ny` floors from the lowest peak return to the top of the frontier.
+
+    In column `j` a floor inside the ladder's span, `y_peak[j] < Y_k <= y_front[j]`, holds the
+    ladder's mix at that return: the straight blend of the two ladder mixes whose returns
+    enclose it, which earns exactly `Y_k` and whose risk is at most `X_j`; where those two are a
+    hop apart, the upper one, which earns more than `Y_k`. The highest floor at or below the
+    peak's return holds the peak itself (the frontier mix in a collapsed column), so every
+    column has a bottom cell. Every other cell is empty: above the frontier nothing is feasible,
+    and below the peak nothing is worth showing.
     """
     if ny < 2:
-        raise ValueError("a surface needs at least 2 rows")
-    mu, cov = programs.mu, programs.cov
+        raise ValueError("a raster needs at least 2 rows")
     nx = len(front.x)
-    top = float(front.y.max())
-    lowest = min(float(mu @ greedy_fill(mu, programs.lo, programs.hi, ascending=True)), top)
-    y = np.linspace(lowest, top, ny)
-    top_is_unique = greedy_is_unique(mu, programs.lo, programs.hi)
+    y = np.linspace(float(surf.y[:, -1].min()), float(front.y.max()), ny)
     w: list[list[np.ndarray | None]] = []
     z = np.full((nx, ny), np.nan)
-    enb_front = np.array([enb(mix, cov, basis) for mix in front.w])
-    enb_best = enb_front.copy()  # per column: the highest ENB among its candidates
     k_div = np.full(nx, -1, dtype=int)
     for j in range(nx):
-        column: list[np.ndarray | None] = [None] * ny
-        slack_mix = None
-        for k in range(ny - 1, -1, -1):
-            if y[k] > front.y[j]:
-                continue
-            if slack_mix is not None:
-                mix = slack_mix
-            elif front.pinned[j] or (
-                y[k] == front.y[j] and (top_is_unique or front.y[j] < top - TOL)
-            ):
-                mix = front.w[j]
+        cells: list[np.ndarray | None] = [None] * ny
+        returns = surf.y[j]
+        bottom = int(np.searchsorted(y, returns[-1], side="right")) - 1
+        for k in range(bottom, ny):
+            if y[k] > returns[0]:
+                break
+            if k == bottom:
+                mix = surf.w[j, -1]
             else:
-                mix = programs.cell(float(front.x[j]), float(y[k]))
-                if float(mu @ mix) > y[k] + TOL:
-                    slack_mix = mix
-            column[k] = mix
-            z[j, k] = enb(mix, cov, basis)
-            if z[j, k] > enb_best[j]:  # strictly: a tie stays with the higher return
-                enb_best[j], k_div[j] = z[j, k], k
-        w.append(column)
-    collapsed = k_div < 0
-    y_div = np.where(collapsed, front.y, y[k_div])
-    w_div = np.array(
-        [front.w[j] if collapsed[j] else w[j][k_div[j]] for j in range(nx)], dtype=float
-    )
-    return Surface(
-        y=y,
-        w=w,
-        z=z,
-        enb_front=enb_front,
-        k_div=k_div,
-        y_div=y_div,
-        w_div=w_div,
-        enb_ref=float(enb_best.max()),
-    )
+                lower = int(np.argmax(returns < y[k]))  # the first level earning less than Y_k
+                share = (returns[lower - 1] - y[k]) / (returns[lower - 1] - returns[lower])
+                if surf.hop[j, lower - 1]:
+                    share = 0.0
+                mix = (1.0 - share) * surf.w[j, lower - 1] + share * surf.w[j, lower]
+            cells[k] = mix
+            z[j, k] = enb(mix, program.cov, program.basis)
+        if not surf.collapsed[j]:
+            k_div[j] = bottom
+        w.append(cells)
+    y_div = np.where(surf.collapsed, front.y, y[k_div])
+    return Raster(y=y, w=w, z=z, k_div=k_div, y_div=y_div)
 
 
 def frontier_curve(w_front, mu_s, cov, substeps: int = SUBSTEPS) -> tuple[np.ndarray, np.ndarray]:
@@ -122,57 +129,46 @@ def frontier_curve(w_front, mu_s, cov, substeps: int = SUBSTEPS) -> tuple[np.nda
     return np.array(sigma), np.array(mu)
 
 
-def s_safe(sigma, mu, substeps: int = SUBSTEPS) -> float:
-    """Left end of the risk slider: the rightmost maximum of `Low_front`, in `s` units."""
-    low = np.asarray(mu, dtype=float) / 2.0 - RANGE_Z * np.asarray(sigma, dtype=float) / math.sqrt(
-        2.0
-    )
-    return float(np.flatnonzero(low == low.max())[-1]) / substeps
+def s_safe(bad_front) -> float:
+    """Left end of the risk slider: the rightmost column whose frontier mix has the best bad year.
+
+    `bad_front` is the bad one-year return of each frontier node. Between nodes the page reads
+    the range by straight interpolation, so no position between two columns can beat both.
+    """
+    bad = np.asarray(bad_front, dtype=float)
+    return float(np.flatnonzero(bad == bad.max())[-1])
 
 
 def interpolate(tensor: Mapping, s: float, t: float) -> np.ndarray:
     """The mix at slider position `(s, t)`: the reference for the browser's interpolation.
 
-    `tensor` needs `frontier.w`, `frontier.y`, `grid.w`, `grid.y` and `grid.k_div` in the
-    tensor's own layout. `s` is the column position in `[0, nx - 1]`; `t` runs from 0 (the
-    frontier mix) to 1 (the most diversified mix) along each neighbouring column's ladder, and
-    reaches both ends exactly. Nothing is clipped or renormalized: the result is a convex
-    combination of computed mixes.
+    `tensor` needs `ladder.w` and `ladder.hop` in the tensor's own layout. `s` is the column
+    position in `[0, nx - 1]`; `t` runs from 0 (the frontier mix) to 1 (the peak) along each
+    neighbouring column's ladder, and reaches both ends exactly. Nothing is clipped or
+    renormalized: the result is a convex combination of computed mixes.
     """
-    columns = len(tensor["frontier"]["w"])
+    ladders, hops = tensor["ladder"]["w"], tensor["ladder"]["hop"]
+    columns = len(ladders)
     if not (0.0 <= s <= columns - 1 and 0.0 <= t <= 1.0):
         raise ValueError(f"position ({s!r}, {t!r}) is outside [0, {columns - 1}] x [0, 1]")
     j = min(int(math.floor(s)), columns - 2)
     lam = s - j
-    return (1.0 - lam) * _ladder_mix(tensor, j, t) + lam * _ladder_mix(tensor, j + 1, t)
+    left = _ladder_mix(ladders[j], hops[j], t)
+    return (1.0 - lam) * left + lam * _ladder_mix(ladders[j + 1], hops[j + 1], t)
 
 
-def _ladder_mix(tensor: Mapping, j: int, t: float) -> np.ndarray:
-    """Column `j`'s mix at fraction `t` of its ladder's return span.
+def _ladder_mix(ladder, hops, t: float) -> np.ndarray:
+    """A column's mix at fraction `t` of its ladder: straight between the two levels around it.
 
-    The ladder is the frontier mix, then the feasible cells from the top down to the most
-    diversified one, each at its return floor. A ladder with no return span (a collapsed one,
-    or one whose most diversified mix costs no return) has nothing to walk by return: `t`
-    blends its two ends directly.
+    Levels are evenly spaced in `t`, level `l` of `L` at `t = l / (L - 1)`. Across a hop
+    nothing is blended: the upper level holds up to the middle of the step, the lower one from
+    there on.
     """
-    mixes = [np.asarray(tensor["frontier"]["w"][j], dtype=float)]
-    returns = [float(tensor["frontier"]["y"][j])]
-    k_div = int(tensor["grid"]["k_div"][j])
-    if k_div >= 0:
-        floors = tensor["grid"]["y"]
-        for k in range(len(floors) - 1, k_div - 1, -1):
-            cell = tensor["grid"]["w"][j][k]
-            if cell is not None:
-                mixes.append(np.asarray(cell, dtype=float))
-                returns.append(min(returns[-1], float(floors[k])))
-    if len(mixes) == 1:
-        return mixes[0]
-    if returns[0] <= returns[-1]:
-        return (1.0 - t) * mixes[0] + t * mixes[-1]
-    # written so that t = 0 and t = 1 land on the two ends exactly, whatever the rounding
-    target = max((1.0 - t) * returns[0] + t * returns[-1], returns[-1])
-    lower = next(i for i, value in enumerate(returns) if value <= target)
-    if lower == 0:
-        return mixes[0]
-    share = (returns[lower - 1] - target) / (returns[lower - 1] - returns[lower])
-    return (1.0 - share) * mixes[lower - 1] + share * mixes[lower]
+    last = len(ladder) - 1
+    position = t * last
+    level = min(int(math.floor(position)), last - 1)
+    share = position - level
+    if hops[level]:
+        share = 0.0 if share < 0.5 else 1.0
+    upper = np.asarray(ladder[level], dtype=float)
+    return (1.0 - share) * upper + share * np.asarray(ladder[level + 1], dtype=float)

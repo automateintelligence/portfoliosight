@@ -28,7 +28,7 @@ def _own_scatter(r: np.ndarray, omega: np.ndarray) -> tuple[np.ndarray, np.ndarr
 
 
 def test_engine_version_is_the_spec_version():
-    assert ENGINE_VERSION == "0.1.0"
+    assert ENGINE_VERSION == "0.2.0"
 
 
 def test_fixed_window_is_ledoit_wolf_on_correlations():
@@ -225,12 +225,3 @@ def test_risk_free_rate_prefers_sgov_then_tsp_g_then_four_percent():
     assert abs(stats.risk_free_rate({"SGOV": holed}) - expected) <= 1e-15
     assert abs(stats.risk_free_rate({"SGOV": sgov.iloc[:251], "TSP-G": tsp_g}) - r_tsp) <= 1e-15
     assert stats.risk_free_rate({"SGOV": sgov.iloc[:251]}) == 0.04
-
-
-def test_range6m_is_the_additive_normal_range():
-    low, typical, high = stats.range6m(0.062, 0.12)
-    assert typical == 0.031
-    assert abs(low - (0.031 - 1.96 * 0.12 / np.sqrt(2.0))) <= 1e-15
-    assert abs(high - (0.031 + 1.96 * 0.12 / np.sqrt(2.0))) <= 1e-15
-    assert abs((high - typical) - (typical - low)) <= 1e-15
-    assert stats.range6m(0.04, 0.0) == (0.02, 0.02, 0.02)

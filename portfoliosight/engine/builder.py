@@ -20,25 +20,38 @@ from importlib import resources
 import jsonschema
 import numpy as np
 import pandas as pd
+from threadpoolctl import threadpool_limits
 
 from . import ENGINE_VERSION
 from .caps import RULE, requested_caps, resolve_bounds
-from .invariants import check_floor, check_weights
+from .invariants import TOL, InvariantError, check_floor, check_risk_line, check_weights
+from .ladder import LEVELS, EnbProgram
 from .optimize import NX, Frontier, MenuPrograms, frontier
+from .ranges import METHOD, RangeModel, one_year_ranges, range_model
 from .stats import EW_HALFLIFE_DAYS, estimate_moments, menu_beta_blend, risk_free_rate
 from .stress import segments_from_returns, stress_returns
-from .suggest import suggested_floor
-from .surface import NY, Surface, frontier_curve, s_safe, surface
-from .torsion import TorsionBasis, enb, torsion_basis
-from .windows import WindowSelection, select_window
+from .suggest import DEFAULT_POINT, balanced_level, suggested_level
+from .surface import NY, Raster, Surface, frontier_curve, raster, s_safe, surface
+from .torsion import torsion_basis
+from .windows import WindowSelection, renormalize_allocation, select_window
 
 SCHEMA_VERSION = 2
 TELEMETRY_FIELDS = ("built_at", "build_seconds")
 NOTES = (
     "Expected returns are a 50/50 blend of the sample mean and a menu-beta heuristic.",
-    "The suggested point is the lowest return floor whose give-up versus the frontier mix is "
-    "within one standard error of the paired daily return difference (a heuristic, not a "
-    "significance test).",
+    "Every mix below the frontier has exactly its column's risk and is the most diversified "
+    "mix found at that risk for its return level: a local search from several starting points, "
+    "not a proof that no better mix exists.",
+    "The balanced point is where, going down the column, diversification stops rising faster "
+    "than return falls, each measured as a share of what the column offers; the peak is the "
+    "most diversified mix found at that risk.",
+    "One-year ranges are the 2.5th, 50th and 97.5th percentiles of 2,000 one-year paths "
+    "resampled from the mix's own daily history in runs averaging 21 days, recentred on the "
+    "expected return, at constant weights.",
+)
+EW_NOTE = (
+    "In the recent-weighted view the weights set each range's centre; its shape comes from the "
+    "same five years of daily history, unweighted."
 )
 
 
@@ -71,9 +84,11 @@ class TensorInputs:
     tr_index: Mapping[str, pd.Series] | None = None  # for stress; else rebuilt from returns
     rf_series: Mapping[str, pd.Series] | None = None  # served SGOV / TSP-G daily returns
     xnys_sessions: Sequence | None = None  # for the stress three-session rule; default XNYS
+    allocation: Mapping[str, float] | None = None  # the entered mix, amounts by fund id
     engine_version: str = ENGINE_VERSION
     nx: int = NX
     ny: int = NY
+    levels: int = LEVELS
 
 
 class WindowUnavailable(ValueError):
@@ -124,7 +139,15 @@ def build_tensor(inputs: TensorInputs) -> dict:
     the funds' correlation matrix is singular (every varying fund switching between two values
     in lockstep leaves Ledoit-Wolf nothing to shrink; nothing is regularized), and an error from
     the post-check when any computed mix breaks an invariant.
+
+    A build is thousands of small matrix operations, where BLAS threads only get in each
+    other's way; they are held to one for its duration.
     """
+    with threadpool_limits(limits=1, user_api="blas"):
+        return _build(inputs)
+
+
+def _build(inputs: TensorInputs) -> dict:
     started = time.perf_counter()
     funds = list(inputs.funds)
     ids = [fund.id for fund in funds]
@@ -163,10 +186,20 @@ def build_tensor(inputs: TensorInputs) -> dict:
     basis = torsion_basis(moments.cov)
     programs = MenuPrograms(mu_s, moments.cov, lo, hi)
     front = frontier(programs, inputs.nx)
-    surf = surface(programs, front, basis, inputs.ny)
-    _post_check(programs, front, surf, basis)
-    y_sug = _suggested_floors(front, surf, mu_s, sample, selection.omega)
+    program = EnbProgram(mu_s, moments.cov, lo, hi, basis)
+    surf = surface(program, programs, front, inputs.levels)
+    grid = raster(surf, front, program, inputs.ny)
+    _post_check(program, front, surf, grid)
+    last = surf.y.shape[1] - 1
+    balanced = [balanced_level(surf.y[j], surf.z[j]) for j in range(inputs.nx)]
+    suggested = [suggested_level(surf.y[j], surf.z[j], DEFAULT_POINT) for j in range(inputs.nx)]
     curve_sigma, curve_mu = frontier_curve(front.w, mu_s, moments.cov)
+    no_limits = frontier(
+        MenuPrograms(mu_s, moments.cov, np.zeros(len(mu_s)), np.ones(len(mu_s))), inputs.nx
+    )
+    model = range_model(sample, mu_s, moments.cov)
+    ladder_range = _range_block(one_year_ranges(model, surf.w.reshape(-1, len(mu_s))), surf.y.shape)
+    front_range = _column(ladder_range, 0)
 
     history = frame.loc[frame.index <= asof]
     tr_index: dict[str, pd.Series | list[pd.Series]] = {}
@@ -184,6 +217,7 @@ def build_tensor(inputs: TensorInputs) -> dict:
         "generation": f"{asof_iso}-{inputs.engine_version}",
         "asof": asof_iso,
         "frontier_curve": {"sigma": curve_sigma.tolist(), "mu": curve_mu.tolist()},
+        "frontier_uncapped": {"sigma": no_limits.x.tolist(), "mu": no_limits.y.tolist()},
         "universe": {
             "hash": universe_hash([{"id": i, **requested.get(i, default)} for i in ids]),
             "name": inputs.universe_name,
@@ -235,20 +269,39 @@ def build_tensor(inputs: TensorInputs) -> dict:
             "x": front.x.tolist(),
             "y": front.y.tolist(),
             "w": front.w.tolist(),
-            "s_safe": s_safe(curve_sigma, curve_mu),
+            "s_safe": s_safe(front_range["bad"]),
+            "range": front_range,
+        },
+        "ladder": {
+            "y": surf.y.tolist(),
+            "z": surf.z.tolist(),
+            "w": surf.w.tolist(),
+            "hop": surf.hop.tolist(),
+            "collapsed": [bool(flag) for flag in surf.collapsed],
+            "t_balanced": [level / last for level in balanced],
+            "y_balanced": [float(surf.y[j, level]) for j, level in enumerate(balanced)],
+            "default_point": DEFAULT_POINT,
+            "t_suggested": [level / last for level in suggested],
+            "y_suggested": [float(surf.y[j, level]) for j, level in enumerate(suggested)],
+            "range": ladder_range,
         },
         "grid": {
-            "y": surf.y.tolist(),
-            "z": [[None if np.isnan(v) else float(v) for v in column] for column in surf.z],
-            "w": [[None if mix is None else mix.tolist() for mix in column] for column in surf.w],
-            "k_div": [int(k) for k in surf.k_div],
-            "y_div": surf.y_div.tolist(),
-            "w_div": surf.w_div.tolist(),
-            "y_sug": y_sug,
+            "y": grid.y.tolist(),
+            "z": [[None if np.isnan(v) else float(v) for v in column] for column in grid.z],
+            "w": [[None if mix is None else mix.tolist() for mix in column] for column in grid.w],
+            "k_div": [int(k) for k in grid.k_div],
+            "y_div": grid.y_div.tolist(),
+            "w_div": surf.w[:, -1].tolist(),
+            "y_sug": [
+                float(grid.y_div[j] if level == last else surf.y[j, level])
+                for j, level in enumerate(suggested)
+            ],
         },
+        "entered": _entered(inputs.allocation, included, model),
+        "range_method": dict(METHOD),
         "enb_ref": surf.enb_ref,
         "stress": stress_returns(tr_index, inputs.xnys_sessions),
-        "notes": list(NOTES),
+        "notes": [*NOTES, *([] if selection.omega is None else [EW_NOTE])],
     }
     tensor["built_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     tensor["build_seconds"] = round(time.perf_counter() - started, 3)
@@ -256,46 +309,76 @@ def build_tensor(inputs: TensorInputs) -> dict:
     return tensor
 
 
-def _post_check(
-    programs: MenuPrograms, front: Frontier, surf: Surface, basis: TorsionBasis
-) -> None:
-    """Every vector the tensor will carry meets the 1e-6 invariants, or the build fails."""
-    lo, hi, cov = programs.lo, programs.hi, programs.cov
-    for j, ceiling in enumerate(front.x):
-        check_weights(front.w[j], lo=lo, hi=hi, cov=cov, ceiling=ceiling, enb=surf.enb_front[j])
-        for k, mix in enumerate(surf.w[j]):
+def _post_check(program: EnbProgram, front: Frontier, surf: Surface, grid: Raster) -> None:
+    """Every vector the tensor will carry meets the 1e-6 invariants, or the build fails.
+
+    A ladder is also checked for what it promises by construction: it starts at the frontier
+    mix, every mix has the column's risk and earns its level's return, ENB never falls and
+    return never rises on the way down.
+    """
+    lo, hi, cov, mu = program.lo, program.hi, program.cov, program.mu
+    levels = surf.y.shape[1]
+    for j, risk in enumerate(front.x):
+        check_weights(front.w[j], lo=lo, hi=hi, cov=cov, ceiling=risk, enb=surf.z[j, 0])
+        if not np.array_equal(surf.w[j, 0], front.w[j]):
+            raise InvariantError("ladder", f"column {j} does not start at its frontier mix")
+        floors = np.linspace(surf.y[j, 0], surf.y[j, -1], levels)
+        for level in range(levels):
+            mix = surf.w[j, level]
+            check_weights(mix, lo=lo, hi=hi, cov=cov, ceiling=risk, enb=surf.z[j, level])
+            check_risk_line(mix, cov=cov, risk=risk)
+            check_floor(mix, mu=mu, floor=floors[level])
+        if (np.diff(surf.z[j]) < 0).any() or (np.diff(surf.y[j]) > TOL).any():
+            raise InvariantError("ladder", f"column {j} is not monotone from frontier to peak")
+        for k, mix in enumerate(grid.w[j]):
             if mix is not None:
-                check_weights(mix, lo=lo, hi=hi, cov=cov, ceiling=ceiling, enb=surf.z[j, k])
-                check_floor(mix, mu=programs.mu, floor=surf.y[k])
-        diversified = surf.w_div[j]
-        check_weights(
-            diversified, lo=lo, hi=hi, cov=cov, ceiling=ceiling, enb=enb(diversified, cov, basis)
-        )
+                check_weights(mix, lo=lo, hi=hi, cov=cov, ceiling=risk, enb=grid.z[j, k])
+                check_floor(mix, mu=mu, floor=grid.y[k])
 
 
-def _suggested_floors(
-    front: Frontier, surf: Surface, mu_s: np.ndarray, sample: np.ndarray, omega
-) -> list[float]:
-    """`y_sug` per column: the walk of spec 4.8 over the ladder from the top down to k_div."""
-    floors = []
-    for j in range(len(front.x)):
-        ladder = [
-            k
-            for k in range(len(surf.y) - 1, surf.k_div[j] - 1, -1)
-            if surf.k_div[j] >= 0 and surf.w[j][k] is not None
-        ]
-        floors.append(
-            suggested_floor(
-                front.w[j],
-                float(front.y[j]),
-                [surf.w[j][k] for k in ladder],
-                [float(surf.y[k]) for k in ladder],
-                mu_s,
-                sample,
-                omega,
-            )
-        )
-    return floors
+def _range_block(ranges: Mapping, shape: tuple[int, ...]) -> dict:
+    """The tensor form of `one_year_ranges`: nested lists of `shape`, plain floats for `()`."""
+
+    def laid_out(values) -> object:
+        return np.asarray(values, dtype=float).reshape(shape).tolist()
+
+    return {
+        "bad": laid_out(ranges["bad"]),
+        "typical": laid_out(ranges["typical"]),
+        "good": laid_out(ranges["good"]),
+        "normal": {name: laid_out(values) for name, values in ranges["normal"].items()},
+    }
+
+
+def _column(block: Mapping, level: int) -> dict:
+    """One ladder level of a range block across all columns (level 0 is the frontier mix)."""
+
+    def pick(rows) -> list:
+        return [row[level] for row in rows]
+
+    return {
+        "bad": pick(block["bad"]),
+        "typical": pick(block["typical"]),
+        "good": pick(block["good"]),
+        "normal": {name: pick(rows) for name, rows in block["normal"].items()},
+    }
+
+
+def _entered(
+    allocation: Mapping[str, float] | None, included: Sequence[str], model: RangeModel
+) -> dict | None:
+    """The entered mix over the included funds, with its one-year range; `None` without one."""
+    if allocation is None:
+        return None
+    weights, set_aside = renormalize_allocation(allocation, included)
+    if weights is None:
+        return None
+    mix = np.array([weights.get(fund, 0.0) for fund in included])
+    return {
+        "w": mix.tolist(),
+        "set_aside": float(set_aside),
+        "range": _range_block(one_year_ranges(model, mix), ()),
+    }
 
 
 def _number_or_none(value: float | None) -> float | None:

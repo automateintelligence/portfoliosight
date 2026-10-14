@@ -99,26 +99,20 @@ def test_frontier_on_random_menus(n, seed):
     assert judged > nx
 
 
-def test_frontier_point_and_cell_solve_their_programs():
+def test_frontier_point_solves_its_program():
     mu, cov, lo, hi = _menu(8, 3608)
     programs = MenuPrograms(mu, cov, lo, hi)
     front = frontier(programs, nx=9)
-    x, y_front = float(front.x[5]), float(front.y[5])
-    assert np.abs(programs.frontier_point(x) - front.w[5]).max() <= 1e-9  # deterministic
-    floor = y_front - 0.4 * (y_front - front.y[0])
-    w = programs.cell(x, floor)
-    assert _feasible(w, lo, hi) and _sigma(w, cov) <= x + TOL and mu @ w >= floor - TOL
-    assert w @ w < front.w[5] @ front.w[5] - 1e-6  # really less concentrated than the frontier mix
+    x = float(front.x[5])
+    w = programs.frontier_point(x)
+    assert np.abs(w - front.w[5]).max() <= 1e-9  # deterministic
+    assert _feasible(w, lo, hi) and _sigma(w, cov) <= x + TOL
     v = cp.Variable(8)
-    constraints: list = [cp.sum(v) == 1, v >= lo, v <= hi, mu @ v >= floor]
+    constraints: list = [cp.sum(v) == 1, v >= lo, v <= hi]
     constraints.append(cp.quad_form(v, cp.psd_wrap(cov)) <= x**2)
-    own = cp.Problem(cp.Minimize(cp.sum_squares(v)), constraints)
+    own = cp.Problem(cp.Maximize(mu @ v), constraints)
     own.solve(solver=cp.CLARABEL, tol_feas=1e-10, tol_gap_abs=1e-10, tol_gap_rel=1e-10)
-    assert abs(w @ w - own.value) <= 1e-7 and np.abs(w - v.value).max() <= 1e-4
-    # a floor nobody has to reach leaves the least concentrated mix under the ceiling
-    slack = programs.cell(x, -1.0)
-    assert slack @ slack <= w @ w + 1e-9
-    assert np.abs(programs.cell(x, -2.0) - slack).max() <= 1e-6
+    assert own.status == "optimal" and abs(mu @ w - mu @ np.array(v.value)) <= 1e-7
     assert programs.sigma(w) == _sigma(w, cov)
 
 
@@ -128,8 +122,6 @@ def test_infeasible_program_raises_and_names_what_failed():
     floor_risk = programs.sigma(programs.min_variance())
     with pytest.raises(SolveError, match=r"frontier point at risk .* infeasible"):
         programs.frontier_point(0.5 * floor_risk)
-    with pytest.raises(SolveError, match=r"cell at risk .*, return floor .* infeasible"):
-        programs.cell(2.0 * floor_risk, 10.0)
 
 
 class _FlakyProblem:
@@ -202,7 +194,7 @@ def test_nodes_sit_on_their_ceilings_however_flat_the_frontier(gap):
         assert node_return >= mu @ plain - 1e-15  # moving a node never costs return
 
 
-def test_onto_ceiling_moves_toward_the_top_mix_until_risk_binds():
+def test_onto_risk_moves_toward_the_top_mix_until_risk_binds():
     rng = np.random.default_rng(3640)
     for _ in range(50):
         n = int(rng.integers(2, 12))
@@ -212,7 +204,7 @@ def test_onto_ceiling_moves_toward_the_top_mix_until_risk_binds():
         if _sigma(inside, cov) > _sigma(top, cov):
             inside, top = top, inside
         ceiling = rng.uniform(_sigma(inside, cov), _sigma(top, cov))
-        moved = optimize._onto_ceiling(inside, top, ceiling, cov)
+        moved = optimize.onto_risk(inside, top, ceiling, cov)
         assert abs(_sigma(moved, cov) - ceiling) <= 1e-12
         share = (moved - inside) @ (top - inside) / ((top - inside) @ (top - inside))
         assert (
@@ -220,8 +212,8 @@ def test_onto_ceiling_moves_toward_the_top_mix_until_risk_binds():
         )
     cov = np.diag([0.01, 0.04])
     start, top = np.array([1.0, 0.0]), np.array([0.0, 1.0])
-    assert np.array_equal(optimize._onto_ceiling(start, top, 0.2, cov), top)  # all the way
-    falling = optimize._onto_ceiling(np.array([0.9, 0.1]), np.array([0.0, 1.0]), 0.15, cov)
+    assert np.array_equal(optimize.onto_risk(start, top, 0.2, cov), top)  # all the way
+    falling = optimize.onto_risk(np.array([0.9, 0.1]), np.array([0.0, 1.0]), 0.15, cov)
     assert abs(_sigma(falling, cov) - 0.15) <= 1e-12  # risk dips before it rises on this path
 
 

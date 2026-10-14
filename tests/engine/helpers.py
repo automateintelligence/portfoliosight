@@ -14,7 +14,10 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from portfoliosight.engine.ladder import EnbProgram
+from portfoliosight.engine.optimize import Frontier, MenuPrograms, frontier
 from portfoliosight.engine.tensor import FundInput, TensorInputs
+from portfoliosight.engine.torsion import TorsionBasis, enb, torsion_basis
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
@@ -80,6 +83,7 @@ def fixture_inputs(lookback: str = "5y", **changes) -> TensorInputs:
         "asof": FIXTURE_ASOF,
         "universe_name": meta["universe"]["name"],
         "preset_id": meta["universe"]["preset_id"],
+        "allocation": meta["universe"]["allocation"],
     }
     return TensorInputs(**{**fields, **changes})
 
@@ -115,3 +119,30 @@ def write_converted_menu_parquet(path: Path) -> Path:
     metadata[METADATA_KEY] = json.dumps(document).encode()
     pq.write_table(table.replace_schema_metadata(metadata), path)
     return path
+
+
+class Menu:
+    """A seeded random menu with its programs and frontier solved: three factors plus noise."""
+
+    def __init__(self, n: int, seed: int, nx: int = 10):
+        rng = np.random.default_rng(seed)
+        load = rng.normal(0.0, 1.0, (n, 3)) * np.array([0.10, 0.05, 0.03]) + np.array([0.06, 0, 0])
+        self.cov = load @ load.T + np.diag(rng.uniform(0.02, 0.10, n) ** 2)
+        self.mu = rng.uniform(0.01, 0.10, n)
+        self.lo = np.where(rng.random(n) < 0.5, rng.uniform(0.0, 0.3 / n, n), 0.0)
+        self.hi = np.full(n, min(max(3.0 / n, 0.25), 1.0))
+        self.n, self.nx = n, nx
+        self.programs = MenuPrograms(self.mu, self.cov, self.lo, self.hi)
+        self.basis: TorsionBasis = torsion_basis(self.cov)
+        self.front: Frontier = frontier(self.programs, nx=nx)
+        self.program = EnbProgram(self.mu, self.cov, self.lo, self.hi, self.basis)
+
+    def sigma(self, w) -> float:
+        return float(np.sqrt(w @ self.cov @ w))
+
+    def enb(self, w) -> float:
+        return enb(w, self.cov, self.basis)
+
+    def feasible(self, w, tol: float = 1e-6) -> bool:
+        inside = (w >= self.lo - tol).all() and (w <= self.hi + tol).all()
+        return bool(inside and abs(w.sum() - 1.0) <= tol)

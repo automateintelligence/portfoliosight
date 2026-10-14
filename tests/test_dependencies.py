@@ -25,6 +25,7 @@ RUNTIME_IMPORTS = (
     "boto3",
     "exchange_calendars",
     "jsonschema",
+    "threadpoolctl",
     "fastapi",
     "uvicorn",
     "pytest",

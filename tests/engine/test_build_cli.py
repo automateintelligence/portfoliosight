@@ -27,7 +27,7 @@ from tests.engine.helpers import (
 )
 
 TELEMETRY = ("built_at", "build_seconds")
-SMALL = ["--nx", "6", "--ny", "5"]
+SMALL = ("--nx", "6", "--ny", "5", "--levels", "3")
 FORBIDDEN_COPY = [
     "bets",
     "knee",
@@ -101,7 +101,7 @@ def test_ui_fixture_has_what_the_page_tests_need(ui):
     excluded = ui["universe"]["excluded"]
     assert excluded == []  # the default view uses all 23 funds of the guide menu
     assert ids == list(amounts) and len(ids) == 23 and "VTI" in ids and "EFA" in ids
-    assert ui["lookback"]["id"] == "5y" and ui["generation"] == "2026-10-12-0.1.0"
+    assert ui["lookback"]["id"] == "5y" and ui["generation"] == "2026-10-12-0.2.0"
     assert re.fullmatch(r"[0-9a-f]{16}", ui["universe"]["hash"])
     assert ui["universe"]["name"] == "Example Portfolio"
     assert ui["bounds"]["requested"] == [{"min": None, "max": None}] * 23
@@ -119,6 +119,9 @@ def test_ui_fixture_has_what_the_page_tests_need(ui):
 
     nx, ny = len(ui["frontier"]["x"]), len(ui["grid"]["y"])
     assert (nx, ny) == (48, 32) and len(ui["frontier_curve"]["mu"]) == 377
+    ladder = ui["ladder"]
+    assert np.array(ladder["w"]).shape == (48, 14, 23)  # 12 levels between frontier and peak
+    assert len(ui["frontier_uncapped"]["sigma"]) == 48
     mu, cov = np.array(ui["mu_s"]), np.array(ui["cov"])
     w_front, w_div = np.array(ui["frontier"]["w"]), np.array(ui["grid"]["w_div"])
     y_front, k_div = np.array(ui["frontier"]["y"]), ui["grid"]["k_div"]
@@ -132,10 +135,17 @@ def test_ui_fixture_has_what_the_page_tests_need(ui):
     )
     # some column gives up at least 0.4 points of yearly return for diversification
     assert max(float(mu @ (w_front[c] - w_div[c])) for c in domain if k_div[c] >= 0) >= 0.004
-    # the suggested default is strictly inside the slider somewhere
+    # the suggested default is strictly inside the slider, in every column that has a ladder
     y_div, y_sug = np.array(ui["grid"]["y_div"]), np.array(ui["grid"]["y_sug"])
     t_sug = [(y_front[c] - y_sug[c]) / (y_front[c] - y_div[c]) for c in domain if k_div[c] >= 0]
-    assert any(0.05 < value < 0.95 for value in t_sug)
+    assert all(0.05 < value < 0.95 for value in t_sug)
+    assert all(0.05 < ladder["t_suggested"][c] < 0.95 for c in domain if not ladder["collapsed"][c])
+    assert ladder["default_point"] == "balanced" and not any(any(row) for row in ladder["hop"])
+    # the entered mix is the guide allocation, with its own one-year range
+    entered = ui["entered"]
+    assert np.abs(np.array(entered["w"]) - current).max() <= 1e-15 and entered["set_aside"] == 0.0
+    assert entered["range"]["bad"] < 0.0 < entered["range"]["typical"] < entered["range"]["good"]
+    assert ui["frontier"]["range"]["bad"][nx - 1] < ui["frontier"]["range"]["bad"][nx // 2]
     # the heatmap has an interior and its colours vary
     z = ui["grid"]["z"]
     interior = [
@@ -173,6 +183,9 @@ def test_other_lookbacks_build_with_every_fund_of_the_menu(cli, tmp_path):
         assert tensor["lookback"]["id"] == lookback and tensor["lookback"]["rows"] == rows
         assert tensor["universe"]["excluded"] == [] and len(tensor["universe"]["funds"]) == 23
         assert len(tensor["frontier"]["x"]) == 6 and len(tensor["grid"]["y"]) == 5
+        assert np.array(tensor["ladder"]["w"]).shape == (6, 5, 23)
+        assert len(tensor["notes"]) == (5 if lookback == "ew" else 4)
+        assert tensor["entered"]["set_aside"] == 0.0  # the allocation travels with the parquet
     assert tensor["lookback"]["ew_halflife_days"] is None
 
 
@@ -220,11 +233,13 @@ def test_an_earlier_day_sets_young_funds_aside_in_the_ten_year_view(cli, tmp_pat
     assert code == 0 and json.loads(out.read_text())["universe"]["excluded"] == []
 
 
-def test_fallback_grid_builds(cli, tmp_path):
-    code, out = _run(cli, tmp_path, "--nx", "32", "--ny", "24")
+def test_another_grid_builds(cli, tmp_path):
+    code, out = _run(cli, tmp_path, "--nx", "32", "--ny", "24", "--levels", "8")
     tensor = json.loads(out.read_text())
     assert code == 0 and len(tensor["frontier"]["w"]) == 32 and len(tensor["grid"]["y"]) == 24
+    assert np.array(tensor["ladder"]["y"]).shape == (32, 10)
     assert len(tensor["frontier_curve"]["sigma"]) == 31 * 8 + 1
+    assert len(tensor["frontier_uncapped"]["mu"]) == 32
     validate_tensor(tensor)
 
 
@@ -286,6 +301,7 @@ def test_parquet_without_metadata_gets_plain_catalog_facts(cli, tmp_path):
     assert universe["name"] == "Custom menu" and universe["preset_id"] is None
     assert [fund["id"] for fund in universe["funds"]] == ["AAA", "BBB", "CCC"]
     assert universe["excluded"] == [] and tensor["rf"] == 0.04
+    assert tensor["entered"] is None  # no allocation without the metadata
     last_bbb = frame["BBB"].last_valid_index().date().isoformat()
     for fund in universe["funds"]:
         assert fund["name"] == fund["id"] and fund["kind"] == "etf" and fund["source"] == "seed"

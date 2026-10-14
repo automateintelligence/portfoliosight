@@ -1,119 +1,82 @@
-"""The suggested point: a one-standard-error walk down the column (spec 4.8)."""
+"""The suggested point: the knee of ENB gained against return given up, or the peak."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from portfoliosight.engine.stats import ew_weights
-from portfoliosight.engine.suggest import standard_error, suggested_floor
+from portfoliosight.engine import suggest
+from portfoliosight.engine.suggest import balanced_level, suggested_level
 
 
-def _se(d, omega=None) -> float:
-    d = np.asarray(d, float)
-    if omega is None:
-        sd, t_eff = d.std(ddof=1), float(len(d))
-    else:
-        mean = omega @ d
-        sd = float(np.sqrt(omega @ (d - mean) ** 2 / (1 - (omega**2).sum())))
-        t_eff = 1.0 / (omega**2).sum()
-    return float(np.sqrt(252.0) * sd / np.sqrt(t_eff / 252.0))
+def test_knee_is_the_level_farthest_above_the_chord():
+    returns = np.array([0.10, 0.09, 0.08, 0.07, 0.06])
+    enbs = np.array([2.0, 3.6, 4.4, 4.8, 5.0])  # quick gains first, little at the end
+    g = (returns[0] - returns) / (returns[0] - returns[-1])
+    e = (enbs - enbs[0]) / (enbs[-1] - enbs[0])
+    assert np.allclose(e - g, [0.0, 0.2833333, 0.3, 0.1833333, 0.0])
+    assert balanced_level(returns, enbs) == int(np.argmax(e - g)) == 2
+    # the perpendicular distance to the chord from (0, 0) to (1, 1) is (e - g) / sqrt(2)
+    distance = np.abs(e - g) / np.sqrt(2.0)
+    assert int(np.argmax(distance)) == 2
 
 
-def _column():
-    rng = np.random.default_rng(3901)
-    r = rng.normal(0.0, 1.0, (600, 4)) * np.array([0.004, 0.008, 0.012, 0.02])
-    w_front = np.array([0.7, 0.3, 0.0, 0.0])
-    cands = [
-        np.array([0.6, 0.3, 0.1, 0.0]),
-        np.array([0.5, 0.3, 0.1, 0.1]),
-        np.array([0.3, 0.2, 0.1, 0.4]),
-    ]
-    diffs = np.array([w_front - c for c in cands])
-    ses = np.array([_se(r @ d) for d in diffs])
-    return r, w_front, cands, diffs, ses
+def test_knee_is_unchanged_by_the_units_of_either_axis():
+    rng = np.random.default_rng(4301)
+    for _ in range(50):
+        levels = int(rng.integers(3, 15))
+        returns = np.sort(rng.uniform(0.01, 0.12, levels))[::-1]
+        enbs = np.sort(rng.uniform(1.0, 20.0, levels))
+        knee = balanced_level(returns, enbs)
+        assert 0 <= knee <= levels - 1
+        assert balanced_level(100.0 * returns + 3.0, 7.0 * enbs - 2.0) == knee
+        g = (returns[0] - returns) / (returns[0] - returns[-1])
+        e = (enbs - enbs[0]) / (enbs[-1] - enbs[0])
+        assert (e - g)[knee] == (e - g).max() >= 0.0  # both ends are on the chord
 
 
-def _mu_for(diffs, give_ups):
-    """Expected returns under which candidate k gives up exactly give_ups[k]."""
-    return np.linalg.lstsq(np.atleast_2d(diffs), np.atleast_1d(give_ups), rcond=None)[0]
+def test_knee_uses_the_returns_the_mixes_really_earn():
+    """Levels that hold the same mix are one point of the curve, wherever their floors were."""
+    returns = np.array([0.10, 0.099, 0.099, 0.099, 0.06])
+    enbs = np.array([2.0, 3.5, 3.5, 3.5, 4.0])
+    assert balanced_level(returns, enbs) == 1  # the first of the repeated levels
 
 
-def test_standard_error_is_the_annualized_paired_deviation_over_years():
-    rng = np.random.default_rng(3902)
-    d = rng.normal(0.0001, 0.004, 900)
-    assert abs(standard_error(d) - np.sqrt(252.0) * d.std(ddof=1) / np.sqrt(900 / 252.0)) <= 1e-15
-    assert standard_error(d) == _se(d)
-    omega = ew_weights(900)
-    assert standard_error(d, omega) == _se(d, omega)
-    assert abs(standard_error(d, np.full(900, 1 / 900)) - standard_error(d)) <= 1e-15
-    assert abs(standard_error(d, omega) - standard_error(d)) > 1e-6
-    assert standard_error(np.zeros(50)) == 0.0
+def test_a_tie_goes_to_the_level_that_gives_up_less():
+    returns = np.array([1.0, 0.75, 0.5, 0.25, 0.0])
+    enbs = np.array([1.0, 5.0, 7.0, 8.0, 9.0])  # e - g = 0, 1/4, 1/4, 1/8, 0, exactly
+    assert balanced_level(returns, enbs) == 1
 
 
-def test_walk_stops_at_the_first_failure_even_if_a_lower_candidate_would_pass():
-    r, w_front, cands, diffs, ses = _column()
-    y_front, floors = 0.09, [0.08, 0.07, 0.06]
-    mu_s = _mu_for(diffs, ses * np.array([0.5, 1.5, 0.5]))
-    give_up = diffs @ mu_s
-    assert give_up[0] <= ses[0] and give_up[1] > ses[1] and give_up[2] <= ses[2]
-    assert suggested_floor(w_front, y_front, cands, floors, mu_s, r) == floors[0]
-    assert suggested_floor(w_front, y_front, cands, floors, _mu_for(diffs, ses * 0.5), r) == 0.06
-    last_fails = _mu_for(diffs, ses * np.array([0.5, 0.5, 1.5]))
-    assert suggested_floor(w_front, y_front, cands, floors, last_fails, r) == floors[1]
-    first_fails = _mu_for(diffs, ses * np.array([1.5, 0.5, 0.5]))
-    assert suggested_floor(w_front, y_front, cands, floors, first_fails, r) == y_front
+def test_a_curve_below_the_chord_has_its_knee_at_the_frontier_mix():
+    returns = np.array([0.10, 0.09, 0.08, 0.07])
+    enbs = np.array([1.0, 1.2, 1.6, 4.0])  # slow gains first: never above the chord
+    assert balanced_level(returns, enbs) == 0
 
 
-def test_collapsed_ladder_and_identical_candidate():
-    r, w_front, cands, _, _ = _column()
-    mu_s = np.array([0.03, 0.05, 0.07, 0.09])
-    assert suggested_floor(w_front, 0.09, [], [], mu_s, r) == 0.09
-    # a candidate equal to the frontier mix gives up nothing against no noise: it passes
-    assert suggested_floor(w_front, 0.09, [w_front.copy()], [0.09], mu_s, r) == 0.09
-    assert suggested_floor(w_front, 0.09, [w_front.copy()], [0.085], mu_s, r) == 0.085
-    with pytest.raises(ValueError, match="one floor per candidate"):
-        suggested_floor(w_front, 0.09, cands, [0.08], mu_s, r)
+def test_ladders_without_a_curve():
+    flat = np.full(5, 3.0)
+    falling = np.array([0.10, 0.09, 0.08, 0.07, 0.06])
+    assert balanced_level(falling, flat) == 0  # collapsed: nothing gained
+    assert balanced_level(np.full(5, 0.05), flat) == 0
+    free = np.array([2.0, 3.0, 3.0, 3.0, 3.0])
+    assert balanced_level(np.full(5, 0.05), free) == 4  # gained for no return at all: take it
+    assert balanced_level(0.05 + np.array([0.0, 5e-9, 5e-9, 5e-9, 5e-9]), free) == 4
+    assert balanced_level(falling, flat + np.array([0, 0, 0, 0, 5e-7])) == 0  # within tolerance
+    for returns, enbs in (([0.1], [1.0]), ([0.1, 0.09], [1.0]), ([[0.1, 0.09]], [[1.0, 2.0]])):
+        with pytest.raises(ValueError, match="one return and one ENB per level"):
+            balanced_level(returns, enbs)
 
 
-def test_threshold_is_exactly_one_standard_error():
-    r, w_front, cands, diffs, ses = _column()
-    for scale, expected in ((0.98, 0.08), (1.0 - 1e-9, 0.08), (1.02, 0.09)):
-        mu_s = _mu_for(diffs[:1], ses[:1] * scale)
-        assert suggested_floor(w_front, 0.09, cands[:1], [0.08], mu_s, r) == expected
-    # more history shrinks the noise: the same give-up stops being "within noise"
-    mu_s = _mu_for(diffs[:1], ses[:1] * 0.8)
-    assert suggested_floor(w_front, 0.09, cands[:1], [0.08], mu_s, r) == 0.08
-    long = np.vstack([r, r, r])
-    assert _se(long @ diffs[0]) < 0.8 * ses[0]
-    assert suggested_floor(w_front, 0.09, cands[:1], [0.08], mu_s, long) == 0.09
-
-
-def test_ew_window_uses_t_eff_and_the_weighted_deviation():
-    rng = np.random.default_rng(3903)
-    rows = 1260
-    vol = np.linspace(0.002, 0.02, rows)[:, None]  # recent rows are much noisier
-    r = rng.normal(0.0, 1.0, (rows, 3)) * vol
-    omega = ew_weights(rows)
-    w_front, cand, y_front, floor = np.array([0.8, 0.2, 0.0]), np.array([0.4, 0.3, 0.3]), 0.08, 0.05
-    diff = w_front - cand
-    d = r @ diff
-    se_ew = _se(d, omega)
-    mean = omega @ d
-    sd_w = np.sqrt(omega @ (d - mean) ** 2 / (1 - (omega**2).sum()))
-    se_with_t = np.sqrt(252.0) * sd_w / np.sqrt(rows / 252.0)  # wrong: T instead of T_eff
-    se_plain = _se(d)  # wrong: ignores omega
-    assert se_with_t < 0.9 * se_ew and abs(se_plain - se_ew) > 0.05 * se_ew
-
-    def mu_for(give_up):
-        return diff * give_up / (diff @ diff)
-
-    def walk(give_up, weights=None):
-        return suggested_floor(w_front, y_front, [cand], [floor], mu_for(give_up), r, omega=weights)
-
-    assert walk(float(np.sqrt(se_with_t * se_ew)), omega) == floor  # passes only with T_eff
-    assert walk(0.98 * se_ew, omega) == floor and walk(1.02 * se_ew, omega) == y_front
-    uniform = np.full(rows, 1.0 / rows)
-    between = 0.5 * (_se(d, uniform) + se_ew)
-    assert walk(between, omega) != walk(between, uniform)
-    assert walk(between, uniform) == walk(between)
+def test_default_point_selects_the_knee_or_the_peak():
+    returns = np.array([0.10, 0.09, 0.08, 0.07, 0.06])
+    enbs = np.array([2.0, 3.6, 4.4, 4.8, 5.0])
+    assert suggest.DEFAULT_POINT == "balanced" and suggest.POINTS == ("balanced", "peak")
+    assert suggested_level(returns, enbs) == balanced_level(returns, enbs) == 2
+    assert suggested_level(returns, enbs, "balanced") == 2
+    assert suggested_level(returns, enbs, "peak") == 4
+    flat = np.full(5, 3.0)
+    assert suggested_level(returns, flat, "peak") == 0  # nothing to walk to
+    assert suggested_level(np.full(5, 0.05), np.array([2.0, 3, 3, 3, 3]), "peak") == 4
+    with pytest.raises(ValueError, match="unknown point 'knee'"):
+        suggested_level(returns, enbs, "knee")
