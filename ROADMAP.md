@@ -44,20 +44,27 @@ method are in `docs/reviews/`.
   obtain written storage/display terms before marketing the site; on a Power-class plan the
   nightly job serves all of tier 3 without code changes. A second price provider (EODHD if its
   plan gains prices) is one adapter behind the existing Protocol.
-- One-year range, in two steps, each behind the one engine function the page already calls
-  (`portfoliosight.engine.ranges.one_year_ranges`), so neither step changes page code:
-  1. Filtered historical simulation, replacing the block bootstrap in the next engine batch. Fit
-     GARCH(1,1) with Student-t errors per fund (the pattern of the owner's QSE distribution
-     fitters, ported with the `arch` library, not imported), standardize each fund's history by
-     its fitted volatility, resample whole cross-sectional rows of standardized shocks so funds
-     keep moving together, and re-inflate with simulated volatility started from the long-run
-     variance (not today's), vectorized. The level is tied to the selected lookback: each mix's
-     simulated mean and volatility are scaled to the chart's expected return and risk for that
-     lookback. The shape (tail fatness, volatility persistence, co-movement of shocks) is fitted
-     on the longest history held per fund, up to ten years, and is the same for every lookback.
-     Near-constant funds (TSP G, SGOV) need a fallback when GARCH does not fit.
-  2. Copula simulation: replace the resampled shock rows of step 1 with a fitted copula (vine
-     copula, fat-tailed margins) for tail dependence beyond what history contains.
+- Simulation engines and diversification measures, specified in
+  `docs/specs/2026-10-14-portfoliosight-simulation-engines-design.md` (awaiting the owner's
+  approval; no implementation plan yet). Three engines selectable in Settings behind the one
+  engine function the page already calls (`portfoliosight.engine.ranges.one_year_ranges`), with
+  History replay (the block bootstrap) staying the default until the others are validated by a
+  rolling out-of-sample backtest on both ready-made menus. The level (mean and volatility) of
+  every mix follows the selected lookback; the shape is fitted once on up to ten years per fund.
+  The minimum-torsion effective number of bets was found to be inflated on correlated menus (one
+  fund alone scores 3.5 to 14.4 bets on the Example Portfolio), so the spec also replaces the
+  optimized measure. Phases, each with a done condition in the spec:
+  0. Tag the deployed dashboard (commit, Cloudflare Worker version, KS-001 image, generation) so
+     the page, the service and the data pointer can all be rolled back.
+  1. Volatility model: GARCH(1,1)-t per fund with joint filtered historical simulation (whole
+     residual rows resampled so funds keep moving together; long-run variance start), imported
+     from the owner's QSE library at a pinned commit (`qse.distributions.joint`, QSE pull request
+     #164), not ported; constant-volatility fallbacks for near-constant funds (TSP G, SGOV).
+  2. Diversification measures: the diversification ratio squared as the ladders' objective
+     (convex; one fund scores exactly one), and an effective number of loss contributors in each
+     mix's simulated bad years, measured under the selected engine and shown in the details.
+  3. Copula: a fitted vine copula with fat-tailed margins replaces the resampled shock rows
+     through QSE's `ShockSource` seam, for joint bad days beyond what the history contains.
 - Later product options: a TSP preset that includes the L Funds as comparison choices.
 
 ## Out of scope for the demo and parked
@@ -65,3 +72,7 @@ method are in `docs/reviews/`.
 FERS planner (Phase 2b), risk questionnaire / risk number, hedge/collar calculator, emails,
 programmatic SEO pages, payments, accounts/login, Student-t toggle, image
 export, walk-forward UI, robustness score.
+
+Holdings look-through diversification (counting the stocks and bonds behind the funds, so a
+menu of near-duplicate funds is measured by what it holds): needs fund holdings data, and none of
+the current sources (Tiingo, tsp.gov, the QSE lake) provides it.
