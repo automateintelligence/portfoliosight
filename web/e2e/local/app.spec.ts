@@ -209,8 +209,8 @@ test("funds sit in a sidebar beside the chart on a wide screen and in a section 
   await expect(page.getByTestId("section-funds")).toHaveAttribute("aria-expanded", "true");
 });
 
-test("at 1024 px the open sidebar leaves a first screen in which nothing overlaps", async ({ page }, testInfo) => {
-  test.skip(isPhone(testInfo.project.name), "a desktop width");
+test("at 1024 px the open sidebar leaves a first screen in which nothing overlaps", async ({ page }) => {
+  // The width is set here, so this runs the same in both projects.
   await page.setViewportSize({ width: 1024, height: 768 });
   await open(page);
   await page.getByTestId("funds-toggle").click();
@@ -347,9 +347,17 @@ test("the square and the open circle show the same card as the selected mix", as
 });
 
 test("hovering the colour map shows a plain card for the mix there", async ({ page }, testInfo) => {
-  test.skip(isPhone(testInfo.project.name), "the map answers to a mouse; a phone has none");
   await open(page);
   const chart = await boxOf(page, "chart");
+  if (isPhone(testInfo.project.name)) {
+    // The map answers to a mouse only: a touch on it shows no card and moves nothing.
+    const before = await page.getByTestId("range-typical").innerText();
+    await page.getByTestId("chart").tap({ position: { x: chart.width * 0.3, y: chart.height * 0.72 } });
+    await page.waitForTimeout(300);
+    await expect(page.getByTestId("mix-card")).toHaveCount(0);
+    await expect(page.getByTestId("range-typical")).toHaveText(before);
+    return;
+  }
   await page.mouse.move(chart.x + chart.width * 0.3, chart.y + chart.height * 0.72);
   const card = page.locator('[data-testid="mix-card"][data-for="cell"]');
   await expect(card).toBeVisible();

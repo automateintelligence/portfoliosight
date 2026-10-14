@@ -37,8 +37,9 @@ for (const theme of THEMES) {
 }
 
 test("owner feedback 1 views", async ({ page, request }, testInfo) => {
-  test.skip(testInfo.project.name.includes("phone"), "these are desktop views");
-  test.skip(Boolean(process.env.PS_SHOT_DRAFT), "drafts cover the first screens only");
+  // Desktop views: the phone project leaves this test out (playwright.config.ts). Drafts cover the first screens only.
+  expect(testInfo.project.name).toBe("shots-desktop");
+  if (process.env.PS_SHOT_DRAFT) return;
   await request.post("/__mock/reset");
   for (const [size, viewport] of [["desktop", { width: 1366, height: 900 }], ["wide", { width: 1920, height: 1080 }]] as const) {
     await page.setViewportSize(viewport);
