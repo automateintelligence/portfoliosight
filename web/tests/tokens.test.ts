@@ -68,6 +68,25 @@ describe("theme tokens (spec 3.5)", () => {
     }
   });
 
+  it("the strip's strong caption stands out more than body text in every look (lighter on the dark ones, darker on Light)", () => {
+    const lum = (hex: string) => {
+      const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+      return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    };
+    const contrast = (a: string, b: string) => {
+      const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+      return (x + 0.05) / (y + 0.05);
+    };
+    for (const theme of THEMES) {
+      const got = declarations(theme);
+      const strong = got.get("--strip-cap-strong") ?? "";
+      expect(strong, `--strip-cap-strong in ${theme}`).toMatch(/^#[0-9a-f]{6}$/i);
+      const surface = got.get("--surface")!;
+      expect(contrast(strong, surface), theme).toBeGreaterThan(contrast(got.get("--text")!, surface));
+      expect(contrast(strong, surface), theme).toBeGreaterThanOrEqual(7);
+    }
+  });
+
   it("ks-dark is also the default on :root", () => {
     expect(css).toMatch(/:root,\s*\[data-theme="ks-dark"\]\s*\{\s*--bg: #141417;/);
   });

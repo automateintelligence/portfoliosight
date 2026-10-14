@@ -11,6 +11,7 @@ import { ShareDialog } from "./controls/ShareDialog";
 import { ThemeSwitch } from "./controls/ThemeSwitch";
 import { disclaimer, family, lookbackLine, lookbackNames, plain } from "./copy";
 import { portfolioMath, type YearRange } from "./math/portfolio";
+import { stripScale } from "./math/stripScale";
 import { atNode, ceilingAt, deriveView, limitsBind, positionOfCeiling } from "./math/view";
 import { Funds } from "./sections/Funds";
 import { Settings } from "./sections/Settings";
@@ -18,6 +19,7 @@ import { Stress } from "./sections/Stress";
 import { Trades } from "./sections/Trades";
 import { createStore, currentMix, LOOKBACKS, type LookbackId } from "./state/store";
 import { useExactRange } from "./state/useExactRange";
+import { useStripBounds } from "./state/useStripBounds";
 import { applyTheme, useMediaQuery, useThemeEpoch } from "./theme/useTheme";
 
 type SectionId = "funds" | "trades" | "stress" | "settings";
@@ -142,6 +144,9 @@ export default function App() {
     if (!math || !mix?.weights || !currentStats) return null;
     return { stats: currentStats, range: builtIn ?? enteredExact, weights: mix.weights };
   }, [math, mix, currentStats, builtIn, enteredExact]);
+
+  // The strip's bar keeps one scale per menu, over every history window loaded for it.
+  const stripBounds = useStripBounds(tensor, state.ghostTensors);
 
   const lookbackGhosts = useMemo(
     () => state.ghosts.flatMap((id) => (state.ghostTensors[id] ? [{ id, curve: state.ghostTensors[id]!.frontier_curve }] : [])),
@@ -425,6 +430,7 @@ export default function App() {
             typical={view.range.typical}
             high={view.range.high}
             normal={view.normal}
+            scale={stripScale(stripBounds, [view.range.low, view.range.typical, view.range.high])}
             word={view.word}
             details={state.details}
             facts={{

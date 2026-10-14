@@ -611,3 +611,40 @@ test("Clear all and Scale to 100% work from the keyboard; the total and Scale sh
   await expect(scale).toHaveCount(0);
   await expect(clear).toBeEnabled();
 });
+
+test("the strip marks Bad, Typical and Good on one scale that holds still as the sliders and the history window move", async ({ page }, testInfo) => {
+  test.skip(isPhone(testInfo.project.name), "the phone strip shows the three figures without the bar");
+  await open(page, "u=guide2017&lb=5y");
+  const bar = page.getByTestId("range-bar");
+  const scaleOf = async () => [await bar.getAttribute("data-lo"), await bar.getAttribute("data-hi")];
+  const xOf = async (id: string) => {
+    const b = (await page.getByTestId(id).boundingBox())!;
+    return b.x + b.width / 2;
+  };
+  await expect(bar).toHaveAttribute("role", "img");
+  await expect(bar).toHaveAttribute("aria-label", /fixed scale.*Bad .*Typical .*Good /);
+  for (const id of ["range-mark-low", "range-mark-typical", "range-mark-high"]) await expect(page.getByTestId(id)).toBeVisible();
+  await expect(page.getByTestId("range-mark-low")).toHaveAttribute("title", /^Bad year: /);
+  await expect(page.getByTestId("range-mark-high")).toHaveAttribute("title", /^Good year: /);
+  const ends = async () => [await xOf("range-mark-low"), await xOf("range-mark-typical"), await xOf("range-mark-high")];
+  const [lo, typ, hi] = await ends();
+  expect(lo).toBeLessThan(typ);
+  expect(typ).toBeLessThan(hi);
+  // the caps are not the dot: thin and taller than wide
+  const cap = (await page.getByTestId("range-mark-high").boundingBox())!;
+  expect(cap.height).toBeGreaterThan(cap.width * 3);
+  const first = await scaleOf();
+  const lowBefore = await page.getByTestId("range-low").textContent();
+  await page.getByTestId("point-selected").focus();
+  for (let i = 0; i < 25; i++) await page.keyboard.press("ArrowRight");
+  await expect(page.getByTestId("range-low")).not.toHaveText(lowBefore ?? "");
+  expect(await scaleOf(), "the scale after the risk slider moved").toEqual(first);
+  expect((await ends())[2]).not.toBeCloseTo(hi, 0);
+  for (let i = 0; i < 10; i++) await page.keyboard.press("ArrowDown");
+  expect(await scaleOf(), "the scale after the diversification slider moved").toEqual(first);
+  await section(page, "settings");
+  await page.getByTestId("lookback-1y").check({ force: true });
+  await expect.poll(() => new URL(page.url()).searchParams.get("lb")).toBe("1y");
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  expect(await scaleOf(), "the scale after the history window changed").toEqual(first);
+});

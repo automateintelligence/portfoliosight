@@ -1,6 +1,7 @@
 import { SlidersHorizontal } from "lucide-react";
-import { enbLine, plain, staleLine, technical } from "../copy";
+import { enbLine, plain, rangeBarLabel, staleLine, technical } from "../copy";
 import { pct, signedPct } from "../format";
+import { stripAt, type StripScale } from "../math/stripScale";
 
 export type DetailFacts = {
   enb: number;
@@ -23,6 +24,8 @@ type Props = {
   high: number;
   /** The bell-curve figure, shown in the details only. */
   normal: { low: number; mid: number; high: number };
+  /** The bar's fixed scale for this menu (math/stripScale.ts). */
+  scale: StripScale;
   word: string;
   details: boolean;
   facts: DetailFacts;
@@ -31,12 +34,11 @@ type Props = {
 };
 
 /** "Selected mix": the one-year range, the quiet diversification word, and the details toggle. */
-export function ResultStrip({ low, typical, high, normal, word, details, facts, staleAsof, onToggleDetails }: Props) {
-  // A small picture of the range: where low, typical and high sit around zero.
-  const lo = Math.min(low, 0);
-  const hi = Math.max(high, 0);
-  const span = hi - lo || 1;
-  const at = (v: number) => `${(((v - lo) / span) * 100).toFixed(2)}%`;
+export function ResultStrip({ low, typical, high, normal, scale, word, details, facts, staleAsof, onToggleDetails }: Props) {
+  // A small picture of the range on one scale for the whole menu: the Bad-to-Good band with its
+  // two ends marked, the typical year, and 0%.
+  const at = (v: number) => `${(Math.min(1, Math.max(0, stripAt(scale, v))) * 100).toFixed(2)}%`;
+  const spoken = rangeBarLabel(signedPct(scale.lo), signedPct(scale.hi), signedPct(low), signedPct(typical), signedPct(high));
 
   return (
     <section className="strip" aria-label={plain.resultStrip}>
@@ -63,10 +65,13 @@ export function ResultStrip({ low, typical, high, normal, word, details, facts, 
             {signedPct(high)}
           </span>
         </div>
-        <div className="rangebar" aria-hidden="true">
+        <div className="rangebar" data-testid="range-bar" role="img" aria-label={spoken} data-lo={scale.lo.toFixed(6)} data-hi={scale.hi.toFixed(6)}>
+          <span className="rb-track" />
           <span className="rb-line" style={{ left: at(low), right: `calc(100% - ${at(high)})` }} />
           <span className="rb-zero" style={{ left: at(0) }} />
-          <span className="rb-dot" style={{ left: at(typical) }} />
+          <span className="rb-cap rb-low" data-testid="range-mark-low" title={`${plain.rangeLow} year: ${signedPct(low)}`} style={{ left: at(low) }} />
+          <span className="rb-cap rb-high" data-testid="range-mark-high" title={`${plain.rangeHigh} year: ${signedPct(high)}`} style={{ left: at(high) }} />
+          <span className="rb-dot" data-testid="range-mark-typical" title={`${plain.rangeTypical} year: ${signedPct(typical)}`} style={{ left: at(typical) }} />
         </div>
       </div>
       <div className="divword">

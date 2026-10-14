@@ -170,3 +170,6 @@ export const staleLine = (asof: string) => `Prices through ${asof}; the nightly 
 // Behind the details toggle only (it names the technical measure).
 export const enbLine = (n: string, m: string) =>
   `spreads risk over the equivalent of ${n} independent bets; highest found on this menu: ${m}`;
+/** The strip's bar, spoken: it is drawn on one scale for every mix of this menu. */
+export const rangeBarLabel = (from: string, to: string, low: string, typical: string, high: string) =>
+  `One-year range on a fixed scale from ${from} to ${to}, the same for every mix of this menu: ${plain.rangeLow} ${low}, ${plain.rangeTypical} ${typical}, ${plain.rangeHigh} ${high}`;

@@ -1586,6 +1586,18 @@ button {
   max-width: 460px;
 }
 
+/* The whole scale (the same for every mix of the menu), faint under the Bad-to-Good band. */
+.rangebar .rb-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 12px;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 1px;
+  background: var(--border);
+}
+
 .rangebar .rb-line {
   position: absolute;
   top: 12px;
@@ -1616,6 +1628,25 @@ button {
   margin-top: 3px;
 }
 
+/* Bad and Good: square end caps on the band, taller than it, unlike the round typical dot. */
+.rangebar .rb-cap {
+  position: absolute;
+  top: 12px;
+  width: 3px;
+  height: 16px;
+  margin: -8px 0 0 -1.5px;
+  border-radius: 1px;
+  box-shadow: 0 0 0 1px var(--surface);
+}
+
+.rangebar .rb-low {
+  background: var(--error);
+}
+
+.rangebar .rb-high {
+  background: var(--success);
+}
+
 .rangebar .rb-dot {
   position: absolute;
   top: 12px;
@@ -1635,7 +1666,8 @@ button {
 
 .divword-cap {
   font-size: 11px;
-  color: var(--muted);
+  font-weight: 700;
+  color: var(--strip-cap-strong);
 }
 
 .divword-val {
