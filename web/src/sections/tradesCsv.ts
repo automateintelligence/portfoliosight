@@ -18,7 +18,7 @@ const field = (value: string | number | null): string => {
 const round = (value: number, digits: number) => Number(value.toFixed(digits)) + 0;
 
 /**
- * One row per fund that is held now or in the selected mix: fund, now %, selected %, change in
+ * One row per fund with any non-zero figure (held now, held in the selected mix, or traded): fund, now %, selected %, change in
  * percentage points, then the change in dollars (dollar and share units) and in whole shares
  * (share unit). Plain numbers, a full stop as the decimal mark, CRLF line ends (RFC 4180).
  */
@@ -29,10 +29,12 @@ export function tradesCsv({ funds, wNow, wSel, unit, amounts }: Input): string {
   if (unit === "shares") head.push("Change (shares)");
   const lines = [head.map(field).join(",")];
   funds.forEach((f, i) => {
-    if (!(wNow[i] > 5e-5 || wSel[i] > 5e-4)) return;
     const cells: (string | number | null)[] = [f.id, round(wNow[i] * 100, 2), round(wSel[i] * 100, 2), round(rows[i].dpp * 100, 2)];
     if (unit !== "pct") cells.push(rows[i].dUsd === null ? null : round(rows[i].dUsd as number, 2));
     if (unit === "shares") cells.push(rows[i].dShares);
+    // A fund is left out only when every figure of its row would read zero: a small holding of a
+    // large portfolio is still a trade.
+    if (cells.slice(1).every((cell) => cell === null || cell === 0)) return;
     lines.push(cells.map(field).join(","));
   });
   return `${lines.join("\r\n")}\r\n`;

@@ -49,6 +49,15 @@ describe("tradesCsv", () => {
     expect(rows[1]).toEqual(["AAA", "33.33", "50", "16.67"]);
   });
 
+  it("keeps a trade too small to show as a percentage when it is worth dollars", () => {
+    // 0.04% of $1,000,000 moves from AAA into DDD: $400 each way.
+    const csv = tradesCsv({ funds, wNow: [0.5, 0.5, 0, 0], wSel: [0.4996, 0.5, 0, 0.0004], unit: "usd", amounts: [500000, 500000, null, null] });
+    const rows = rowsOf(csv);
+    expect(rows.map((r) => r[0])).toEqual(["Fund", "AAA", "BBB", "DDD"]);
+    expect(rows[1]).toEqual(["AAA", "50", "49.96", "-0.04", "-400"]);
+    expect(rows[3]).toEqual(["DDD", "0", "0.04", "0.04", "400"]);
+  });
+
   it("quotes a field that holds a comma or a quote", () => {
     const csv = tradesCsv({ funds: [{ id: 'A,"B' }, { id: "C" }], wNow: [0.5, 0.5], wSel: [0.5, 0.5], unit: "pct", amounts: [50, 50] });
     expect(csv.split("\r\n")[1]).toBe('"A,""B",50,50,0');

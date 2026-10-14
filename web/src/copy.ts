@@ -32,7 +32,7 @@ export const plain = {
   cellMix: "The mix at this spot",
   cardRisk: "Risk",
   cardReturn: "Expected return",
-  cardPerYear: "a year",
+  cardPerYear: "Risk and expected return are per year.",
   cardHoldings: "Largest holdings",
   details: "Details",
   advice: "Historical math, not investment advice.",

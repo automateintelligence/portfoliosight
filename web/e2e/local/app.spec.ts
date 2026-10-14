@@ -209,6 +209,30 @@ test("funds sit in a sidebar beside the chart on a wide screen and in a section 
   await expect(page.getByTestId("section-funds")).toHaveAttribute("aria-expanded", "true");
 });
 
+test("at 1024 px the open sidebar leaves a first screen in which nothing overlaps", async ({ page }, testInfo) => {
+  test.skip(isPhone(testInfo.project.name), "a desktop width");
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await open(page);
+  await page.getByTestId("funds-toggle").click();
+  await expect(page.getByTestId("fund-row-VTI")).toBeVisible();
+  const box = async (selector: string) => (await page.locator(selector).first().boundingBox())!;
+  const apart = (a: { x: number; y: number; width: number; height: number }, b: typeof a) => a.x + a.width <= b.x + 0.5 || b.x + b.width <= a.x + 0.5 || a.y + a.height <= b.y + 0.5 || b.y + b.height <= a.y + 0.5;
+  const parts = [".strip-label", '[data-testid="range-low"]', '[data-testid="range-typical"]', '[data-testid="range-high"]', ".divword", '[data-testid="details-toggle"]'];
+  const boxes = await Promise.all(parts.map(box));
+  for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) expect(apart(boxes[i], boxes[j]), `${parts[i]} and ${parts[j]} overlap`).toBe(true);
+  const chips = await Promise.all(["funds", "trades", "stress", "settings"].map((id) => box(`[data-testid="chip-${id}"]`)));
+  const advice = await box(".advice");
+  for (const chip of chips) expect(apart(chip, advice), "a chip and the advice line overlap").toBe(true);
+  const chart = await box('[data-testid="chart"]');
+  const side = await box('[data-testid="section-funds"]');
+  expect(chart.width).toBeGreaterThan(400);
+  expect(side.x + side.width).toBeLessThanOrEqual(1024);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1024);
+  // every column of the table is inside the sidebar
+  const cellBox = await box('[data-testid="mix-selected-VTI"]');
+  expect(cellBox.x + cellBox.width).toBeLessThanOrEqual(side.x + side.width);
+});
+
 test("the table always shows the mix entered and the selected mix, and the selected one follows the sliders", async ({ page }) => {
   await open(page);
   await section(page, "funds");
@@ -305,6 +329,8 @@ test("the square and the open circle show the same card as the selected mix", as
     await expect(card.locator(".tip-range")).toHaveText(/Low\s*[+−]?\d+\.\d%\s*Typical\s*[+−]?\d+\.\d%\s*High\s*[+−]?\d+\.\d%/);
     await expect(card.getByTestId("mix-card-word")).toHaveText(/^(Good|Average|Fair|Poor)$/);
     expect(await card.locator("li").count(), `${kind}: largest holdings`).toBeGreaterThanOrEqual(3);
+    await expect(card).toContainText("Risk and expected return are per year.");
+    expect(await mark.getAttribute("aria-describedby"), `${kind}: the open card describes its marker`).toBe(await card.locator("xpath=..").getAttribute("id"));
     await expect(card.locator("li").first()).toHaveText(/^[A-Z0-9.-]+\s*\d+\.\d%$/);
     const box = (await card.boundingBox())!;
     const chart = await boxOf(page, "chart");

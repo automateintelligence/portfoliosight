@@ -372,6 +372,64 @@ button {
   width: clamp(348px, 31vw, 440px);
 }
 
+/* Between 1024 and 1279 px the open sidebar leaves the chart little room: everything tightens. */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .side-open .side {
+    width: 318px;
+  }
+
+  .app:has(.stage.side-open) {
+    --div-col: 108px;
+  }
+
+  .side-open .strip {
+    column-gap: 16px;
+    padding: 12px 14px;
+  }
+
+  .side-open .range {
+    grid-template-columns: repeat(3, auto);
+    justify-content: start;
+    column-gap: 18px;
+  }
+
+  .side-open .rangebar {
+    display: none;
+  }
+
+  .side-open .below {
+    flex-wrap: wrap;
+  }
+
+  .side-open .chips {
+    flex-wrap: wrap;
+  }
+
+  .side-open .advice {
+    white-space: normal;
+  }
+
+  .side-open .vslider .v-tick-label {
+    display: none;
+  }
+}
+
+/* A chart this narrow has no room for the key to the markers beside the curve; each marker
+ * still names itself in its card. */
+.chart {
+  container-type: inline-size;
+}
+
+@container (max-width: 560px) {
+  .legend .keys {
+    display: none;
+  }
+
+  .legend {
+    width: 200px;
+  }
+}
+
 .side-tab {
   display: flex;
   flex-direction: column;
@@ -2732,7 +2790,7 @@ button {
   text-shadow: 0 0 18px rgba(255, 150, 60, 0.45);
 }
 
-/* Type: squared instrument capitals for every label; figures stay in the tabular mono. */
+/* HUD type: squared instrument capitals for every label; figures stay in the tabular mono. */
 [data-theme="hud"] .heading,
 [data-theme="hud"] .btn,
 [data-theme="hud"] .chip,
@@ -2808,7 +2866,7 @@ button {
   letter-spacing: 0.05em;
 }
 
-/* Glass: every panel is a translucent sheet with a warm hairline and an inner sheen. */
+/* HUD glass: every panel is a translucent sheet with a warm hairline and an inner sheen. */
 [data-theme="hud"] .chart,
 [data-theme="hud"] .divs:not(.divs-h),
 [data-theme="hud"] .strip,
@@ -2826,7 +2884,7 @@ button {
   box-shadow: inset 0 1px 0 rgba(255, 240, 220, 0.06);
 }
 
-/* A red tab and a gold corner mark the edge of each sheet. */
+/* HUD: a red tab and a gold corner mark the edge of each sheet. */
 [data-theme="hud"] .strip,
 [data-theme="hud"] .acc,
 [data-theme="hud"] .side,
@@ -2859,7 +2917,7 @@ button {
   filter: drop-shadow(0 0 5px rgba(255, 120, 50, 0.7));
 }
 
-/* The colour map is light on glass: dark cells let the field show through. */
+/* HUD: the colour map is light on glass, so dark cells let the field show through. */
 [data-theme="hud"] .chart-canvas {
   mix-blend-mode: screen;
 }
@@ -2881,7 +2939,7 @@ button {
   text-shadow: 0 0 16px rgba(255, 150, 60, 0.6);
 }
 
-/* Gauges are cut into segments. */
+/* HUD gauges are cut into segments. */
 [data-theme="hud"] .ramp-bar {
   height: 8px;
   border: 0;
@@ -2897,7 +2955,7 @@ button {
   filter: drop-shadow(0 0 3px rgba(255, 200, 100, 0.9));
 }
 
-/* The selected mix: a gold core inside two rings that turn against each other. */
+/* HUD: the selected mix is a gold core inside two rings that turn against each other. */
 [data-theme="hud"] .pt-selected .halo {
   fill: var(--accent);
   opacity: 0.3;
@@ -2954,7 +3012,7 @@ button {
   filter: drop-shadow(0 0 4px rgba(255, 200, 100, 0.9));
 }
 
-/* Floating cards are deeper glass with a brighter edge. */
+/* HUD: floating cards are deeper glass with a brighter edge. */
 [data-theme="hud"] .tooltip,
 [data-theme="hud"] .celltip,
 [data-theme="hud"] .ghosttip,
@@ -2979,7 +3037,7 @@ button {
   mask: repeating-linear-gradient(90deg, #000 0 4px, transparent 4px 6px);
 }
 
-/* Controls */
+/* HUD controls */
 [data-theme="hud"] .btn {
   background: rgba(255, 226, 190, 0.045);
   border-color: var(--glass-line);
@@ -3056,7 +3114,7 @@ button {
   border-color: var(--glass-line);
 }
 
-/* Sliders: hairline tracks against a ruler, ring thumbs with a gold core. */
+/* HUD sliders: hairline tracks against a ruler, ring thumbs with a gold core. */
 [data-theme="hud"] .v-track,
 [data-theme="hud"] .h-track {
   border-radius: 0;
@@ -3124,7 +3182,7 @@ button {
   color: var(--text-2);
 }
 
-/* Result strip */
+/* HUD result strip */
 [data-theme="hud"] .fig-val {
   text-shadow: 0 0 14px rgba(255, 226, 190, 0.22);
 }

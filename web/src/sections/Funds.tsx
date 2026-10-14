@@ -84,8 +84,11 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
   // this view sets aside are left out, as they are for the square on the chart.
   const lastClose = useMemo(() => new Map((tensor?.universe.funds ?? []).map((f) => [f.id, f.last_close ?? null])), [tensor]);
   const entered = useMemo(() => {
+    // Percentages must add up over the whole list (the rule of the running total); what is left
+    // after funds are set aside is then scaled up to 100%, as it is for the square on the chart.
+    if (unit === "pct" && !percentTotal(list.map((r) => r.amount)).ok) return new Map<string, number>();
     const counted = list.filter((r) => (changed || !tensor ? !excluded.has(r.id) : included.has(r.id)));
-    const res = amountsToWeights(counted.map((r) => r.amount), unit, counted.map((r) => lastClose.get(r.id) ?? null));
+    const res = amountsToWeights(counted.map((r) => r.amount), unit === "shares" ? "shares" : "usd", counted.map((r) => lastClose.get(r.id) ?? null));
     return new Map(res.weights ? counted.map((r, i) => [r.id, res.weights[i]]) : []);
   }, [list, changed, tensor, excluded, included, unit, lastClose]);
   const selectedById = useMemo(() => new Map((tensor && selected ? tensor.universe.funds : []).map((f, i) => [f.id, selected?.[i] ?? 0])), [tensor, selected]);
@@ -184,11 +187,13 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
                 )}
               </span>
               <AmountInput id={r.id} value={r.amount} unit={unit} onCommit={(amount) => setAmount(r.id, amount)} />
-              <span className="pc pc-ent num" data-testid={`mix-entered-${r.id}`} data-label={plain.colEntered}>
-                {entered.has(r.id) ? pct(entered.get(r.id) ?? 0) : ""}
+              <span className="pc pc-ent num" data-label={plain.colEntered}>
+                <span className="sr-only">{`${plain.colEntered}: `}</span>
+                <span data-testid={`mix-entered-${r.id}`}>{entered.has(r.id) ? pct(entered.get(r.id) ?? 0) : ""}</span>
               </span>
-              <span className="pc pc-sel num" data-testid={`mix-selected-${r.id}`} data-label={plain.colSelected}>
-                {selectedById.has(r.id) ? pct(selectedById.get(r.id) ?? 0) : "—"}
+              <span className="pc pc-sel num" data-label={plain.colSelected}>
+                <span className="sr-only">{`${plain.colSelected}: `}</span>
+                <span data-testid={`mix-selected-${r.id}`}>{selectedById.has(r.id) ? pct(selectedById.get(r.id) ?? 0) : "—"}</span>
               </span>
               <button type="button" className="btn btn-icon btn-quiet rm" aria-label={`Remove ${r.id}`} onClick={() => remove(r.id)}>
                 <X size={15} aria-hidden="true" />

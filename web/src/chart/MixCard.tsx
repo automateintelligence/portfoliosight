@@ -71,6 +71,7 @@ export function MixCard({ kind, title, mix, details, enbRef, extra }: Props) {
           <dd data-testid="mix-card-word">{mix.word}</dd>
         </div>
       </dl>
+      <p className="tip-sub">{plain.cardPerYear}</p>
       {details && (
         <p className="tip-tech">
           {`This mix ${enbLine(mix.enb.toFixed(1), enbRef.toFixed(1))}.`}

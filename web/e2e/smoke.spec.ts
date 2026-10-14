@@ -269,7 +269,10 @@ test("DoD-06 no tangency point and no jargon in the default page", async ({ page
 
   // The only marks on the chart: the selected point, the entered mix, the most diversified mix and the ceiling.
   const marks = await page.getByTestId("chart").evaluate((chart) => Array.from(chart.querySelectorAll("svg [data-testid]")).map((el) => el.getAttribute("data-testid")));
-  expect(marks.sort()).toEqual(["ceiling-line", "point-current", "point-div", "point-selected"]);
+  // Beside them the overlay holds only the names of the frontier lines (text, one per line drawn).
+  const names = marks.filter((id) => (id ?? "").startsWith("frontier-label-"));
+  expect(names, "the primary frontier line is named").toEqual(["frontier-label-5y"]);
+  expect(marks.filter((id) => !names.includes(id)).sort()).toEqual(["ceiling-line", "point-current", "point-div", "point-selected"]);
   const ids = await page.evaluate(() => Array.from(document.querySelectorAll("[data-testid]")).map((el) => el.getAttribute("data-testid") ?? ""));
   expect(ids.filter((id) => /tangen|sharpe|cml|capital/i.test(id))).toEqual([]);
 

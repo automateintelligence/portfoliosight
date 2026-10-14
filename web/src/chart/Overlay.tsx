@@ -46,6 +46,7 @@ const fmtTick = (v: number) => `${Number((v * 100).toFixed(1))}%`;
 const HIT = 22; // 44 px touch target around a point drawn much smaller (spec 3.4)
 const AXIS_LOCK = 6; // px of travel before a drag commits to one direction
 const LABEL_STEP = 14; // px between two line labels that would otherwise touch
+const CARD_ID = "mix-card-tip"; // the open card describes the marker it belongs to
 const CARD_W = { desktop: 260, phone: 224 };
 
 export type PlacedLabel = LineEnd & { ex: number; ey: number; x: number; y: number; anchor: "start" | "end"; leader: string | null };
@@ -261,12 +262,12 @@ export function Overlay({ scales, phone, ceiling, selected, mostDiversified, cur
             </text>
           </g>
         ))}
-        <g className="mark" data-mark="div" tabIndex={0} role="img" aria-label={divLabel} {...show("div")} {...tapToggle("div")}>
+        <g className="mark" data-mark="div" tabIndex={0} role="img" aria-label={divLabel} aria-describedby={tip === "div" ? CARD_ID : undefined} {...show("div")} {...tapToggle("div")}>
           <circle className="hit" cx={at.div!.px} cy={at.div!.py} r={phone ? HIT : 13} />
           <circle className="pt-div" data-testid="point-div" cx={at.div!.px} cy={at.div!.py} r={4.5} />
         </g>
         {at.current && (
-          <g className="mark" data-mark="current" tabIndex={0} role="img" aria-label={currentLabel} {...show("current")} {...tapToggle("current")}>
+          <g className="mark" data-mark="current" tabIndex={0} role="img" aria-label={currentLabel} aria-describedby={tip === "current" ? CARD_ID : undefined} {...show("current")} {...tapToggle("current")}>
             <circle className="hit" cx={at.current.px} cy={at.current.py} r={phone ? HIT : 14} />
             <rect className="pt-current" data-testid="point-current" x={at.current.px - 6.5} y={at.current.py - 6.5} width={13} height={13} rx={2} />
           </g>
@@ -285,6 +286,7 @@ export function Overlay({ scales, phone, ceiling, selected, mostDiversified, cur
           aria-valuenow={Number(position.s.toFixed(4))}
           aria-valuetext={selectedLabel}
           aria-disabled={busy || undefined}
+          aria-describedby={tip === "selected" ? CARD_ID : undefined}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}
@@ -302,7 +304,7 @@ export function Overlay({ scales, phone, ceiling, selected, mostDiversified, cur
         </g>
       </svg>
       {tip && where && cards[tip] && (
-        <div ref={cardRef} className="tooltip" role="tooltip" style={{ left: cardLeft, top: cardTop, width: cardW }}>
+        <div ref={cardRef} id={CARD_ID} className="tooltip" role="tooltip" style={{ left: cardLeft, top: cardTop, width: cardW }}>
           {cards[tip]}
           {tip !== "selected" && under(tip) && cards[under(tip)!] && <p className="tip-more">{phone ? "Tap" : "Click"} again for the marker underneath.</p>}
         </div>

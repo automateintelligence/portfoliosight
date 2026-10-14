@@ -11,7 +11,8 @@ import { Funds } from "../src/sections/Funds";
 import type { Row, Unit } from "../src/state/store";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const tensor = parseTensor(JSON.parse(fs.readFileSync(path.join(here, "..", "fixtures", "guide2017_5y.json"), "utf8")));
+const raw = JSON.parse(fs.readFileSync(path.join(here, "..", "fixtures", "guide2017_5y.json"), "utf8"));
+const tensor = parseTensor(raw);
 const funds = tensor.universe.funds;
 const noop = () => undefined;
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
@@ -45,6 +46,23 @@ it("shows both percentage columns in every unit, the entered one from the amount
     expect(cell("selected", b.id)).toBe("60.0%");
     cleanup();
   }
+});
+
+it("scales percentages up over the funds in use when one fund is set aside", () => {
+  const out = { id: "ZZOUT" };
+  const partial = parseTensor({ ...raw, universe: { ...raw.universe, excluded: [{ id: out.id, reason: "no data since 2024-10-30", last_close: null }] } });
+  const rows: Row[] = [funds[0], funds[1], out].map((f, i) => ({ id: f.id, name: f.id, amount: [60, 20, 20][i] }));
+  render(<Funds rows={rows} unit="pct" tensor={partial} symbols={null} mixStatus="ok" setAside={0.2} menuError={null} busy={false} selected={null} onUnit={noop} onAmount={noop} onUseMenu={noop} onNeedSymbols={noop} />);
+  expect(screen.getByTestId("funds-total").textContent).toBe("Adds up to 100%");
+  expect(cell("entered", funds[0].id)).toBe("75.0%");
+  expect(cell("entered", funds[1].id)).toBe("25.0%");
+  expect(cell("entered", out.id)).toBe("");
+});
+
+it("names each percentage for a screen reader", () => {
+  show({ unit: "usd", amounts: [3000, 1000] });
+  expect(screen.getByTestId(`mix-entered-${funds[0].id}`).parentElement?.textContent).toBe("Mix entered %: 75.0%");
+  expect(screen.getByTestId(`mix-selected-${funds[0].id}`).parentElement?.textContent).toBe("Selected mix %: 40.0%");
 });
 
 it("leaves the entered column blank when no amounts are entered, and still shows the selected mix", () => {
