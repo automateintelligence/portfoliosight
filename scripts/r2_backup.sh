@@ -1,0 +1,1 @@
+/home/danie906/.local/share/portfoliosight/bin/r2_backup.sh
