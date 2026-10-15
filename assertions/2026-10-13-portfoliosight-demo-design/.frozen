@@ -343,9 +343,9 @@
       }
     },
     "A-PS-58": {
-      "entry": "d0856788b7d624c196307c12e9e1a1b321c4638d017140666a5b5cff4ff16166",
+      "entry": "1d188ab02ebcb70762e4e77cd15108ef3344f01e78a57ea195fa3225c9e2831e",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_58_store_seeded_mirrored_cron.py": "78a494593dd6dceee4ccc6191238954d51f0e49f6051e1fdf7bb6afa26c391d6"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_58_store_seeded_mirrored_cron.py": "f5d788b8df06accda08ad2ca1de50b107d24f04f9a3510848e868143a947f2f6"
       }
     },
     "A-PS-59": {

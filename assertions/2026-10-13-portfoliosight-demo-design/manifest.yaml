@@ -459,7 +459,7 @@ assertions:
     level: spec
     kind: example
   - id: A-PS-58
-    claim: "The store verify passes against the bucket, the manifest holds at least 1,400 seeded symbols, the bucket is mirrored to /mnt/d/portfoliosight-data, a restore dry-run uploads nothing, and crontab shows exactly one PortfolioSight backup line."
+    claim: "The store verify passes against the bucket, the manifest holds at least 1,400 seeded or lake-kept symbols, the bucket is mirrored to /mnt/d/portfoliosight-data, a restore dry-run uploads nothing, and crontab shows exactly one PortfolioSight backup line and no other PortfolioSight line but at most one lake-sync line."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_58_store_seeded_mirrored_cron.py"
     setup: ""
     teardown: ""
