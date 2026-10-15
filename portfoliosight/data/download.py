@@ -53,9 +53,18 @@ DEFAULT_TIER = 3
 STALE_ON_FAILED_FETCH = frozenset({TSP_PROVIDER})
 MAX_ERROR_CHARS = 300
 DEADLINE_REACHED = "deadline reached"
+STORE_ERROR = "store"  # the ``provider`` of an error that was the store's, not a provider's
 
 Clock = Callable[[], datetime]
 Sleep = Callable[[float], None]
+
+
+class RecordWriteFailed(Exception):
+    """A symbol's record could not be stored once the store's retries were spent."""
+
+    def __init__(self, symbol: str, cause: Exception):
+        super().__init__(f"{symbol}: storing its record failed: {type(cause).__name__}: {cause}")
+        self.symbol = symbol
 
 
 @dataclass
@@ -235,6 +244,11 @@ class _Ingest:
                     logger.warning("provider rate limit persists: stopping at %s", symbol)
                     self.report.stopped = "provider rate limit"
                     break
+                except RecordWriteFailed as exc:
+                    # The symbol keeps its previous record and entry; the walk goes on.
+                    self.errors += 1
+                    logger.error("%s", RedactingFilter().redact(str(exc)))
+                    self._store_failed(symbol, exc)
                 except (ProviderError, ValueError) as exc:
                     self.errors += 1
                     logger.error("%s: %s: %s", symbol, type(exc).__name__, exc)
@@ -280,6 +294,16 @@ class _Ingest:
         entry = self.manifest.symbols.get(symbol)
         if entry is not None and name in STALE_ON_FAILED_FETCH:
             manifest_mod.mark_fetch_failed(entry, self.d_g, self._note(symbol))
+
+    def _store_failed(self, symbol: str, exc: RecordWriteFailed) -> None:
+        text = RedactingFilter().redact(str(exc))[:MAX_ERROR_CHARS]
+        self.report.errors.append({"symbol": symbol, "provider": STORE_ERROR, "error": text})
+
+    def _put_record(self, symbol: str, record: pd.DataFrame) -> None:
+        try:
+            store_mod.put_record(self.store, symbol, record)
+        except store_mod.STORE_ERRORS as exc:
+            raise RecordWriteFailed(symbol, exc) from exc
 
     def _refreshed(self, symbol: str) -> None:
         tier, _ = self._tier_income(symbol)
@@ -338,7 +362,7 @@ class _Ingest:
         record = None if frame.empty else provider_rows_to_record(frame)
         if record is not None:
             # Stored before the catalog names it: a failed upload leaves no entry behind.
-            store_mod.put_record(self.store, symbol, record)
+            self._put_record(symbol, record)
             self._refreshed(symbol)
         tier, income = self._tier_income(symbol)
         if entry is None:
@@ -379,6 +403,7 @@ class _Ingest:
             return
         provider_name, _ = self._provider(symbol)
         frame = self._fetch_daily(symbol, tail_start(anchor))
+        fetched_before = entry.fetched_at
         entry.fetched_at = self.clock().astimezone(UTC).isoformat()
         if frame.empty:
             entry.status = "unavailable"
@@ -389,7 +414,11 @@ class _Ingest:
             return
         spliced, adjusted_through = splice_tail(record, frame, anchor)
         if adjusted_through != anchor:
-            store_mod.put_record(self.store, symbol, spliced)
+            try:
+                self._put_record(symbol, spliced)
+            except RecordWriteFailed:
+                entry.fetched_at = fetched_before  # the entry stays as it was
+                raise
             self._refreshed(symbol)
             entry.last_date = entry.adjusted_through = adjusted_through
         if entry.source == "seed":

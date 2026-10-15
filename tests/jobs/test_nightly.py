@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -556,3 +557,96 @@ def test_entry_point_uses_the_real_providers_by_default(unpublished, monkeypatch
     monkeypatch.setenv("PS_STORE", "local")
     monkeypatch.setenv("PS_LOCAL_STORE_DIR", str(unpublished.root))
     assert nightly.main() == 2
+
+
+class _FailingPuts(_Recording):
+    """R2 answering 500 InternalError, retries spent, on the chosen keys."""
+
+    def __init__(self, inner, keys: set[str]):
+        super().__init__(inner)
+        self.failing = keys
+
+    def put(self, key, data):
+        if key in self.failing:
+            from botocore.exceptions import ClientError
+
+            raise ClientError(
+                {
+                    "Error": {"Code": "InternalError", "Message": "Please try again."},
+                    "ResponseMetadata": {"HTTPStatusCode": 500},
+                },
+                "PutObject",
+            )
+        return super().put(key, data)
+
+
+class _Tail(_NoData):
+    """One new session of prices for the chosen symbols, nothing for the rest."""
+
+    def __init__(self, name: str, rows: dict[str, tuple[Any, float]]):
+        super().__init__(name)
+        self.rows = rows
+
+    def fetch_daily(self, symbol, start, end=None):
+        self.calls.append(symbol)
+        if symbol not in self.rows:
+            return empty_frame()
+        day, close = self.rows[symbol]
+        return pd.DataFrame(
+            {"close": [close], "adj_close": [close], "div_cash": [0.0], "split_factor": [1.0]},
+            index=pd.DatetimeIndex([day], name="date"),
+        )
+
+
+def _one_session_behind(store, symbols, d_g) -> dict[str, tuple[Any, float]]:
+    """Cut each record back by its last session; returns that session's row to fetch again."""
+    catalog = manifest_mod.load_manifest(store)
+    rows = {}
+    for symbol in symbols:
+        record = store_mod.get_record(store, symbol)
+        last = record.iloc[-1]
+        rows[symbol] = (pd.Timestamp(last["date"]), float(last["close"]))
+        record = record.iloc[:-1]
+        store_mod.put_record(store, symbol, record)
+        entry = catalog.symbols[symbol]
+        entry.last_date = entry.adjusted_through = record["date"].iloc[-1].date()
+    manifest_mod.write_catalog(store, catalog, NOW)
+    return rows
+
+
+def test_a_record_write_that_fails_is_that_symbols_error_and_the_run_publishes(
+    unpublished, generation, d_g
+):
+    rows = _one_session_behind(unpublished, ["VTI", "BND"], d_g)
+    before = manifest_mod.load_manifest(unpublished).symbols["VTI"]
+    store: Any = _FailingPuts(unpublished._inner, {"prices/VTI.parquet"})
+    providers = {"tiingo": _Tail("tiingo", rows), "tsp": _NoData("tsp")}
+    status = nightly.run(store=store, now=NOW, providers=providers, build_fn=_FastBuild())
+    failed = [error for error in status["errors"] if error.get("provider") == "store"]
+    assert [error["symbol"] for error in failed] == ["VTI"]
+    assert failed[0]["step"] == "refresh" and "InternalError" in failed[0]["error"]
+    # VTI keeps its previous record and entry; BND, after it in the walk, was refreshed.
+    after = manifest_mod.load_manifest(store).symbols
+    assert after["VTI"].last_date == before.last_date
+    assert after["VTI"].fetched_at == before.fetched_at
+    assert store_mod.get_record(store, "VTI")["date"].iloc[-1] < rows["VTI"][0]
+    assert after["BND"].last_date == rows["BND"][0].date()
+    assert status["published"] is True and status["finished"]
+    assert store_mod.get_json(store, "meta/current.json")["generation"] == generation
+
+
+def test_a_new_symbol_whose_record_write_fails_gets_no_entry(unpublished):
+    store: Any = _FailingPuts(unpublished._inner, {"prices/NEWF.parquet"})
+    rows = {"NEWF": (pd.Timestamp("2026-10-12"), 10.0)}
+    report = download.RunReport()
+    download.run(
+        "catch-up",
+        store=store,
+        providers={"tiingo": _Tail("tiingo", rows)},
+        clock=lambda: NOW,
+        sleep=lambda seconds: None,
+        symbols=["NEWF"],
+        report=report,
+    )
+    assert report.exit_code == 1 and report.errors[0]["symbol"] == "NEWF"
+    assert "NEWF" not in manifest_mod.load_manifest(store).symbols

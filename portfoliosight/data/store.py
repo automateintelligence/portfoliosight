@@ -38,6 +38,12 @@ SCOPE_HINT = (
 )
 _MISSING_CODES = {"404", "NoSuchKey", "NotFound"}
 _CONDITION_CODES = {"PreconditionFailed", "ConditionalRequestConflict"}
+# Retries after the first attempt (botocore standard mode: exponential backoff with jitter, up to
+# 20 s apart); R2 answers an occasional 500 InternalError that a later attempt gets through.
+R2_RETRIES = 7
+# What a store call raises once its retries are spent: the S3 client's errors, or the file
+# system's for a LocalStore. A caller that can carry on without one write catches these.
+STORE_ERRORS: tuple[type[Exception], ...] = (ClientError, BotoCoreError, OSError)
 _CLIENT_LOGGERS = ("boto3", "botocore", "s3transfer", "urllib3")
 
 
@@ -174,7 +180,7 @@ class R2Store:
             aws_access_key_id=os.environ[names[1]],
             aws_secret_access_key=os.environ[names[2]],
             config=Config(
-                retries={"max_attempts": 3, "mode": "standard"},
+                retries={"max_attempts": R2_RETRIES, "mode": "standard"},
                 connect_timeout=15,
                 read_timeout=60,
             ),
