@@ -1,7 +1,7 @@
 import { Share2 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import type { Tensor } from "../api/tensor";
-import { capsRule, lookbackNames, plain, technical } from "../copy";
+import { adminLine, adminTag, capsRule, lookbackNames, plain, technical } from "../copy";
 import { pctPlain } from "../format";
 import { LOOKBACKS, type Cap, type LookbackId } from "../state/store";
 
@@ -14,6 +14,8 @@ type Props = {
   details: boolean;
   busy: boolean;
   problem: string | null;
+  /** Set in admin mode (engines spec 6.2): the menu limit it allows. */
+  adminMenuMax: number | null;
   onLookback: (lookback: LookbackId) => void;
   onGhost: (lookback: LookbackId) => void;
   onCaps: (caps: Cap[]) => void;
@@ -54,7 +56,7 @@ export function validateCaps(ids: string[], draft: Draft, defaultMaxPct: number)
   return errors;
 }
 
-export function Settings({ tensor, lookback, ghosts, caps, unavailable, details, busy, problem, onLookback, onGhost, onCaps, onShare }: Props) {
+export function Settings({ tensor, lookback, ghosts, caps, unavailable, details, busy, problem, adminMenuMax, onLookback, onGhost, onCaps, onShare }: Props) {
   const uid = useId();
   const funds = tensor.universe.funds;
   const ids = funds.map((f) => f.id);
@@ -92,6 +94,14 @@ export function Settings({ tensor, lookback, ghosts, caps, unavailable, details,
 
   return (
     <div className="set-grid">
+      {adminMenuMax !== null && (
+        <p className="hint admin-line">
+          <span className="admin-tag" data-testid="admin-tag">
+            {adminTag}
+          </span>
+          <span>{adminLine(adminMenuMax)}</span>
+        </p>
+      )}
       <div className="set-block">
         <h3 className="heading">Years of history</h3>
         <div className="opts" role="radiogroup" aria-label="Years of history">

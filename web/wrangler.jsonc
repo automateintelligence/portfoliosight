@@ -24,6 +24,8 @@
     "SHARE_CAP_IP_MINUTE": "1",
     "SHARE_CAP_IP_DAY": "3",
     "SHARE_CAP_GLOBAL_DAY": "50",
-    "PS_PRIVATE_PREVIEW": "1"
+    "PS_PRIVATE_PREVIEW": "1",
+    "PS_MENU_MAX_PUBLIC": "30",
+    "PS_MENU_MAX_ADMIN": "100"
   }
 }

@@ -487,6 +487,72 @@ Gate, same hour: A-PS-55 red (2 of 4: `api.portfoliosight.ai` does not resolve),
 (2 of 3, same cause), A-PS-58 red (the backup exits 2 on this drive, so the mirror and
 restore-dry-run legs fail, and the crontab leg counts the conductor's two lines as well).
 
+## Admin mode: menus of up to 100 funds (2026-10-15)
+
+Owner decision 2026-10-15: 30 funds a menu for the public, 100 in admin mode (engines spec §6.2,
+demo spec §6 "Menu limit by access tier"). Admin mode is a browser cookie made from the Worker
+secret `PS_ADMIN_SECRET`, its own value (never `PS_GATE_SECRET`'s). Only the Worker holds it: the
+API trusts `x-ps-tier: admin` beside the gate secret, so KS-001 needs nothing new. That makes
+`PS_GATE_SECRET` the API's tier anchor too: whoever holds it (it is also the `?k=` preview key)
+can call `api.portfoliosight.ai` directly with `x-ps-gate` and `x-ps-tier: admin` and get the
+admin limit. Keep the preview key owner-only; if a `?k=` link was ever shared, rotate the gate
+secret (step 6, "If the gate secret is ever changed"), and give the Worker and the API a
+separate origin secret before a paid tier depends on this. The limits are
+the Worker vars `PS_MENU_MAX_PUBLIC` / `PS_MENU_MAX_ADMIN` and the API settings of the same names
+(defaults 30 and 100; keep the two places equal if either changes).
+
+Done 2026-10-15 from the laptop: the secret was generated once (32 random bytes as 64 hex
+characters, appended to the laptop env file as one `PS_ADMIN_SECRET=` line, never printed) and
+set on the Worker from the file on stdin:
+
+```
+f=~/.secrets/portfoliosight.env
+grep -q '^PS_ADMIN_SECRET=' "$f" || printf 'PS_ADMIN_SECRET=%s\n' "$(openssl rand -hex 32)" >> "$f"
+cd web && (set -a; . "$f"; set +a; printf '%s' "$PS_ADMIN_SECRET" | npx wrangler secret put PS_ADMIN_SECRET)
+```
+
+**Turn admin mode on** (once per browser; the cookie lasts 180 days): read the value of
+`PS_ADMIN_SECRET` in `~/.secrets/portfoliosight.env` and open
+
+    https://portfoliosight.ai/?admin=<PS_ADMIN_SECRET>
+
+The site redirects to the same page without the parameter and sets the `ps_admin` cookie
+(HttpOnly, Secure, SameSite=Strict). Settings then shows an "Admin" tag and the funds list says
+"Up to 100 funds." While the private preview is on, open the preview link (`?k=`) first, or
+both at once (`?k=<PS_GATE_SECRET>&admin=<PS_ADMIN_SECRET>`). A wrong value is ignored with no
+message. The typed address, with the secret, stays in that browser's history; clear it there if
+the browser is shared, and it also passes through Cloudflare's request logs for the zone:
+rotation (below), not clearing history, is the remedy if the value may have been seen.
+**Turn it off**: `https://portfoliosight.ai/?admin=off`.
+
+**Rotate the secret** (voids every admin cookie at once): replace the line and set the Worker
+secret again, then open the admin link with the new value.
+
+```
+f=~/.secrets/portfoliosight.env
+sed -i '/^PS_ADMIN_SECRET=/d' "$f" && printf 'PS_ADMIN_SECRET=%s\n' "$(openssl rand -hex 32)" >> "$f"
+cd web && (set -a; . "$f"; set +a; printf '%s' "$PS_ADMIN_SECRET" | npx wrangler secret put PS_ADMIN_SECRET)
+```
+
+Check, with the gate header and a cookie jar (the value is read from the file, never typed):
+`GET /api/tier` without the cookie answers `{"tier":"public","menu_max":30}`; after
+`GET /?admin=$PS_ADMIN_SECRET` with `-c jar`, `GET /api/tier` with `-b jar` answers
+`{"tier":"admin","menu_max":100}`; a request with a forged `x-ps-tier: admin` header and no
+cookie answers public.
+
+Checked live 2026-10-15 after `make deploy-backend` (image `5a085ff`) and `make deploy-frontend`
+(Worker version `44efa895-6fc4-4dc4-b757-497c27d0b449`), with the gate header:
+
+| Check | Result |
+|---|---|
+| `GET /api/tier`, no cookie | `{"tier":"public","menu_max":30}` |
+| the same with a forged `x-ps-tier: admin` (and with a forged `ps_admin` cookie) | public, 30 |
+| `GET /?u=tsp&admin=<secret>` | 302 to `/?u=tsp`, `ps_admin` cookie set |
+| `GET /api/tier` with that cookie | `{"tier":"admin","menu_max":100}` |
+| `GET /?admin=<wrong>` | 302 to `/`, no cookie |
+| `GET /?admin=off` | 302, `ps_admin=; …; Max-Age=0` |
+| `POST /api/tensors`, 31 funds and lookback `4y` (refused before any build) | public and forged header: `funds` "at most 30" and `lookback`; admin cookie: `lookback` only |
+
 ## Measured
 
 - Provider tier and limits: Tiingo Starter; 45 requests per hour, 900 per day, 450 unique symbols

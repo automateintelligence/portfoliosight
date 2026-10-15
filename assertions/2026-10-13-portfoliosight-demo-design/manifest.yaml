@@ -411,7 +411,7 @@ assertions:
     level: spec
     kind: example
   - id: A-PS-52
-    claim: "web/dist after npm run build contains none of the secret values from the env file, neither the string x-ps-gate nor PS_GATE_SECRET, nor the host api.portfoliosight.ai; every API call in the bundle targets a same-origin /api/ path."
+    claim: "web/dist after npm run build contains none of the secret values from the env file, neither the strings x-ps-gate, PS_GATE_SECRET, x-ps-tier, PS_ADMIN_SECRET nor ps_admin, nor the host api.portfoliosight.ai; every API call in the bundle targets a same-origin /api/ path."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_52_bundle_no_secret.py"
     setup: ""
     teardown: ""
