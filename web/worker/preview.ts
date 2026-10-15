@@ -31,14 +31,20 @@ export async function secretEquals(candidate: string | null | undefined, secret:
   return crypto.subtle.timingSafeEqual(a, b);
 }
 
-/** The cookie value for a secret: a keyed digest, so the cookie proves knowledge without carrying it. */
-export async function previewCookieValue(secret: string): Promise<string> {
+/** hex(HMAC-SHA256(key = secret, message = label)): proves knowledge of the secret without carrying it. */
+export async function cookieProof(secret: string, label: string): Promise<string> {
   const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(PREVIEW_COOKIE)));
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(label)));
   return Array.from(mac, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function cookieValues(header: string | null, name: string): string[] {
+/** The cookie value for a secret: a keyed digest, so the cookie proves knowledge without carrying it. */
+export function previewCookieValue(secret: string): Promise<string> {
+  return cookieProof(secret, PREVIEW_COOKIE);
+}
+
+/** Every value the request's `Cookie` header gives `name` (a browser may send a name twice). */
+export function cookieValues(header: string | null, name: string): string[] {
   if (header === null) return [];
   const values: string[] = [];
   for (const part of header.split(";")) {
@@ -48,19 +54,19 @@ function cookieValues(header: string | null, name: string): string[] {
   return values;
 }
 
-function isKeyParam(part: string): boolean {
+function isParam(part: string, name: string): boolean {
   const eq = part.indexOf("=");
   const rawName = (eq === -1 ? part : part.slice(0, eq)).replaceAll("+", " ");
   try {
-    return decodeURIComponent(rawName) === "k";
+    return decodeURIComponent(rawName) === name;
   } catch {
     return false;
   }
 }
 
-/** The same URL without the `k` parameter; the rest of the query is kept byte for byte. */
-function withoutKey(url: URL): string {
-  const kept = url.search.slice(1).split("&").filter((part) => part !== "" && !isKeyParam(part));
+/** The same URL without the `name` parameter; the rest of the query is kept byte for byte. */
+export function withoutParam(url: URL, name: string): string {
+  const kept = url.search.slice(1).split("&").filter((part) => part !== "" && !isParam(part, name));
   return url.origin + url.pathname + (kept.length > 0 ? `?${kept.join("&")}` : "");
 }
 
@@ -108,7 +114,7 @@ export async function previewGate(request: Request, env: PreviewEnv): Promise<Re
     return new Response(null, {
       status: 302,
       headers: {
-        location: withoutKey(url),
+        location: withoutParam(url, "k"),
         "set-cookie": `${PREVIEW_COOKIE}=${await previewCookieValue(secret as string)}; HttpOnly; Secure; SameSite=Lax; Max-Age=${COOKIE_MAX_AGE_S}; Path=/`,
         "cache-control": "no-store",
       },

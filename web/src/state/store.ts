@@ -8,14 +8,18 @@ import {
   fetchHealth,
   fetchPresets,
   fetchSymbols,
+  fetchTier,
   getTensor,
   postTensor,
+  PUBLIC_TIER,
   type Preset,
   type PresetsBody,
   type SymbolEntry,
   type TensorAnswer,
+  type Tier,
 } from "../api/http";
 import type { Tensor } from "../api/tensor";
+import { linkTooManyFunds } from "../copy";
 import { amountsToWeights, percentTotal } from "../math/amounts";
 import { portfolioMath } from "../math/portfolio";
 import { positionOfCeiling } from "../math/view";
@@ -29,7 +33,6 @@ export type Row = { id: string; name: string; amount: number | null };
 export type BuildStatus = "idle" | "building" | "ready" | "build-retry" | "build-failed-final";
 
 export const LOOKBACKS: LookbackId[] = ["1y", "2y", "3y", "5y", "10y", "ew"];
-export const MAX_FUNDS = 30;
 export const MIN_FUNDS = 2;
 export const NOT_ENOUGH_HISTORY = "not enough shared history";
 export const NOT_LOADED_YET = "PortfolioSight's price data is not loaded yet. Please check back in a little while.";
@@ -51,6 +54,10 @@ export type State = {
   details: boolean;
   presets: PresetsBody | null;
   previewOn: boolean;
+  /** This browser's access tier and menu limit (engines spec 6.2); public until `/api/tier` answers. */
+  tier: Tier;
+  /** Why the link this page was opened with was not shown (a menu over the tier's limit). */
+  linkError: string | null;
   symbols: SymbolEntry[] | null;
   tensor: Tensor | null;
   /** Lookback of the tensor on screen (differs from `lookback` while a switch is loading). */
@@ -167,7 +174,7 @@ const menuKey = (rows: Row[], caps: Cap[]) =>
 export function createStore(init: { search: string }): Store {
   const url = decode(init.search);
   const params = new URLSearchParams(init.search.startsWith("?") ? init.search.slice(1) : init.search);
-  const unitInUrl = params.has("unit");
+  let unitInUrl = params.has("unit");
   let haveR = url.r !== null;
   let pendingUrlR = url.r !== null;
 
@@ -184,6 +191,8 @@ export function createStore(init: { search: string }): Store {
     details: url.details,
     presets: null,
     previewOn: false,
+    tier: PUBLIC_TIER,
+    linkError: null,
     symbols: null,
     tensor: null,
     tensorLookback: null,
@@ -505,10 +514,26 @@ export function createStore(init: { search: string }): Store {
     }
   }
 
+  /**
+   * Engines spec 6.2: a link whose menu is over this browser's limit is refused whole, never
+   * cut down. The page says so and opens the default view instead (a fresh page has no other).
+   */
+  function refuseLink() {
+    pendingUrlR = false;
+    haveR = false;
+    unitInUrl = false;
+    state = { ...state, preset: null, rows: [], caps: [], s: 0, t: "auto", linkError: linkTooManyFunds(state.tier.menuMax) };
+    emit();
+  }
+
   async function start() {
     if (started || halted) return;
     started = true;
-    const custom = state.preset === null && state.rows.length > 0;
+    let custom = state.preset === null && state.rows.length > 0;
+    const tierJob = fetchTier().then(
+      (tier) => set({ tier }, false),
+      (err) => void guard(err),
+    );
     const presetsJob = fetchPresets().then(
       ({ body, previewOn }) => set({ presets: body, previewOn }, false),
       (err) => {
@@ -525,11 +550,22 @@ export function createStore(init: { search: string }): Store {
     );
     const symbolsJob = ensureSymbols();
     if (custom) {
-      // The catalog tells which of the URL's funds have verified current data before the one POST.
-      await symbolsJob;
-    } else {
+      // The catalog tells which of the URL's funds have verified current data, and the tier how
+      // many funds this browser may ask for, before the one POST.
+      await Promise.all([symbolsJob, tierJob]);
+      if (halted) return;
+      if (state.rows.length > state.tier.menuMax) {
+        custom = false;
+        refuseLink();
+      }
+    }
+    if (!custom) {
       await presetsJob;
-      if (halted || !state.presets) return;
+      if (halted) return;
+      if (!state.presets) {
+        if (!state.loadError) set({ loadError: "The ready-made portfolios could not be loaded. Reload to try again." }, false);
+        return;
+      }
       const preset = state.presets.presets.find((p) => p.id === state.preset) ?? state.presets.presets[0];
       if (!preset) return;
       adoptPreset(preset, unitInUrl);
@@ -544,7 +580,7 @@ export function createStore(init: { search: string }): Store {
   /** A change to the menu or its caps: drop per-menu data and load the current lookback again. */
   function menuChanged(patch: Partial<State>) {
     pendingUrlR = false;
-    set({ ...patch, ghostTensors: {}, unavailable: {}, menuError: null });
+    set({ ...patch, ghostTensors: {}, unavailable: {}, menuError: null, linkError: null });
     void load(state.lookback);
     for (const g of state.ghosts) void loadGhost(g);
   }
@@ -633,8 +669,9 @@ export function createStore(init: { search: string }): Store {
         return;
       }
       case "useMenu": {
-        const rows = action.rows.slice(0, MAX_FUNDS);
-        if (rows.length < MIN_FUNDS) return;
+        // The funds table never offers more than the tier allows; a longer list is refused, not cut.
+        const rows = action.rows;
+        if (rows.length < MIN_FUNDS || rows.length > state.tier.menuMax) return;
         const sameFunds = menuKey(rows, []) === menuKey(state.rows, []);
         if (sameFunds) {
           set({ rows, preset: null });
