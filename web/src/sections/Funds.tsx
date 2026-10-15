@@ -2,10 +2,10 @@ import { Eraser, Percent, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SymbolEntry } from "../api/http";
 import type { Tensor } from "../api/tensor";
-import { fundsTotal, plain } from "../copy";
+import { fundsTotal, fundsUpTo, menuFull, menuNeedsMore, plain } from "../copy";
 import { amountText, money, parseAmount, pct } from "../format";
 import { amountsToWeights, percentShown, percentTotal, scaleTo100 } from "../math/amounts";
-import { MAX_FUNDS, MIN_FUNDS, type Row, type Unit } from "../state/store";
+import { MIN_FUNDS, type Row, type Unit } from "../state/store";
 
 type Props = {
   rows: Row[];
@@ -16,6 +16,8 @@ type Props = {
   setAside: number | null;
   menuError: string | null;
   busy: boolean;
+  /** The most funds a menu may hold for this browser's access tier (engines spec 6.2). */
+  menuMax: number;
   /** Weights of the point selected in the chart, in the tensor's fund order. */
   selected: number[] | null;
   onUnit: (unit: Unit) => void;
@@ -57,7 +59,7 @@ function AmountInput({ id, value, unit, onCommit }: { id: string; value: number 
 const sameIds = (a: Row[], b: Row[]) => a.length === b.length && [...a.map((r) => r.id)].sort().join(",") === [...b.map((r) => r.id)].sort().join(",");
 
 /** Funds & amounts: the menu, the ways to enter it, and the two mixes side by side (spec 3.3). */
-export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuError, busy, selected, onUnit, onAmount, onUseMenu, onNeedSymbols }: Props) {
+export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuError, busy, menuMax, selected, onUnit, onAmount, onUseMenu, onNeedSymbols }: Props) {
   // Adding or removing funds edits a draft; amounts of the menu in use apply as they are typed.
   const [draft, setDraft] = useState<Row[] | null>(null);
   const [query, setQuery] = useState("");
@@ -73,7 +75,7 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
   const anyAmount = list.some((r) => r.amount !== null);
   const total = percentTotal(list.map((r) => r.amount));
   const pctBlocked = unit === "pct" && anyAmount && !total.ok;
-  const countBlocked = list.length < MIN_FUNDS || list.length > MAX_FUNDS;
+  const countBlocked = list.length < MIN_FUNDS || list.length > menuMax;
   const sum = list.reduce((acc, r) => acc + (r.amount ?? 0), 0);
 
   // The fund list on screen differs from the one plotted: only then is there anything to recalculate.
@@ -102,7 +104,7 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
   const add = (sym: { id: string; name?: string | null }) => {
     setQuery("");
     if (list.some((r) => r.id === sym.id)) return setAddError(`${sym.id} is already in the menu.`);
-    if (list.length >= MAX_FUNDS) return setAddError(`A menu holds at most ${MAX_FUNDS} funds.`);
+    if (list.length >= menuMax) return setAddError(menuFull(menuMax));
     setAddError("");
     edit([...list, { id: sym.id, name: sym.name ?? sym.id, amount: rows.find((r) => r.id === sym.id)?.amount ?? null }]);
   };
@@ -194,7 +196,7 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
           </button>
         </div>
       )}
-      {countBlocked && <p className="err">{list.length < MIN_FUNDS ? `A menu needs at least ${MIN_FUNDS} funds.` : `A menu holds at most ${MAX_FUNDS} funds.`}</p>}
+      {countBlocked && <p className="err">{list.length < MIN_FUNDS ? menuNeedsMore(MIN_FUNDS) : menuFull(menuMax)}</p>}
       {menuError && (
         <p className="err" role="alert">
           {menuError}
@@ -284,7 +286,7 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
             {addError}
           </p>
         )}
-        <p className="hint">{plain.symbolsHelp}</p>
+        <p className="hint" data-testid="funds-limit">{`${fundsUpTo(menuMax)} ${plain.symbolsHelp}`}</p>
       </div>
     </div>
   );

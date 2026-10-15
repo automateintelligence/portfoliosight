@@ -727,3 +727,57 @@ test("the sidebar's amount column holds 1,000,000 and the sidebar leaves the cha
     for (const [head, n] of lines) expect(n, `${theme} ${width}: ${head} lines`).toBeLessThanOrEqual(head === "amount-head" ? (width >= 1280 ? 1 : 2) : 3);
   }
 });
+
+// Menu size by access tier (engines spec 6.2): the page reads its limit from /api/tier.
+const mockFunds = (n: number, from = 1) => Array.from({ length: n }, (_, i) => `MOCKF${String(from + i).padStart(3, "0")}`);
+const addFund = async (page: Page, id: string) => {
+  await page.getByTestId("fund-add").fill(id);
+  await page.getByTestId("fund-add").press("Enter");
+};
+
+test("the funds picker: the 31st fund is refused for the public and accepted for an admin", async ({ page, request }) => {
+  await request.post("/__mock/config", { data: { manySymbols: true } });
+  await open(page, `f=${mockFunds(30).join(",")}`);
+  await section(page, "funds");
+  await expect(page.getByTestId("funds-limit")).toContainText("Up to 30 funds.");
+  const before = (await posts(page)).length;
+  await addFund(page, "MOCKF031");
+  await expect(page.getByTestId("section-funds").getByRole("alert")).toHaveText("A menu holds up to 30 funds.");
+  await expect(page.getByTestId("fund-row-MOCKF031")).toHaveCount(0);
+  await expect(page.getByTestId("use-menu")).toHaveCount(0);
+  expect((await posts(page)).length, "no request for a 31st fund").toBe(before);
+  await section(page, "settings");
+  await expect(page.getByTestId("admin-tag")).toHaveCount(0);
+
+  await request.post("/__mock/config", { data: { tier: "admin" } });
+  await open(page, `f=${mockFunds(30).join(",")}`);
+  await section(page, "funds");
+  await expect(page.getByTestId("funds-limit")).toContainText("Up to 100 funds.");
+  await addFund(page, "MOCKF031");
+  await expect(page.getByTestId("fund-row-MOCKF031")).toBeVisible();
+  const sent = (await posts(page)).length;
+  await page.getByTestId("use-menu").click();
+  await expect.poll(async () => (await posts(page)).length).toBe(sent + 1);
+  expect((await posts(page)).at(-1)!.funds.length).toBe(31);
+  await section(page, "settings");
+  await expect(page.getByTestId("admin-tag")).toHaveText("Admin");
+});
+
+test("the funds picker: an admin's 101st fund is refused", async ({ page, request }) => {
+  await request.post("/__mock/config", { data: { manySymbols: true, tier: "admin" } });
+  await open(page, `f=${mockFunds(100).join(",")}`);
+  expect((await posts(page)).at(-1)!.funds.length).toBe(100);
+  await section(page, "funds");
+  await addFund(page, "MOCKF101");
+  await expect(page.getByTestId("section-funds").getByRole("alert")).toHaveText("A menu holds up to 100 funds.");
+  await expect(page.getByTestId("fund-row-MOCKF101")).toHaveCount(0);
+});
+
+test("a shared link over the public limit is refused with a message and the default view opens", async ({ page, request }) => {
+  await request.post("/__mock/config", { data: { manySymbols: true } });
+  await open(page, `f=${mockFunds(31).join(",")}&lb=5y`);
+  await expect(page.getByTestId("link-refused")).toHaveText("This menu has more funds than this site allows (30).");
+  expect(await posts(page), "nothing is built for the refused menu").toEqual([]);
+  await expect(page.getByTestId("preset-menu")).toHaveAccessibleName(/Example Portfolio/);
+  await expect.poll(() => page.url()).not.toContain("MOCKF");
+});

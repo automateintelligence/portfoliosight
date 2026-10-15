@@ -3,6 +3,8 @@
 // anything outside this process.
 //
 //   GET  /api/presets, /api/symbols, /api/health, /api/tensors/{G}/{hash}/{lookback}
+//   GET  /api/tier               {"tier": "public", "menu_max": 30}, or admin and 100 while the
+//                                "tier" switch is "admin"
 //   POST /api/tensors            (bodies are recorded)
 //   POST /api/share              (always 202; nothing is sent)
 //   POST /api/range              409 range_unavailable (the page keeps its own figure), or the
@@ -11,7 +13,8 @@
 //   GET  /__mock/posts           recorded POST /api/tensors bodies
 //   GET  /__mock/ranges          recorded POST /api/range bodies
 //   POST /__mock/config          {"stale": 3, "unavailable": "10y", "challenge": 1, "build409": 2, "ranges": true,
-//                                 "noGeneration": true}
+//                                 "noGeneration": true, "tier": "admin", "manySymbols": true}
+//                                (manySymbols adds 120 served stand-ins MOCKF001 ... MOCKF120)
 //   POST /__mock/reset           clears the switches and the recorded bodies
 import fs from "node:fs";
 import http from "node:http";
@@ -226,7 +229,12 @@ function tensorFor(hash, lookback) {
   return copy;
 }
 
-const DEFAULTS = { stale: 0, unavailable: null, challenge: 0, build409: 0, ranges: false, noGeneration: false };
+const DEFAULTS = { stale: 0, unavailable: null, challenge: 0, build409: 0, ranges: false, noGeneration: false, tier: "public", manySymbols: false };
+const MANY = Array.from({ length: 120 }, (_, i) => {
+  const id = `MOCKF${String(i + 1).padStart(3, "0")}`;
+  return { id, name: `Mock stand-in fund ${id}`, kind: "etf", tier: 3, first_date: "2010-01-04" };
+});
+const servedSymbols = () => (config.manySymbols ? { ...symbols, symbols: [...symbols.symbols, ...MANY] } : symbols);
 let config = { ...DEFAULTS };
 // As the service does: an unusable window is a failed build that is not retried (409).
 const windowUnavailable = (lookback) => ({ status: "failed", error: "window_unavailable", attempts: 1, retry: false, details: { lookback, reason: "not enough shared history", rows: 61 } });
@@ -292,7 +300,10 @@ const server = http.createServer(async (req, res) => {
   }
   if (config.noGeneration && (where === "/api/presets" || where === "/api/tensors")) return send(res, 503, noGeneration);
   if (method === "GET" && where === "/api/presets") return send(res, 200, presets, { "x-ps-source": "r2" });
-  if (method === "GET" && where === "/api/symbols") return send(res, 200, symbols, { "x-ps-source": "r2" });
+  if (method === "GET" && where === "/api/symbols") return send(res, 200, servedSymbols(), { "x-ps-source": "r2" });
+  if (method === "GET" && where === "/api/tier") {
+    return send(res, 200, config.tier === "admin" ? { tier: "admin", menu_max: 100 } : { tier: "public", menu_max: 30 });
+  }
   if (method === "GET" && where === "/api/health") {
     return send(res, 200, {
       status: "ok", version: fixture.engine_version, generation: G, asof: fixture.asof,
@@ -313,7 +324,7 @@ const server = http.createServer(async (req, res) => {
     posts.push(body);
     const ids = Array.isArray(body?.funds) ? body.funds.map((f) => String(f?.id)).sort() : [];
     const lookback = LOOKBACKS.includes(body?.lookback) ? body.lookback : "5y";
-    const known = new Set(symbols.symbols.map((s) => s.id).concat(guideFunds.map((f) => f.id)));
+    const known = new Set(servedSymbols().symbols.map((s) => s.id).concat(guideFunds.map((f) => f.id)));
     const unknown = ids.filter((id) => !known.has(id));
     if (unknown.length > 0) return send(res, 400, { error: { code: "unknown_symbols", message: "unknown symbols", details: { symbols: unknown } } });
     const hash = ids.join(",") === "SGOV,VTIP" ? H3 : H1;

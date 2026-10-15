@@ -334,6 +334,7 @@ export default function App() {
       setAside={mix?.setAside ?? null}
       menuError={state.menuError}
       busy={busy}
+      menuMax={state.tier.menuMax}
       selected={view?.weights ?? null}
       onUnit={(unit) => dispatch({ type: "setUnit", unit })}
       onAmount={(id, amount) => dispatch({ type: "setAmount", id, amount })}
@@ -365,6 +366,11 @@ export default function App() {
 
       <main className={`wrap stage${wide ? " has-side" : ""}${wide && sideOpen ? " side-open" : ""}`}>
         <div className="stage-main">
+        {state.linkError && (
+          <p className="link-refused" role="alert" data-testid="link-refused">
+            {state.linkError}
+          </p>
+        )}
         <div className="hero">
           <Chart
             ref={chartRef}
@@ -516,6 +522,7 @@ export default function App() {
               details={state.details}
               busy={busy}
               problem={state.menuError}
+              adminMenuMax={state.tier.tier === "admin" ? state.tier.menuMax : null}
               onLookback={(lookback: LookbackId) => dispatch({ type: "setLookback", lookback })}
               onGhost={(lookback: LookbackId) => dispatch({ type: "toggleGhost", lookback })}
               onCaps={(caps) => dispatch({ type: "setCaps", caps })}
