@@ -95,7 +95,7 @@ export function Settings({ tensor, lookback, ghosts, caps, unavailable, details,
   return (
     <div className="set-grid">
       {adminMenuMax !== null && (
-        <p className="hint admin-line" style={{ gridColumn: "1 / -1" }}>
+        <p className="hint admin-line">
           <span className="admin-tag" data-testid="admin-tag">
             {adminTag}
           </span>

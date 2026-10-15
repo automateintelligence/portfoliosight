@@ -475,7 +475,12 @@ restore-dry-run legs fail, and the crontab leg counts the conductor's two lines 
 Owner decision 2026-10-15: 30 funds a menu for the public, 100 in admin mode (engines spec §6.2,
 demo spec §6 "Menu limit by access tier"). Admin mode is a browser cookie made from the Worker
 secret `PS_ADMIN_SECRET`, its own value (never `PS_GATE_SECRET`'s). Only the Worker holds it: the
-API trusts `x-ps-tier: admin` beside the gate secret, so KS-001 needs nothing new. The limits are
+API trusts `x-ps-tier: admin` beside the gate secret, so KS-001 needs nothing new. That makes
+`PS_GATE_SECRET` the API's tier anchor too: whoever holds it (it is also the `?k=` preview key)
+can call `api.portfoliosight.ai` directly with `x-ps-gate` and `x-ps-tier: admin` and get the
+admin limit. Keep the preview key owner-only; if a `?k=` link was ever shared, rotate the gate
+secret (step 6, "If the gate secret is ever changed"), and give the Worker and the API a
+separate origin secret before a paid tier depends on this. The limits are
 the Worker vars `PS_MENU_MAX_PUBLIC` / `PS_MENU_MAX_ADMIN` and the API settings of the same names
 (defaults 30 and 100; keep the two places equal if either changes).
 
@@ -499,7 +504,9 @@ The site redirects to the same page without the parameter and sets the `ps_admin
 "Up to 100 funds." While the private preview is on, open the preview link (`?k=`) first, or
 both at once (`?k=<PS_GATE_SECRET>&admin=<PS_ADMIN_SECRET>`). A wrong value is ignored with no
 message. The typed address, with the secret, stays in that browser's history; clear it there if
-the browser is shared. **Turn it off**: `https://portfoliosight.ai/?admin=off`.
+the browser is shared, and it also passes through Cloudflare's request logs for the zone:
+rotation (below), not clearing history, is the remedy if the value may have been seen.
+**Turn it off**: `https://portfoliosight.ai/?admin=off`.
 
 **Rotate the secret** (voids every admin cookie at once): replace the line and set the Worker
 secret again, then open the admin link with the new value.

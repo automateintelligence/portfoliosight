@@ -1705,6 +1705,7 @@ button {
 }
 
 .admin-line {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   gap: 8px;

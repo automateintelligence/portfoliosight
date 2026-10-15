@@ -88,6 +88,16 @@ def test_a_direct_request_with_the_tier_header_alone_is_refused(paused):
     assert response.json()["error"]["code"] == "forbidden"
 
 
+def test_the_tier_header_with_a_wrong_gate_value_is_refused(paused):
+    for gate in ("wrong-value", GATE[:-1], GATE + "0"):
+        response = paused.post(
+            "/v1/tensors",
+            json=_menu(31),
+            headers={"x-ps-gate": gate, "CF-Connecting-IP": fresh_ip(), **ADMIN},
+        )
+        assert response.status_code == 403, gate
+
+
 # ---------------------------------------------------------------- settings
 
 

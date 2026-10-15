@@ -124,6 +124,29 @@ describe("admin link and tier", () => {
     expect(e.assetCalls).toEqual([]);
   });
 
+  it("duplicates, a bare or encoded name and HEAD: the first value decides and every copy is stripped", async () => {
+    const worker = await loadWorker();
+    const e = makeEnv();
+    const cookieOf = (res: Response) => (res.headers.get("set-cookie") ?? "").split(";")[0];
+    const offFirst = await call(worker, e.env, `${SITE}/?admin=off&u=tsp&admin=${ADMIN}`);
+    expect(offFirst.headers.get("location")).toBe(`${SITE}/?u=tsp`);
+    expect(cookieOf(offFirst)).toBe("ps_admin=");
+    const secretFirst = await call(worker, e.env, `${SITE}/?admin=${ADMIN}&admin=x`);
+    expect(secretFirst.headers.get("location")).toBe(`${SITE}/`);
+    expect(cookieOf(secretFirst)).toBe(adminCookie);
+    const bare = await call(worker, e.env, `${SITE}/?u=tsp&admin`);
+    expect(bare.status).toBe(302);
+    expect(bare.headers.get("location")).toBe(`${SITE}/?u=tsp`);
+    expect(bare.headers.get("set-cookie")).toBeNull();
+    const encoded = await call(worker, e.env, `${SITE}/?%61dmin=${ADMIN}&lb=5y`);
+    expect(encoded.headers.get("location")).toBe(`${SITE}/?lb=5y`);
+    expect(cookieOf(encoded)).toBe(adminCookie);
+    const head = await call(worker, e.env, `${SITE}/?admin=${ADMIN}`, { method: "HEAD" });
+    expect(head.status).toBe(302);
+    expect(cookieOf(head)).toBe(adminCookie);
+    expect(e.assetCalls).toEqual([]);
+  });
+
   it("?admin=off clears the cookie", async () => {
     const worker = await loadWorker();
     const e = makeEnv();
