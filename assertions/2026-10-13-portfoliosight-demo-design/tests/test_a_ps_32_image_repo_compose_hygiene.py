@@ -5,7 +5,7 @@ Claim: the built image contains no `runs/`, no `data/holdings/*` other than
 `holdings_guide2017_step2.csv`, no `.venv`, `web/node_modules` or `web/dist`; neither the image
 nor any git-tracked file contains any secret value from `~/.secrets/portfoliosight.env` or the
 string `qse.env`; `deploy/docker-compose.yml` mounts only the named volume `ps-cache` at
-`/app/cache`, publishes only `127.0.0.1:8010:8000`, sets `cpus: "2"`, `memory: 1536M`,
+`/app/cache`, publishes only `127.0.0.1:8010:8000`, sets `cpus: "4"`, `memory: 1536M`,
 `PS_CACHE_MAX_MB=300`, `PS_STORE=r2`; and the image runs as uid 10001.
 
 Pinned interface (the product must provide exactly this): `deploy/Dockerfile` (buildable with the
@@ -204,8 +204,8 @@ def test_compose_leg():
 
     resources = (api.get("deploy") or {}).get("resources") or {}
     limits, reservations = resources.get("limits") or {}, resources.get("reservations") or {}
-    assert str(limits.get("cpus")) in ("2", "2.0") and str(limits.get("memory")) == "1536M", (
-        f"A-PS-32 red: api limits must be cpus 2 / memory 1536M, are {limits}"
+    assert str(limits.get("cpus")) in ("4", "4.0") and str(limits.get("memory")) == "1536M", (
+        f"A-PS-32 red: api limits must be cpus 4 / memory 1536M, are {limits}"
     )
     assert str(reservations.get("cpus")) == "0.5" and str(reservations.get("memory")) == "256M", (
         f"A-PS-32 red: api reservations must be cpus 0.5 / memory 256M, are {reservations}"

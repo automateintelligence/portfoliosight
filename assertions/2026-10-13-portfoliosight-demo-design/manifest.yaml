@@ -251,7 +251,7 @@ assertions:
     level: spec
     kind: contract
   - id: A-PS-32
-    claim: "The built image holds no runs/, no holdings other than the Step 2 CSV, no .venv, web/node_modules or web/dist; neither the image nor any git-tracked file contains a secret value or the string qse.env; deploy/docker-compose.yml mounts only ps-cache at /app/cache, publishes only 127.0.0.1:8010:8000, sets cpus 2, memory 1536M, PS_CACHE_MAX_MB=300, PS_STORE=r2; and the image runs as uid 10001."
+    claim: "The built image holds no runs/, no holdings other than the Step 2 CSV, no .venv, web/node_modules or web/dist; neither the image nor any git-tracked file contains a secret value or the string qse.env; deploy/docker-compose.yml mounts only ps-cache at /app/cache, publishes only 127.0.0.1:8010:8000, sets cpus 4, memory 1536M, PS_CACHE_MAX_MB=300, PS_STORE=r2; and the image runs as uid 10001."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_32_image_repo_compose_hygiene.py"
     setup: ""
     teardown: ""

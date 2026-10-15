@@ -908,7 +908,7 @@ Phase 2 · static (image build when `docker` is available, else the ignore-rule 
   `holdings_guide2017_step2.csv`, no `.venv`, `web/node_modules` or `web/dist`; neither the
   image nor any git-tracked file contains any secret value from `~/.secrets/portfoliosight.env`
   or the string `qse.env`; `deploy/docker-compose.yml` mounts only the named volume `ps-cache`
-  at `/app/cache`, publishes only `127.0.0.1:8010:8000`, sets `cpus: "2"`, `memory: 1536M`,
+  at `/app/cache`, publishes only `127.0.0.1:8010:8000`, sets `cpus: "4"`, `memory: 1536M`,
   `PS_CACHE_MAX_MB=300`, `PS_STORE=r2`; and the image runs as uid 10001.
 - **Setup.** The repository at HEAD; `docker build -f deploy/Dockerfile .` when available; the
   env file's values read by the test (never printed); a planted file `data/holdings/
