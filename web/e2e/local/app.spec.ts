@@ -830,3 +830,49 @@ test("the sidebar's amount column holds 1,000,000 and the sidebar leaves the cha
     for (const [head, n] of lines) expect(n, `${theme} ${width}: ${head} lines`).toBeLessThanOrEqual(head === "amount-head" ? (width >= 1280 ? 1 : 2) : 3);
   }
 });
+
+test("in dollars the strip's parts stay inside it and apart, with the sidebar open or closed and for large amounts", async ({ page }, testInfo) => {
+  const phone = isPhone(testInfo.project.name);
+  const views = ["u=guide2017&lb=5y", "f=SGOV:60000,VTIP:38900&unit=shares", "f=SGOV:150000,VTIP:20000&unit=shares"];
+  const widths = phone ? [null] : [1280, 1366, 1920];
+  for (const width of widths) {
+    if (width) await page.setViewportSize({ width, height: 860 });
+    for (const query of views) {
+      for (const side of phone ? [false] : [false, true]) {
+        await open(page, query);
+        await expect(page.getByTestId("strip-sub")).toHaveText(/on your \$/);
+        if (!phone) {
+          // the sidebar remembers its state in this browser: set it either way
+          const funds = page.getByTestId("section-funds");
+          if ((await funds.getAttribute("aria-expanded")) !== String(side)) await page.getByTestId("funds-toggle").click();
+          await expect(funds).toHaveAttribute("aria-expanded", String(side));
+        }
+        await page.evaluate(() => document.fonts.ready);
+        const where = `${width ?? "phone"} ${query} sidebar ${side ? "open" : "closed"}`;
+        const got = await page.evaluate(() => {
+          const r = (el: Element | null) => (el ? el.getBoundingClientRect() : null);
+          const strip = document.querySelector(".strip")!;
+          const range = document.querySelector(".range")!;
+          const pad = parseFloat(getComputedStyle(strip).paddingRight);
+          const parts = ["range-low", "range-typical", "range-high"].map((id) => r(document.querySelector(`[data-testid="${id}"]`))!);
+          const bar = r(document.querySelector(".rangebar"));
+          return {
+            overflow: range.scrollWidth - range.clientWidth,
+            inside: r(strip)!.right - pad,
+            parts: parts.map((p) => ({ left: p.left, right: p.right, top: p.top, bottom: p.bottom })),
+            bar: bar && bar.width > 0 ? { left: bar.left, right: bar.right, top: bar.top, bottom: bar.bottom } : null,
+            word: r(document.querySelector(".divword"))!,
+          };
+        });
+        expect(got.overflow, `${where}: the figures and the bar fit their row`).toBeLessThanOrEqual(0);
+        for (const p of got.parts) expect(p.right, `${where}: a figure inside the strip`).toBeLessThanOrEqual(got.inside + 0.5);
+        const apart = (a: { left: number; right: number; top: number; bottom: number }, b: typeof a) => a.right <= b.left + 0.5 || b.right <= a.left + 0.5 || a.bottom <= b.top + 0.5 || b.bottom <= a.top + 0.5;
+        for (let i = 0; i < got.parts.length; i++) for (let j = i + 1; j < got.parts.length; j++) expect(apart(got.parts[i], got.parts[j]), `${where}: figures apart`).toBe(true);
+        if (got.bar) {
+          expect(apart(got.bar, got.word), `${where}: the bar and the diversification word apart`).toBe(true);
+          for (const p of got.parts) expect(apart(got.bar, p), `${where}: the bar and a figure apart`).toBe(true);
+        }
+      }
+    }
+  }
+});

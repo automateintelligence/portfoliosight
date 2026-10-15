@@ -375,6 +375,15 @@ button {
   width: 360px;
 }
 
+/* In dollars the three figures are wider: beside the open sidebar the label takes its own row,
+   so they fit beside the bar, the word and the toggle. */
+.side-open .strip-usd .strip-label {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
 /* Between 1024 and 1279 px the open sidebar leaves the chart little room: everything tightens. */
 @media (min-width: 1024px) and (max-width: 1279px) {
   .side-open .side {
@@ -2676,6 +2685,11 @@ button {
 
   .fig-val.has-usd {
     font-size: 16px;
+  }
+
+  /* Figures of eleven characters or more ("+$2,375,639") on the phone. */
+  .fig-val.has-usd.is-long {
+    font-size: 13.5px;
   }
 
   .divword {

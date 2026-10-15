@@ -49,7 +49,9 @@ export function ResultStrip({ low, typical, high, normal, scale, value, word, de
   const both = (r: number) => (total === null ? signedPct(r) : `${signedPct(r)} (${money(r)})`);
   const spoken = rangeBarLabel(signedPct(scale.lo), signedPct(scale.hi), both(low), both(typical), both(high));
   // Each figure's column is as wide as the widest figure the scale can hold, so the bar beside them
-  // keeps its place on screen while the figures change (their font is monospaced).
+  // keeps its place on screen while the figures change (their font is monospaced). A figure past
+  // an end of the scale (rare) can be one character wider. In dollars the group's label speaks
+  // both values, so the visible text is hidden from readers to avoid a double read.
   const widest = Math.max(...[scale.lo, scale.hi].map((r) => (total === null ? signedPct(r) : (money(r) as string)).length));
   const width = { minWidth: `${widest}ch` };
   const figure = (id: string, r: number) =>
@@ -58,7 +60,7 @@ export function ResultStrip({ low, typical, high, normal, scale, value, word, de
         {signedPct(r)}
       </span>
     ) : (
-      <span className="fig-val num has-usd" data-testid={id}>
+      <span className={widest >= 11 ? "fig-val num has-usd is-long" : "fig-val num has-usd"} data-testid={id} aria-hidden="true">
         <span className="fig-usd" data-testid={`${id}-usd`} style={width}>
           {money(r)}
         </span>
@@ -70,7 +72,7 @@ export function ResultStrip({ low, typical, high, normal, scale, value, word, de
   const label = (cap: string, r: number) => (total === null ? {} : { role: "group", "aria-label": stripFigure(cap, money(r) as string, signedPct(r)) });
 
   return (
-    <section className="strip" aria-label={plain.resultStrip}>
+    <section className={total === null ? "strip" : "strip strip-usd"} aria-label={plain.resultStrip}>
       <div className="strip-label">
         <span className="heading">{plain.resultStrip}</span>
         <span className="sub" data-testid="strip-sub">
@@ -79,15 +81,15 @@ export function ResultStrip({ low, typical, high, normal, scale, value, word, de
       </div>
       <div className="range">
         <div className="fig" {...label(plain.rangeLow, low)}>
-          <span className="fig-cap">{plain.rangeLow}</span>
+          <span className="fig-cap" aria-hidden={total !== null || undefined}>{plain.rangeLow}</span>
           {figure("range-low", low)}
         </div>
         <div className="fig fig-typ" {...label(plain.rangeTypical, typical)}>
-          <span className="fig-cap">{plain.rangeTypical}</span>
+          <span className="fig-cap" aria-hidden={total !== null || undefined}>{plain.rangeTypical}</span>
           {figure("range-typical", typical)}
         </div>
         <div className="fig" {...label(plain.rangeHigh, high)}>
-          <span className="fig-cap">{plain.rangeHigh}</span>
+          <span className="fig-cap" aria-hidden={total !== null || undefined}>{plain.rangeHigh}</span>
           {figure("range-high", high)}
         </div>
         <div className="rangebar" data-testid="range-bar" role="img" aria-label={spoken} data-lo={scale.lo.toFixed(6)} data-hi={scale.hi.toFixed(6)}>
