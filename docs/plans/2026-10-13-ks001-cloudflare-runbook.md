@@ -407,7 +407,9 @@ ln -s "$HOME/.local/share/portfoliosight/bin/r2_backup.sh" "$HOME/programming/po
   Until the drive is fixed the 05:30 run downloads the whole bucket each night (150 MB now,
   about 300 MB when the catch-up is complete) and adds about 1 MB of progress lines to the log.
 
-Laptop lake sync (spec §5.4, added 2026-10-15): `scripts/install_sync_lake_cron.sh` adds one
+Laptop lake sync (spec §5.4, added 2026-10-15). Order: deploy the backend image that knows
+`meta/lake.json` first (an older nightly ignores it, fetches lake symbols and writes the manifest
+without them), then install the cron. `scripts/install_sync_lake_cron.sh` adds one
 line and changes no other (`crontab -l | grep -c sync_lake.py` → 1):
 
 ```
