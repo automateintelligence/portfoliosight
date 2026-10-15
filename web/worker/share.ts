@@ -40,7 +40,8 @@ export const MAX_SHARE_BODY_BYTES = 2048;
 const MAX_SHARE_URL_CHARS = 2048;
 const MAX_ADDRESS_CHARS = 254;
 const MAX_LOCAL_PART_CHARS = 64;
-const MAX_FUNDS = 30;
+// the public menu limit (engines spec §6.2); a verified admin sender passes its own
+const PUBLIC_MAX_FUNDS = 30;
 
 // ---------------------------------------------------------------- responses
 
@@ -107,12 +108,13 @@ const matching = (pattern: RegExp): Shape => (value) => pattern.test(value);
 const pageTheme: Shape = (value) => decode(new URLSearchParams([["t", value]]).toString()).theme === value;
 
 // The spec §8.1 keys in the order the page writes them, each with the only value shape it may
-// take. A value is mailed only if it matches, so a link cannot carry free text.
-const URL_KEYS: ReadonlyArray<readonly [string, Shape]> = [
+// take. A value is mailed only if it matches, so a link cannot carry free text. A menu holds at
+// most `maxFunds` funds, the sender's own limit.
+const urlKeys = (maxFunds: number): ReadonlyArray<readonly [string, Shape]> => [
   ["u", matching(/^(?:guide2017|tsp)$/)],
-  ["f", matching(listOf(`${FUND_ID}(?::\\d{1,12}(?:\\.\\d{1,6})?)?`, MAX_FUNDS))],
+  ["f", matching(listOf(`${FUND_ID}(?::\\d{1,12}(?:\\.\\d{1,6})?)?`, maxFunds))],
   ["unit", matching(/^(?:pct|usd|shares)$/)],
-  ["c", matching(listOf(`${FUND_ID}:(?:\\d{1,3})?:(?:\\d{1,3})?`, MAX_FUNDS))],
+  ["c", matching(listOf(`${FUND_ID}:(?:\\d{1,3})?:(?:\\d{1,3})?`, maxFunds))],
   ["lb", matching(new RegExp(`^${LOOKBACK}$`))],
   ["g", matching(listOf(LOOKBACK, 6))],
   ["r", matching(/^-?\d{1,4}(?:\.\d{1,12})?$/)],
@@ -124,10 +126,11 @@ const URL_KEYS: ReadonlyArray<readonly [string, Shape]> = [
 
 /**
  * Rebuilds a submitted link from the spec §8.1 keys, or returns `null` when it is not a link to
- * this site's page, carries any other key (the preview key `k` included), repeats a key, has a
- * value outside its shape, or is longer than 2,048 characters once rebuilt.
+ * this site's page, carries any other key (the preview key `k` and `admin` included), repeats a
+ * key, has a value outside its shape (more than `maxFunds` funds included), or is longer than
+ * 2,048 characters once rebuilt.
  */
-export function reencodeShareUrl(submitted: unknown): string | null {
+export function reencodeShareUrl(submitted: unknown, maxFunds = PUBLIC_MAX_FUNDS): string | null {
   if (typeof submitted !== "string" || !submitted.startsWith(SITE_ORIGIN)) return null;
   let url: URL;
   try {
@@ -138,7 +141,7 @@ export function reencodeShareUrl(submitted: unknown): string | null {
   if (url.origin !== SITE_ORIGIN || url.username !== "" || url.password !== "") return null;
   if (url.pathname !== "/" || url.hash !== "" || submitted.includes("#")) return null;
 
-  const shapes = new Map(URL_KEYS);
+  const shapes = new Map(urlKeys(maxFunds));
   const values = new Map<string, string>();
   for (const [key, value] of url.searchParams) {
     const shape = shapes.get(key);
@@ -322,8 +325,11 @@ async function sendShareMail(env: ShareEnv, to: string, link: string): Promise<b
 
 const IP_SHAPE = /^[0-9A-Fa-f:.]{2,45}$/;
 
-/** `POST /api/share {"to", "url"}`. Validation comes first; the limiter is asked only for a sendable request. */
-export async function handleShare(request: Request, env: ShareEnv, limiter: ShareLimiterFn): Promise<Response> {
+/**
+ * `POST /api/share {"to", "url"}`. Validation comes first; the limiter is asked only for a
+ * sendable request. `maxFunds` is the sender's menu limit (its access tier).
+ */
+export async function handleShare(request: Request, env: ShareEnv, limiter: ShareLimiterFn, maxFunds = PUBLIC_MAX_FUNDS): Promise<Response> {
   if (request.headers.get("origin") !== SITE_ORIGIN) return jsonError(403, "forbidden_origin", "Shares are accepted from the site only");
   const mediaType = (request.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
   if (mediaType !== "application/json") return jsonError(415, "unsupported_media_type", "Send application/json");
@@ -340,7 +346,7 @@ export async function handleShare(request: Request, env: ShareEnv, limiter: Shar
   // only these two fields are read; anything else in the body is ignored and never mailed
   const { to, url } = body as { to?: unknown; url?: unknown };
   if (!isBareAddress(to)) return jsonError(400, "invalid_recipient", "Enter one email address");
-  const link = reencodeShareUrl(url);
+  const link = reencodeShareUrl(url, maxFunds);
   if (link === null) return jsonError(400, "invalid_url", "This view cannot be emailed; copy the link instead");
 
   const exempt = await secretEquals(request.headers.get("x-ps-gate"), env.PS_GATE_SECRET);

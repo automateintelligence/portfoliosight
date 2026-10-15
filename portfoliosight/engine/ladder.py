@@ -45,6 +45,7 @@ the risk line: the page then shows one or the other, never the blend.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -52,6 +53,7 @@ from scipy.optimize import minimize
 
 from .caps import greedy_fill
 from .optimize import Frontier, MenuPrograms, onto_risk
+from .parallel import by_column
 from .torsion import TorsionBasis, enb
 
 LEVELS = 12  # return levels strictly between the frontier mix and the peak
@@ -237,7 +239,11 @@ def open_columns(programs: MenuPrograms, front: Frontier) -> list[int]:
 
 
 def peak_pools(
-    program: EnbProgram, programs: MenuPrograms, front: Frontier, seed: int = SEED
+    program: EnbProgram,
+    programs: MenuPrograms,
+    front: Frontier,
+    seed: int = SEED,
+    workers: int = 1,
 ) -> list[Pool]:
     """One pool per column, holding the most diversified mix found at that column's risk.
 
@@ -246,22 +252,35 @@ def peak_pools(
     column's best to its neighbours. The frontier mix is a member of its pool, so the best of a
     pool never has a lower ENB than the frontier mix.
 
+    The starts that need nothing from another column are solved first, for all columns at once
+    on `workers` processes; then, column by column, the start from the column before it. Each
+    pool gains its answers in the order the starts are listed above, as if the columns had been
+    solved one after another.
+
     A column whose risk is the menu's minimum has one mix only, the frontier's, and is not
     solved.
     """
-    lowest, top = front.w[0], front.w[-1]
     pools = [Pool(program.candidate(mix)) for mix in front.w]
-    for j in open_columns(programs, front):
-        risk = float(front.x[j])
-        rng = np.random.default_rng([seed, j])
-        starts = [front.w[j]]
-        starts += [random_start(rng, program, risk, lowest, top) for _ in range(RANDOM_STARTS)]
+    opened = open_columns(programs, front)
+    answers = by_column(_own_starts, (program, front, seed), dict.fromkeys(opened), workers)
+    for j in opened:
+        for answer in answers[j]:
+            pools[j].add(answer)
         if j > 0:
-            starts.append(pools[j - 1].best().w)
-        for start in starts:
-            pools[j].add(program.solve(risk, None, start))
+            pools[j].add(program.solve(float(front.x[j]), None, pools[j - 1].best().w))
     spread_peaks(program, programs, front, pools)
     return pools
+
+
+def _own_starts(shared, j: int, _payload: None) -> list[Candidate | None]:
+    """Column `j`'s answers from its frontier mix and its random starts, in that order."""
+    program, front, seed = shared
+    risk = float(front.x[j])
+    rng = np.random.default_rng([seed, j])
+    lowest, top = front.w[0], front.w[-1]
+    starts = [front.w[j]]
+    starts += [random_start(rng, program, risk, lowest, top) for _ in range(RANDOM_STARTS)]
+    return [program.solve(risk, None, start) for start in starts]
 
 
 def spread_peaks(
@@ -335,3 +354,33 @@ def column(program: EnbProgram, risk: float, pool: Pool, levels: int = LEVELS) -
         hop=np.array(hop, dtype=bool),
         collapsed=chosen[-1] is top,
     )
+
+
+def ladders(
+    program: EnbProgram,
+    risks: Sequence[float],
+    pools: Sequence[Pool],
+    columns: Sequence[int],
+    levels: int = LEVELS,
+    workers: int = 1,
+) -> dict[int, Column]:
+    """The ladder of each column of `columns`, by index, solved on `workers` processes.
+
+    Each column's pool gains what its ladder found, in the order it was found, exactly as
+    `column` leaves it.
+    """
+    payloads = {j: (float(risks[j]), pools[j]) for j in columns}
+    laid_out = {}
+    for j, (ladder, found) in by_column(_ladder, (program, levels), payloads, workers).items():
+        pools[j].members.extend(found)
+        laid_out[j] = ladder
+    return laid_out
+
+
+def _ladder(shared, _j: int, payload: tuple[float, Pool]) -> tuple[Column, list[Candidate]]:
+    """One column's ladder, solved on a copy of its pool; the ladder and the copy's new members."""
+    program, levels = shared
+    risk, pool = payload
+    own = Pool(pool.top)
+    own.members = list(pool.members)
+    return column(program, risk, own, levels), own.members[len(pool.members) :]

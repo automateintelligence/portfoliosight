@@ -31,7 +31,7 @@ from portfoliosight.api.errors import (
     install_handlers,
     unexpected_error,
 )
-from portfoliosight.api.gate import GATE_HEADER, gate_open
+from portfoliosight.api.gate import GATE_HEADER, TIER_HEADER, caller_tier, gate_open
 from portfoliosight.api.hashing import universe_hash
 from portfoliosight.api.limiter import POSTS_PER_MINUTE, REQUESTS_PER_MINUTE, RateLimiter
 from portfoliosight.api.models import (
@@ -261,11 +261,18 @@ def create_app(
             ) from None
         return _job_response(state)
 
+    def _menu_max(request: Request) -> int:
+        """The caller's menu limit: its tier counts only beside the gate secret (gate.py)."""
+        tier = caller_tier(
+            request.headers.get(GATE_HEADER), request.headers.get(TIER_HEADER), settings.gate_secret
+        )
+        return settings.menu_max(tier)
+
     @app.post("/v1/tensors")
     async def post_tensors(request: Request) -> JSONResponse:
         if not posts_limiter.admit(_client_ip(request)):
             return _rate_limited()
-        parsed = parse_tensor_request(await _read_body(request))
+        parsed = parse_tensor_request(await _read_body(request), max_funds=_menu_max(request))
         return await run_in_threadpool(_submit, parsed)
 
     def _range(request: RangeRequest) -> JSONResponse:
@@ -274,7 +281,7 @@ def create_app(
 
     @app.post("/v1/range")
     async def post_range(request: Request) -> JSONResponse:
-        parsed = parse_range_request(await _read_body(request))
+        parsed = parse_range_request(await _read_body(request), max_funds=_menu_max(request))
         return await run_in_threadpool(_range, parsed)
 
     @app.get("/v1/tensors/{generation}/{uhash}/{lookback}")

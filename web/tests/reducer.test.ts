@@ -21,6 +21,7 @@ let calls: Call[] = [];
 let replaced: string[] = [];
 let health: () => Response;
 let tensorRoute: (call: Call) => Response;
+let tierRoute: () => Response;
 let presetsAsof = RAW.asof as string;
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
@@ -65,6 +66,7 @@ beforeEach(() => {
   replaced = [];
   presetsAsof = RAW.asof;
   health = () => json(200, { asof: RAW.asof, asof_trading_days_behind: 0 });
+  tierRoute = () => json(404, {});
   tensorRoute = (call) => (call.method === "POST" ? json(200, { status: "ready", url: `/api/tensors/${G}/${H1}/${JSON.parse(call.body as string).lookback}` }) : json(200, tensorFor(call.path.split("/").pop() as string)));
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   vi.setSystemTime(new Date(`${RAW.asof}T20:00:00Z`));
@@ -75,6 +77,7 @@ beforeEach(() => {
     if (url.pathname === "/api/presets") return json(200, presetsBody(), { "x-ps-preview": "1" });
     if (url.pathname === "/api/symbols") return json(200, { symbols: IDS.map((id) => ({ id, name: id })) });
     if (url.pathname === "/api/health") return health();
+    if (url.pathname === "/api/tier") return tierRoute();
     if (url.pathname.startsWith("/api/tensors")) return tensorRoute(call);
     return json(404, {});
   });
@@ -388,6 +391,65 @@ describe("store: transitions", () => {
     expect(localStorage.getItem("ps.theme")).toBe("light");
     const again = createStore({ search: "" });
     expect(again.getState().theme).toBe("light");
+  });
+});
+
+describe("store: menu size by access tier (engines spec 6.2)", () => {
+  const link = (n: number) => `?f=${Array.from({ length: n }, (_, i) => `${IDS[i % IDS.length]}${i < IDS.length ? "" : `X${i}`}`).join(",")}&lb=5y&r=20&d=0.3`;
+  const posted = () => tensorCalls().filter((c) => c.method === "POST").map((c) => (JSON.parse(c.body as string) as { funds: unknown[] }).funds.length);
+  const admin = () => json(200, { tier: "admin", menu_max: 100 });
+
+  it("is public with 30 funds until /api/tier says otherwise, and whenever it cannot answer", async () => {
+    const store = await boot("");
+    expect(store.getState().tier).toEqual({ tier: "public", menuMax: 30 });
+    tierRoute = () => json(200, { tier: "admin", menu_max: "lots" });
+    expect((await boot("")).getState().tier).toEqual({ tier: "public", menuMax: 30 });
+    tierRoute = admin;
+    expect((await boot("")).getState().tier).toEqual({ tier: "admin", menuMax: 100 });
+  });
+
+  it("a public visitor's link with 31 funds is refused whole: the default view and the message, no request for it", async () => {
+    const store = await boot(link(31));
+    const s = store.getState();
+    expect(s.linkError).toBe("This menu has more funds than this site allows (30).");
+    expect(posted()).toEqual([]);
+    expect(s.preset).toBe("guide2017");
+    expect(s.rows.length).toBe(IDS.length);
+    expect(s.build.status).toBe("ready");
+    expect(tensorCalls().map((c) => `${c.method} ${c.path}`)).toEqual([`GET /api/tensors/${G}/${H1}/5y`]);
+    // the refused link's position is not carried over to the default view
+    expect(s.t).toBe("auto");
+    // choosing a menu clears the message
+    store.dispatch({ type: "selectPreset", id: "tsp" });
+    await flush();
+    expect(store.getState().linkError).toBeNull();
+  });
+
+  it("a link with 30 funds opens for a public visitor", async () => {
+    const store = await boot(link(30));
+    expect(store.getState().linkError).toBeNull();
+    expect(posted()).toEqual([30]);
+  });
+
+  it("an admin opens a 31- and a 100-fund link, and a 101-fund link is refused with the admin limit", async () => {
+    tierRoute = admin;
+    expect((await boot(link(31))).getState().linkError).toBeNull();
+    expect((await boot(link(100))).getState().linkError).toBeNull();
+    expect(posted()).toEqual([31, 100]);
+    const refused = await boot(link(101));
+    expect(refused.getState().linkError).toBe("This menu has more funds than this site allows (100).");
+    expect(posted()).toEqual([31, 100]);
+  });
+
+  it("a menu over the tier's limit is never sent, and is not cut down either", async () => {
+    const store = await boot("");
+    const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `F${i}`, name: `F${i}`, amount: null }));
+    store.dispatch({ type: "useMenu", rows: rows(31) });
+    await flush();
+    expect(posted()).toEqual([]);
+    store.dispatch({ type: "useMenu", rows: rows(30) });
+    await flush();
+    expect(posted()).toEqual([30]);
   });
 });
 

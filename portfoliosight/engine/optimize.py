@@ -19,6 +19,7 @@ import cvxpy as cp
 import numpy as np
 
 from .caps import greedy_fill
+from .parallel import by_column
 
 NX = 48
 TOL = 1e-6  # the one tolerance of spec 4.11
@@ -86,7 +87,7 @@ class MenuPrograms:
         return _solve(self._frontier, self._w, f"frontier point at risk {x!r}")
 
 
-def frontier(programs: MenuPrograms, nx: int = NX) -> Frontier:
+def frontier(programs: MenuPrograms, nx: int = NX, workers: int = 1) -> Frontier:
     """Frontier nodes from the minimum-variance mix to the max-return greedy fill.
 
     The two ends are not solved for: under `X = sigma_min` the minimum-variance mix is the only
@@ -104,6 +105,9 @@ def frontier(programs: MenuPrograms, nx: int = NX) -> Frontier:
     When the two ends are within the 1e-6 tolerance in risk there is no risk axis to grid: no
     ceiling between them can be told from sigma_max, under which the greedy fill is feasible
     and earns the most. Every column then holds the greedy fill at `X = sigma_max`.
+
+    The programs of the nodes between the ends are independent of each other and are solved on
+    `workers` processes (`parallel.py`); the two corrections above then run in node order.
     """
     if nx < 2:
         raise ValueError("a frontier needs at least 2 columns")
@@ -116,18 +120,44 @@ def frontier(programs: MenuPrograms, nx: int = NX) -> Frontier:
         pinned = np.zeros(nx, dtype=bool)
     else:
         x = np.linspace(sigma_min, sigma_max, nx)
+        ceilings = {j: float(x[j]) for j in range(1, nx - 1)}
+        solved = by_column(_frontier_point, _Menu(programs), ceilings, workers, chunks_per_worker=1)
         nodes = [lowest]
-        for ceiling in x[1:-1]:
-            mix = programs.frontier_point(float(ceiling))
+        for j, ceiling in ceilings.items():
+            mix = solved[j]
             if programs.mu @ mix < programs.mu @ nodes[-1]:
                 mix = nodes[-1]
             if ceiling - programs.sigma(mix) > TOL:
-                mix = onto_risk(mix, top, float(ceiling), programs.cov)
+                mix = onto_risk(mix, top, ceiling, programs.cov)
             nodes.append(mix)
         w = np.vstack([*nodes, top])
         pinned = np.arange(nx) == 0
     y = np.array([float(programs.mu @ mix) for mix in w])  # one dot per mix, as everywhere
     return Frontier(x=x, y=y, w=w, pinned=pinned)
+
+
+class _Menu:
+    """A menu's moments and bounds for a worker, which builds its own programs from them once.
+
+    Pickling leaves the programs behind (they hold solver state); in the process that made it,
+    the menu answers with the programs it was made from.
+    """
+
+    def __init__(self, programs: MenuPrograms):
+        self.mu, self.cov, self.lo, self.hi = programs.mu, programs.cov, programs.lo, programs.hi
+        self._programs: MenuPrograms | None = programs
+
+    def __getstate__(self) -> dict:
+        return {**self.__dict__, "_programs": None}
+
+    def programs(self) -> MenuPrograms:
+        if self._programs is None:
+            self._programs = MenuPrograms(self.mu, self.cov, self.lo, self.hi)
+        return self._programs
+
+
+def _frontier_point(menu: _Menu, _j: int, ceiling: float) -> np.ndarray:
+    return menu.programs().frontier_point(ceiling)
 
 
 def onto_risk(mix: np.ndarray, top: np.ndarray, x: float, cov: np.ndarray) -> np.ndarray:

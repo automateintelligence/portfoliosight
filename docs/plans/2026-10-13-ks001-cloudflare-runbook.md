@@ -407,6 +407,23 @@ ln -s "$HOME/.local/share/portfoliosight/bin/r2_backup.sh" "$HOME/programming/po
   Until the drive is fixed the 05:30 run downloads the whole bucket each night (150 MB now,
   about 300 MB when the catch-up is complete) and adds about 1 MB of progress lines to the log.
 
+Laptop lake sync (spec §5.4, added 2026-10-15). Order: deploy the backend image that knows
+`meta/lake.json` first (an older nightly ignores it, fetches lake symbols and writes the manifest
+without them), then install the cron. `scripts/install_sync_lake_cron.sh` adds one
+line and changes no other (`crontab -l | grep -c sync_lake.py` → 1):
+
+```
+*/10 7-9 * * 1-5 $HOME/programming/portfoliosight/.venv/bin/python $HOME/programming/portfoliosight/scripts/sync_lake.py >> $HOME/.local/state/portfoliosight/sync_lake.log 2>&1
+```
+
+Weekdays every 10 minutes from 07:00 to 09:50 PT (the laptop's clock is America/Los_Angeles).
+Each poll waits until QSE's 06:45 run has rewritten `_adjusted_through.json`, syncs that run once,
+then does nothing until the next run. A run still missing at 09:50 writes a line starting
+`ALERT sync_lake` to `~/.local/state/portfoliosight/sync_lake.log` and exits 1:
+`grep ALERT ~/.local/state/portfoliosight/sync_lake.log`. It runs from the main checkout and its
+`.venv`, so `git pull` there brings changes to it. Manual run of the lake run there is:
+`.venv/bin/python scripts/sync_lake.py --force` (`--dry-run` to see the counts only).
+
 ## Second attempt on 2026-10-13 (22:30 UTC): tunnel route and backup drive
 
 Both owner steps of issue #86 were tried again from the laptop. Neither is done; nothing was
@@ -470,6 +487,72 @@ Gate, same hour: A-PS-55 red (2 of 4: `api.portfoliosight.ai` does not resolve),
 (2 of 3, same cause), A-PS-58 red (the backup exits 2 on this drive, so the mirror and
 restore-dry-run legs fail, and the crontab leg counts the conductor's two lines as well).
 
+## Admin mode: menus of up to 100 funds (2026-10-15)
+
+Owner decision 2026-10-15: 30 funds a menu for the public, 100 in admin mode (engines spec §6.2,
+demo spec §6 "Menu limit by access tier"). Admin mode is a browser cookie made from the Worker
+secret `PS_ADMIN_SECRET`, its own value (never `PS_GATE_SECRET`'s). Only the Worker holds it: the
+API trusts `x-ps-tier: admin` beside the gate secret, so KS-001 needs nothing new. That makes
+`PS_GATE_SECRET` the API's tier anchor too: whoever holds it (it is also the `?k=` preview key)
+can call `api.portfoliosight.ai` directly with `x-ps-gate` and `x-ps-tier: admin` and get the
+admin limit. Keep the preview key owner-only; if a `?k=` link was ever shared, rotate the gate
+secret (step 6, "If the gate secret is ever changed"), and give the Worker and the API a
+separate origin secret before a paid tier depends on this. The limits are
+the Worker vars `PS_MENU_MAX_PUBLIC` / `PS_MENU_MAX_ADMIN` and the API settings of the same names
+(defaults 30 and 100; keep the two places equal if either changes).
+
+Done 2026-10-15 from the laptop: the secret was generated once (32 random bytes as 64 hex
+characters, appended to the laptop env file as one `PS_ADMIN_SECRET=` line, never printed) and
+set on the Worker from the file on stdin:
+
+```
+f=~/.secrets/portfoliosight.env
+grep -q '^PS_ADMIN_SECRET=' "$f" || printf 'PS_ADMIN_SECRET=%s\n' "$(openssl rand -hex 32)" >> "$f"
+cd web && (set -a; . "$f"; set +a; printf '%s' "$PS_ADMIN_SECRET" | npx wrangler secret put PS_ADMIN_SECRET)
+```
+
+**Turn admin mode on** (once per browser; the cookie lasts 180 days): read the value of
+`PS_ADMIN_SECRET` in `~/.secrets/portfoliosight.env` and open
+
+    https://portfoliosight.ai/?admin=<PS_ADMIN_SECRET>
+
+The site redirects to the same page without the parameter and sets the `ps_admin` cookie
+(HttpOnly, Secure, SameSite=Strict). Settings then shows an "Admin" tag and the funds list says
+"Up to 100 funds." While the private preview is on, open the preview link (`?k=`) first, or
+both at once (`?k=<PS_GATE_SECRET>&admin=<PS_ADMIN_SECRET>`). A wrong value is ignored with no
+message. The typed address, with the secret, stays in that browser's history; clear it there if
+the browser is shared, and it also passes through Cloudflare's request logs for the zone:
+rotation (below), not clearing history, is the remedy if the value may have been seen.
+**Turn it off**: `https://portfoliosight.ai/?admin=off`.
+
+**Rotate the secret** (voids every admin cookie at once): replace the line and set the Worker
+secret again, then open the admin link with the new value.
+
+```
+f=~/.secrets/portfoliosight.env
+sed -i '/^PS_ADMIN_SECRET=/d' "$f" && printf 'PS_ADMIN_SECRET=%s\n' "$(openssl rand -hex 32)" >> "$f"
+cd web && (set -a; . "$f"; set +a; printf '%s' "$PS_ADMIN_SECRET" | npx wrangler secret put PS_ADMIN_SECRET)
+```
+
+Check, with the gate header and a cookie jar (the value is read from the file, never typed):
+`GET /api/tier` without the cookie answers `{"tier":"public","menu_max":30}`; after
+`GET /?admin=$PS_ADMIN_SECRET` with `-c jar`, `GET /api/tier` with `-b jar` answers
+`{"tier":"admin","menu_max":100}`; a request with a forged `x-ps-tier: admin` header and no
+cookie answers public.
+
+Checked live 2026-10-15 after `make deploy-backend` (image `5a085ff`) and `make deploy-frontend`
+(Worker version `44efa895-6fc4-4dc4-b757-497c27d0b449`), with the gate header:
+
+| Check | Result |
+|---|---|
+| `GET /api/tier`, no cookie | `{"tier":"public","menu_max":30}` |
+| the same with a forged `x-ps-tier: admin` (and with a forged `ps_admin` cookie) | public, 30 |
+| `GET /?u=tsp&admin=<secret>` | 302 to `/?u=tsp`, `ps_admin` cookie set |
+| `GET /api/tier` with that cookie | `{"tier":"admin","menu_max":100}` |
+| `GET /?admin=<wrong>` | 302 to `/`, no cookie |
+| `GET /?admin=off` | 302, `ps_admin=; …; Max-Age=0` |
+| `POST /api/tensors`, 31 funds and lookback `4y` (refused before any build) | public and forged header: `funds` "at most 30" and `lookback`; admin cookie: `lookback` only |
+
 ## Measured
 
 - Provider tier and limits: Tiingo Starter; 45 requests per hour, 900 per day, 450 unique symbols
@@ -483,6 +566,15 @@ restore-dry-run legs fail, and the crontab leg counts the conductor's two lines 
   Measure once more through `https://portfoliosight.ai/api/tensors` after step 5 and add the
   number here.
 - Grid in effect: NX = 48, NY = 32. The fallback was not needed and was not applied.
+- Builds on worker processes, 2026-10-15, image `7661840` (PR #103), `api` at `cpus: "4"`
+  (`cpu.max` `400000 100000`, so 4 workers; host load average 3.5 to 4.8). Through the API at
+  the origin, custom 23-fund menus (the default preset's funds, `max = 0.2` and then `0.21` on
+  VTI, `5y`): the first build after the deploy 8.4 s `build_seconds` (this includes starting the
+  fork server and its 4 workers, about 4 s); the second 3.2 s, and 8.2 s from POST to the
+  first 200. With `scripts/bench_build.py` run inside the API container: a 23-fund synthetic
+  menu 10.6 s on 1 worker (first build of the process) and 3.9 s on 4; a 100-fund menu 87.2 s on
+  1 worker and 31.4 s on 4. The container peaked at 566 MiB of its 1536 MiB during the 100-fund
+  build and holds about 530 MiB with the API's pool started.
 - Six-lookback preset build time (target: three minutes): `guide2017` 15.8 and `tsp` 7.5, in
   seconds, as the sum of the six tensors' own `build_seconds` in generation `2026-10-12-0.1.0`.
   The whole first nightly, refresh included, published 68 seconds after it started.

@@ -49,12 +49,18 @@ Settings, hosts and secrets are `KEY=value` lines in `~/.secrets/portfoliosight.
   those) and from tsp.gov for the TSP funds, each behind the provider Protocol. The nightly job on
   KS-001 refreshes within the measured request budget, rebuilds the two ready-made menus for six
   lookbacks, and publishes a new generation only when all twelve tensors exist.
+- Stocks (and any fund no provider has refreshed) come from the owner's repaired QSE lake instead:
+  `scripts/sync_lake.py`, a laptop cron job on weekdays, uploads each symbol the lake vouches as
+  current once QSE's 06:45 PT run is complete, marks it `source: lake` in the manifest, and the
+  nightly spends no Tiingo request on it. Tiingo and tsp.gov stay the source of the ready-made
+  menus' funds. Entries whose recent dividends come from yfinance carry `relies_on_yfinance`;
+  they are reviewed before public launch (spec §5.4).
 
 ## Deployment
 
 - A Cloudflare Worker (`web/worker`, `web/wrangler.jsonc`) serves the page, reads tensors from R2,
   forwards builds and sends the share email. The only human check is Cloudflare's own; while
   `PS_PRIVATE_PREVIEW` is `"1"` the Worker also requires the gate secret.
-- The build service runs on KS-001 in one container (`deploy/docker-compose.yml`, 2 CPUs,
+- The build service runs on KS-001 in one container (`deploy/docker-compose.yml`, 4 CPUs,
   1536 MB) behind a cloudflared tunnel; a systemd timer runs the nightly job.
 - Steps, measurements and owner checks: `docs/plans/2026-10-13-ks001-cloudflare-runbook.md`.

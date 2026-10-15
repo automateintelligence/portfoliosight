@@ -14,6 +14,7 @@ EXPECTED = {
     "invariants",
     "ladder",
     "optimize",
+    "parallel",
     "ranges",
     "stats",
     "stress",

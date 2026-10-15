@@ -1,6 +1,8 @@
 # PortfolioSight on KS-001 (spec 9.1). The host is shared: one loopback port, one named volume,
-# hard CPU and memory limits, and no data bind mount. GIT_SHA comes from deploy/.env, written by
-# scripts/deploy_ks001.sh, so `build`, `up` and the nightly timer's `run` resolve the same image.
+# hard CPU and memory limits, and no data bind mount. A build uses as many worker processes as
+# its CPU limit allows (at most 8; PS_BUILD_WORKERS, unset here, overrides it). GIT_SHA comes
+# from deploy/.env, written by scripts/deploy_ks001.sh, so `build`, `up` and the nightly
+# timer's `run` resolve the same image.
 #
 #   docker compose -f deploy/docker-compose.yml up -d api
 #   docker compose -f deploy/docker-compose.yml run --rm --no-deps nightly
@@ -28,7 +30,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2"
+          cpus: "4"
           memory: 1536M
         reservations:
           cpus: "0.5"
@@ -60,7 +62,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2"
+          cpus: "4"
           memory: 1536M
     logging:
       driver: json-file

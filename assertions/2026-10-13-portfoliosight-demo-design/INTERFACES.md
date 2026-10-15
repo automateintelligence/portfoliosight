@@ -249,6 +249,20 @@ the docstring is authoritative for that test.
   legend key (`key-nolimits`: "No allocation limits: same funds, no limit on any one fund";
   `caps-none` still reads "No limits"); the open sidebar is 360 px wide (326 px from 1024 to
   1279 px).
+- Menu size by access tier, 2026-10-15 (owner decision "I am good with 30 and 100"; engines spec
+  §6.2, demo spec §3.3 and §6). The public limit stays 30 funds, so every gate assertion about a
+  31st fund (A-PS-28, A-PS-62, DoD 12) holds for a request or a browser without admin mode. API:
+  `PS_MENU_MAX_PUBLIC` (30) and `PS_MENU_MAX_ADMIN` (100); `x-ps-tier: admin` counts only beside
+  the gate secret. Worker: `GET /api/tier` answers `{"tier": "public" | "admin", "menu_max": int}`;
+  `?admin=<PS_ADMIN_SECRET>` sets the `ps_admin` cookie (HttpOnly, Secure, SameSite=Strict,
+  180 days) on a 302 without the parameter, any other value the same 302 with no cookie,
+  `?admin=off` clears it. New test ids, asserted by `web/e2e/local/app.spec.ts` and `web/tests/`
+  and free for later gate assertions: `funds-limit` (the picker's hint, "Up to {n} funds. Only
+  funds and stocks with verified current data are offered."), `link-refused` (above the chart
+  when a shared link has more funds than the visitor's limit: "This menu has more funds than this
+  site allows ({n})."; the default view opens and nothing is built for the refused menu),
+  `admin-tag` (the "Admin" tag in Settings, only in admin mode). Adding a fund past the limit
+  shows "A menu holds up to {n} funds." in the funds section's alert.
 - Strip in dollars, 2026-10-15 (owner direction). With amounts in $ or Shares, `range-low`,
   `range-typical` and `range-high` each hold the dollar change (`range-low-usd`, ...) and the
   percent beneath it (`range-low-pct`, ...), so a signed percent is still found inside each; each

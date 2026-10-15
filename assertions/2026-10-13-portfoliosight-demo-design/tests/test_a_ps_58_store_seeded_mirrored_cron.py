@@ -1,9 +1,11 @@
 """A-PS-58 — the store is verified, seeded, mirrored, and the cron is installed once.
 
 Claim: `python -m portfoliosight.data.store --verify` passes against the bucket;
-`meta/manifest.json` holds at least 1,400 symbols with `source` containing `seed`;
+`meta/manifest.json` holds at least 1,400 symbols with `source` containing `seed` or equal to
+`lake` (a seeded symbol the lake sync now keeps, spec 5.4; amended 2026-10-15);
 `scripts/r2_backup.sh` has mirrored the bucket to `/mnt/d/portfoliosight-data/`; a dry-run restore
-reports zero files to upload; `crontab -l` shows exactly one PortfolioSight line.
+reports zero files to upload; `crontab -l` shows exactly one PortfolioSight backup line, and no
+PortfolioSight line other than it and at most one lake-sync line (`scripts/sync_lake.py`).
 
 Live laptop check, inside the project virtualenv (needs `boto3`; also the AWS CLI v2 and `crontab`).
 Environment: `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_R2_ACCESS_KEY_ID`,
@@ -301,7 +303,11 @@ else:
 
     def test_manifest_holds_at_least_1400_seeded_symbols_with_adjusted_through():
         entries = _read_manifest(_r2_client())
-        seeded = {k: v for k, v in entries.items() if "seed" in str(v.get("source") or "")}
+        seeded = {
+            k: v
+            for k, v in entries.items()
+            if "seed" in str(v.get("source") or "") or v.get("source") == "lake"
+        }
         assert len(seeded) >= MIN_SEEDED, (
             f"meta/manifest.json has {len(seeded)} symbols with 'seed' in source "
             f"(of {len(entries)} entries), expected at least {MIN_SEEDED}"
@@ -435,6 +441,10 @@ else:
             if ln.strip() and not ln.strip().startswith("#")
         ]
         project = [ln for ln in active if "portfoliosight" in ln.lower()]
-        assert len(project) == 1, (
-            f"crontab -l shows {len(project)} PortfolioSight lines, expected exactly one"
+        sync = [ln for ln in project if "portfoliosight/scripts/sync_lake.py" in ln]
+        assert len(sync) <= 1, f"crontab -l shows {len(sync)} lake-sync lines, expected at most one"
+        others = [ln for ln in project if ln not in sync]
+        assert len(others) == 1, (
+            f"crontab -l shows {len(others)} PortfolioSight lines besides the lake sync, "
+            "expected exactly one"
         )

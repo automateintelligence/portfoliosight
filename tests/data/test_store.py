@@ -108,8 +108,8 @@ def test_r2_from_env(monkeypatch):
     assert store.bucket == BUCKET
     assert client.meta.endpoint_url == "https://acct123.r2.cloudflarestorage.com"
     assert client.meta.region_name == "auto"
-    # three retries after the first attempt
-    assert client.meta.config.retries == {"total_max_attempts": 4, "mode": "standard"}
+    # seven retries after the first attempt
+    assert client.meta.config.retries == {"total_max_attempts": 8, "mode": "standard"}
     monkeypatch.setenv("PS_R2_BUCKET", "other-bucket")
     assert store_mod.R2Store.from_env().bucket == "other-bucket"
 
