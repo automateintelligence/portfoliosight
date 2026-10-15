@@ -3,12 +3,15 @@
 Usage, from the repo root:
     python scripts/bench_build.py --funds 23 60 100 --workers 1 4 [--repeat 2] [--profile]
     taskset -c 0-3 python scripts/bench_build.py --funds 100 --workers 4
-    docker exec -i portfoliosight-api python - --funds 23 --workers 4 < scripts/bench_build.py
+    docker exec -i portfoliosight-api python -c "import sys; exec(sys.stdin.read())" \
+        --funds 23 --workers 4 < scripts/bench_build.py
 
 The menus come from one generator, so a run can be repeated anywhere: a six-factor model drawn
 from seed 7 over the business days 2016-01-04 to 2026-10-13, one column per fund, built for the
 5y lookback with the default caps. `--workers` sets `PS_BUILD_WORKERS` for each build; pin the
-process with `taskset` to measure a given number of CPUs. Each line reports the wall time of
+process with `taskset` to measure a given number of CPUs. Piped into a container, the script
+runs through `-c` and `exec`, not `python -`: a worker process re-imports the main module by its
+path, and `<stdin>` has none. Each line reports the wall time of
 the build call and the tensor's own `build_seconds`; the process pool for a worker count is
 started before its builds and timed on its own (`pool_s`). `--profile` adds the wall time of
 each stage of the build (the parallel stages include waiting for the workers).
