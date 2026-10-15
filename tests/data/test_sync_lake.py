@@ -29,7 +29,7 @@ NOW = datetime(2026, 10, 14, 14, 30, tzinfo=UTC)
 TIERS = Tiers(
     tier1=("VTI",),
     tier2=("VTI", "BND", "SGOV"),
-    tier3=("AAPL", "MSFT", "OLD", "GONE", "PART", "BND"),
+    tier3=("AAPL", "MSFT", "OLD", "GONE", "PART", "AHEAD", "BND"),
     income=frozenset({"BND"}),
     starter_slice=2,
 )
@@ -91,8 +91,9 @@ def _write_lake(root: Path, vouched: dict[str, str], generated: str = GENERATED)
 @pytest.fixture
 def lake(tmp_path) -> Path:
     """AAPL and MSFT vouched through the latest session (AAPL with a yfinance dividend), OLD
-    vouched and stopped in March, GONE not vouched, PART vouched short of its last row, VTI
-    (tier 1, the provider's) and BND (tier 2, a pending seed) current; SGOV not in the lake."""
+    vouched and stopped in March, GONE not vouched, PART vouched a session short of its last
+    row (taken, newest row price-only), AHEAD vouched past its last row, VTI (tier 1, the
+    provider's) and BND (tier 2, a pending seed) current; SGOV not in the lake."""
     root = tmp_path / "lake"
     _write_lake(
         root,
@@ -101,6 +102,7 @@ def lake(tmp_path) -> Path:
             "MSFT": LATEST.isoformat(),
             "OLD": STOPPED.isoformat(),
             "PART": "2026-10-12",
+            "AHEAD": LATEST.isoformat(),
             "VTI": LATEST.isoformat(),
             "BND": LATEST.isoformat(),
         },
@@ -108,6 +110,8 @@ def lake(tmp_path) -> Path:
     for symbol in ("AAPL", "MSFT", "PART", "GONE", "VTI", "BND"):
         _eod(symbol, LATEST).to_parquet(root / "eod_history" / f"{symbol}.parquet", index=False)
     _eod("OLD", STOPPED).to_parquet(root / "eod_history" / "OLD.parquet", index=False)
+    ahead = _eod("AHEAD", date(2026, 10, 12))
+    ahead.to_parquet(root / "eod_history" / "AHEAD.parquet", index=False)
     _actions([("2026-02-09", "eodhd"), ("2026-05-11", "yfinance")]).to_parquet(
         root / "dividends" / "AAPL.parquet", index=False
     )
@@ -225,7 +229,11 @@ def test_sync_takes_current_vouched_symbols_and_serves_them(lake, store):
     # The provider keeps its tier 1 fund; March-stale and unvouched symbols are not taken.
     assert entries["VTI"]["source"] == "seed+tiingo"
     assert entries["OLD"]["source"] == "seed" and entries["OLD"]["status"] == "pending"
-    assert {"GONE", "PART", "SGOV"}.isdisjoint(entries)
+    assert {"GONE", "AHEAD", "SGOV"}.isdisjoint(entries)
+    # vouched a session behind its last row: taken, the newest row price-only
+    assert entries["PART"]["source"] == "lake" and entries["PART"]["status"] == "ok"
+    assert entries["PART"]["adjusted_through"] == "2026-10-12"
+    assert entries["PART"]["last_date"] == "2026-10-13"
 
     record = store_mod.get_record(store, "AAPL")
     eod = pd.read_parquet(lake / "eod_history" / "AAPL.parquet")
@@ -235,12 +243,12 @@ def test_sync_takes_current_vouched_symbols_and_serves_them(lake, store):
 
     overlay = lake_mod.load_lake(store)
     assert overlay.generated_at == GENERATED
-    assert sorted(overlay.symbols) == ["AAPL", "BND", "MSFT"]
+    assert sorted(overlay.symbols) == ["AAPL", "BND", "MSFT", "PART"]
 
     listed = store_mod.get_json(store, manifest_mod.SYMBOLS_KEY)["symbols"]
     by_id = {row["id"]: row for row in listed}
     assert by_id["AAPL"]["kind"] == "stock" and by_id["MSFT"]["kind"] == "stock"
-    assert {"AAPL", "MSFT", "BND", "VTI"} == set(by_id)
+    assert {"AAPL", "MSFT", "BND", "PART", "VTI"} == set(by_id)
 
 
 def test_dry_run_counts_by_status_and_reason_and_writes_nothing(lake, store):
@@ -248,13 +256,13 @@ def test_dry_run_counts_by_status_and_reason_and_writes_nothing(lake, store):
     code, lines = _sync(lake, recording, dry_run=True)
     assert code == 0 and recording.puts == []
     text = "\n".join(lines)
-    assert "taken 3 (3 written, 0 unchanged); status {'ok': 3}" in text
-    assert "served 3 (2 stocks); relies_on_yfinance 1" in text
+    assert "taken 4 (4 written, 0 unchanged); status {'ok': 4}" in text
+    assert "served 4 (3 stocks); relies_on_yfinance 1" in text
     for line in (
         "skipped 1: kept current by the provider",
         "skipped 1: more than 3 sessions behind the lake's latest session",
         "skipped 1: not vouched by the lake",
-        "skipped 1: vouched date is not the last price row",
+        "skipped 1: vouched date is after the last price row",
         "skipped 1: not in the lake",
     ):
         assert line in lines, (line, lines)
@@ -277,7 +285,7 @@ def test_a_new_run_rewrites_only_changed_symbols_and_a_repeat_is_a_no_op(lake, s
     code, lines = _sync(lake, recording, now=datetime(2026, 10, 15, 14, 30, tzinfo=UTC))
     assert code == 0, lines
     assert [key for key in recording.puts if key.startswith("prices/")] == ["prices/AAPL.parquet"]
-    assert "taken 3 (1 written, 2 unchanged); status {'ok': 3}" in "\n".join(lines)
+    assert "taken 4 (1 written, 3 unchanged); status {'ok': 4}" in "\n".join(lines)
     assert lake_mod.load_lake(store).generated_at == "2026-10-15T13:52:00+00:00"
 
 
