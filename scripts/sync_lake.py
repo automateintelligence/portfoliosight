@@ -12,8 +12,9 @@ there is no stitch and it exits 0 at once. ``--force`` syncs the lake run there 
 time, day or what was synced before.
 
 For every symbol of tiers 1 to 3 (TSP aside) that the lake holds, the sync takes it when the
-lake vouches it (a date in ``_adjusted_through.json``), that date is its last price row, and it
-is within 3 sessions of the lake's latest vouched session; except that a tier 1 or 2 fund a
+lake vouches it (a date in ``_adjusted_through.json``), that date is not after its last
+price row (newer rows are kept price-only), and it is within 3 sessions of the lake's latest
+vouched session; except that a tier 1 or 2 fund a
 provider already keeps (source ``tiingo``, ``seed+tiingo`` or ``tsp``, not ``unavailable``)
 stays the provider's. A taken symbol gets ``prices/{SYMBOL}.parquet`` (``tr_index`` from
 ``adj_close``) unless its lake files are unchanged since the last sync (digest), and an entry
@@ -82,7 +83,7 @@ SKIP_NOT_IN_LAKE = "not in the lake"
 SKIP_PROVIDER = "kept current by the provider"
 SKIP_NOT_VOUCHED = "not vouched by the lake"
 SKIP_BEHIND = "more than 3 sessions behind the lake's latest session"
-SKIP_TAIL = "vouched date is not the last price row"
+SKIP_TAIL = "vouched date is after the last price row"
 SKIP_UNUSABLE = "unusable prices"
 
 logger = logging.getLogger("sync_lake")
@@ -237,7 +238,7 @@ class _Sync:
             self._settle(kept)
             return Outcome(symbol, "unchanged", entry=kept)
         frame = lake_mod.read_eod(eod)
-        if frame.empty or frame["date"].iloc[-1].date() != day:
+        if frame.empty or frame["date"].iloc[-1].date() < day:
             return Outcome(symbol, "skipped", SKIP_TAIL)
         if lake_mod.unusable_reason(frame) is not None:
             return Outcome(symbol, "skipped", SKIP_UNUSABLE)
@@ -249,7 +250,7 @@ class _Sync:
             income=known.income,
             source=lake_mod.LAKE_SOURCE,
             first_date=frame["date"].iloc[0].date(),
-            last_date=day,
+            last_date=frame["date"].iloc[-1].date(),
             adjusted_through=day,
             status="pending",
             fetched_at=self.now.astimezone(UTC).isoformat(),
