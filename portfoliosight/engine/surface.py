@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .ladder import LEVELS, EnbProgram, column, peak_pools, spread_peaks
+from .ladder import LEVELS, EnbProgram, ladders, peak_pools, spread_peaks
 from .optimize import Frontier, MenuPrograms
 from .torsion import enb
 
@@ -47,19 +47,26 @@ class Raster:
 
 
 def surface(
-    program: EnbProgram, programs: MenuPrograms, front: Frontier, levels: int = LEVELS
+    program: EnbProgram,
+    programs: MenuPrograms,
+    front: Frontier,
+    levels: int = LEVELS,
+    workers: int = 1,
 ) -> Surface:
     """Find every column's peak, then lay out and solve its ladder.
 
     A ladder can come across a mix more diversified than the peak it started from. Once all
     ladders are solved, each column's best is offered to its neighbours once more, and a column
-    that gains from it has its ladder laid out again.
+    that gains from it has its ladder laid out again. The ladders, which are most of the work,
+    and the peak search's own starts are solved on `workers` processes (`parallel.py`); the
+    starts and sweeps that pass a column's best to its neighbour run here, in order.
     """
-    pools = peak_pools(program, programs, front)
+    pools = peak_pools(program, programs, front, workers=workers)
     risks = [float(risk) for risk in front.x]
-    columns = [column(program, risks[j], pool, levels) for j, pool in enumerate(pools)]
-    for j in spread_peaks(program, programs, front, pools):
-        columns[j] = column(program, risks[j], pools[j], levels)
+    found = ladders(program, risks, pools, range(len(pools)), levels, workers)
+    gained = spread_peaks(program, programs, front, pools)
+    found.update(ladders(program, risks, pools, gained, levels, workers))
+    columns = [found[j] for j in range(len(pools))]
     z = np.array([entry.z for entry in columns])
     return Surface(
         w=np.array([entry.w for entry in columns]),
