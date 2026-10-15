@@ -6,7 +6,9 @@
 Catch-up fetches every symbol of the configured set that has no record (history, then meta) and
 the tail of every seeded symbol not yet refreshed. Refresh fetches the tail of every symbol that
 is not current at ``D_G``, whatever its status. Both walk the priority order, write each record
-as they go, and rewrite the catalog after each tier and at the end.
+as they go, and rewrite the catalog after each tier and at the end. A symbol the lake sync keeps
+(``source: lake``, ``meta/lake.json``) is never fetched; every catalog write first applies the
+sync's overlay as it stands then, so the sync's entries are never written over.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from typing import Any
 
 import pandas as pd
 
+from portfoliosight.data import lake as lake_mod
 from portfoliosight.data import manifest as manifest_mod
 from portfoliosight.data import store as store_mod
 from portfoliosight.data.budget import BudgetLedger, BudgetSpent
@@ -192,6 +195,7 @@ class _Ingest:
         now = self.clock().astimezone(UTC)
         self.manifest = manifest_mod.load_manifest(self.store)
         self.d_g = generation_date(now)
+        lake_mod.apply_lake(self.manifest, lake_mod.load_lake(self.store), self.d_g)
         # Unavailable symbols are asked for again on the first run date of each month.
         self.retry_unavailable = now.day == 1
 
@@ -254,6 +258,8 @@ class _Ingest:
         return (1 if is_tsp(symbol) else DEFAULT_TIER), False
 
     def _write_catalog(self) -> None:
+        # Read just before the write: an entry the sync took or released since is carried.
+        lake_mod.apply_lake(self.manifest, lake_mod.load_lake(self.store), self.d_g)
         manifest_mod.restatus(self.manifest, self.d_g)
         manifest_mod.write_catalog(self.store, self.manifest, self.clock().astimezone(UTC))
 
@@ -302,6 +308,8 @@ class _Ingest:
 
     def _visit(self, symbol: str) -> None:
         entry = self.manifest.symbols.get(symbol)
+        if entry is not None and entry.source == lake_mod.LAKE_SOURCE:
+            return  # the lake sync keeps it current; no provider request is spent on it
         if entry is not None and entry.status == "unavailable" and not self.retry_unavailable:
             return
         has_record = (

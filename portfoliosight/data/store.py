@@ -8,13 +8,16 @@ This module is the only code that touches R2 (and the only one that imports ``bo
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
+import hashlib
 import io
 import json
 import logging
 import os
 import sys
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -34,6 +37,7 @@ SCOPE_HINT = (
     "CLOUDFLARE_R2_ACCESS_KEY_ID and CLOUDFLARE_R2_SECRET_ACCESS_KEY."
 )
 _MISSING_CODES = {"404", "NoSuchKey", "NotFound"}
+_CONDITION_CODES = {"PreconditionFailed", "ConditionalRequestConflict"}
 _CLIENT_LOGGERS = ("boto3", "botocore", "s3transfer", "urllib3")
 
 
@@ -48,6 +52,10 @@ class Store(Protocol):
 
 class StoreConfigError(Exception):
     """The environment does not describe a usable store."""
+
+
+class ConcurrentUpdate(Exception):
+    """A conditional read-modify-write kept losing to other writers of the same key."""
 
 
 def _check_key(key: str) -> str:
@@ -112,6 +120,34 @@ class LocalStore:
 
     def delete(self, key: str) -> None:
         self._path(key).unlink(missing_ok=True)
+
+    @contextlib.contextmanager
+    def _locked(self) -> Iterator[None]:
+        tmp_dir = self.root / self._TMP_DIR
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        with (tmp_dir / ".lock").open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+    def get_tagged(self, key: str) -> tuple[bytes, str]:
+        """The value and its tag (a content digest); ``KeyError`` when absent."""
+        data = self.get(key)
+        return data, hashlib.sha256(data).hexdigest()
+
+    def put_if(self, key: str, data: bytes, tag: str | None) -> bool:
+        """Write only when the key still holds the value tagged ``tag`` (``None``: absent)."""
+        with self._locked():
+            try:
+                _, current = self.get_tagged(key)
+            except KeyError:
+                current = None
+            if current != tag:
+                return False
+            self.put(key, data)
+            return True
 
 
 class R2Store:
@@ -186,6 +222,31 @@ class R2Store:
     def delete(self, key: str) -> None:
         self._client.delete_object(Bucket=self.bucket, Key=_check_key(key))
 
+    def get_tagged(self, key: str) -> tuple[bytes, str]:
+        """The value and its ETag; ``KeyError`` when absent."""
+        try:
+            response = self._client.get_object(Bucket=self.bucket, Key=_check_key(key))
+        except ClientError as exc:
+            if _error_code(exc) in _MISSING_CODES:
+                raise KeyError(key) from None
+            raise
+        return response["Body"].read(), str(response["ETag"])
+
+    def put_if(self, key: str, data: bytes, tag: str | None) -> bool:
+        """A conditional PUT: ``If-Match: tag``, or ``If-None-Match: *`` when ``tag`` is None.
+
+        False when R2 refuses it because the object changed (412) or another conditional write
+        to it is in flight (409).
+        """
+        condition = {"IfMatch": tag} if tag is not None else {"IfNoneMatch": "*"}
+        try:
+            self._client.put_object(Bucket=self.bucket, Key=_check_key(key), Body=data, **condition)
+        except ClientError as exc:
+            if _error_code(exc) in _CONDITION_CODES or _http_status(exc) in (409, 412):
+                return False
+            raise
+        return True
+
 
 def _redact_client_logs(values: list[str]) -> None:
     """Keep the R2 keys out of the S3 client's own log lines.
@@ -216,8 +277,45 @@ def store_from_env() -> Store:
 # Helpers over the five pinned methods; they work with any store, a test's proxy included.
 
 
+def _json_bytes(value: Any) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
 def put_json(store: Store, key: str, value: Any) -> None:
-    store.put(key, (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    store.put(key, _json_bytes(value))
+
+
+def update_json(
+    store: Store, key: str, change: Callable[[Any | None], Any], attempts: int = 5
+) -> Any:
+    """Read ``key``, write ``change(value)`` back, and never overwrite a write it did not read.
+
+    ``change`` gets the stored JSON value (``None`` when the key is absent) and returns the new
+    one; it may be called again when another writer got in first. Stores with ``get_tagged`` and
+    ``put_if`` (R2: ``If-Match``; ``LocalStore``: a lock and a digest) make the write
+    conditional; on any other store (a test's proxy) it is a plain read and write. Raises
+    ``ConcurrentUpdate`` when ``attempts`` conditional writes in a row were refused.
+    """
+    get_tagged = getattr(store, "get_tagged", None)
+    put_if = getattr(store, "put_if", None)
+    if get_tagged is None or put_if is None:
+        try:
+            current = get_json(store, key)
+        except KeyError:
+            current = None
+        value = change(current)
+        put_json(store, key, value)
+        return value
+    for _ in range(attempts):
+        try:
+            data, tag = get_tagged(key)
+            current = json.loads(data)
+        except KeyError:
+            current, tag = None, None
+        value = change(current)
+        if put_if(key, _json_bytes(value), tag):
+            return value
+    raise ConcurrentUpdate(f"{key} kept changing during {attempts} conditional writes")
 
 
 def get_json(store: Store, key: str) -> Any:

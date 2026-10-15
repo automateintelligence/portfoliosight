@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 TAIL_OVERLAP = timedelta(days=7)
+LAKE_SOURCE = "lake"  # kept current by the lake sync (spec 5.4), never by a provider
 
 
 def as_date(value: Any) -> date | None:
@@ -44,12 +45,12 @@ def plan_refresh(
     A symbol is left out only when ``last_date >= d_g`` and ``adjusted_through >= d_g``; a seed
     with recent prices but unverified corporate actions is always refetched from its adjustment
     date. Symbols without a stored record (no ``adjusted_through``) need a full fetch and are
-    not part of a tail plan.
+    not part of a tail plan, and neither are those the lake sync keeps (``source: lake``).
     """
     plan: list[tuple[str, date]] = []
     for symbol in symbols:
         entry = entries.get(symbol)
-        if entry is None:
+        if entry is None or _field(entry, "source") == LAKE_SOURCE:
             continue
         adjusted = as_date(_field(entry, "adjusted_through"))
         if adjusted is None or is_current(entry, d_g):

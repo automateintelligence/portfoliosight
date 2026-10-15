@@ -33,13 +33,16 @@ class ManifestEntry(BaseModel):
     kind: str  # etf | mutual_fund | stock | tsp
     tier: int
     income: bool = False
-    source: str  # seed | tiingo | tsp | seed+tiingo
+    source: str  # seed | tiingo | tsp | seed+tiingo | lake
     first_date: date | None = None
     last_date: date | None = None
     adjusted_through: date | None = None
     status: str  # ok | pending | stale | unavailable
     reason: str | None = None
     fetched_at: str | None = None
+    # True when the record's dividend or split rows after 2026-03-20 include one from yfinance
+    # (lake symbols only, spec 5.4); to be reviewed before public launch.
+    relies_on_yfinance: bool = False
 
 
 class Manifest(BaseModel):
