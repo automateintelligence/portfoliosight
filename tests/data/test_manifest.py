@@ -24,6 +24,7 @@ ENTRY_KEYS = {
     "status",
     "reason",
     "fetched_at",
+    "relies_on_yfinance",
 }
 
 

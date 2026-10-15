@@ -29,13 +29,13 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from portfoliosight.data import manifest as manifest_mod  # noqa: E402
 from portfoliosight.data import store as store_mod  # noqa: E402
+from portfoliosight.data.lake import eod_to_record, read_eod  # noqa: E402
 from portfoliosight.data.manifest import ManifestEntry  # noqa: E402
 from portfoliosight.data.universe import load_tiers  # noqa: E402
 
 DEFAULT_LAKE = "~/tft-quantile-forecaster/data/tft/raw/eodhd/datalake_us_core/eod_history"
 MIN_FILES = 1_000
 UPLOAD_THREADS = 8
-LAKE_COLUMNS = ["date", "close", "adj_close"]
 
 
 @dataclass
@@ -48,19 +48,13 @@ class Checked:
     unusable: str | None  # why the file cannot be seeded at all
 
 
-def _read(path: Path) -> pd.DataFrame:
-    frame = pd.read_parquet(path, columns=LAKE_COLUMNS)
-    frame["date"] = pd.to_datetime(frame["date"]).dt.tz_localize(None)
-    return frame.sort_values("date").reset_index(drop=True)
-
-
 def _iso(values: Any) -> list[str]:
     return [str(value)[:10] for value in values]
 
 
 def check(path: Path, through: date) -> Checked:
     """Read one lake file and find its latest adjustment and any drift after ``through``."""
-    frame = _read(path)
+    frame = read_eod(path)
     days = _iso(frame["date"])
     close = frame["close"].to_numpy(dtype=float)
     adj = frame["adj_close"].to_numpy(dtype=float)
@@ -87,19 +81,7 @@ def check(path: Path, through: date) -> Checked:
 
 def to_record(path: Path, through: date) -> pd.DataFrame:
     """The canonical record of one lake file: price-only after ``through``."""
-    frame = _read(path)
-    adj = frame["adj_close"].to_numpy(dtype=float)
-    tr_index = adj / adj[0]
-    tr_index[(frame["date"] > pd.Timestamp(through)).to_numpy()] = np.nan
-    return pd.DataFrame(
-        {
-            "date": frame["date"],
-            "close": frame["close"].to_numpy(dtype=float),
-            "tr_index": tr_index,
-            "div_cash": np.nan,
-            "split_factor": np.nan,
-        }
-    )
+    return eod_to_record(read_eod(path), through)
 
 
 def _fail(message: str) -> int:

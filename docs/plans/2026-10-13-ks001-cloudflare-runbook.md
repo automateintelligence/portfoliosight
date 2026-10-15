@@ -407,6 +407,23 @@ ln -s "$HOME/.local/share/portfoliosight/bin/r2_backup.sh" "$HOME/programming/po
   Until the drive is fixed the 05:30 run downloads the whole bucket each night (150 MB now,
   about 300 MB when the catch-up is complete) and adds about 1 MB of progress lines to the log.
 
+Laptop lake sync (spec §5.4, added 2026-10-15). Order: deploy the backend image that knows
+`meta/lake.json` first (an older nightly ignores it, fetches lake symbols and writes the manifest
+without them), then install the cron. `scripts/install_sync_lake_cron.sh` adds one
+line and changes no other (`crontab -l | grep -c sync_lake.py` → 1):
+
+```
+*/10 7-9 * * 1-5 $HOME/programming/portfoliosight/.venv/bin/python $HOME/programming/portfoliosight/scripts/sync_lake.py >> $HOME/.local/state/portfoliosight/sync_lake.log 2>&1
+```
+
+Weekdays every 10 minutes from 07:00 to 09:50 PT (the laptop's clock is America/Los_Angeles).
+Each poll waits until QSE's 06:45 run has rewritten `_adjusted_through.json`, syncs that run once,
+then does nothing until the next run. A run still missing at 09:50 writes a line starting
+`ALERT sync_lake` to `~/.local/state/portfoliosight/sync_lake.log` and exits 1:
+`grep ALERT ~/.local/state/portfoliosight/sync_lake.log`. It runs from the main checkout and its
+`.venv`, so `git pull` there brings changes to it. Manual run of the lake run there is:
+`.venv/bin/python scripts/sync_lake.py --force` (`--dry-run` to see the counts only).
+
 ## Second attempt on 2026-10-13 (22:30 UTC): tunnel route and backup drive
 
 Both owner steps of issue #86 were tried again from the laptop. Neither is done; nothing was

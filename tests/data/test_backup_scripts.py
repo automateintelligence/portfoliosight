@@ -178,3 +178,23 @@ def test_cron_installer_starts_an_empty_crontab_and_replaces_an_old_line(box):
     box.crontab.write_text("\n".join([old, other, SEEDED[1]]) + "\n")
     assert box.run(INSTALLER).returncode == 0
     assert box.crontab.read_text() == "\n".join([other, SEEDED[1], CRON_LINE]) + "\n"
+
+
+SYNC_INSTALLER = ROOT / "scripts" / "install_sync_lake_cron.sh"
+SYNC_LINE = (
+    "*/10 7-9 * * 1-5 $HOME/programming/portfoliosight/.venv/bin/python"
+    " $HOME/programming/portfoliosight/scripts/sync_lake.py"
+    " >> $HOME/.local/state/portfoliosight/sync_lake.log 2>&1"
+)
+
+
+def test_sync_cron_installer_adds_one_line_and_keeps_every_other(box):
+    box.crontab.write_text("\n".join([*SEEDED, CRON_LINE]) + "\n")
+    for _ in range(2):
+        proc = box.run(SYNC_INSTALLER)
+        assert proc.returncode == 0, proc.stderr
+    assert box.crontab.read_text() == "\n".join([*SEEDED, CRON_LINE, SYNC_LINE]) + "\n"
+    # The backup installer, run after it, keeps the sync line too.
+    assert box.run(INSTALLER).returncode == 0
+    assert box.crontab.read_text() == "\n".join([*SEEDED, SYNC_LINE, CRON_LINE]) + "\n"
+    assert (box.home / ".local" / "state" / "portfoliosight").is_dir()

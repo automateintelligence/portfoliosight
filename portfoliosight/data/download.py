@@ -6,7 +6,9 @@
 Catch-up fetches every symbol of the configured set that has no record (history, then meta) and
 the tail of every seeded symbol not yet refreshed. Refresh fetches the tail of every symbol that
 is not current at ``D_G``, whatever its status. Both walk the priority order, write each record
-as they go, and rewrite the catalog after each tier and at the end.
+as they go, and rewrite the catalog after each tier and at the end. A symbol the lake sync keeps
+(``source: lake``, ``meta/lake.json``) is never fetched; every catalog write first applies the
+sync's overlay as it stands then, so the sync's entries are never written over.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from typing import Any
 
 import pandas as pd
 
+from portfoliosight.data import lake as lake_mod
 from portfoliosight.data import manifest as manifest_mod
 from portfoliosight.data import store as store_mod
 from portfoliosight.data.budget import BudgetLedger, BudgetSpent
@@ -50,9 +53,18 @@ DEFAULT_TIER = 3
 STALE_ON_FAILED_FETCH = frozenset({TSP_PROVIDER})
 MAX_ERROR_CHARS = 300
 DEADLINE_REACHED = "deadline reached"
+STORE_ERROR = "store"  # the ``provider`` of an error that was the store's, not a provider's
 
 Clock = Callable[[], datetime]
 Sleep = Callable[[float], None]
+
+
+class RecordWriteFailed(Exception):
+    """A symbol's record could not be stored once the store's retries were spent."""
+
+    def __init__(self, symbol: str, cause: Exception):
+        super().__init__(f"{symbol}: storing its record failed: {type(cause).__name__}: {cause}")
+        self.symbol = symbol
 
 
 @dataclass
@@ -192,6 +204,7 @@ class _Ingest:
         now = self.clock().astimezone(UTC)
         self.manifest = manifest_mod.load_manifest(self.store)
         self.d_g = generation_date(now)
+        lake_mod.apply_lake(self.manifest, lake_mod.load_lake(self.store), self.d_g)
         # Unavailable symbols are asked for again on the first run date of each month.
         self.retry_unavailable = now.day == 1
 
@@ -231,6 +244,11 @@ class _Ingest:
                     logger.warning("provider rate limit persists: stopping at %s", symbol)
                     self.report.stopped = "provider rate limit"
                     break
+                except RecordWriteFailed as exc:
+                    # The symbol keeps its previous record and entry; the walk goes on.
+                    self.errors += 1
+                    logger.error("%s", RedactingFilter().redact(str(exc)))
+                    self._store_failed(symbol, exc)
                 except (ProviderError, ValueError) as exc:
                     self.errors += 1
                     logger.error("%s: %s: %s", symbol, type(exc).__name__, exc)
@@ -254,8 +272,35 @@ class _Ingest:
         return (1 if is_tsp(symbol) else DEFAULT_TIER), False
 
     def _write_catalog(self) -> None:
-        manifest_mod.restatus(self.manifest, self.d_g)
-        manifest_mod.write_catalog(self.store, self.manifest, self.clock().astimezone(UTC))
+        """Write the manifest, then its symbols view, carrying the lake sync's overlay.
+
+        The walk's own entries are authoritative for every symbol but the lake's, and the
+        overlay for those. It is read inside a conditional write: when the sync's manifest
+        write lands between this read and this write, the write is refused and redone with the
+        overlay the sync wrote first, so neither drops the other's entries.
+        """
+
+        def change(_stored: Any) -> dict[str, Any]:
+            lake_mod.apply_lake(self.manifest, lake_mod.load_lake(self.store), self.d_g)
+            manifest_mod.restatus(self.manifest, self.d_g)
+            return self.manifest.to_json()
+
+        store_mod.update_json(self.store, manifest_mod.MANIFEST_KEY, change)
+        store_mod.put_json(
+            self.store,
+            manifest_mod.SYMBOLS_KEY,
+            manifest_mod.symbols_view(self.manifest, self.clock().astimezone(UTC)),
+        )
+
+    def _taken_by_lake(self, symbol: str) -> bool:
+        """Re-read the sync's overlay; True when it keeps ``symbol`` now.
+
+        Asked just before a provider request and again just before a record write, so a symbol
+        the sync took while the walk ran is neither fetched nor written over.
+        """
+        lake_mod.apply_lake(self.manifest, lake_mod.load_lake(self.store), self.d_g)
+        entry = self.manifest.symbols.get(symbol)
+        return entry is not None and entry.source == lake_mod.LAKE_SOURCE
 
     # -- one symbol -----------------------------------------------------------------------
 
@@ -274,6 +319,16 @@ class _Ingest:
         entry = self.manifest.symbols.get(symbol)
         if entry is not None and name in STALE_ON_FAILED_FETCH:
             manifest_mod.mark_fetch_failed(entry, self.d_g, self._note(symbol))
+
+    def _store_failed(self, symbol: str, exc: RecordWriteFailed) -> None:
+        text = RedactingFilter().redact(str(exc))[:MAX_ERROR_CHARS]
+        self.report.errors.append({"symbol": symbol, "provider": STORE_ERROR, "error": text})
+
+    def _put_record(self, symbol: str, record: pd.DataFrame) -> None:
+        try:
+            store_mod.put_record(self.store, symbol, record)
+        except store_mod.STORE_ERRORS as exc:
+            raise RecordWriteFailed(symbol, exc) from exc
 
     def _refreshed(self, symbol: str) -> None:
         tier, _ = self._tier_income(symbol)
@@ -302,13 +357,16 @@ class _Ingest:
 
     def _visit(self, symbol: str) -> None:
         entry = self.manifest.symbols.get(symbol)
+        if entry is not None and entry.source == lake_mod.LAKE_SOURCE:
+            return  # the lake sync keeps it current; no provider request is spent on it
         if entry is not None and entry.status == "unavailable" and not self.retry_unavailable:
             return
         has_record = (
             entry is not None and entry.adjusted_through is not None and entry.last_date is not None
         )
         if entry is None or not has_record:
-            self._full(symbol, entry)
+            if not self._taken_by_lake(symbol):
+                self._full(symbol, self.manifest.symbols.get(symbol))
             return
         if self.mode == "catch-up" and entry.source != "seed":
             # Already has its history. What is still made up here is its meta request: the one
@@ -319,7 +377,9 @@ class _Ingest:
             return
         if self.mode == "refresh" and is_current(entry, self.d_g):
             return
-        self._tail(symbol, entry)
+        if self._taken_by_lake(symbol):
+            return
+        self._tail(symbol, self.manifest.symbols[symbol])
 
     def _full(self, symbol: str, entry: ManifestEntry | None) -> None:
         """A symbol without a record: the full history, then its meta (two requests)."""
@@ -330,7 +390,7 @@ class _Ingest:
         record = None if frame.empty else provider_rows_to_record(frame)
         if record is not None:
             # Stored before the catalog names it: a failed upload leaves no entry behind.
-            store_mod.put_record(self.store, symbol, record)
+            self._put_record(symbol, record)
             self._refreshed(symbol)
         tier, income = self._tier_income(symbol)
         if entry is None:
@@ -366,11 +426,17 @@ class _Ingest:
             record = store_mod.get_record(self.store, symbol)
         except KeyError:
             logger.warning("%s: the manifest lists a record the store lacks; refetching", symbol)
+            dates = (entry.last_date, entry.adjusted_through)
             entry.last_date = entry.adjusted_through = None
-            self._full(symbol, entry)
+            try:
+                self._full(symbol, entry)
+            except RecordWriteFailed:
+                entry.last_date, entry.adjusted_through = dates  # the entry stays as it was
+                raise
             return
         provider_name, _ = self._provider(symbol)
         frame = self._fetch_daily(symbol, tail_start(anchor))
+        fetched_before = entry.fetched_at
         entry.fetched_at = self.clock().astimezone(UTC).isoformat()
         if frame.empty:
             entry.status = "unavailable"
@@ -381,7 +447,14 @@ class _Ingest:
             return
         spliced, adjusted_through = splice_tail(record, frame, anchor)
         if adjusted_through != anchor:
-            store_mod.put_record(self.store, symbol, spliced)
+            if self._taken_by_lake(symbol):
+                logger.info("%s: taken by the lake sync during the fetch; not written", symbol)
+                return
+            try:
+                self._put_record(symbol, spliced)
+            except RecordWriteFailed:
+                entry.fetched_at = fetched_before  # the entry stays as it was
+                raise
             self._refreshed(symbol)
             entry.last_date = entry.adjusted_through = adjusted_through
         if entry.source == "seed":
