@@ -272,10 +272,35 @@ class _Ingest:
         return (1 if is_tsp(symbol) else DEFAULT_TIER), False
 
     def _write_catalog(self) -> None:
-        # Read just before the write: an entry the sync took or released since is carried.
+        """Write the manifest, then its symbols view, carrying the lake sync's overlay.
+
+        The walk's own entries are authoritative for every symbol but the lake's, and the
+        overlay for those. It is read inside a conditional write: when the sync's manifest
+        write lands between this read and this write, the write is refused and redone with the
+        overlay the sync wrote first, so neither drops the other's entries.
+        """
+
+        def change(_stored: Any) -> dict[str, Any]:
+            lake_mod.apply_lake(self.manifest, lake_mod.load_lake(self.store), self.d_g)
+            manifest_mod.restatus(self.manifest, self.d_g)
+            return self.manifest.to_json()
+
+        store_mod.update_json(self.store, manifest_mod.MANIFEST_KEY, change)
+        store_mod.put_json(
+            self.store,
+            manifest_mod.SYMBOLS_KEY,
+            manifest_mod.symbols_view(self.manifest, self.clock().astimezone(UTC)),
+        )
+
+    def _taken_by_lake(self, symbol: str) -> bool:
+        """Re-read the sync's overlay; True when it keeps ``symbol`` now.
+
+        Asked just before a provider request and again just before a record write, so a symbol
+        the sync took while the walk ran is neither fetched nor written over.
+        """
         lake_mod.apply_lake(self.manifest, lake_mod.load_lake(self.store), self.d_g)
-        manifest_mod.restatus(self.manifest, self.d_g)
-        manifest_mod.write_catalog(self.store, self.manifest, self.clock().astimezone(UTC))
+        entry = self.manifest.symbols.get(symbol)
+        return entry is not None and entry.source == lake_mod.LAKE_SOURCE
 
     # -- one symbol -----------------------------------------------------------------------
 
@@ -340,7 +365,8 @@ class _Ingest:
             entry is not None and entry.adjusted_through is not None and entry.last_date is not None
         )
         if entry is None or not has_record:
-            self._full(symbol, entry)
+            if not self._taken_by_lake(symbol):
+                self._full(symbol, self.manifest.symbols.get(symbol))
             return
         if self.mode == "catch-up" and entry.source != "seed":
             # Already has its history. What is still made up here is its meta request: the one
@@ -351,7 +377,9 @@ class _Ingest:
             return
         if self.mode == "refresh" and is_current(entry, self.d_g):
             return
-        self._tail(symbol, entry)
+        if self._taken_by_lake(symbol):
+            return
+        self._tail(symbol, self.manifest.symbols[symbol])
 
     def _full(self, symbol: str, entry: ManifestEntry | None) -> None:
         """A symbol without a record: the full history, then its meta (two requests)."""
@@ -398,8 +426,13 @@ class _Ingest:
             record = store_mod.get_record(self.store, symbol)
         except KeyError:
             logger.warning("%s: the manifest lists a record the store lacks; refetching", symbol)
+            dates = (entry.last_date, entry.adjusted_through)
             entry.last_date = entry.adjusted_through = None
-            self._full(symbol, entry)
+            try:
+                self._full(symbol, entry)
+            except RecordWriteFailed:
+                entry.last_date, entry.adjusted_through = dates  # the entry stays as it was
+                raise
             return
         provider_name, _ = self._provider(symbol)
         frame = self._fetch_daily(symbol, tail_start(anchor))
@@ -414,6 +447,9 @@ class _Ingest:
             return
         spliced, adjusted_through = splice_tail(record, frame, anchor)
         if adjusted_through != anchor:
+            if self._taken_by_lake(symbol):
+                logger.info("%s: taken by the lake sync during the fetch; not written", symbol)
+                return
             try:
                 self._put_record(symbol, spliced)
             except RecordWriteFailed:

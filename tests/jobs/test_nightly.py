@@ -65,6 +65,12 @@ class _Recording:
         self.deletes.append(key)
         return self._inner.delete(key)
 
+    def put_if(self, key, data, tag):
+        written = self._inner.put_if(key, data, tag)
+        if written:
+            self.puts.append(key)
+        return written
+
     def __getattr__(self, name):
         return getattr(self._inner, name)
 

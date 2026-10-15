@@ -257,3 +257,95 @@ def test_overlay_round_trips_through_the_store(tmp_path):
     store_mod.put_json(store, lake_mod.LAKE_KEY, overlay.to_json())
     assert lake_mod.load_lake(store) == overlay
     assert json.loads(store.get(lake_mod.LAKE_KEY))["symbols"]["AAPL"]["digest"] == "d" * 64
+
+
+def _stale_entries(symbols, behind: date) -> dict[str, dict]:
+    return {
+        symbol: {
+            "name": symbol,
+            "kind": "stock",
+            "tier": 3,
+            "income": False,
+            "source": "seed+tiingo",
+            "first_date": RECORD_START.isoformat(),
+            "last_date": behind.isoformat(),
+            "adjusted_through": behind.isoformat(),
+            "status": "stale",
+            "reason": None,
+            "fetched_at": "2026-02-21T10:00:00+00:00",
+        }
+        for symbol in symbols
+    }
+
+
+def test_a_symbol_the_sync_takes_mid_walk_is_neither_fetched_nor_written_over(tmp_path):
+    """The sync takes LAKE while the walk fetches FIRST, and SAME while the walk fetches SAME."""
+    store = LocalStore(tmp_path / "store")
+    behind = date(2026, 2, 20)
+    for symbol in ("FIRST", "LAKE", "SAME"):
+        _put_record(store, symbol, behind, behind)
+    store_mod.put_json(
+        store,
+        manifest_mod.MANIFEST_KEY,
+        {"symbols": _stale_entries(["FIRST", "LAKE", "SAME"], behind)},
+    )
+    lake_record = b"the lake's record"
+
+    class Provider(FakeProvider):
+        def fetch_daily(self, symbol, start, end=None):
+            taken = {"FIRST": "LAKE", "SAME": "SAME"}.get(symbol)
+            if taken is not None:  # the sync stores the record, then its overlay
+                store.put(store_mod.record_key(taken), lake_record)
+                overlay = lake_mod.load_lake(store)
+                overlay.symbols[taken] = _lake_entry(taken, date(2026, 2, 26))
+                store_mod.put_json(store, lake_mod.LAKE_KEY, overlay.to_json())
+            return super().fetch_daily(symbol, start, end)
+
+    provider = Provider(default_available=FEB27)
+    clock = Clock(FEB27, 13)
+    code = download.run(
+        "refresh",
+        store=store,
+        providers={"tiingo": provider},
+        clock=clock,
+        sleep=clock.sleep,
+        symbols=["FIRST", "LAKE", "SAME"],
+    )
+    assert code == 0
+    assert [call[1] for call in provider.calls] == ["FIRST", "SAME"]  # LAKE never fetched
+    assert store.get("prices/LAKE.parquet") == lake_record
+    assert store.get("prices/SAME.parquet") == lake_record  # the fetched tail was not written
+    entries = store_mod.get_json(store, manifest_mod.MANIFEST_KEY)["symbols"]
+    assert entries["LAKE"]["source"] == entries["SAME"]["source"] == "lake"
+    assert entries["FIRST"]["status"] == "ok"
+
+
+def test_a_missing_record_whose_refetch_cannot_be_stored_keeps_its_entry(tmp_path):
+    store = LocalStore(tmp_path / "store")
+    behind = date(2026, 2, 20)
+    store_mod.put_json(
+        store, manifest_mod.MANIFEST_KEY, {"symbols": _stale_entries(["GONE"], behind)}
+    )
+
+    class Refusing(LocalStore):
+        def put(self, key: str, data: bytes) -> None:
+            if key.startswith("prices/"):
+                raise OSError("disk full")
+            super().put(key, data)
+
+    refusing = Refusing(store.root)
+    provider = FakeProvider(default_available=FEB27)
+    clock = Clock(FEB27, 13)
+    report = download.RunReport()
+    download.run(
+        "refresh",
+        store=refusing,
+        providers={"tiingo": provider},
+        clock=clock,
+        sleep=clock.sleep,
+        symbols=["GONE"],
+        report=report,
+    )
+    assert report.exit_code == 1 and report.errors[0]["provider"] == "store"
+    entry = store_mod.get_json(store, manifest_mod.MANIFEST_KEY)["symbols"]["GONE"]
+    assert entry["last_date"] == entry["adjusted_through"] == behind.isoformat()
