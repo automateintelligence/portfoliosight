@@ -213,7 +213,7 @@ Owner direction (2026-10-14): design for 100 funds now, so a paid tier can be ad
 
 - The menu limit is a per-tier setting, not a constant: `PS_MENU_MAX_PUBLIC=30`, `PS_MENU_MAX_ADMIN=100`. The API and the Worker both enforce the caller's tier; a later paid tier is one more setting.
 - **Admin today, without accounts:** a separate admin secret (`PS_ADMIN_SECRET`, its own value, never the preview gate's), opened once as `?admin=<secret>`; the Worker sets an HttpOnly, Secure, SameSite=Strict cookie and forwards `x-ps-tier: admin` to the API only when the cookie verifies (an HMAC of the secret, like the preview gate). The API trusts the header only from the Worker (same mechanism as `x-ps-gate`). When accounts exist, the account's tier replaces the cookie.
-- **Cost, measured 2026-10-14** (one lookback, ENB ladders, synthetic factor-model menus, 2 CPUs under load average 6 to 7): 23 funds 18 s, 40 funds 40 s, 60 funds 76 s, 100 funds 230 s (about N^1.5). A quiet machine is about 4 times faster (the 23-fund fixture builds in 3.7 s).
+- **Cost, measured 2026-10-14** (one lookback, ENB ladders, synthetic factor-model menus, 2 CPUs under load average 6 to 7): 23 funds 18 s, 40 funds 40 s, 60 funds 76 s, 100 funds 230 s (about N^1.5). A quiet machine is about 4 times faster (the 23-fund fixture builds in 3.7 s). **Measured 2026-10-15 with the risk columns on worker processes** (demo spec §4.12; `scripts/bench_build.py`, six-factor synthetic menus, seed 7, one 5y lookback, each run pinned to as many cores as workers, load average 6 to 14): 23 funds 24 / 21 / 10.5 / 9.3 s on 1 / 2 / 4 / 8 workers, 60 funds 74 / 39 / 27 / 19 s, 100 funds 184 / 142 / 80 / 50 s. KS-001's API and nightly containers now have 4 CPUs, so a build there uses 4 workers.
 - Consequences: menus over 30 funds are built on demand only, never in the nightly; the page's "Give us a moment" notice shows the expected wait for large menus; at 100 funds the ENB peak search uses extra random starts (local optima grow with N), and the copula is truncated at tree 3 (§9 fallback 2). A paid tier, when it comes, is capped at 50 funds unless DR² ladders (convex) become the default, which should make 100 funds fast; Phase 2 measures DR² at 100 funds and records it here.
 
 ## 7. Tensor, model artifacts and API
@@ -266,7 +266,7 @@ Owner direction (2026-10-14): design for 100 funds now, so a paid tier can be ad
 
 ## 9. Performance budget and fallbacks
 
-Target (unchanged): at most 30 s per 23-fund (menu, lookback) build on KS-001's 2-vCPU container; nightly presets (2 menus × 6 lookbacks) at most 10 min; `/v1/range` under 1 s for `replay` and `garch`. Estimates; Phase 1 and Phase 3 measure them on KS-001 and record them in the runbook.
+Target (unchanged): at most 30 s per 23-fund (menu, lookback) build on KS-001's container (4 vCPUs since 2026-10-15, 2 before); nightly presets (2 menus × 6 lookbacks) at most 10 min; `/v1/range` under 1 s for `replay` and `garch`. Estimates; Phase 1 and Phase 3 measure them on KS-001 and record them in the runbook.
 
 | Work | Once per | Today | Estimate after |
 |---|---|---|---|
