@@ -523,6 +523,19 @@ Check, with the gate header and a cookie jar (the value is read from the file, n
 `{"tier":"admin","menu_max":100}`; a request with a forged `x-ps-tier: admin` header and no
 cookie answers public.
 
+Checked live 2026-10-15 after `make deploy-backend` (image `5a085ff`) and `make deploy-frontend`
+(Worker version `44efa895-6fc4-4dc4-b757-497c27d0b449`), with the gate header:
+
+| Check | Result |
+|---|---|
+| `GET /api/tier`, no cookie | `{"tier":"public","menu_max":30}` |
+| the same with a forged `x-ps-tier: admin` (and with a forged `ps_admin` cookie) | public, 30 |
+| `GET /?u=tsp&admin=<secret>` | 302 to `/?u=tsp`, `ps_admin` cookie set |
+| `GET /api/tier` with that cookie | `{"tier":"admin","menu_max":100}` |
+| `GET /?admin=<wrong>` | 302 to `/`, no cookie |
+| `GET /?admin=off` | 302, `ps_admin=; …; Max-Age=0` |
+| `POST /api/tensors`, 31 funds and lookback `4y` (refused before any build) | public and forged header: `funds` "at most 30" and `lookback`; admin cookie: `lookback` only |
+
 ## Measured
 
 - Provider tier and limits: Tiingo Starter; 45 requests per hour, 900 per day, 450 unique symbols
