@@ -35,8 +35,9 @@ from threadpoolctl import threadpool_limits
 
 CHUNKS_PER_WORKER = 4  # chunks per worker, so a worker that drew cheap columns takes more
 # What the fork server imports before it forks a worker: first the module that holds BLAS to
-# one thread (so the server has no threads to fork with), then every engine module.
-PRELOAD = ("portfoliosight.worker_env", "__main__", f"{__package__}.builder")
+# one thread (so the server has no threads to fork with), then every engine module. Not
+# `__main__`: a Python that preloads it does so first, which could load NumPy before the settings.
+PRELOAD = ("portfoliosight.worker_env", f"{__package__}.builder")
 
 Task = Callable[[Any, int, Any], Any]  # task(shared, column index, payload) -> answer
 
@@ -95,7 +96,7 @@ def by_column(
     finally:
         for future in pending:
             future.cancel()
-    return answers
+    return {j: answers[j] for j, _payload in items}
 
 
 def warm_up(workers: int) -> None:
@@ -104,12 +105,15 @@ def warm_up(workers: int) -> None:
         _pool(workers).submit(_ready).result()
 
 
-def shutdown() -> None:
-    """Stop the process pool, if there is one; the next call that needs one starts another."""
+def shutdown(wait: bool = True) -> None:
+    """Stop the process pool, if there is one; the next call that needs one starts another.
+
+    Chunks not yet started are dropped; `wait` waits for the running ones to finish.
+    """
     global _executor
     with _lock:
         if _executor is not None:
-            _executor.shutdown(wait=True, cancel_futures=True)
+            _executor.shutdown(wait=wait, cancel_futures=True)
             _executor = None
 
 
@@ -164,3 +168,9 @@ def _init_worker() -> None:
 
 def _ready() -> bool:
     return True
+
+
+# At interpreter exit, drop the chunks of a build still in progress before concurrent.futures'
+# own exit hook (registered earlier, so run later) waits for the pool's work: exit then waits
+# for the running chunks only, not for the rest of the build.
+threading._register_atexit(shutdown, wait=False)  # pyright: ignore[reportAttributeAccessIssue]

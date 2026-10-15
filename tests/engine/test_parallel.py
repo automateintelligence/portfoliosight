@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib
 import os
 import pickle
+import threading
+from concurrent.futures import process as futures_process
 
 import numpy as np
 import pytest
@@ -175,6 +177,15 @@ def test_the_pool_is_kept_for_the_same_count_and_replaced_for_another():
     parallel.shutdown()
     assert parallel._executor is None
     parallel.shutdown()  # nothing to stop
+
+
+def test_exit_drops_unstarted_chunks_before_the_pool_waits_for_its_work():
+    hooks = threading._threading_atexits  # type: ignore[attr-defined]
+    ours = [i for i, hook in enumerate(hooks) if getattr(hook, "func", None) is parallel.shutdown]
+    exit_hook = futures_process._python_exit
+    pools = [i for i, hook in enumerate(hooks) if getattr(hook, "func", None) is exit_hook]
+    assert len(ours) == 1 and hooks[ours[0]].keywords == {"wait": False}
+    assert pools and ours[0] > pools[0]  # run in reverse order: ours first
 
 
 def test_workers_fork_from_a_single_threaded_server_and_run_blas_on_one_thread():
