@@ -40,8 +40,8 @@ class ManifestEntry(BaseModel):
     status: str  # ok | pending | stale | unavailable
     reason: str | None = None
     fetched_at: str | None = None
-    # True when the record's dividend or split rows after 2026-03-20 include one from yfinance
-    # (lake symbols only, spec 5.4); to be reviewed before public launch.
+    # True when a dividend or split row of the lake record dated after 2026-03-20 came from the
+    # Yahoo Finance library (lake symbols only, spec 5.4); reviewed before public launch.
     relies_on_yfinance: bool = False
 
 

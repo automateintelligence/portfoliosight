@@ -25,10 +25,6 @@ LAKE_KEY = "meta/lake.json"
 
 RELEASED_SOURCE = "seed"
 EOD_COLUMNS = ["date", "close", "adj_close"]
-# Dividend and split rows dated after this day may come from yfinance (QSE's repair of the lake);
-# an entry whose rows after it include a yfinance row is flagged ``relies_on_yfinance``.
-YFINANCE_SINCE = date(2026, 3, 20)
-YFINANCE = "yfinance"
 
 
 def read_eod(path: Path) -> pd.DataFrame:
@@ -68,24 +64,6 @@ def unusable_reason(frame: pd.DataFrame) -> str | None:
     if not (np.isfinite(close).all() and (close > 0).all()):
         return "close is missing or not positive"
     return None
-
-
-def action_sources(paths: list[Path], since: date = YFINANCE_SINCE) -> list[str]:
-    """The sorted sources of the dividend and split rows dated after ``since`` in ``paths``.
-
-    A missing file, or one without rows or without a ``source`` column, contributes nothing.
-    """
-    found: set[str] = set()
-    for path in paths:
-        if not path.is_file():
-            continue
-        frame = pd.read_parquet(path)
-        if frame.empty or "date" not in frame.columns or "source" not in frame.columns:
-            continue
-        days = pd.to_datetime(frame["date"]).dt.tz_localize(None)
-        after = frame.loc[(days > pd.Timestamp(since)).to_numpy(), "source"]
-        found.update(str(value) for value in after.dropna())
-    return sorted(found)
 
 
 class LakeEntry(ManifestEntry):

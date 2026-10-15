@@ -390,3 +390,35 @@ def test_main_takes_its_own_lock_and_reports_an_unreadable_lake(tmp_path, monkey
     with sync_lake._single_run(lock) as alone:
         assert alone
         assert sync_lake.main(args, now=NOW) == 0  # another sync holds it: nothing to do
+
+
+def test_action_sources_reads_rows_after_the_cutoff_only(tmp_path):
+    dividends = tmp_path / "dividends.parquet"
+    pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2026-03-20", "2026-03-23", "2026-06-01"]),
+            "source": pd.Series(["yfinance", "eodhd", "schwab"], dtype="string"),
+        }
+    ).to_parquet(dividends, index=False)
+    empty = tmp_path / "splits.parquet"
+    pd.DataFrame().to_parquet(empty)
+    assert sync_lake.action_sources([dividends, empty, tmp_path / "absent.parquet"]) == [
+        "eodhd",
+        "schwab",
+    ]
+
+
+def test_a_symbol_the_lake_brings_back_to_current_is_taken(lake, store):
+    """QSE backfills a symbol that stopped in March: its date jumps to the latest session."""
+    assert _sync(lake, store)[0] == 0
+    assert "OLD" not in lake_mod.load_lake(store).symbols
+    vouched = json.loads((lake / "_adjusted_through.json").read_text())["symbols"]
+    vouched["OLD"] = LATEST.isoformat()
+    _write_lake(lake, vouched, generated="2026-10-15T13:52:00+00:00")
+    _eod("OLD", LATEST).to_parquet(lake / "eod_history" / "OLD.parquet", index=False)
+    recording = Recording(store)
+    code, lines = _sync(lake, recording, now=datetime(2026, 10, 15, 14, 30, tzinfo=UTC))
+    assert code == 0, lines
+    assert [key for key in recording.puts if key.startswith("prices/")] == ["prices/OLD.parquet"]
+    old = _manifest(store)["OLD"]
+    assert (old["source"], old["status"], old["last_date"]) == ("lake", "ok", "2026-10-13")

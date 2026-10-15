@@ -6,7 +6,6 @@ import json
 from datetime import UTC, date, datetime, time
 from types import SimpleNamespace
 
-import pandas as pd
 import pytest
 from botocore.exceptions import ClientError
 
@@ -245,22 +244,6 @@ def test_r2_conditional_put_of_an_absent_key_uses_if_none_match():
     assert store.put_if("meta/lake.json", b"{}", None) is True
     assert client.calls[0]["IfNoneMatch"] == "*" and "IfMatch" not in client.calls[0]
     assert store.get_tagged("meta/lake.json") == (b"{}", '"abc"')
-
-
-def test_action_sources_reads_rows_after_the_cutoff_only(tmp_path):
-    dividends = tmp_path / "dividends.parquet"
-    pd.DataFrame(
-        {
-            "date": pd.to_datetime(["2026-03-20", "2026-03-23", "2026-06-01"]),
-            "source": pd.Series(["yfinance", "eodhd", "schwab"], dtype="string"),
-        }
-    ).to_parquet(dividends, index=False)
-    empty = tmp_path / "splits.parquet"
-    pd.DataFrame().to_parquet(empty)
-    assert lake_mod.action_sources([dividends, empty, tmp_path / "absent.parquet"]) == [
-        "eodhd",
-        "schwab",
-    ]
 
 
 def test_overlay_round_trips_through_the_store(tmp_path):

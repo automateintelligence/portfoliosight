@@ -41,6 +41,8 @@ from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -64,6 +66,11 @@ READY_AT = time(6, 45)  # QSE's stitch starts then (America/Los_Angeles, weekday
 ALERT_AFTER = time(9, 50)  # the last poll of the day: a run still missing then is an alert
 DIGEST_VERSION = b"lake-record-1"
 THREADS = 8
+# QSE's repair filled the lake's dividend and split rows after this day partly from the Yahoo
+# Finance library. Only these two sources are primary; an entry with any other source among its
+# rows after the day is flagged ``relies_on_yfinance`` (an allow-list: a new source is flagged too).
+SECONDARY_SINCE = date(2026, 3, 20)
+PRIMARY_SOURCES = frozenset({"eodhd", "schwab"})
 PROVIDER_TIERS = (1, 2)
 NOT_PROVIDER = ("seed", lake_mod.LAKE_SOURCE)
 
@@ -154,6 +161,24 @@ def file_digest(vouched: date, paths: list[Path]) -> str:
     return digest.hexdigest()
 
 
+def action_sources(paths: list[Path], since: date = SECONDARY_SINCE) -> list[str]:
+    """The sorted sources of the dividend and split rows dated after ``since`` in ``paths``.
+
+    A missing file, or one without rows or without a ``source`` column, contributes nothing.
+    """
+    found: set[str] = set()
+    for path in paths:
+        if not path.is_file():
+            continue
+        frame = pd.read_parquet(path)
+        if frame.empty or "date" not in frame.columns or "source" not in frame.columns:
+            continue
+        days = pd.to_datetime(frame["date"]).dt.tz_localize(None)
+        after = frame.loc[(days > pd.Timestamp(since)).to_numpy(), "source"]
+        found.update(str(value) for value in after.dropna())
+    return sorted(found)
+
+
 def provider_keeps(entry: ManifestEntry | None) -> bool:
     """A provider has refreshed this entry and still serves or retries it."""
     return entry is not None and entry.source not in NOT_PROVIDER and entry.status != "unavailable"
@@ -223,7 +248,7 @@ class _Sync:
             adjusted_through=day,
             status="pending",
             fetched_at=self.now.astimezone(UTC).isoformat(),
-            relies_on_yfinance=lake_mod.YFINANCE in lake_mod.action_sources(actions),
+            relies_on_yfinance=not PRIMARY_SOURCES.issuperset(action_sources(actions)),
             digest=digest,
         )
         self._settle(entry)
