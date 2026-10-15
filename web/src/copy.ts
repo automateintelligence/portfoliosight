@@ -176,3 +176,10 @@ export const enbLine = (n: string, m: string) =>
 /** The strip's bar, spoken: it is drawn on one scale for every mix of this menu. */
 export const rangeBarLabel = (from: string, to: string, low: string, typical: string, high: string) =>
   `One-year range on a fixed scale from ${from} to ${to}, the same for every mix of this menu: ${plain.rangeLow} ${low}, ${plain.rangeTypical} ${typical}, ${plain.rangeHigh} ${high}`;
+/** The strip's subtitle when its figures are in dollars: "over one year on your $98,900". */
+export const stripOnTotal = (total: string) => `${plain.resultStripSuffix} on your ${total}`;
+/** A strip figure spoken with both values: "Bad year: −$10,681, −10.8%". */
+export const stripFigure = (cap: string, money: string, percent: string) => `${cap} year: ${money}, ${percent}`;
+/** Why the strip stays in percent although shares are entered (details). */
+export const stripNoPrice = (funds: string[]) =>
+  `Shown in percent: ${funds.length === 1 ? `${funds[0]} has` : `${funds.slice(0, -1).join(", ")} and ${funds[funds.length - 1]} have`} no latest price, so the shares entered cannot be valued in dollars.`;

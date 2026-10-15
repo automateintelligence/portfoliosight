@@ -90,7 +90,9 @@ test("an expired human check reloads once and the view comes back", async ({ pag
   await request.post("/__mock/config", { data: { challenge: 1 } });
   await section(page, "settings");
   const reloaded = page.waitForEvent("load");
-  await page.getByTestId("lookback-3y").check({ force: true });
+  // a click, not check(): check() then waits to see the radio checked, and the reload it starts
+  // can take the collapsed section (and the radio) away first
+  await page.getByTestId("lookback-3y").click({ force: true });
   await reloaded;
   await expect(page.getByTestId("chart-canvas")).toBeVisible();
   expect(new URL(page.url()).searchParams.get("lb")).toBe("3y");
@@ -98,7 +100,8 @@ test("an expired human check reloads once and the view comes back", async ({ pag
 });
 
 test("the strip swaps in the service's one-year range for exact weights, and keeps its own when the service cannot answer", async ({ page, request }) => {
-  const pctOf = async (id: string) => Number(((await page.getByTestId(id).textContent()) ?? "").replace("−", "-").replace(/[+%]/g, ""));
+  // the percent figure (beneath the dollars when the strip is in dollars, as for this preset)
+  const pctOf = async (id: string) => Number(/([−+]?\d+\.\d)%/.exec((await page.getByTestId(id).textContent()) ?? "")?.[1].replace("−", "-").replace("+", ""));
   // a position between two columns: the page blends the node ranges, then asks the service
   await open(page, "u=guide2017&lb=5y&r=20.5&d=0.4");
   const own = await pctOf("range-typical");
@@ -385,7 +388,7 @@ test("hovering the colour map shows a plain card for the mix there", async ({ pa
   const chart = await boxOf(page, "chart");
   if (isPhone(testInfo.project.name)) {
     // The map answers to a mouse only: a touch on it shows no card and moves nothing.
-    const before = await page.getByTestId("range-typical").innerText();
+    const before = (await page.getByTestId("range-typical").textContent()) ?? "";
     await page.getByTestId("chart").tap({ position: { x: chart.width * 0.3, y: chart.height * 0.72 } });
     await page.waitForTimeout(300);
     await expect(page.getByTestId("mix-card")).toHaveCount(0);
@@ -620,10 +623,16 @@ test("Clear all and Scale to 100% work from the keyboard; the total and Scale sh
 });
 
 // @desktop-only: the phone strip shows the three figures without the bar (playwright.config.ts).
-test("the strip marks Bad, Typical and Good on one scale that holds still as the sliders and the history window move @desktop-only", async ({ page }) => {
-  await open(page, "u=guide2017&lb=5y");
+test("the strip marks Bad, Typical and Good on one scale that holds still as the sliders move @desktop-only", async ({ page }) => {
+  // a preset without amounts: the strip is in percent
+  await open(page, "u=tsp&lb=5y");
+  await expect(page.getByTestId("strip-sub")).toHaveText("over one year");
   const bar = page.getByTestId("range-bar");
-  const scaleOf = async () => [await bar.getAttribute("data-lo"), await bar.getAttribute("data-hi")];
+  // the scale, and where the bar's track sits on screen (the figures beside it change width)
+  const scaleOf = async () => {
+    const t = (await bar.locator(".rb-track").boundingBox())!;
+    return [await bar.getAttribute("data-lo"), await bar.getAttribute("data-hi"), t.x, t.width];
+  };
   const xOf = async (id: string) => {
     const b = (await page.getByTestId(id).boundingBox())!;
     return b.x + b.width / 2;
@@ -643,17 +652,111 @@ test("the strip marks Bad, Typical and Good on one scale that holds still as the
   const first = await scaleOf();
   const lowBefore = await page.getByTestId("range-low").textContent();
   await page.getByTestId("point-selected").focus();
+  for (let i = 0; i < 25; i++) {
+    await page.keyboard.press(i < 12 ? "ArrowLeft" : "ArrowRight");
+    expect(await scaleOf(), `the scale as the risk slider moves (${i})`).toEqual(first);
+  }
   for (let i = 0; i < 25; i++) await page.keyboard.press("ArrowRight");
   await expect(page.getByTestId("range-low")).not.toHaveText(lowBefore ?? "");
   expect(await scaleOf(), "the scale after the risk slider moved").toEqual(first);
   expect((await ends())[2]).not.toBeCloseTo(hi, 0);
-  for (let i = 0; i < 10; i++) await page.keyboard.press("ArrowDown");
-  expect(await scaleOf(), "the scale after the diversification slider moved").toEqual(first);
+  for (let i = 0; i < 10; i++) {
+    await page.keyboard.press("ArrowDown");
+    expect(await scaleOf(), `the scale as the diversification slider moves (${i})`).toEqual(first);
+  }
+  // Another window has its own scale from its own nodes (the mock's windows share theirs).
   await section(page, "settings");
   await page.getByTestId("lookback-1y").check({ force: true });
   await expect.poll(() => new URL(page.url()).searchParams.get("lb")).toBe("1y");
   await expect(page.getByTestId("point-selected")).toBeVisible();
-  expect(await scaleOf(), "the scale after the history window changed").toEqual(first);
+  expect(await scaleOf(), "the scale of the 1y window").toEqual(first);
+});
+
+const signedNumber = (text: string) => Number(text.replace(/[−–]/g, "-").replace(/[+$,%]/g, ""));
+
+test("with amounts in $ or Shares the strip shows the year in dollars on the value entered, the percent beneath", async ({ page }) => {
+  await open(page, "f=SGOV:60000,VTIP:38900&unit=pct");
+  // in % (these do not add up to 100) the strip is in percent
+  await expect(page.getByTestId("strip-sub")).toHaveText("over one year");
+  await expect(page.getByTestId("range-low-usd")).toHaveCount(0);
+  await section(page, "funds");
+  const units = page.getByTestId("unit-toggle").getByRole("radio");
+  await units.nth(2).click();
+  await expect(page.getByTestId("strip-sub")).toHaveText("over one year on your $98,900");
+  for (const id of ["range-low", "range-typical", "range-high"]) {
+    const usd = signedNumber(await page.getByTestId(`${id}-usd`).innerText());
+    const pct = signedNumber(await page.getByTestId(`${id}-pct`).innerText());
+    expect(await page.getByTestId(`${id}-usd`).innerText()).toMatch(/^([−+]\$\d{1,3}(,\d{3})*|\$0)$/);
+    expect(await page.getByTestId(`${id}-pct`).innerText()).toMatch(/^[−+]?\d+\.\d%$/);
+    // the dollars are the total times the (unrounded) percent: within the percent's rounding
+    expect(Math.abs(usd - (98_900 * pct) / 100), id).toBeLessThanOrEqual(98_900 * 0.0005 + 1);
+    // the percent sits under the dollar figure, smaller
+    const [u, p] = [(await page.getByTestId(`${id}-usd`).boundingBox())!, (await page.getByTestId(`${id}-pct`).boundingBox())!];
+    expect(p.y).toBeGreaterThanOrEqual(u.y + u.height - 1);
+    expect(p.height).toBeLessThan(u.height);
+  }
+  await expect(page.getByRole("group", { name: /^Bad year: [−+]?\$[\d,]+, [−+]?\d+\.\d%$/ })).toBeVisible();
+  // Shares: valued at the tensor's last close (SGOV 100.42, VTIP 49.87 in the mock)
+  await units.nth(0).click();
+  await expect(page.getByTestId("strip-sub")).toHaveText("over one year on your $7,965,143");
+  // back to %: percent again
+  await units.nth(1).click();
+  await expect(page.getByTestId("strip-sub")).toHaveText("over one year");
+  await expect(page.getByTestId("range-low-usd")).toHaveCount(0);
+});
+
+// @desktop-only: the bar is hidden on a phone.
+test("in dollars the bar's ends hold still as both sliders move, and its marks sit on its fixed percent scale @desktop-only", async ({ page, request }) => {
+  await request.post("/__mock/config", { data: { ranges: true } });
+  await open(page, "u=guide2017&lb=5y");
+  await expect(page.getByTestId("strip-sub")).toHaveText(/^over one year on your \$[\d,]+$/);
+  // the figures' columns are sized in the figure font's character width: measure once it has loaded
+  await page.evaluate(() => document.fonts.ready);
+  // one read of the page per call, so an exact range arriving between two reads cannot split it
+  const state = async () => {
+    const got = await page.evaluate(() => {
+      const q = (id: string) => document.querySelector(`[data-testid="${id}"]`)!;
+      const bar = q("range-bar");
+      const t = bar.querySelector(".rb-track")!.getBoundingClientRect();
+      const cap = (id: string) => {
+        const b = q(`range-mark-${id}`).getBoundingClientRect();
+        return { x: b.x + b.width / 2, text: q(`range-${id}-pct`).textContent ?? "" };
+      };
+      return { left: t.x, right: t.x + t.width, lo: Number(bar.getAttribute("data-lo")), hi: Number(bar.getAttribute("data-hi")), caps: [cap("low"), cap("high")] };
+    });
+    for (const [i, c] of got.caps.entries()) {
+      const pct = signedNumber(c.text) / 100;
+      // the cap's centre is where its percent falls on the track's own scale
+      const want = got.left + ((pct - got.lo) / (got.hi - got.lo)) * (got.right - got.left);
+      expect(Math.abs(c.x - want), `range-mark-${i ? "high" : "low"}`).toBeLessThanOrEqual((got.right - got.left) * 0.0006 + 1.5);
+    }
+    return { ends: [got.left, got.right, got.lo, got.hi], caps: got.caps.map((c) => c.x) };
+  };
+  const first = await state();
+  const risk = (await page.getByTestId("risk-slider").boundingBox())!;
+  const div = (await page.getByTestId("div-slider").boundingBox())!;
+  const drags: [number, number, number, number][] = [
+    [risk.x + risk.width * 0.55, risk.y + risk.height / 2, risk.x + risk.width * 0.95, risk.y + risk.height / 2],
+    [risk.x + risk.width * 0.95, risk.y + risk.height / 2, risk.x + risk.width * 0.4, risk.y + risk.height / 2],
+    [div.x + div.width / 2, div.y + div.height * 0.1, div.x + div.width / 2, div.y + div.height * 0.9],
+  ];
+  let moved = 0;
+  for (const [x0, y0, x1, y1] of drags) {
+    await page.mouse.move(x0, y0);
+    await page.mouse.down();
+    for (let k = 1; k <= 12; k++) {
+      await page.mouse.move(x0 + ((x1 - x0) * k) / 12, y0 + ((y1 - y0) * k) / 12);
+      expect((await state()).ends, "the bar's ends during the drag").toEqual(first.ends);
+    }
+    await page.mouse.up();
+    // the service's exact range arrives once the sliders rest; the ends still hold
+    await page.waitForTimeout(600);
+    const now = await state();
+    expect(now.ends, "the bar's ends after the exact range arrived").toEqual(first.ends);
+    if (now.caps.join() !== first.caps.join()) moved += 1;
+  }
+  expect(moved, "the marks moved with the mix").toBeGreaterThan(0);
+  expect(((await (await page.request.get("/__mock/ranges")).json()) as unknown[]).length, "exact ranges were asked").toBeGreaterThan(0);
 });
 
 test("the axis title and its details line sit inside the chart frame, under the tick labels, in every look", async ({ page }, testInfo) => {

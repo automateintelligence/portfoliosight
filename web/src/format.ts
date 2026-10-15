@@ -59,3 +59,24 @@ export function parseAmount(text: string): number | null {
   const value = Number(cleaned);
   return Number.isFinite(value) && value >= 0 ? value : null;
 }
+
+/** Dollar amounts above this are written in millions or billions ("$12.3M"), never below. */
+export const DOLLARS_ABBREVIATE_ABOVE = 10_000_000;
+
+const dollarBody = (abs: number) => {
+  const whole = Math.round(abs);
+  if (whole <= DOLLARS_ABBREVIATE_ABOVE) return whole.toLocaleString("en-US");
+  if (whole >= 1e9) return `${(whole / 1e9).toFixed(1)}B`;
+  return `${(whole / 1e6).toFixed(1)}M`;
+};
+
+/** Whole dollars, thousands separated, abbreviated only above $10M: 98900 -> "$98,900", 12345678 -> "$12.3M". */
+export function dollars(value: number): string {
+  return `${value < 0 && Math.round(value) !== 0 ? MINUS : ""}$${dollarBody(Math.abs(value))}`;
+}
+
+/** Signed whole dollars as `dollars`: -10681.2 -> "−$10,681", 4210 -> "+$4,210", -0.4 -> "$0", -12345678 -> "−$12.3M". */
+export function signedDollars(value: number): string {
+  if (Math.round(value) === 0) return "$0";
+  return `${value < 0 ? MINUS : "+"}$${dollarBody(Math.abs(value))}`;
+}

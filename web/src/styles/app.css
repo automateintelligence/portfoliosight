@@ -400,6 +400,18 @@ button {
     padding: 12px 14px;
   }
 
+  /* The label takes its own row, so three dollar figures fit beside the word and the toggle. */
+  .side-open .strip-label {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .side-open .fig-val.has-usd {
+    font-size: 19px;
+  }
+
   .side-open .range {
     grid-template-columns: repeat(3, auto);
     justify-content: start;
@@ -1592,6 +1604,19 @@ button {
   color: var(--accent-dark);
 }
 
+/* In dollars: the change on the value entered, with the percent beneath it, small and muted. */
+.fig-val.has-usd {
+  display: grid;
+  gap: 1px;
+}
+
+.fig-val .fig-pct {
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.2;
+  color: var(--muted);
+}
+
 .rangebar {
   position: relative;
   height: 34px;
@@ -1658,6 +1683,27 @@ button {
 
 .rangebar .rb-high {
   background: var(--success);
+}
+
+/* A figure past an end of the scale sits at that end with a small arrow pointing out of it. */
+.rangebar [data-over]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  margin-top: -4px;
+  border: 4px solid transparent;
+}
+
+.rangebar [data-over="low"]::after {
+  right: 100%;
+  margin-right: 2px;
+  border-right-color: var(--text-2);
+}
+
+.rangebar [data-over="high"]::after {
+  left: 100%;
+  margin-left: 2px;
+  border-left-color: var(--text-2);
 }
 
 .rangebar .rb-dot {
@@ -2626,6 +2672,10 @@ button {
 
   .fig-val {
     font-size: 19px;
+  }
+
+  .fig-val.has-usd {
+    font-size: 16px;
   }
 
   .divword {

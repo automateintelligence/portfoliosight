@@ -96,6 +96,23 @@ export function amountsToWeights(amounts: Amount[], unit: Unit, lastClose: Price
 }
 
 /**
+ * What the amounts entered are worth in dollars: dollars as entered, shares at the last close.
+ * `pct`: the unit is percent, or nothing above zero is entered. `unknown_price`: shares held in a
+ * fund without a last close (indices in `unknownPrice`), so the total cannot be known.
+ */
+export function amountsValue(
+  amounts: Amount[],
+  unit: Unit,
+  lastClose: Price[],
+): { status: "usd"; total: number } | { status: "pct" } | { status: "unknown_price"; unknownPrice: number[] } {
+  if (unit === "pct") return { status: "pct" };
+  const unknownPrice = unit === "shares" ? amounts.flatMap((amount, i) => ((amount ?? 0) > 0 && (lastClose[i] ?? null) === null ? [i] : [])) : [];
+  if (unknownPrice.length > 0) return { status: "unknown_price", unknownPrice };
+  const total = sum(worth(amounts, unit, lastClose));
+  return Number.isFinite(total) && total > 0 ? { status: "usd", total } : { status: "pct" };
+}
+
+/**
  * Moves from the mix entered (`wNow`) to the selected mix (`wSel`). Per fund: `dpp` the change as
  * a fraction of the portfolio, `dUsd = dpp * value` (not in % mode), `dShares` whole shares (Shares
  * mode only; `null` with `unknownPrice` for a fund without a last close). `value` is the
