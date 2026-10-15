@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -65,3 +65,52 @@ def test_within_trading_days_boundary():
     assert calendar.within_trading_days(monday, monday, 0) is True
     # A non-session D counts back from the session before it.
     assert calendar.session_back(date(2026, 3, 8), 0) == date(2026, 3, 6)
+
+
+def _utc(*parts: int) -> datetime:
+    return datetime(*parts, tzinfo=UTC)
+
+
+def _la(*parts: int) -> datetime:
+    return datetime(*parts, tzinfo=LA)
+
+
+@pytest.mark.parametrize(
+    ("label", "run_at", "minutes", "expected"),
+    [
+        ("scheduled 02:00 start", _la(2026, 10, 14, 2, 0), 30, _utc(2026, 10, 15, 8, 30)),
+        ("manual 21:50 start", _la(2026, 10, 13, 21, 50), 30, _utc(2026, 10, 14, 8, 30)),
+        ("manual, before 01:30", _la(2026, 10, 14, 1, 0), 30, _utc(2026, 10, 14, 8, 30)),
+        ("manual, after 01:30", _la(2026, 10, 14, 1, 45), 30, _utc(2026, 10, 15, 8, 30)),
+        ("start exactly at 01:30", _la(2026, 10, 14, 1, 30), 30, _utc(2026, 10, 15, 8, 30)),
+        ("UTC instant", _utc(2026, 10, 14, 9, 0), 30, _utc(2026, 10, 15, 8, 30)),
+        ("lead of 90 minutes", _la(2026, 10, 14, 2, 0), 90, _utc(2026, 10, 15, 7, 30)),
+        ("lead of 0 minutes", _la(2026, 10, 14, 2, 0), 0, _utc(2026, 10, 15, 9, 0)),
+        # Spring forward (2026-03-08): 01:30 is still PST; the next morning's is PDT.
+        ("eve of spring forward", _la(2026, 3, 7, 2, 0), 30, _utc(2026, 3, 8, 9, 30)),
+        ("day of spring forward", _la(2026, 3, 8, 3, 0), 30, _utc(2026, 3, 9, 8, 30)),
+        # 02:00 does not exist that day: the timer fires at 03:00 PDT, which is 02:00 PST.
+        ("spring forward, lead 0", _la(2026, 3, 7, 2, 0), 0, _utc(2026, 3, 8, 10, 0)),
+        # Fall back (2026-11-01): 01:00-02:00 happens twice and 02:00 PST is the start, so the
+        # deadline is the second 01:30 (PST), 30 minutes before it.
+        ("eve of fall back", _la(2026, 10, 31, 2, 0), 30, _utc(2026, 11, 1, 9, 30)),
+        ("01:45 PDT on fall back", _utc(2026, 11, 1, 8, 45), 30, _utc(2026, 11, 1, 9, 30)),
+        ("01:45 PST on fall back", _utc(2026, 11, 1, 9, 45), 30, _utc(2026, 11, 2, 9, 30)),
+        ("day of fall back", _la(2026, 11, 1, 2, 0), 30, _utc(2026, 11, 2, 9, 30)),
+    ],
+)
+def test_refresh_deadline(label, run_at, minutes, expected):
+    got = calendar.refresh_deadline(run_at, minutes)
+    assert got == expected, label
+    assert got.utcoffset() == timedelta(0) and got > run_at
+
+
+@pytest.mark.parametrize("minutes", [-1, 24 * 60])
+def test_refresh_deadline_refuses_a_lead_outside_one_day(minutes):
+    with pytest.raises(ValueError, match="minutes"):
+        calendar.refresh_deadline(_utc(2026, 10, 14, 9, 0), minutes)
+
+
+def test_refresh_deadline_needs_an_aware_instant():
+    with pytest.raises(ValueError, match="timezone-aware"):
+        calendar.refresh_deadline(datetime(2026, 10, 14, 2, 0), 30)

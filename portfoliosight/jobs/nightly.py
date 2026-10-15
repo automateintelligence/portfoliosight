@@ -5,7 +5,10 @@
 Steps: (1) ``D_G`` and ``G``; a generation already published skips to step 4. (2) Refresh
 tier 1. (3) Write ``meta/{G}/generation.json`` if absent, build every preset tensor whose key is
 missing, and only when all twelve exist write ``meta/{G}/presets.json`` and switch
-``meta/current.json``. (4) Refresh tiers 2 and 3 within the provider budget. (5) Delete every
+``meta/current.json``. (4) Refresh tiers 2 and 3 within the provider budget, stopping between
+symbols at the deadline, by default 30 minutes before the next scheduled start
+(``PS_NIGHTLY_DEADLINE_MINUTES_BEFORE_NEXT``), so that start is never skipped; ``status.json``
+records ``deadline`` and ``stopped``, and the walk resumes on the next run. (5) Delete every
 generation older than the previous one. (6) Write ``meta/status.json``. (7) Evict the scratch
 cache. A rerun after an interruption resumes at the first missing tensor; nothing under
 ``meta/{G}/`` is ever rewritten.
@@ -38,7 +41,7 @@ from portfoliosight.api.queue import BUILD_FAILED, build_job
 from portfoliosight.data import cache as cache_mod
 from portfoliosight.data import download
 from portfoliosight.data import store as store_mod
-from portfoliosight.data.calendar import generation_date, generation_id
+from portfoliosight.data.calendar import generation_date, generation_id, refresh_deadline
 from portfoliosight.data.secrets import RedactingFilter, install_redaction, redacted_traceback
 from portfoliosight.engine import ENGINE_VERSION
 from portfoliosight.engine.caps import RULE
@@ -55,6 +58,8 @@ PREVIOUS_KEY = "meta/previous.json"
 PROVIDERS_ENV = "PS_NIGHTLY_PROVIDERS"
 FIXTURE_DIR_ENV = "PS_FIXTURE_DIR"
 FIXED_NOW_ENV = "PS_FIXED_NOW"
+DEADLINE_MINUTES_ENV = "PS_NIGHTLY_DEADLINE_MINUTES_BEFORE_NEXT"
+DEFAULT_DEADLINE_MINUTES = 30
 MAX_STATUS_ERRORS = 200
 _GENERATION_RE = re.compile(r"(\d{4}-\d{2}-\d{2})-([0-9.]+)")
 
@@ -202,20 +207,27 @@ def run(
     now: datetime,
     providers: Mapping[str, Any],
     build_fn: BuildFn | None = None,
+    clock: download.Clock | None = None,
+    deadline_minutes_before_next: int = DEFAULT_DEADLINE_MINUTES,
 ) -> dict[str, Any]:
     """One nightly run against ``store``; returns what it wrote to ``meta/status.json``.
 
-    ``now`` is the timezone-aware start of the run; ``D_G`` and ``G`` derive from it.
-    ``providers`` maps ``"tiingo"`` and ``"tsp"`` to price providers. ``build_fn`` builds and
-    writes one tensor (default ``portfoliosight.api.queue.build_job``).
+    ``now`` is the timezone-aware start of the run; ``D_G``, ``G`` and the deadline of the
+    tier 2 and 3 walk (``deadline_minutes_before_next`` before the next scheduled start) derive
+    from it. ``providers`` maps ``"tiingo"`` and ``"tsp"`` to price providers. ``build_fn``
+    builds and writes one tensor (default ``portfoliosight.api.queue.build_job``). ``clock`` is
+    the time during the run (default ``now`` plus the monotonic time elapsed since the call).
     """
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     build = build_fn if build_fn is not None else build_job
+    deadline = refresh_deadline(now, deadline_minutes_before_next)
     begun = time.monotonic()
 
-    def clock() -> datetime:
+    def elapsed() -> datetime:
         return (now + timedelta(seconds=time.monotonic() - begun)).astimezone(UTC)
+
+    tick: download.Clock = clock if clock is not None else elapsed
 
     d_g = generation_date(now)
     generation = generation_id(d_g, ENGINE_VERSION)
@@ -231,25 +243,31 @@ def run(
         "preset_build_seconds": {},
         "preset_tensors_built": {},
         "pruned": [],
+        "deadline": deadline.isoformat(),
+        "stopped": None,
         "errors": errors,
         "error_count": 0,
     }
 
-    def refresh(tiers: tuple[int, ...]) -> None:
+    def refresh(tiers: tuple[int, ...], until: datetime | None = None) -> None:
         report = download.RunReport()
         download.run(
             "refresh",
             store=store,
             providers=providers,
-            clock=clock,
+            clock=tick,
             sleep=time.sleep,
             tiers=tiers,
             report=report,
+            deadline=until,
         )
         for tier, count in report.refreshed.items():
             refreshed[str(tier)] = refreshed.get(str(tier), 0) + count
         errors.extend({"step": "refresh", **error} for error in report.errors)
-        if report.stopped:
+        if report.stopped == download.DEADLINE_REACHED:
+            # Planned, not a failure: the rest of the walk is the next run's.
+            status["stopped"] = report.stopped
+        elif report.stopped:
             errors.append({"step": "refresh", "error": report.stopped})
 
     def write_status() -> None:
@@ -262,7 +280,7 @@ def run(
             refresh((1,))
             if not store.exists(generation_key(generation)):
                 store_mod.put_json(
-                    store, generation_key(generation), _generation_meta(generation, d_g, clock())
+                    store, generation_key(generation), _generation_meta(generation, d_g, tick())
                 )
             seconds, built, complete = _build_presets(store, generation, build, errors)
             status["preset_build_seconds"] = seconds
@@ -274,7 +292,7 @@ def run(
                 # Recorded before the switch: once the pointer moves, what it left is known.
                 outgoing = {"current": generation, "previous": _current(store)}
                 store_mod.put_json(store, PREVIOUS_KEY, outgoing)
-                pointer = {"generation": generation, "published_at": clock().isoformat()}
+                pointer = {"generation": generation, "published_at": tick().isoformat()}
                 store_mod.put_json(store, CURRENT_KEY, pointer)
                 status["published"] = True
                 logger.info("published generation %s", generation)
@@ -283,7 +301,7 @@ def run(
                     {"step": "publish", "error": "not every preset tensor exists; not published"}
                 )
                 logger.error("generation %s is incomplete and was not published", generation)
-        refresh((2, 3))
+        refresh((2, 3), deadline)
         current = _current(store)
         if current is not None:
             status["pruned"] = prune_generations(store, current)
@@ -291,7 +309,7 @@ def run(
         errors.append({"step": "run", "error": _error_text(exc)})
         write_status()
         raise
-    status["finished"] = clock().isoformat()
+    status["finished"] = tick().isoformat()
     write_status()
     cache_mod.evict(cache_dir=cache_mod.cache_dir_from_env())
     return status
@@ -324,6 +342,20 @@ def _now_from_env() -> datetime:
     return moment
 
 
+def _deadline_minutes_from_env() -> int:
+    """Minutes before the next scheduled start at which the tier 2 and 3 walk stops."""
+    raw = os.environ.get(DEADLINE_MINUTES_ENV, "").strip()
+    if not raw:
+        return DEFAULT_DEADLINE_MINUTES
+    try:
+        minutes = int(raw)
+    except ValueError:
+        minutes = -1
+    if not 0 <= minutes < 24 * 60:
+        raise ValueError(f"{DEADLINE_MINUTES_ENV} must be an integer in [0, 1440), not {raw!r}")
+    return minutes
+
+
 def main() -> int:
     """The container entry point: 0 when the run's generation is published, else 1."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -331,11 +363,14 @@ def main() -> int:
         store = store_mod.store_from_env()
         providers = _providers_from_env()
         now = _now_from_env()
+        minutes = _deadline_minutes_from_env()
     except (store_mod.StoreConfigError, download.ProviderError, ValueError, OSError) as exc:
         print(f"nightly not run: {exc}", file=sys.stderr)
         return 2
     try:
-        status = run(store=store, now=now, providers=providers)
+        status = run(
+            store=store, now=now, providers=providers, deadline_minutes_before_next=minutes
+        )
     except Exception as exc:
         # Logged here, redacted: the interpreter's own traceback would print an error text,
         # and any credential in it, as it is.

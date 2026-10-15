@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
@@ -43,6 +43,28 @@ def generation_date(run_at: datetime) -> date:
         if calendar.session_close(session) <= cutoff:
             return date.fromisoformat(session)
     raise RuntimeError(f"no {EXCHANGE} session in the {_LOOKBACK.days} days before {run_day}")
+
+
+def refresh_deadline(run_at: datetime, minutes_before: int) -> datetime:
+    """The first instant after ``run_at`` that is ``minutes_before`` a scheduled start (UTC).
+
+    Each scheduled start is 02:00 America/Los_Angeles (on a spring-forward day, where 02:00 does
+    not exist, the instant 02:00 PST, i.e. 03:00 PDT); the lead is subtracted in elapsed time.
+    A run started inside the lead of the next start gets the deadline of the start after it.
+    """
+    if run_at.tzinfo is None:
+        raise ValueError("run_at must be timezone-aware")
+    if not 0 <= minutes_before < 24 * 60:
+        raise ValueError(f"minutes_before must be in [0, 1440), not {minutes_before}")
+    started = run_at.astimezone(UTC)
+    run_day = run_at.astimezone(SCHEDULE_ZONE).date()
+    lead = timedelta(minutes=minutes_before)
+    for offset in range(3):
+        start = datetime.combine(run_day + timedelta(days=offset), SCHEDULED_START, SCHEDULE_ZONE)
+        deadline = start.astimezone(UTC) - lead
+        if deadline > started:
+            return deadline
+    raise AssertionError("unreachable: a start within two days lies beyond any lead")
 
 
 def generation_id(d_g: date, engine_version: str) -> str:

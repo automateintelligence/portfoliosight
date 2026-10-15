@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -274,6 +274,109 @@ def test_a_stopped_refresh_is_recorded(unpublished, monkeypatch):
     assert {"step": "refresh", "error": "daily budget spent"} in status["errors"]
 
 
+class _FakeClock:
+    def __init__(self, start: datetime):
+        self.now = start.astimezone(UTC)
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+class _Ticking(_NoData):
+    """Each request takes ten minutes on ``clock``."""
+
+    def __init__(self, name: str, clock: _FakeClock, calls: list[str]):
+        super().__init__(name)
+        self.clock, self.calls = clock, calls
+
+    def fetch_daily(self, symbol, start, end=None):
+        self.clock.now += timedelta(minutes=10)
+        return super().fetch_daily(symbol, start, end)
+
+
+class _BuildUntil(_FastBuild):
+    """Builds every tensor; the builds end with ``clock`` at ``until``.
+
+    ``before`` is the requests made before the first build (tier 1's).
+    """
+
+    def __init__(self, clock: _FakeClock, until: datetime, calls: list[str]):
+        super().__init__()
+        self.clock, self.until, self.requests = clock, until.astimezone(UTC), calls
+        self.before: list[str] | None = None
+
+    def __call__(self, *args, **kwargs):
+        if self.before is None:
+            self.before = list(self.requests)
+        super().__call__(*args, **kwargs)
+        self.clock.now = self.until
+
+
+LA = ZoneInfo("America/Los_Angeles")
+
+
+@pytest.mark.parametrize(
+    ("walk_starts", "requests"),
+    [
+        # 01:00, 01:10 and 01:20 start before the 01:30 deadline; 01:30 does not.
+        (datetime(2026, 10, 13, 1, 0, tzinfo=LA), 3),
+        # The builds ran past the deadline: tiers 2 and 3 wait, publication does not.
+        (datetime(2026, 10, 13, 1, 45, tzinfo=LA), 0),
+    ],
+)
+def test_the_lower_tier_walk_stops_at_the_deadline_and_publication_is_untouched(
+    unpublished, generation, walk_starts, requests
+):
+    """A manual run at 00:30 PT: the deadline is 01:30 PT, 30 minutes before the 02:00 start."""
+    store = unpublished
+    clock = _FakeClock(datetime(2026, 10, 13, 0, 30, tzinfo=LA))
+    calls: list[str] = []
+    providers = {"tiingo": _Ticking("tiingo", clock, calls), "tsp": _Ticking("tsp", clock, calls)}
+    build = _BuildUntil(clock, walk_starts, calls)
+    status = nightly.run(
+        store=store, now=clock.now, providers=providers, build_fn=build, clock=clock
+    )
+    assert len(build.calls) == 12 and status["published"] is True
+    assert store_mod.get_json(store, "meta/current.json")["generation"] == generation
+    # Tier 1 (the TSP L funds the fixture leaves behind) runs to the end, past the deadline.
+    assert build.before is not None and len(build.before) == 11
+    assert all(symbol.startswith("TSP-L") for symbol in build.before)
+    assert len(calls) - len(build.before) == requests
+    assert status["deadline"] == "2026-10-13T08:30:00+00:00"
+    assert status["stopped"] == download.DEADLINE_REACHED
+    assert not [error for error in status["errors"] if "deadline" in json.dumps(error)]
+    assert store_mod.get_json(store, "meta/status.json") == status
+    assert status["finished"] is not None
+
+
+def test_only_the_lower_tiers_get_the_deadline(unpublished, monkeypatch):
+    seen: list[tuple[tuple[int, ...], datetime | None]] = []
+    real = download.run
+
+    def spy(mode, **kwargs):
+        seen.append((tuple(kwargs["tiers"]), kwargs.get("deadline")))
+        return real(mode, **kwargs)
+
+    monkeypatch.setattr(download, "run", spy)
+    status = nightly.run(
+        store=unpublished,
+        now=NOW,
+        providers=_providers(),
+        build_fn=_FastBuild(),
+        deadline_minutes_before_next=45,
+    )
+    deadline = datetime(2026, 10, 14, 8, 15, tzinfo=UTC)  # 01:15 PDT the next morning
+    assert seen == [((1,), None), ((2, 3), deadline)]
+    assert status["deadline"] == deadline.isoformat() and status["stopped"] is None
+
+
+def test_deadline_minutes_come_from_the_environment(monkeypatch):
+    monkeypatch.delenv("PS_NIGHTLY_DEADLINE_MINUTES_BEFORE_NEXT", raising=False)
+    assert nightly._deadline_minutes_from_env() == 30
+    monkeypatch.setenv("PS_NIGHTLY_DEADLINE_MINUTES_BEFORE_NEXT", " 75 ")
+    assert nightly._deadline_minutes_from_env() == 75
+
+
 def test_now_must_be_timezone_aware(unpublished):
     with pytest.raises(ValueError, match="timezone-aware"):
         nightly.run(store=unpublished, now=datetime(2026, 10, 13, 2, 0), providers=_providers())
@@ -425,6 +528,9 @@ def test_entry_point_publishes_real_tensors_offline(unpublished, generation, mon
         {"PS_NIGHTLY_PROVIDERS": "fixture", "PS_FIXTURE_DIR": "/nonexistent/fixtures"},
         {"PS_FIXED_NOW": "2026-10-13T02:00:00"},
         {"PS_FIXED_NOW": "tomorrow"},
+        {"PS_NIGHTLY_DEADLINE_MINUTES_BEFORE_NEXT": "soon"},
+        {"PS_NIGHTLY_DEADLINE_MINUTES_BEFORE_NEXT": "1440"},
+        {"PS_NIGHTLY_DEADLINE_MINUTES_BEFORE_NEXT": "-5"},
     ],
 )
 def test_entry_point_refuses_a_bad_environment(unpublished, monkeypatch, capsys, env):
