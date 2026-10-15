@@ -168,6 +168,14 @@ export const stressLine = (pct: string) => `What this mix did: ${pct} (${plain.s
 export const stressGap = (n: number, m: number, pct: string) =>
   `${n} of ${m} funds (${pct}% of the mix) didn't exist yet; result is for the rest.`;
 /** The running total of percentages while it is not exactly 100%: "Total: 92%, 8% to go". */
+/** The menu limit of this browser's access tier (engines spec 6.2). */
+export const fundsUpTo = (n: number) => `Up to ${n} funds.`;
+export const menuFull = (n: number) => `A menu holds up to ${n} funds.`;
+export const menuNeedsMore = (n: number) => `A menu needs at least ${n} funds.`;
+/** A shared link with more funds than this browser's tier allows is refused whole, never cut. */
+export const linkTooManyFunds = (n: number) => `This menu has more funds than this site allows (${n}).`;
+export const adminTag = "Admin";
+export const adminLine = (n: number) => `Admin mode: menus of up to ${n} funds.`;
 export const fundsTotal = (total: string, gap: string, over: boolean) => `Total: ${total}%, ${gap}% ${over ? "over" : "to go"}`;
 export const staleLine = (asof: string) => `Prices through ${asof}; the nightly refresh has not run since then.`;
 // Behind the details toggle only (it names the technical measure).

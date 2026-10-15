@@ -3,9 +3,12 @@
 //   1. host: `www` is redirected to the apex, any other host is a 404;
 //   2. private preview (spec §9.6): without a credential, a static 403 page and nothing else;
 //   3. `/api/*`: reads come straight from R2; `POST /api/tensors`, `POST /api/range`,
-//      `GET /api/health` and a tensor that R2 does not hold are forwarded to the origin;
-//      `POST /api/share` is handled here; every other `/api/` path or method is a 404;
-//   4. everything else is a static asset.
+//      `GET /api/health` and a tensor that R2 does not hold are forwarded to the origin (with
+//      `x-ps-tier: admin` only for a verified admin cookie, engines spec §6.2);
+//      `POST /api/share` and `GET /api/tier` are handled here; every other `/api/` path or
+//      method is a 404;
+//   4. a page request with `?admin=` sets or clears the admin cookie and redirects (admin.ts);
+//   5. everything else is a static asset.
 //
 // The host check comes first so that a foreign host learns nothing (not even that a preview
 // exists) and a preview key is only ever honoured on the apex.
@@ -13,13 +16,14 @@
 // This module must load in plain Node (unit tests): Workers types are ambient only and nothing
 // is imported from `cloudflare:*`.
 
+import { adminLink, isAdmin, menuMax, serveTier, TIER_HEADER, tierOf, type AdminEnv } from "./admin";
 import { isPreviewOn, previewGate } from "./preview";
 import { handleShare, jsonError, readBodyLimited, ShareLimiter, type ShareEnv, type ShareLimiterFn } from "./share";
 
 // wrangler binds SHARE_LIMITER to this class by name
 export { ShareLimiter };
 
-export interface Env extends ShareEnv {
+export interface Env extends ShareEnv, AdminEnv {
   API_ORIGIN: string;
   PS_PRIVATE_PREVIEW?: string;
   DATA: R2Bucket;
@@ -104,6 +108,8 @@ async function serveSymbols(env: Env): Promise<Response> {
 async function forward(request: Request, env: Env, rest: string, body?: Uint8Array, method = request.method): Promise<Response> {
   if (!env.PS_GATE_SECRET) return unavailable();
   const headers = new Headers({ "x-ps-gate": env.PS_GATE_SECRET, accept: "application/json" });
+  // the API trusts the tier only beside the gate secret; a visitor's own x-ps-tier never goes up
+  if (await isAdmin(request, env)) headers.set(TIER_HEADER, "admin");
   const ip = request.headers.get("CF-Connecting-IP");
   if (ip !== null) headers.set("CF-Connecting-IP", ip);
   const contentType = request.headers.get("content-type");
@@ -171,12 +177,13 @@ async function handleApi(request: Request, env: Env, pathname: string): Promise<
   if (route === "GET presets") return servePresets(env);
   if (route === "GET symbols") return serveSymbols(env);
   if (route === "GET health") return forward(request, env, "health");
+  if (route === "GET tier") return serveTier(request, env);
   if (request.method === "POST" && FORWARDED_POSTS.has(rest)) {
     const body = await readBodyLimited(request, MAX_FORWARD_BODY_BYTES);
     if (body === null) return jsonError(413, "payload_too_large", "The request body is over 16 KB");
     return forward(request, env, rest, body);
   }
-  if (route === "POST share") return handleShare(request, env, durableLimiter(env));
+  if (route === "POST share") return handleShare(request, env, durableLimiter(env), menuMax(env, await tierOf(request, env)));
   if ((request.method === "GET" || request.method === "HEAD") && rest.startsWith("tensors/")) {
     return serveTensor(request, env, rest.split("/").slice(1));
   }
@@ -194,7 +201,10 @@ export default {
     const isApi = url.pathname === "/api" || url.pathname.startsWith("/api/");
     let response = await previewGate(request, env);
     if (response === null) {
-      if (!isApi) return env.ASSETS.fetch(request);
+      if (!isApi) {
+        const link = request.method === "GET" || request.method === "HEAD" ? await adminLink(request, env) : null;
+        return link ?? env.ASSETS.fetch(request);
+      }
       try {
         response = await handleApi(request, env, url.pathname);
       } catch {

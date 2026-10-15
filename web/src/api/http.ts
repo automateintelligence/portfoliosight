@@ -48,6 +48,12 @@ export type PresetsBody = z.infer<typeof presetsSchema>;
 export type SymbolEntry = z.infer<typeof symbolsSchema>["symbols"][number];
 export type Health = z.infer<typeof healthSchema>;
 
+const tierSchema = z.object({ tier: z.enum(["public", "admin"]), menu_max: z.number().int().min(2) }).passthrough();
+
+export type Tier = { tier: "public" | "admin"; menuMax: number };
+/** The public limit (engines spec 6.2), used until `/api/tier` answers and whenever it cannot. */
+export const PUBLIC_TIER: Tier = { tier: "public", menuMax: 30 };
+
 export type TensorAnswer =
   | { kind: "tensor"; tensor: Tensor }
   | { kind: "ready"; url: string }
@@ -86,6 +92,22 @@ export async function fetchSymbols(): Promise<SymbolEntry[]> {
   const res = await call("/api/symbols");
   if (!res.ok) throw new Error(`symbols ${res.status}`);
   return symbolsSchema.parse(await res.json()).symbols;
+}
+
+/**
+ * `GET /api/tier`: this browser's access tier and menu limit, decided by the Worker from the
+ * admin cookie. Anything but a clear answer is the public tier; only a challenge throws.
+ */
+export async function fetchTier(): Promise<Tier> {
+  try {
+    const res = await call("/api/tier");
+    if (!res.ok) return PUBLIC_TIER;
+    const body = tierSchema.safeParse(await jsonOf(res));
+    return body.success ? { tier: body.data.tier, menuMax: body.data.menu_max } : PUBLIC_TIER;
+  } catch (err) {
+    if (err instanceof ChallengeError) throw err;
+    return PUBLIC_TIER;
+  }
 }
 
 export async function fetchHealth(): Promise<Health> {

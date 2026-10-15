@@ -1,8 +1,9 @@
 """A-PS-52 — the bundle carries no secret, no gate header and no origin host.
 
 Claim: `web/dist` after `npm run build` contains none of the secret values from
-`~/.secrets/portfoliosight.env`, neither the string `x-ps-gate` nor `PS_GATE_SECRET`, nor the
-host `api.portfoliosight.ai`; every API call in the bundle targets a same-origin `/api/` path.
+`~/.secrets/portfoliosight.env` (`PS_ADMIN_SECRET` included, 2026-10-15), neither the strings
+`x-ps-gate`, `PS_GATE_SECRET`, `x-ps-tier`, `PS_ADMIN_SECRET` nor `ps_admin`, nor the host
+`api.portfoliosight.ai`; every API call in the bundle targets a same-origin `/api/` path.
 
 Pinned interface (the product must provide exactly this): `web/package.json` with a `build`
 script that writes the site to `web/dist` (an `index.html` plus at least one JavaScript file);
@@ -23,17 +24,26 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 WEB = ROOT / "web"
 DIST = WEB / "dist"
-# The six credentials of the env file. PS_SHARE_TEST_RECIPIENT is left out on purpose: it is an
+# The seven credentials of the env file. PS_SHARE_TEST_RECIPIENT is left out on purpose: it is an
 # e-mail address, not a credential, and may equal an address the page legitimately shows.
 SECRET_NAMES = (
     "PS_GATE_SECRET",
+    "PS_ADMIN_SECRET",
     "TIINGO_API_KEY",
     "CLOUDFLARE_ACCOUNT_ID",
     "CLOUDFLARE_API_TOKEN",
     "CLOUDFLARE_R2_ACCESS_KEY_ID",
     "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
 )
-FORBIDDEN = ("x-ps-gate", "PS_GATE_SECRET", "api.portfoliosight.ai", "MAILCHANNELS")
+FORBIDDEN = (
+    "x-ps-gate",
+    "PS_GATE_SECRET",
+    "x-ps-tier",
+    "PS_ADMIN_SECRET",
+    "ps_admin",
+    "api.portfoliosight.ai",
+    "MAILCHANNELS",
+)
 CODE_SUFFIXES = {".js", ".mjs", ".cjs", ".html", ".htm"}
 ABSOLUTE_API = re.compile(rb"https?://[^\s\"'`<>()\\]*/api/", re.IGNORECASE)
 ORIGIN_PATH = re.compile(rb"/v1/")

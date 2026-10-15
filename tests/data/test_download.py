@@ -597,8 +597,9 @@ def test_failed_upload_leaves_no_entry_and_the_next_run_retries(tmp_path):
 
     store = Flaky(inner.root)
     provider = FakeProvider(default_available=FEB23)
-    with pytest.raises(OSError, match="upload failed"):
-        _go("catch-up", store, provider, Clock(date(2026, 2, 24)), ["NEW"])
+    # The failed write is the symbol's error: the run goes on and ends with status 1.
+    code, _ = _go("catch-up", store, provider, Clock(date(2026, 2, 24)), ["NEW"])
+    assert code == 1
     # The catalog was still written on the way out, and it does not name the symbol.
     assert _manifest(store) == {} and _listed(store) == []
     store.failing = False

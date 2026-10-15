@@ -23,7 +23,7 @@ function show(opts: { unit: Unit; amounts: (number | null)[]; selected?: number[
   const rows: Row[] = funds.map((f, i) => ({ id: f.id, name: f.name ?? f.id, amount: opts.amounts[i] ?? null }));
   const selected = opts.selected === undefined ? funds.map((_, i) => (i === 0 ? 0.4 : i === 1 ? 0.6 : 0)) : opts.selected;
   const symbols = [...funds.map((f) => ({ id: f.id, name: f.name ?? f.id })), { id: "ZZNEW", name: "A New Fund" }];
-  const props = { rows, unit: opts.unit, tensor, symbols: symbols as never, mixStatus: "ok" as const, setAside: 0, menuError: null, busy: false, selected, onUnit: opts.onUnit ?? noop, onAmount: opts.onAmount ?? noop, onUseMenu: opts.onUseMenu ?? noop, onNeedSymbols: noop };
+  const props = { rows, unit: opts.unit, tensor, symbols: symbols as never, mixStatus: "ok" as const, setAside: 0, menuError: null, busy: false, menuMax: 30, selected, onUnit: opts.onUnit ?? noop, onAmount: opts.onAmount ?? noop, onUseMenu: opts.onUseMenu ?? noop, onNeedSymbols: noop };
   return { rows, ...render(<Funds {...props} />) };
 }
 const cell = (kind: "entered" | "selected", id: string) => screen.getByTestId(`mix-${kind}-${id}`).textContent;
@@ -52,7 +52,7 @@ it("scales percentages up over the funds in use when one fund is set aside", () 
   const out = { id: "ZZOUT" };
   const partial = parseTensor({ ...raw, universe: { ...raw.universe, excluded: [{ id: out.id, reason: "no data since 2024-10-30", last_close: null }] } });
   const rows: Row[] = [funds[0], funds[1], out].map((f, i) => ({ id: f.id, name: f.id, amount: [60, 20, 20][i] }));
-  render(<Funds rows={rows} unit="pct" tensor={partial} symbols={null} mixStatus="ok" setAside={0.2} menuError={null} busy={false} selected={null} onUnit={noop} onAmount={noop} onUseMenu={noop} onNeedSymbols={noop} />);
+  render(<Funds rows={rows} unit="pct" tensor={partial} symbols={null} mixStatus="ok" setAside={0.2} menuError={null} busy={false} menuMax={30} selected={null} onUnit={noop} onAmount={noop} onUseMenu={noop} onNeedSymbols={noop} />);
   // exactly 100%: no running total and no Scale to 100%
   expect(screen.queryByTestId("funds-total")).toBeNull();
   expect(screen.queryByTestId("funds-scale100")).toBeNull();
@@ -230,7 +230,7 @@ it("Scale to 100% hands keyboard focus to Clear all as it goes away", () => {
 
 it("keeps one live region mounted for the total, empty while there is nothing to say", () => {
   const rows = (amounts: number[]): Row[] => funds.slice(0, amounts.length).map((f, i) => ({ id: f.id, name: f.name ?? f.id, amount: amounts[i] }));
-  const props = { unit: "pct" as const, tensor, symbols: null, mixStatus: "ok" as const, setAside: 0, menuError: null, busy: false, selected: null, onUnit: noop, onAmount: noop, onUseMenu: noop, onNeedSymbols: noop };
+  const props = { unit: "pct" as const, tensor, symbols: null, mixStatus: "ok" as const, setAside: 0, menuError: null, busy: false, menuMax: 30, selected: null, onUnit: noop, onAmount: noop, onUseMenu: noop, onNeedSymbols: noop };
   const { rerender } = render(<Funds {...props} rows={rows([60, 40])} />);
   const live = screen.getByRole("status");
   expect(live.textContent).toBe("");
@@ -241,4 +241,42 @@ it("keeps one live region mounted for the total, empty while there is nothing to
   rerender(<Funds {...props} rows={rows([60, 40])} />);
   expect(screen.getByRole("status")).toBe(live);
   expect(live.textContent).toBe("");
+});
+
+it("holds up to the tier's limit: the 31st fund refused for the public, accepted for an admin, the 101st refused for an admin", () => {
+  const menu = (n: number): Row[] => Array.from({ length: n }, (_, i) => ({ id: `F${i}`, name: `Fund ${i}`, amount: null }));
+  const symbols = [...menu(101).map((r) => ({ id: r.id, name: r.name })), { id: "ZZNEW", name: "A New Fund" }];
+  const addZznew = () => {
+    fireEvent.change(screen.getByTestId("fund-add"), { target: { value: "ZZNEW" } });
+    fireEvent.keyDown(screen.getByTestId("fund-add"), { key: "Enter" });
+  };
+  const open = (rows: Row[], menuMax: number, onUseMenu = vi.fn()) => {
+    render(<Funds rows={rows} unit="pct" tensor={null} symbols={symbols as never} mixStatus="empty" setAside={null} menuError={null} busy={false} menuMax={menuMax} selected={null} onUnit={noop} onAmount={noop} onUseMenu={onUseMenu} onNeedSymbols={noop} />);
+    return onUseMenu;
+  };
+
+  // public: 30 is full; the 31st is refused with a message and nothing to recalculate
+  open(menu(30), 30);
+  expect(screen.getByTestId("funds-limit").textContent).toContain("Up to 30 funds.");
+  addZznew();
+  expect(screen.getByRole("alert").textContent).toBe("A menu holds up to 30 funds.");
+  expect(screen.queryByTestId("use-menu")).toBeNull();
+  expect(screen.queryByTestId("fund-row-ZZNEW")).toBeNull();
+  cleanup();
+
+  // admin: the 31st goes in and can be recalculated
+  const onUseMenu = open(menu(30), 100);
+  expect(screen.getByTestId("funds-limit").textContent).toContain("Up to 100 funds.");
+  addZznew();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByTestId("fund-row-ZZNEW")).toBeTruthy();
+  fireEvent.click(screen.getByTestId("use-menu"));
+  expect(onUseMenu.mock.calls[0][0].length).toBe(31);
+  cleanup();
+
+  // admin: 100 is full; the 101st is refused
+  open(menu(100), 100);
+  addZznew();
+  expect(screen.getByRole("alert").textContent).toBe("A menu holds up to 100 funds.");
+  expect(screen.queryByTestId("fund-row-ZZNEW")).toBeNull();
 });

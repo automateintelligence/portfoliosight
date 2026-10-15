@@ -135,6 +135,7 @@ def test_seed_converts_the_lake_and_resumes(lake, store_env, capsys):
         "status": "pending",
         "reason": "corporate actions not yet verified after 2026-02-27",
         "fetched_at": None,
+        "relies_on_yfinance": False,
     }
     assert (entries["SGOV"]["tier"], entries["SGOV"]["income"]) == (2, True)
     assert (entries["AAPL"]["tier"], entries["AAPL"]["kind"]) == (3, "stock")
