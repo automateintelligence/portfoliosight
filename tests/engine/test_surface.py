@@ -7,6 +7,7 @@ import math
 import numpy as np
 import pytest
 
+from portfoliosight.engine import ladder as ladder_module
 from portfoliosight.engine import surface as surface_module
 from portfoliosight.engine.ladder import EnbProgram, random_start
 from portfoliosight.engine.optimize import MenuPrograms, frontier
@@ -104,13 +105,13 @@ def test_surface_is_deterministic(menu):
 
 def test_a_column_that_gains_from_its_neighbours_is_laid_out_again(menu, monkeypatch):
     calls = []
-    real_column = surface_module.column
+    real_column = ladder_module.column
 
     def recording(program, risk, pool, levels):
         calls.append(risk)
         return real_column(program, risk, pool, levels)
 
-    monkeypatch.setattr(surface_module, "column", recording)
+    monkeypatch.setattr(ladder_module, "column", recording)  # one worker: solved in this process
     monkeypatch.setattr(surface_module, "spread_peaks", lambda *_: [2, 5])
     again = surface(menu.program, menu.programs, menu.front, levels=LEVELS)
     assert len(calls) == NX + 2 and calls[-2:] == [menu.front.x[2], menu.front.x[5]]

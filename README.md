@@ -61,6 +61,6 @@ Settings, hosts and secrets are `KEY=value` lines in `~/.secrets/portfoliosight.
 - A Cloudflare Worker (`web/worker`, `web/wrangler.jsonc`) serves the page, reads tensors from R2,
   forwards builds and sends the share email. The only human check is Cloudflare's own; while
   `PS_PRIVATE_PREVIEW` is `"1"` the Worker also requires the gate secret.
-- The build service runs on KS-001 in one container (`deploy/docker-compose.yml`, 2 CPUs,
+- The build service runs on KS-001 in one container (`deploy/docker-compose.yml`, 4 CPUs,
   1536 MB) behind a cloudflared tunnel; a systemd timer runs the nightly job.
 - Steps, measurements and owner checks: `docs/plans/2026-10-13-ks001-cloudflare-runbook.md`.

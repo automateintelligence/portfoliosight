@@ -36,7 +36,7 @@ def test_api_service_is_the_spec_s(compose):
     assert api["volumes"] == ["ps-cache:/app/cache"]
     assert api["env_file"] == ENV_FILE and api["environment"] == ENVIRONMENT
     assert api["deploy"]["resources"] == {
-        "limits": {"cpus": "2", "memory": "1536M"},
+        "limits": {"cpus": "4", "memory": "1536M"},
         "reservations": {"cpus": "0.5", "memory": "256M"},
     }
     assert api["logging"] == LOGGING
@@ -54,7 +54,7 @@ def test_nightly_is_a_job_on_the_same_image_with_no_port(compose):
     assert "ports" not in nightly and "container_name" not in nightly
     assert nightly["volumes"] == ["ps-cache:/app/cache"]
     assert nightly["env_file"] == ENV_FILE and nightly["environment"] == ENVIRONMENT
-    assert nightly["deploy"]["resources"]["limits"] == {"cpus": "2", "memory": "1536M"}
+    assert nightly["deploy"]["resources"]["limits"] == {"cpus": "4", "memory": "1536M"}
     assert nightly["logging"] == LOGGING
 
 

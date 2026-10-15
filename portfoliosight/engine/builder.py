@@ -22,6 +22,8 @@ import numpy as np
 import pandas as pd
 from threadpoolctl import threadpool_limits
 
+from portfoliosight.cpus import build_workers
+
 from . import ENGINE_VERSION
 from .caps import RULE, requested_caps, resolve_bounds
 from .invariants import TOL, InvariantError, check_floor, check_risk_line, check_weights
@@ -131,7 +133,7 @@ def validate_tensor(tensor: Mapping) -> None:
     jsonschema.Draft202012Validator(load_schema()).validate(tensor)
 
 
-def build_tensor(inputs: TensorInputs) -> dict:
+def build_tensor(inputs: TensorInputs, *, workers: int | None = None) -> dict:
     """Compute the tensor of one (menu, lookback, asof).
 
     Raises `WindowUnavailable` when the window has too little shared history, `CapsError` when
@@ -141,13 +143,16 @@ def build_tensor(inputs: TensorInputs) -> dict:
     the post-check when any computed mix breaks an invariant.
 
     A build is thousands of small matrix operations, where BLAS threads only get in each
-    other's way; they are held to one for its duration.
+    other's way; they are held to one for its duration. The risk columns' ladders are solved on
+    `workers` processes, by default as many as the host lets this process use
+    (`portfoliosight.cpus.build_workers`); the tensor is the same whatever the number.
     """
+    count = build_workers() if workers is None else workers
     with threadpool_limits(limits=1, user_api="blas"):
-        return _build(inputs)
+        return _build(inputs, count)
 
 
-def _build(inputs: TensorInputs) -> dict:
+def _build(inputs: TensorInputs, workers: int) -> dict:
     started = time.perf_counter()
     funds = list(inputs.funds)
     ids = [fund.id for fund in funds]
@@ -185,9 +190,9 @@ def _build(inputs: TensorInputs) -> dict:
     mu_s, _ = menu_beta_blend(moments.mu, moments.cov, rf)
     basis = torsion_basis(moments.cov)
     programs = MenuPrograms(mu_s, moments.cov, lo, hi)
-    front = frontier(programs, inputs.nx)
+    front = frontier(programs, inputs.nx, workers)
     program = EnbProgram(mu_s, moments.cov, lo, hi, basis)
-    surf = surface(program, programs, front, inputs.levels)
+    surf = surface(program, programs, front, inputs.levels, workers)
     grid = raster(surf, front, program, inputs.ny)
     _post_check(program, front, surf, grid)
     last = surf.y.shape[1] - 1
@@ -195,7 +200,9 @@ def _build(inputs: TensorInputs) -> dict:
     suggested = [suggested_level(surf.y[j], surf.z[j], DEFAULT_POINT) for j in range(inputs.nx)]
     curve_sigma, curve_mu = frontier_curve(front.w, mu_s, moments.cov)
     no_limits = frontier(
-        MenuPrograms(mu_s, moments.cov, np.zeros(len(mu_s)), np.ones(len(mu_s))), inputs.nx
+        MenuPrograms(mu_s, moments.cov, np.zeros(len(mu_s)), np.ones(len(mu_s))),
+        inputs.nx,
+        workers,
     )
     model = range_model(sample, mu_s, moments.cov)
     ladder_range = _range_block(one_year_ranges(model, surf.w.reshape(-1, len(mu_s))), surf.y.shape)
