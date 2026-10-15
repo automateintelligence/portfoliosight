@@ -1,13 +1,11 @@
-// The scale of the "Selected mix" strip's bar: one fixed range per menu, so the bar does not jump
-// as the sliders or the history window move. Pure.
+// The scale of the "Selected mix" strip's bar: one fixed range per (menu, history window), taken
+// from the tensor's own nodes, so the bar does not jump as the sliders move. Pure.
 import type { Tensor } from "../api/tensor";
 
 /** Bad and Good one-year returns bounding every mix a tensor carries. */
 export type Bounds = { min: number; max: number };
 /** The bar's scale: `lo` at its left end, `hi` at its right. */
 export type StripScale = { lo: number; hi: number };
-/** What the page has seen of one menu: its hash, the tensors already counted and their bounds. */
-export type StripSeen = { hash: string; keys: string[]; bounds: Bounds };
 
 /** Share of the span added at each end, so no marker sits on the bar's edge. */
 export const STRIP_PAD = 0.06;
@@ -33,52 +31,15 @@ export function tensorBounds(tensor: Tensor): Bounds {
   return { min: finite(bad, Math.min, Infinity), max: finite(good, Math.max, -Infinity) };
 }
 
-const tensorKey = (tensor: Tensor) => `${tensor.lookback.id}|${tensor.generation}`;
-
 /**
- * Folds the tensors on hand into what was seen of their menu. A tensor of another menu starts
- * over; a tensor already counted changes nothing (the same object comes back, so React keeps it).
- * Tensors of a menu other than the first one given are left out.
+ * The bar's scale for one tensor: its bounds (`tensorBounds`) and 0% (always on the bar), with
+ * `STRIP_PAD` of the span added at each end. It depends on nothing else, so it is fixed for a
+ * (menu, history window): neither the sliders, the service's exact ranges nor a ghost window's
+ * tensor move it.
  */
-export function widenSeen(prev: StripSeen | null, tensors: Tensor[]): StripSeen | null {
-  if (tensors.length === 0) return prev;
-  const hash = tensors[0].universe.hash;
-  let seen: StripSeen | null = prev && prev.hash === hash ? prev : null;
-  for (const tensor of tensors) {
-    if (tensor.universe.hash !== hash) continue;
-    const key = tensorKey(tensor);
-    if (seen?.keys.includes(key)) continue;
-    const b = tensorBounds(tensor);
-    seen = {
-      hash,
-      keys: [...(seen?.keys ?? []), key],
-      bounds: { min: Math.min(seen?.bounds.min ?? Infinity, b.min), max: Math.max(seen?.bounds.max ?? -Infinity, b.max) },
-    };
-  }
-  return seen;
-}
-
-/**
- * Widens what was seen by figures shown on the strip that lie outside it (an exact range from the
- * service can step past the node figures), so the bar keeps that width for the rest of the menu
- * instead of shrinking back. Values inside change nothing (the same object comes back).
- */
-export function widenBy(seen: StripSeen | null, values: number[]): StripSeen | null {
-  if (!seen) return seen;
-  const vs = values.filter(Number.isFinite);
-  const min = Math.min(seen.bounds.min, ...vs);
-  const max = Math.max(seen.bounds.max, ...vs);
-  return min === seen.bounds.min && max === seen.bounds.max ? seen : { ...seen, bounds: { min, max } };
-}
-
-/**
- * The bar's scale: the menu's bounds and 0% (always on the bar), widened by any shown value that
- * lies outside them (an exact range from the service can step past the node figures), with
- * `STRIP_PAD` of the span added at each end.
- */
-export function stripScale(bounds: Bounds | null, shown: number[]): StripScale {
-  let min = Math.min(0, bounds?.min ?? 0, ...shown.filter(Number.isFinite));
-  let max = Math.max(0, bounds?.max ?? 0, ...shown.filter(Number.isFinite));
+export function stripScale(bounds: Bounds | null): StripScale {
+  let min = Math.min(0, bounds?.min ?? 0);
+  let max = Math.max(0, bounds?.max ?? 0);
   if (!(max > min)) {
     min -= 0.01;
     max += 0.01;
@@ -89,3 +50,14 @@ export function stripScale(bounds: Bounds | null, shown: number[]): StripScale {
 
 /** Where `value` sits along the bar, from 0 (left end) to 1 (right end). */
 export const stripAt = (scale: StripScale, value: number) => (value - scale.lo) / (scale.hi - scale.lo);
+
+/**
+ * Where `value` is drawn on the bar: its place from 0 to 1, clamped to the ends, and which end it
+ * runs past when it lies outside the scale (rare: an exact range is a blend of node mixes).
+ */
+export function stripPlace(scale: StripScale, value: number): { at: number; over: "low" | "high" | null } {
+  const at = stripAt(scale, value);
+  if (at < 0) return { at: 0, over: "low" };
+  if (at > 1) return { at: 1, over: "high" };
+  return { at, over: null };
+}

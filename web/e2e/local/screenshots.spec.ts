@@ -84,3 +84,12 @@ test("owner feedback 1 views", async ({ page, request }, testInfo) => {
     }
   }
 });
+
+test("the strip in dollars", async ({ page, request }, testInfo) => {
+  // The Example Portfolio's amounts are in $: the strip shows the year in dollars on them.
+  await request.post("/__mock/reset");
+  const size = testInfo.project.name.includes("phone") ? "phone" : "desktop";
+  await ready(page, "u=guide2017&lb=5y&t=ks-dark");
+  await expect(page.getByTestId("strip-sub")).toHaveText(/^over one year on your \$[\d,]+$/);
+  await page.screenshot({ path: path.join(OUT, `2026-10-15_strip-dollars_ks-dark_${size}.png`) });
+});

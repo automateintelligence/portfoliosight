@@ -11,15 +11,14 @@ import { ShareDialog } from "./controls/ShareDialog";
 import { ThemeSwitch } from "./controls/ThemeSwitch";
 import { disclaimer, family, lookbackLine, lookbackNames, plain } from "./copy";
 import { portfolioMath, type YearRange } from "./math/portfolio";
-import { stripScale } from "./math/stripScale";
+import { stripScale, tensorBounds } from "./math/stripScale";
 import { atNode, ceilingAt, deriveView, limitsBind, positionOfCeiling } from "./math/view";
 import { Funds } from "./sections/Funds";
 import { Settings } from "./sections/Settings";
 import { Stress } from "./sections/Stress";
 import { Trades } from "./sections/Trades";
-import { createStore, currentMix, LOOKBACKS, type LookbackId } from "./state/store";
+import { createStore, currentMix, enteredValue, LOOKBACKS, type LookbackId } from "./state/store";
 import { useExactRange } from "./state/useExactRange";
-import { useStripBounds } from "./state/useStripBounds";
 import { applyTheme, useMediaQuery, useThemeEpoch } from "./theme/useTheme";
 
 type SectionId = "funds" | "trades" | "stress" | "settings";
@@ -120,9 +119,11 @@ export default function App() {
   // column's level the tensor's own figure is already exact, so nothing is asked.
   const selectedExact = useExactRange(rangeKey, tensor && nodeView && !atNode(tensor, nodeView.s, nodeView.t) ? nodeView.weights : null);
   const view = useMemo(() => (nodeView && selectedExact ? { ...nodeView, range: selectedExact } : nodeView), [nodeView, selectedExact]);
-  // The strip's bar keeps one scale per menu, over every history window loaded for it and every
-  // figure it has shown.
-  const stripBounds = useStripBounds(tensor, state.ghostTensors, view ? [view.range.low, view.range.high] : []);
+  // The strip's bar keeps one scale per (menu, history window), from the shown tensor's own nodes
+  // only: the sliders, the service's exact ranges and the ghost windows' tensors never move it.
+  const stripBar = useMemo(() => stripScale(tensor ? tensorBounds(tensor) : null), [tensor]);
+  // The strip's figures in dollars on the value entered ($ or Shares), else in percent.
+  const stripValue = useMemo(() => (tensor ? enteredValue({ rows: state.rows, unit: state.unit }, tensor) : null), [tensor, state.rows, state.unit]);
   const mix = useMemo(() => (tensor ? currentMix({ rows: state.rows, unit: state.unit }, tensor) : null), [tensor, state.rows, state.unit]);
   const cellMix = useCallback(
     (j: number, k: number) => {
@@ -438,7 +439,8 @@ export default function App() {
             typical={view.range.typical}
             high={view.range.high}
             normal={view.normal}
-            scale={stripScale(stripBounds, [view.range.low, view.range.typical, view.range.high])}
+            scale={stripBar}
+            value={stripValue}
             word={view.word}
             details={state.details}
             facts={{

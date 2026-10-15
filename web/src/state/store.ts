@@ -20,7 +20,7 @@ import {
 } from "../api/http";
 import type { Tensor } from "../api/tensor";
 import { linkTooManyFunds } from "../copy";
-import { amountsToWeights, percentTotal } from "../math/amounts";
+import { amountsToWeights, amountsValue, percentTotal } from "../math/amounts";
 import { portfolioMath } from "../math/portfolio";
 import { positionOfCeiling } from "../math/view";
 import { decode, encode, type UrlState } from "./url";
@@ -166,6 +166,25 @@ export function currentMix(state: Pick<State, "rows" | "unit">, tensor: Tensor):
   }
   const setAside = outsideAmount <= 0 ? 0 : state.unit === "shares" ? null : outsideAmount / (outsideAmount + insideAmount);
   return { weights: res.weights, status: "ok", setAside };
+}
+
+/**
+ * What the strip shows the year in: dollars on the value of the amounts entered in the funds of
+ * this view (the value Trades counts), or percent. Percent in the % unit and when nothing is
+ * entered; `unknown_price` names the held funds without a last close when shares cannot be valued.
+ */
+export function enteredValue(
+  state: Pick<State, "rows" | "unit">,
+  tensor: Tensor,
+): { status: "usd"; total: number } | { status: "pct" } | { status: "unknown_price"; funds: string[] } {
+  const byId = new Map(state.rows.map((r) => [r.id, r.amount]));
+  const funds = tensor.universe.funds;
+  const value = amountsValue(
+    funds.map((f) => byId.get(f.id) ?? null),
+    state.unit,
+    funds.map((f) => f.last_close ?? null),
+  );
+  return value.status === "unknown_price" ? { status: "unknown_price", funds: value.unknownPrice.map((i) => funds[i].id) } : value;
 }
 
 const menuKey = (rows: Row[], caps: Cap[]) =>

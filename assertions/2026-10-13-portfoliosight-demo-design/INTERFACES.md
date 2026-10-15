@@ -234,7 +234,8 @@ the docstring is authoritative for that test.
   unit while some entry is above zero and the entries do not add up to exactly 100.00, never in $
   or Shares), `funds-entered` (the "$N entered" / "N shares entered" / "No amounts entered: tickers
   only." line that `funds-total` used to carry), `range-bar` (the strip's bar, `role="img"` with a
-  spoken label, `data-lo` / `data-hi` = its fixed scale for the menu as fractions), `range-mark-low`,
+  spoken label, `data-lo` / `data-hi` = its fixed scale for the menu and history window as
+  fractions; since 2026-10-15 from the shown tensor's own nodes only), `range-mark-low`,
   `range-mark-typical`, `range-mark-high` (the Bad and Good end caps and the typical dot, each
   titled), `x-title` (the risk-axis title, under the tick labels and inside the chart frame).
   Chart margins are 48/16/58/56 (desktop) and 32/12/54/44 (phone); the chart box is 18 px taller
@@ -262,3 +263,11 @@ the docstring is authoritative for that test.
   site allows ({n})."; the default view opens and nothing is built for the refused menu),
   `admin-tag` (the "Admin" tag in Settings, only in admin mode). Adding a fund past the limit
   shows "A menu holds up to {n} funds." in the funds section's alert.
+- Strip in dollars, 2026-10-15 (owner direction). With amounts in $ or Shares, `range-low`,
+  `range-typical` and `range-high` each hold the dollar change (`range-low-usd`, ...) and the
+  percent beneath it (`range-low-pct`, ...), so a signed percent is still found inside each; each
+  figure is a `role="group"` labelled with both values. `strip-sub` is the strip's subtitle ("over
+  one year", or "over one year on your $98,900"); `details-no-price` says why the strip stays in
+  percent when shares are held in a fund without a last close. The bar's marks carry
+  `data-over="low"|"high"` when drawn clamped at an end. Asserted by `web/tests/` and
+  `web/e2e/local/app.spec.ts`.
