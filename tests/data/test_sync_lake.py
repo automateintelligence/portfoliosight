@@ -422,3 +422,35 @@ def test_a_symbol_the_lake_brings_back_to_current_is_taken(lake, store):
     assert [key for key in recording.puts if key.startswith("prices/")] == ["prices/OLD.parquet"]
     old = _manifest(store)["OLD"]
     assert (old["source"], old["status"], old["last_date"]) == ("lake", "ok", "2026-10-13")
+
+
+def test_the_claim_comes_first_and_a_record_that_cannot_be_stored_is_retried(lake, store):
+    class Failing(Recording):
+        def put(self, key, data):
+            if key == "prices/AAPL.parquet":
+                raise OSError("R2 kept answering 500")
+            super().put(key, data)
+
+    failing = Failing(store)
+    code, lines = _sync(lake, failing)
+    assert code == 1 and any(
+        line.startswith("ALERT sync_lake: 1 record(s)") and "AAPL" in line for line in lines
+    )
+    # The overlay claimed the symbols before any record changed.
+    first_record = min(i for i, key in enumerate(failing.puts) if key.startswith("prices/"))
+    assert failing.puts.index(lake_mod.LAKE_KEY) < first_record
+    entries = _manifest(store)
+    assert entries["MSFT"]["source"] == "lake" and entries["MSFT"]["status"] == "ok"
+    # AAPL keeps its old record under a claim: the lake's, not fetched, not served yet.
+    assert entries["AAPL"]["source"] == "lake" and entries["AAPL"]["status"] == "stale"
+    assert entries["AAPL"]["last_date"] == "2026-03-27"
+    overlay = lake_mod.load_lake(store)
+    assert overlay.generated_at is None and overlay.symbols["AAPL"].digest == ""
+
+    # The next poll stores only what is missing.
+    recording = Recording(store)
+    code, lines = _sync(lake, recording)
+    assert code == 0, lines
+    assert [key for key in recording.puts if key.startswith("prices/")] == ["prices/AAPL.parquet"]
+    assert _manifest(store)["AAPL"]["status"] == "ok"
+    assert lake_mod.load_lake(store).generated_at == GENERATED

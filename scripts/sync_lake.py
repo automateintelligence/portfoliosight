@@ -56,7 +56,11 @@ from portfoliosight.data.calendar import (  # noqa: E402
 )
 from portfoliosight.data.lake import LakeEntry, LakeOverlay  # noqa: E402
 from portfoliosight.data.manifest import Manifest, ManifestEntry  # noqa: E402
-from portfoliosight.data.secrets import install_redaction, redacted_traceback  # noqa: E402
+from portfoliosight.data.secrets import (  # noqa: E402
+    RedactingFilter,
+    install_redaction,
+    redacted_traceback,
+)
 from portfoliosight.data.universe import SymbolInfo, Tiers, is_tsp, load_tiers  # noqa: E402
 
 DEFAULT_LAKE = "~/tft-quantile-forecaster/data/tft/raw/eodhd/datalake_us_core"
@@ -102,6 +106,7 @@ class Outcome:
     action: str  # written | unchanged | skipped
     reason: str | None = None
     entry: LakeEntry | None = None
+    record: bytes | None = None  # the canonical record to store (written outcomes only)
 
 
 def read_lake_run(lake: Path) -> LakeRun:
@@ -252,9 +257,32 @@ class _Sync:
             digest=digest,
         )
         self._settle(entry)
-        if not self.dry_run:
-            store_mod.put_record(self.store, symbol, record)
-        return Outcome(symbol, "written", entry=entry)
+        data = None if self.dry_run else store_mod.record_to_bytes(record)
+        return Outcome(symbol, "written", entry=entry, record=data)
+
+    def claim(self, symbol: str) -> LakeEntry | None:
+        """The entry that marks ``symbol`` as the lake's while its new record is stored.
+
+        Its dates are those of the record now stored (the previous lake entry's, or the
+        catalog's), and its digest is empty, so a run that fails to store the record rewrites it.
+        """
+        before = self.previous.symbols.get(symbol)
+        if before is not None:
+            return before.model_copy(update={"digest": ""})
+        base = self.base.symbols.get(symbol)
+        if base is None or base.last_date is None or base.adjusted_through is None:
+            return None
+        fields = base.model_dump(exclude={"source"})
+        return LakeEntry(**fields, source=lake_mod.LAKE_SOURCE, digest="")
+
+    def store_record(self, outcome: Outcome) -> str | None:
+        """Store one record; the store's error text when it cannot, else ``None``."""
+        assert outcome.record is not None
+        try:
+            self.store.put(store_mod.record_key(outcome.symbol), outcome.record)
+        except store_mod.STORE_ERRORS as exc:
+            return f"{type(exc).__name__}: {exc}"
+        return None
 
     def _settle(self, entry: LakeEntry) -> None:
         entry.status = manifest_mod.status_for(entry, self.d_g)
@@ -353,12 +381,37 @@ def sync(
         emit("ALERT sync_lake: the lake changed during the sync; catalog not updated, rerun")
         return 1
 
-    overlay = LakeOverlay(
-        generated_at=run.generated_at.isoformat(),
-        synced_at=now.astimezone(UTC).isoformat(),
-        symbols=taken,
+    def publish_overlay(symbols: dict[str, LakeEntry], generated_at: str | None) -> LakeOverlay:
+        overlay = LakeOverlay(
+            generated_at=generated_at, synced_at=now.astimezone(UTC).isoformat(), symbols=symbols
+        )
+        store_mod.put_json(store, lake_mod.LAKE_KEY, overlay.to_json())
+        return overlay
+
+    # 1. Claim the symbols whose records are about to change, so that a provider walk running
+    #    now neither fetches them nor writes a tail over the record being stored.
+    writes = [o for o in outcomes if o.action == "written"]
+    claims = {o.symbol: job.claim(o.symbol) for o in writes}
+    if writes:
+        claimed = {s: e for s, e in claims.items() if e is not None}
+        kept = {o.symbol: o.entry for o in outcomes if o.action == "unchanged" and o.entry}
+        publish_overlay({**kept, **claimed}, previous.generated_at)
+    # 2. Store the records; one that cannot be stored keeps its claim (its old record).
+    with ThreadPoolExecutor(THREADS) as pool:
+        errors = list(pool.map(job.store_record, writes))
+    failures = dict(zip([o.symbol for o in writes], errors, strict=True))
+    failed = {symbol: error for symbol, error in failures.items() if error is not None}
+    for symbol in failed:
+        claim = claims[symbol]
+        if claim is None:
+            taken.pop(symbol, None)
+        else:
+            taken[symbol] = claim
+    # 3. The overlay of this run, then the catalog. A run with failures is not recorded as
+    #    synced, so the next poll stores what is missing (the rest is unchanged by digest).
+    overlay = publish_overlay(
+        taken, previous.generated_at if failed else run.generated_at.isoformat()
     )
-    store_mod.put_json(store, lake_mod.LAKE_KEY, overlay.to_json())
 
     def change(document: Any) -> dict[str, Any]:
         manifest = Manifest.model_validate(document or {})
@@ -373,6 +426,13 @@ def sync(
         manifest_mod.SYMBOLS_KEY,
         manifest_mod.symbols_view(written, now.astimezone(UTC)),
     )
+    if failed:
+        sample = "; ".join(f"{symbol}: {error}" for symbol, error in sorted(failed.items())[:5])
+        emit(
+            f"ALERT sync_lake: {len(failed)} record(s) could not be stored, the next poll "
+            f"retries them: {RedactingFilter().redact(sample)[:600]}"
+        )
+        return 1
     emit(f"synced the lake run generated at {run.generated_at.isoformat()}")
     return 0
 
