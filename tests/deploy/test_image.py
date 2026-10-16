@@ -9,6 +9,7 @@ Built only when a docker daemon answers; without one the ignore rules of
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import uuid
@@ -46,7 +47,7 @@ def image(tmp_path_factory: pytest.TempPathFactory):
     for name in ("pyproject.toml", "README.md", ".dockerignore"):
         context.mkdir(exist_ok=True)
         shutil.copy2(ROOT / name, context / name)
-    for folder in ("portfoliosight", "data", "deploy"):
+    for folder in ("portfoliosight", "qse", "data", "deploy"):
         shutil.copytree(
             ROOT / folder,
             context / folder,
@@ -138,3 +139,21 @@ def test_image_imports_the_service_from_app_and_needs_a_secret_to_start(image):
     assert refused.returncode != 0 and "PS_GATE_SECRET" in refused.stderr
     env = _run(image, "env")
     assert "SECRET" not in env.stdout and "API_KEY" not in env.stdout
+
+
+def test_image_imports_qse_from_site_packages_and_carries_its_lock(image):
+    if image is None:
+        return
+    done = _run(
+        image,
+        "python",
+        "-c",
+        "import json, importlib.resources as r, qse.distributions.joint as j, arch; "
+        "print(j.__file__); "
+        "print(json.loads(r.files('qse').joinpath('qse.lock.json').read_text())['commit'])",
+    )
+    assert done.returncode == 0, done.stderr
+    where, commit = done.stdout.split()
+    lock = json.loads((ROOT / "qse" / "qse.lock.json").read_text(encoding="utf-8"))
+    assert where.startswith("/usr/local/lib/python3.12/site-packages/qse/"), where
+    assert commit == lock["commit"]

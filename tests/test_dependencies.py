@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import importlib.util
+import json
 import re
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
-PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
+ROOT = Path(__file__).resolve().parents[1]
+PYPROJECT = ROOT / "pyproject.toml"
 
 RUNTIME_IMPORTS = (
     "numpy",
@@ -26,6 +32,7 @@ RUNTIME_IMPORTS = (
     "exchange_calendars",
     "jsonschema",
     "threadpoolctl",
+    "arch",
     "fastapi",
     "uvicorn",
     "pytest",
@@ -78,3 +85,115 @@ def test_yfinance_absent_from_api_dev_venv() -> None:
 
 def test_requires_python() -> None:
     assert _project()["requires-python"] == ">=3.12"
+
+
+def test_arch_is_pinned_exact() -> None:
+    # Its optimizer decides the fitted parameters, so the tensor bytes (spec 12, Fit library).
+    assert "arch==8.0.0" in _project()["dependencies"]
+
+
+# What QSE's copied files may pull in: numpy, pandas, scipy, statsmodels and arch, and what those
+# declare. QSE's own dependency list carries torch and xgboost; none of them may be needed here.
+QSE_ROOTS = ("numpy", "scipy", "pandas", "statsmodels", "arch")
+NEVER_PULLED = (
+    "torch",
+    "xgboost",
+    "numba",
+    "sklearn",
+    "cvxpy",
+    "matplotlib",
+    "plotly",
+    "pydantic",
+)
+# A fit of a 300-row GARCH(1,1) series runs `arch`'s lazy import. The child starts with only the
+# standard library, this checkout's `qse` and the packages of the closure: every other installed
+# module is blocked, so a soft import by pandas (pyarrow), by pyarrow (cloudpickle) or by numpy
+# (charset_normalizer) cannot hide a real dependency, and a hard one fails the fit. It reports
+# every top-level package that was loaded from site-packages.
+QSE_CHILD = """
+import json, sys, sysconfig
+from pathlib import Path
+root, blocked = sys.argv[1], json.loads(sys.argv[2])
+sys.path.insert(0, root)
+for name in blocked:
+    sys.modules.setdefault(name, None)
+before = set(sys.modules)
+import numpy as np
+from qse.distributions.joint import fit_garch_t_panel
+rng = np.random.default_rng(7)
+shocks = rng.standard_t(6, size=300) / np.sqrt(6 / 4)
+omega, alpha, beta = 2e-6, 0.08, 0.9
+variance, series = omega / (1 - alpha - beta), []
+for shock in shocks:
+    series.append(np.sqrt(variance) * shock)
+    variance = omega + alpha * series[-1] ** 2 + beta * variance
+fit = fit_garch_t_panel(np.column_stack([series, series[::-1]]))
+assert "arch" in sys.modules, "the fit did not reach arch"
+sites = {Path(sysconfig.get_paths()[key]).resolve() for key in ("purelib", "platlib")}
+tops = set()
+for name in set(sys.modules) - before:
+    file = getattr(sys.modules[name], "__file__", None)
+    if not file:
+        continue
+    path = Path(file).resolve()
+    tops.update(
+        path.relative_to(site).parts[0].split(".")[0] for site in sites if site in path.parents
+    )
+print(json.dumps({"tops": sorted(tops), "status": list(fit.status), "messages": fit.messages}))
+"""
+
+
+def _normalized(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _closure(roots: tuple[str, ...]) -> set[str]:
+    """Normalized names of the roots and of everything they require that is installed."""
+    seen: set[str] = set()
+    todo = [_normalized(name) for name in roots]
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        try:
+            requires = importlib.metadata.requires(name) or []
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        seen.add(name)
+        for text in requires:
+            requirement = Requirement(text)
+            if requirement.marker is not None and not requirement.marker.evaluate({"extra": ""}):
+                continue
+            todo.append(_normalized(requirement.name))
+    return seen
+
+
+def test_qse_import_closure() -> None:
+    owners = importlib.metadata.packages_distributions()
+    allowed = _closure(QSE_ROOTS)
+    assert set(QSE_ROOTS) <= allowed
+    blocked = sorted(
+        module
+        for module, dists in owners.items()
+        if module != "qse" and not any(_normalized(dist) in allowed for dist in dists)
+    )
+    # The probe must really hide what QSE's own dependency list would bring.
+    assert set(NEVER_PULLED) & set(owners) <= set(blocked)
+    done = subprocess.run(
+        [sys.executable, "-I", "-c", QSE_CHILD, str(ROOT), json.dumps(blocked)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert done.returncode == 0, done.stderr[-2000:]
+    report = json.loads(done.stdout.strip().splitlines()[-1])
+    assert report["status"] == ["garch", "garch"], report["messages"]
+    tops = set(report["tops"])
+    unowned = sorted(tops - set(owners))
+    assert not unowned, f"loaded from site-packages without an installed distribution: {unowned}"
+    imported = {_normalized(dist) for top in tops for dist in owners[top]}
+    assert not sorted(imported - allowed), (
+        f"beyond {QSE_ROOTS} and what they declare: {imported - allowed}"
+    )
+    assert {"numpy", "pandas", "scipy", "arch", "statsmodels"} <= tops
+    assert not set(NEVER_PULLED) & tops

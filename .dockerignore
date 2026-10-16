@@ -5,6 +5,7 @@
 !README.md
 !portfoliosight
 !data
+!qse
 runs/
 .venv
 web/node_modules

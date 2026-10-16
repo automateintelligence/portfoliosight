@@ -20,6 +20,7 @@ dependencies = [
   "exchange_calendars>=4.13",
   "jsonschema>=4.26",
   "threadpoolctl>=3.5",
+  "arch==8.0.0",
 ]
 
 [project.optional-dependencies]
@@ -48,14 +49,22 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["portfoliosight*"]
+include = ["portfoliosight*", "qse*"]
 
 [tool.setuptools.package-data]
 portfoliosight = ["engine/*.json"]
+qse = ["qse.lock.json"]
 
 [tool.ruff]
 line-length = 100
-extend-exclude = ["portfoliosight/frontier_cli.py", "assertions", ".worktrees", ".venv", "*.md"]
+extend-exclude = [
+  "portfoliosight/frontier_cli.py",
+  "assertions",
+  ".worktrees",
+  ".venv",
+  "*.md",
+  "qse",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -64,7 +73,7 @@ select = ["E", "F", "I", "UP", "B"]
 typeCheckingMode = "standard"
 pythonVersion = "3.12"
 include = ["portfoliosight", "scripts", "tests"]
-exclude = ["portfoliosight/frontier_cli.py", "assertions", ".worktrees", ".venv", "web"]
+exclude = ["portfoliosight/frontier_cli.py", "assertions", ".worktrees", ".venv", "web", "qse"]
 ignore = ["assertions"]
 venvPath = "."
 venv = ".venv"
