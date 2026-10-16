@@ -15,7 +15,8 @@ Pinned interface (the product must provide exactly this):
   value is the exit code, 0 on a clean run including a run stopped by the daily or monthly budget.
   `D_G` is `portfoliosight.data.calendar.generation_date(clock())`.
 - One provider request = one call of `fetch_daily` or `fetch_meta`; in `refresh` a symbol that
-  has a record costs exactly one request, and a symbol current at `D_G` costs none.
+  has a record and a name (not empty, not its ticker) costs exactly one request, one with no
+  name costs one more (`fetch_meta`, for the name), and a symbol current at `D_G` costs none.
 - Limits: `meta/provider_limits.json` keys `req_per_hour, req_per_day, unique_symbols_per_month`
   win over the environment; without the file, `PS_PROVIDER_REQ_PER_HOUR`, `PS_PROVIDER_REQ_PER_DAY`,
   `PS_PROVIDER_SYMBOLS_PER_MONTH` (defaults 45, 900, 450).
