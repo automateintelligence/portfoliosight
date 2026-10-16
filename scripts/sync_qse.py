@@ -165,7 +165,9 @@ def check(root: Path, qse_dir: Path) -> list[str]:
                 "the lock but not the script" if name in listed else "the script but not the lock"
             )
             drifts.append(f"{name}: named by {where}")
-    for name in sorted(listed):
+    # Only the ten files are read and closed: guard() has checked those paths, and a lock entry
+    # outside them (absolute, `..`, or any other path) is drift above and is never touched.
+    for name in sorted(set(listed) & set(FILES)):
         path = root / name
         if not path.is_file():
             drifts.append(f"{name}: missing")

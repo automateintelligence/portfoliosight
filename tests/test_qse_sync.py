@@ -484,3 +484,28 @@ def test_a_destination_with_a_second_hard_link_is_refused(qse_repo: dict, tmp_pa
         done = _run_script(*args)
         assert done.returncode == 2 and "qse/exceptions.py" in done.stderr, done.stderr
     assert other.read_bytes() == _blob("qse/exceptions.py", 1) and _mode(other) == 0o644
+
+
+def test_check_reports_lock_entries_outside_the_ten_and_never_reads_or_closes_them(
+    copy_root: Path, tmp_path: Path
+):
+    # Write-only files: a read raises, a close (chmod a-w) changes the mode.
+    absolute = tmp_path / "absolute.py"
+    parent = tmp_path / "parent.py"
+    inside = copy_root / "qse/distributions/inside.py"
+    for path in (absolute, parent, inside):
+        path.write_text("x = 1\n")
+        path.chmod(0o200)
+    lock_path = copy_root / "qse" / "qse.lock.json"
+    lock = json.loads(lock_path.read_text())
+    entries = (str(absolute), "../parent.py", "qse/../../parent.py", "qse/distributions/inside.py")
+    for entry in entries:
+        lock["files"][entry] = "0" * 64
+    _edit(lock_path, json.dumps(lock, indent=2, sort_keys=True).encode() + b"\n")
+    done = _run_script("--check", "--root", copy_root)
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert "Traceback" not in done.stderr
+    for entry in entries:
+        assert f"drift: {entry}: " in done.stdout, entry
+    for path in (absolute, parent, inside):
+        assert _mode(path) == 0o200, path
