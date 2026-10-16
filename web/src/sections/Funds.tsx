@@ -6,6 +6,7 @@ import { fundsTotal, fundsUpTo, menuFull, menuNeedsMore, plain } from "../copy";
 import { amountText, money, parseAmount, pct } from "../format";
 import { amountsToWeights, percentShown, percentTotal, scaleTo100 } from "../math/amounts";
 import { MIN_FUNDS, type Row, type Unit } from "../state/store";
+import { matchGroup, rankSymbols } from "./symbolSearch";
 
 type Props = {
   rows: Row[];
@@ -109,10 +110,16 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
     edit([...list, { id: sym.id, name: sym.name ?? sym.id, amount: rows.find((r) => r.id === sym.id)?.amount ?? null }]);
   };
   const q = query.trim().toLowerCase();
-  const matches = q && symbols ? symbols.filter((s) => s.id.toLowerCase().includes(q.replace(/\s+/g, "")) || (s.name ?? "").toLowerCase().includes(q) || s.id.toLowerCase().replace("-", " ").includes(q)).slice(0, 8) : [];
+  const matches = useMemo(() => (q && symbols ? rankSymbols(symbols, q) : []), [q, symbols]);
+  // In the sidebar the list can open below its visible part: bring the whole list into view.
+  const listRef = useRef<HTMLUListElement>(null);
+  const listOpen = matches.length > 0;
+  useEffect(() => {
+    if (listOpen) listRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [listOpen, matches.length]);
   const tryAddTyped = () => {
     if (!q) return;
-    const exact = symbols?.find((s) => s.id.toLowerCase() === q) ?? (matches.length === 1 ? matches[0] : undefined);
+    const exact = (matches[0] && matchGroup(matches[0], q) === 1 ? matches[0] : undefined) ?? (matches.length === 1 ? matches[0] : undefined);
     if (exact) add(exact);
     else setAddError(`${query.trim().toUpperCase()} isn't offered: no verified current data for it.`);
   };
@@ -268,7 +275,7 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
           }}
         />
         {matches.length > 0 && (
-          <ul className="adder-list" role="listbox" aria-label="Matching funds">
+          <ul ref={listRef} className="adder-list" role="listbox" aria-label="Matching funds">
             {matches.map((s) => (
               <li key={s.id} role="none">
                 <button type="button" role="option" aria-selected="false" className="adder-opt" onClick={() => add(s)}>

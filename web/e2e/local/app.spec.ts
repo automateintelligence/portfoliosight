@@ -174,6 +174,61 @@ test("the picker offers served funds, and percentages must add up before the men
   await expect(page.getByTestId("chip-trades")).toBeVisible();
 });
 
+test("the picker lists the exact ticker first and finds funds and companies by name", async ({ page, request }) => {
+  await request.post("/__mock/config", { data: { stocks: true } });
+  await open(page);
+  await section(page, "funds");
+  const options = page.getByRole("listbox", { name: "Matching funds" }).getByRole("option");
+  const firstOf = async (typed: string) => {
+    await page.getByTestId("fund-add").fill(typed);
+    await expect(options.first()).toBeVisible();
+    return (await options.first().innerText()).replace(/\s+/g, " ").trim();
+  };
+  expect(await firstOf("C")).toBe("C Citigroup Inc.");
+  await expect(options.nth(1)).toContainText("CB");
+  expect(await firstOf("AAPL")).toBe("AAPL Apple Inc.");
+  expect(await firstOf("apple")).toBe("AAPL Apple Inc.");
+  await page.getByTestId("fund-add").fill("vang");
+  await expect(options).toHaveCount(8);
+  for (const text of await options.allInnerTexts()) expect(text).toMatch(/Vanguard/);
+  await page.getByTestId("fund-add").fill("c");
+  await page.getByTestId("fund-add").press("Enter");
+  await expect(page.getByTestId("fund-row-C")).toBeVisible();
+});
+
+test("the picker's list is opaque and drawn over the help text in every look", async ({ page }) => {
+  for (const look of ["ks-dark", "light", "hud", "grid"]) {
+    await open(page, `t=${look}`);
+    await section(page, "funds");
+    await page.getByTestId("fund-add").evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await page.getByTestId("fund-add").fill("v");
+    const list = page.getByRole("listbox", { name: "Matching funds" });
+    await expect(list).toBeVisible();
+    await expect(list.getByRole("option")).toHaveCount(8);
+    const look_ = () =>
+      page.evaluate(() => {
+        const listEl = document.querySelector(".adder-list")!;
+        const help = document.querySelector('[data-testid="funds-limit"]')!.getBoundingClientRect();
+        const box = listEl.getBoundingClientRect();
+        const inList = (x: number, y: number) => listEl.contains(document.elementFromPoint(x, y));
+        return {
+          background: getComputedStyle(listEl).backgroundColor,
+          overHelp: inList(help.x + Math.min(40, help.width / 2), help.y + help.height / 2),
+          lastInView: box.bottom <= window.innerHeight && box.top >= 0,
+          // every point of the list, sampled every 16 px down its middle, shows the list
+          lastOnTop: Array.from({ length: Math.floor(box.height / 16) }, (_, i) => box.top + 8 + i * 16).every((y) => inList(box.x + box.width / 2, y)),
+        };
+      });
+    // The list is scrolled into view smoothly: wait until it holds still.
+    await expect.poll(async () => (await look_()).lastInView, { message: `${look}: the whole list is brought into view` }).toBe(true);
+    await page.waitForTimeout(400);
+    const seen = await look_();
+    expect(seen.background, `${look}: the list's background is opaque`).toMatch(/^rgb\(/);
+    expect(seen.overHelp, `${look}: the list is drawn over the help text`).toBe(true);
+    expect(seen.lastOnTop, `${look}: nothing after the section is drawn over the list`).toBe(true);
+  }
+});
+
 test("recalculate appears only when the fund list changes, and sends the new list", async ({ page }) => {
   await open(page, "f=SGOV:60,VTIP:40&unit=pct");
   await section(page, "funds");

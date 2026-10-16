@@ -2185,6 +2185,12 @@ button {
   overflow-y: auto;
 }
 
+/* A section's stacking context (the HUD's glass) must not put the sections after it over the list. */
+.acc:has(.adder-list) {
+  position: relative;
+  z-index: 2;
+}
+
 .adder-opt {
   display: grid;
   grid-template-columns: 96px 1fr;
@@ -3185,7 +3191,13 @@ button {
 [data-theme="hud"] .celltip,
 [data-theme="hud"] .ghosttip,
 [data-theme="hud"] .menu,
-[data-theme="hud"] .adder-list,
+/* The fund picker's list is opaque: the help text under the search box must not show through. */
+[data-theme="hud"] .adder-list {
+  background: var(--elevated);
+  border-color: rgba(255, 210, 150, 0.38);
+  box-shadow: inset 0 1px 0 rgba(255, 240, 220, 0.1), 0 0 22px rgba(232, 64, 28, 0.3), 0 18px 44px -18px rgba(0, 0, 0, 0.8);
+}
+
 [data-theme="hud"] .dialog {
   background: var(--glass-deep);
   border-color: rgba(255, 210, 150, 0.38);
