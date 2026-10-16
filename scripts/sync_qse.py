@@ -85,6 +85,15 @@ def read_blobs(qse_dir: Path, commit: str) -> dict[str, bytes]:
     return blobs
 
 
+def qse_checkout(qse_dir: Path) -> Path:
+    """The resolved top level of the QSE working tree `qse_dir` is in (git accepts a
+    subdirectory), else `qse_dir` itself resolved, when it is no repository or does not exist."""
+    done = _git(qse_dir, "rev-parse", "--show-toplevel")
+    if done.returncode == 0 and done.stdout.strip():
+        return Path(done.stdout.decode().strip()).resolve()
+    return qse_dir.resolve()
+
+
 def _inside(path: Path, base: Path) -> bool:
     return path == base or base in path.parents
 
@@ -96,7 +105,7 @@ def guard(root: Path, qse_dir: Path) -> Path:
     hard link or a path outside `<root>/qse`, would let a sync or a --check overwrite or chmod
     files of the QSE working tree.
     """
-    real_root, real_qse = root.resolve(), qse_dir.resolve()
+    real_root, real_qse = root.resolve(), qse_checkout(qse_dir)
     if _inside(real_root, real_qse) or _inside(real_qse, real_root):
         raise SyncError(
             f"refusing: the root {real_root} and the QSE checkout {real_qse} overlap; "

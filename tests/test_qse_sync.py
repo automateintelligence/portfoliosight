@@ -441,6 +441,25 @@ def test_a_qse_checkout_inside_the_root_is_refused(qse_repo: dict, tmp_path: Pat
     assert _snapshot(repo) == before
 
 
+def test_a_qse_dir_below_the_checkout_root_counts_as_the_whole_checkout(qse_repo: dict):
+    # Git accepts a subdirectory as -C; the overlap test must use the worktree's top level, or a
+    # root beside that subdirectory but inside the checkout would pass.
+    repo = qse_repo["repo"]
+    below, root = repo / "tests", repo / "scratch"
+    below.mkdir()
+    root.mkdir()
+    before = _snapshot(repo)
+    for args in (
+        ("--commit", qse_repo["first"], "--qse-dir", below, "--root", root),
+        ("--check", "--qse-dir", below, "--root", root),
+    ):
+        done = _run_script(*args)
+        assert done.returncode == 2, done.stdout + done.stderr
+        assert "QSE checkout" in done.stderr and "Traceback" not in done.stderr
+    assert list(root.iterdir()) == []
+    assert _snapshot(repo) == before
+
+
 @pytest.mark.parametrize(
     "link",
     [
