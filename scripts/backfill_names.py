@@ -136,6 +136,9 @@ def backfill(
             except RateLimited:
                 emit(f"Tiingo rate limit at {symbol}: stopping; a rerun resumes")
                 break
+            except store_mod.ConcurrentUpdate:
+                emit(f"the budget ledger kept changing at {symbol}: stopping; a rerun resumes")
+                break
             except ProviderError as exc:
                 code = 1
                 emit(f"{symbol}: {RedactingFilter().redact(str(exc))[:300]}")

@@ -11,7 +11,7 @@ from portfoliosight.data import budget
 from portfoliosight.data import lake as lake_mod
 from portfoliosight.data import manifest as manifest_mod
 from portfoliosight.data import store as store_mod
-from portfoliosight.data.providers.base import ProviderError, SymbolMeta
+from portfoliosight.data.providers.base import ProviderError, RateLimited, SymbolMeta
 from portfoliosight.data.store import LocalStore
 from tests.data.test_sync_lake import _load_script
 
@@ -211,3 +211,33 @@ def test_a_name_written_meanwhile_is_kept(lake, store):
     assert (
         names["T1"] == "Named Meanwhile Fund" and names["T2"] == "" and names["T3"] == "Tee Three"
     )
+
+
+@pytest.mark.parametrize(
+    ("error", "says"),
+    [
+        (RateLimited("Tiingo answered 429 for T1"), "Tiingo rate limit at T1"),
+        (store_mod.ConcurrentUpdate("meta/budget.json kept changing"), "kept changing at T1"),
+    ],
+)
+def test_a_rate_limit_or_a_busy_ledger_stops_cleanly(lake, store, error, says):
+    class Stopping(Provider):
+        def fetch_meta(self, symbol):
+            raise error
+
+    provider = Stopping({})
+    code, lines = _run(store, lake, provider, Clock())
+    assert code == 0 and any(says in line for line in lines)
+    assert provider.before_request is None
+    assert _names(store)["QQQ"] == "Invesco QQQ Trust, Series 1"  # the lake's names are kept
+
+
+def test_main_reads_the_store_from_the_environment(lake, store, tmp_path, monkeypatch):
+    monkeypatch.setenv("PS_STORE", "local")
+    monkeypatch.setenv("PS_LOCAL_STORE_DIR", str(tmp_path / "store"))
+    assert backfill_names.main(["--lake", str(lake), "--lake-only", "--dry-run"]) == 0
+    assert _names(store)["QQQ"] == "QQQ"  # dry run
+    assert backfill_names.main(["--lake", str(lake), "--lake-only"]) == 0
+    assert _names(store)["QQQ"] == "Invesco QQQ Trust, Series 1"
+    monkeypatch.setenv("PS_STORE", "nowhere")
+    assert backfill_names.main(["--lake-only"]) == 2
