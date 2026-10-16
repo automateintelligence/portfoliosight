@@ -181,3 +181,46 @@ def test_symbols_view_lists_exactly_the_ok_symbols(tmp_path):
     assert json.loads(store.get("meta/symbols.json")) == view
     assert json.loads(store.get("meta/manifest.json")) == manifest.to_json()
     assert manifest_mod.load_manifest(store) == manifest
+
+
+def _named(name: str) -> manifest_mod.ManifestEntry:
+    return manifest_mod.ManifestEntry(name=name, kind="stock", tier=3, source="tiingo", status="ok")
+
+
+def test_unnamed_is_empty_or_the_ticker():
+    assert manifest_mod.unnamed("C", None) and manifest_mod.unnamed("C", "")
+    assert manifest_mod.unnamed("C", " C ") and manifest_mod.unnamed("C", "   ")
+    assert not manifest_mod.unnamed("C", "Citigroup Inc.")
+
+
+def test_fill_names_names_only_entries_without_one():
+    manifest = manifest_mod.Manifest(
+        symbols={
+            "C": _named("C"),
+            "VTI": _named("Vanguard Total Stock Market ETF"),
+            "X": _named(""),
+        }
+    )
+    named = manifest_mod.fill_names(
+        manifest, {"C": " Citigroup Inc. ", "VTI": "Other", "X": "X", "ABSENT": "Absent Co"}
+    )
+    assert named == ["C"]
+    assert manifest.symbols["C"].name == "Citigroup Inc."
+    assert manifest.symbols["VTI"].name == "Vanguard Total Stock Market ETF"
+    assert manifest.symbols["X"].name == "" and "ABSENT" not in manifest.symbols
+
+
+def test_keep_stored_names_takes_names_only():
+    manifest = manifest_mod.Manifest(symbols={"C": _named("C"), "N": _named("New Name")})
+    stored = {
+        "symbols": {
+            "C": {"name": "Citigroup Inc.", "status": "stale"},
+            "N": {"name": "Old Name"},
+            "Z": {"name": "Not In Memory"},
+            "BAD": "not an entry",
+        }
+    }
+    manifest_mod.keep_stored_names(manifest, stored)
+    assert manifest.symbols["C"].name == "Citigroup Inc." and manifest.symbols["C"].status == "ok"
+    assert manifest.symbols["N"].name == "New Name" and set(manifest.symbols) == {"C", "N"}
+    manifest_mod.keep_stored_names(manifest, None)  # nothing stored yet: nothing changes

@@ -8,7 +8,9 @@ the tail of every seeded symbol not yet refreshed. Refresh fetches the tail of e
 is not current at ``D_G``, whatever its status. Both walk the priority order, write each record
 as they go, and rewrite the catalog after each tier and at the end. A symbol the lake sync keeps
 (``source: lake``, ``meta/lake.json``) is never fetched; every catalog write first applies the
-sync's overlay as it stands then, so the sync's entries are never written over.
+sync's overlay as it stands then, so the sync's entries are never written over, and keeps a name
+another writer stored for an entry the walk holds without one. A symbol that still has no name
+when its tail is refreshed gets one meta request for it, until it has one.
 """
 
 from __future__ import annotations
@@ -280,8 +282,9 @@ class _Ingest:
         overlay the sync wrote first, so neither drops the other's entries.
         """
 
-        def change(_stored: Any) -> dict[str, Any]:
+        def change(stored: Any) -> dict[str, Any]:
             lake_mod.apply_lake(self.manifest, lake_mod.load_lake(self.store), self.d_g)
+            manifest_mod.keep_stored_names(self.manifest, stored)
             manifest_mod.restatus(self.manifest, self.d_g)
             return self.manifest.to_json()
 
@@ -370,8 +373,7 @@ class _Ingest:
             return
         if self.mode == "catch-up" and entry.source != "seed":
             # Already has its history. What is still made up here is its meta request: the one
-            # a budget cut off, or the one a seeded symbol never had (the lake has no names; its
-            # tail refresh stays a single request, so the name comes on a later catch-up).
+            # a budget cut off, or the one a seeded symbol never had.
             if self._unnamed(symbol, entry):
                 self._describe(symbol, entry)
             return
@@ -460,6 +462,8 @@ class _Ingest:
         if entry.source == "seed":
             entry.source = f"seed+{provider_name}"
         self._settle(symbol, entry)
+        if self._unnamed(symbol, entry):
+            self._describe(symbol, entry)  # a symbol that has a name never asks again
 
     def _settle(self, symbol: str, entry: ManifestEntry) -> None:
         """The entry's status and reason against ``D_G``."""
@@ -468,13 +472,13 @@ class _Ingest:
 
     @staticmethod
     def _unnamed(symbol: str, entry: ManifestEntry) -> bool:
-        return not entry.name or entry.name == symbol
+        return manifest_mod.unnamed(symbol, entry.name)
 
     def _describe(self, symbol: str, entry: ManifestEntry) -> None:
         """The second request of a full fetch: the symbol's name and kind from its meta."""
         meta = self._fetch_meta(symbol)
         if meta is not None:
-            entry.name = meta.name or symbol
+            entry.name = (meta.name or "").strip() or symbol
             if not entry.source.startswith("seed"):  # a seed's kind came from the universe
                 entry.kind = self._kind(symbol, meta, entry)
             if meta.first_date is not None and entry.first_date is None:

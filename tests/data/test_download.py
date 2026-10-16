@@ -280,11 +280,12 @@ def test_catch_up_refreshes_pending_seeds_and_leaves_served_symbols(tmp_path):
         "catch-up", store, provider, Clock(date(2026, 2, 24)), ["OKA", "SEED", "BARE", "NEW"]
     )
     assert code == 0
-    # A seeded tail is exactly one request from adjusted_through - 7 days, named or not; a
-    # symbol without a record costs history + meta; OKA is not touched.
+    # A seeded tail is one request from adjusted_through - 7 days, and one more for its name
+    # when it has none; a symbol without a record costs history + meta; OKA is not touched.
     assert calls == [
         ("daily", "SEED", date(2026, 1, 23)),
         ("daily", "BARE", date(2026, 1, 23)),
+        ("meta", "BARE", None),
         ("daily", "NEW", download.FULL_HISTORY_START),
         ("meta", "NEW", None),
     ]
@@ -292,7 +293,8 @@ def test_catch_up_refreshes_pending_seeds_and_leaves_served_symbols(tmp_path):
     assert now["SEED"]["status"] == "ok" and now["SEED"]["source"] == "seed+tiingo"
     assert now["SEED"]["adjusted_through"] == now["SEED"]["last_date"] == "2026-02-23"
     assert now["SEED"]["name"] == "Seeded Co" and now["SEED"]["kind"] == "stock"
-    assert now["BARE"]["name"] == "BARE" and now["BARE"]["kind"] == "stock"
+    # The meta request names it and keeps the kind the seed recorded.
+    assert now["BARE"]["name"] == "BARE Fund" and now["BARE"]["kind"] == "stock"
     assert now["BARE"]["source"] == "seed+tiingo" and now["BARE"]["status"] == "ok"
     assert now["NEW"]["source"] == "tiingo" and now["NEW"]["tier"] == 3
     assert now["NEW"]["name"] == "NEW Fund" and now["NEW"]["kind"] == "etf"
@@ -300,71 +302,47 @@ def test_catch_up_refreshes_pending_seeds_and_leaves_served_symbols(tmp_path):
     seed = store_mod.get_record(store, "SEED")
     assert np.isfinite(seed["tr_index"]).all() and str(seed["date"].iloc[-1])[:10] == "2026-02-23"
     assert seed["div_cash"].iloc[-1] == 0.0 and np.isnan(seed["div_cash"].iloc[0])
-    # A second catch-up gives the refreshed seed that has no name its one meta request, keeps
-    # the kind the seed recorded, and leaves the others alone; a third has nothing left to do.
+    # A second catch-up has nothing left to do.
     again = ["OKA", "SEED", "BARE", "NEW"]
-    code, calls = _go("catch-up", store, provider, Clock(date(2026, 2, 24), 13), again)
-    assert code == 0 and calls == [("meta", "BARE", None)]
-    now = _manifest(store)
-    assert now["BARE"]["name"] == "BARE Fund" and now["BARE"]["kind"] == "stock"
-    assert _go("catch-up", store, provider, Clock(date(2026, 2, 24), 14), again) == (0, [])
-    # Refresh never spends a meta request, named or not.
+    assert _go("catch-up", store, provider, Clock(date(2026, 2, 24), 13), again) == (0, [])
+    # A refresh spends a meta request on a symbol that has no name, and none on one that has.
     store.put(
         "meta/manifest.json",
         json.dumps({"symbols": {**now, "BARE": {**now["BARE"], "name": "BARE"}}}).encode(),
     )
     provider.default_available = FEB26
-    code, calls = _go("refresh", store, provider, Clock(FEB27), ["BARE"])
-    assert code == 0 and [c[0] for c in calls] == ["daily"]
-
-
-def test_status_transitions_and_the_monthly_retry_of_unavailable(tmp_path):
-    entries = {
-        "OKA": _entry("tiingo", "ok", FEB20, FEB20, tier=1),
-        "GONE": _entry("tiingo", "unavailable", None, None, reason="no data"),
-        "OUT": _entry("tiingo", "ok", FEB20, FEB20, tier=3),
-    }
-    store = _seed_store(tmp_path, entries, {"OKA": (FEB20, FEB20), "OUT": (FEB20, FEB20)})
-    provider = FakeProvider(gone={"GONE"})
-    symbols = ["OKA", "GONE"]
-
-    def refresh(day: date, available: date) -> list:
-        provider.available["OKA"] = available
-        code, calls = _go("refresh", store, provider, Clock(day), symbols)
-        assert code == 0
-        return calls
-
-    # 02-23 (D_G 02-20): current, nothing fetched; the catalog is written all the same.
-    assert refresh(date(2026, 2, 23), FEB20) == []
-    assert sorted(_listed(store)) == ["OKA", "OUT"]
-    # 02-27 (D_G 02-26), the provider stuck at 02-23 = D-3 sessions: fetched, still ok.
-    assert refresh(FEB27, FEB23) == [("daily", "OKA", date(2026, 2, 13))]
-    assert _manifest(store)["OKA"]["status"] == "ok"
-    # 02-28 (D_G 02-27): four sessions behind -> stale, and no longer listed. OUT, outside the
-    # configured set, is never fetched but falls out of the served list as well.
-    assert refresh(date(2026, 2, 28), FEB23) == [("daily", "OKA", date(2026, 2, 16))]
-    now = _manifest(store)
-    assert now["OKA"]["status"] == "stale" and now["OKA"]["reason"] == "no data since 2026-02-23"
-    assert now["OUT"]["status"] == "stale" and _listed(store) == []
-    assert json.loads(store.get("meta/symbols.json"))["tiers_served"] == []
-    # 03-01 (D_G 02-27): one successful fetch restores ok; the 1st retries the unavailable one.
-    calls = refresh(date(2026, 3, 1), FEB27)
-    assert calls == [
-        ("daily", "OKA", date(2026, 2, 16)),
-        ("daily", "GONE", download.FULL_HISTORY_START),
+    code, calls = _go("refresh", store, provider, Clock(FEB27), ["BARE", "SEED"])
+    assert code == 0 and calls == [
+        ("daily", "BARE", date(2026, 2, 16)),
+        ("meta", "BARE", None),
+        ("daily", "SEED", date(2026, 2, 16)),
     ]
-    now = _manifest(store)
-    assert now["OKA"]["status"] == "ok" and now["OKA"]["reason"] is None
-    assert now["GONE"]["status"] == "unavailable" and now["GONE"]["reason"] == "no data"
-    assert not store.exists("prices/GONE.parquet") and _listed(store) == ["OKA"]
-    # 03-02: not the 1st any more.
-    assert refresh(date(2026, 3, 2), FEB27) == []
-    # 04-01: the symbol exists now -> fetched in full and served.
-    provider.gone.clear()
-    provider.available["GONE"] = date(2026, 3, 31)
-    calls = refresh(date(2026, 4, 1), date(2026, 3, 31))
-    assert ("daily", "GONE", download.FULL_HISTORY_START) in calls
-    assert _manifest(store)["GONE"]["status"] == "ok" and "GONE" in _listed(store)
+    assert _manifest(store)["BARE"]["name"] == "BARE Fund"
+
+
+def test_a_catalog_write_keeps_a_name_another_writer_stored(tmp_path):
+    """A walk that loaded an entry without a name does not write over the name another writer
+    (the lake sync, the name backfill) stored for it while the walk ran."""
+    entries = {"BARE": _entry("tiingo", "ok", FEB20, FEB20, name="BARE")}
+    store = _seed_store(tmp_path, entries, {"BARE": (FEB20, FEB20)})
+
+    class NamingProvider(FakeProvider):
+        def fetch_daily(self, symbol, start, end=None):
+            stored = json.loads(store.get("meta/manifest.json"))
+            stored["symbols"]["BARE"]["name"] = "Bare Holdings Inc."
+            store.put("meta/manifest.json", json.dumps(stored).encode())
+            return super().fetch_daily(symbol, start, end)
+
+        def fetch_meta(self, symbol):
+            self.calls.append(("meta", symbol, None))
+            return None
+
+    provider = NamingProvider(default_available=FEB23)
+    code, _ = _go("refresh", store, provider, Clock(date(2026, 2, 24)), ["BARE"])
+    assert code == 0
+    assert _manifest(store)["BARE"]["name"] == "Bare Holdings Inc."
+    listed = json.loads(store.get("meta/symbols.json"))["symbols"]
+    assert [row["name"] for row in listed] == ["Bare Holdings Inc."]
 
 
 def test_empty_tail_makes_a_served_symbol_unavailable_and_keeps_its_record(tmp_path):

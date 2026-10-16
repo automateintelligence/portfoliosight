@@ -18,7 +18,10 @@ vouched session; except that a tier 1 or 2 fund a
 provider already keeps (source ``tiingo``, ``seed+tiingo`` or ``tsp``, not ``unavailable``)
 stays the provider's. A taken symbol gets ``prices/{SYMBOL}.parquet`` (``tr_index`` from
 ``adj_close``) unless its lake files are unchanged since the last sync (digest), and an entry
-``source: lake`` with ``relies_on_yfinance``. The entries go to ``meta/lake.json`` (written by
+``source: lake`` with ``relies_on_yfinance`` and the lake's name for it (``General.Name`` of its
+fundamentals file, else EODHD's US symbol list; else the catalog's name, else the ticker). A
+name-only change rewrites the entry, not the record. Entries other writers keep that have no
+name get the lake's name when it has one. The entries go to ``meta/lake.json`` (written by
 this job only), then into ``meta/manifest.json`` by a conditional read-modify-write (never over
 a write it did not read), then ``meta/symbols.json``. A symbol that was taken and no longer
 qualifies is released to ``seed``/``pending``. The R2 keys come from
@@ -64,7 +67,7 @@ from portfoliosight.data.secrets import (  # noqa: E402
 )
 from portfoliosight.data.universe import SymbolInfo, Tiers, is_tsp, load_tiers  # noqa: E402
 
-DEFAULT_LAKE = "~/tft-quantile-forecaster/data/tft/raw/eodhd/datalake_us_core"
+DEFAULT_LAKE = lake_mod.DEFAULT_LAKE
 DEFAULT_LOCK = "~/.local/state/portfoliosight/sync_lake.lock"
 ADJUSTED_FILE = "_adjusted_through.json"
 READY_AT = time(6, 45)  # QSE's stitch starts then (America/Los_Angeles, weekdays)
@@ -211,6 +214,7 @@ class _Sync:
     base: Manifest
     previous: LakeOverlay
     recheck: set[str]
+    names: lake_mod.LakeNames
 
     def __post_init__(self) -> None:
         self.d_g = generation_date(self.now)
@@ -232,9 +236,12 @@ class _Sync:
             return Outcome(symbol, "skipped", SKIP_BEHIND)
         actions = [self.lake / folder / f"{symbol}.parquet" for folder in ("dividends", "splits")]
         digest = file_digest(day, [eod, *actions])
+        name = self.names.name(symbol) or (base.name if base is not None else None) or symbol
         before = self.previous.symbols.get(symbol)
         if before is not None and before.digest == digest and symbol not in self.recheck:
-            kept = before.model_copy(update={"tier": known.tier, "income": known.income})
+            # The record is unchanged; the entry still carries the lake's current name.
+            update = {"tier": known.tier, "income": known.income, "name": name}
+            kept = before.model_copy(update=update)
             self._settle(kept)
             return Outcome(symbol, "unchanged", entry=kept)
         frame = lake_mod.read_eod(eod)
@@ -244,7 +251,7 @@ class _Sync:
             return Outcome(symbol, "skipped", SKIP_UNUSABLE)
         record = lake_mod.eod_to_record(frame, day)
         entry = LakeEntry(
-            name=base.name if base is not None else symbol,
+            name=name,
             kind=known.kind or (base.kind if base is not None else "etf"),
             tier=known.tier,
             income=known.income,
@@ -306,9 +313,17 @@ def _single_run(lock: Path) -> Iterator[bool]:
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def _report(outcomes: list[Outcome], released: list[str], emit: Emit) -> dict[str, Any]:
+def _report(
+    outcomes: list[Outcome], released: list[str], named: list[str], emit: Emit
+) -> dict[str, Any]:
     taken = [o.entry for o in outcomes if o.entry is not None]
     counts = {
+        "unnamed": sum(
+            1
+            for o in outcomes
+            if o.entry is not None and manifest_mod.unnamed(o.symbol, o.entry.name)
+        ),
+        "named_others": len(named),
         "written": sum(1 for o in outcomes if o.action == "written"),
         "unchanged": sum(1 for o in outcomes if o.action == "unchanged"),
         "status": dict(sorted(Counter(e.status for e in taken).items())),
@@ -324,6 +339,10 @@ def _report(outcomes: list[Outcome], released: list[str], emit: Emit) -> dict[st
         f"taken {len(taken)} ({counts['written']} written, {counts['unchanged']} unchanged); "
         f"status {counts['status']}; served {counts['served']} "
         f"({counts['served_stocks']} stocks); relies_on_yfinance {counts['relies_on_yfinance']}"
+    )
+    emit(
+        f"names: {counts['unnamed']} taken entries have only their ticker; "
+        f"{counts['named_others']} entries other writers keep get the lake's name"
     )
     for reason, count in counts["skipped"].items():
         emit(f"skipped {count}: {reason}")
@@ -365,7 +384,8 @@ def sync(
 
     universe = tiers or load_tiers()
     info = {s: known for s, known in universe.info().items() if not is_tsp(s)}
-    job = _Sync(lake, store, now, dry_run, run, info, base, previous, recheck)
+    names = lake_mod.LakeNames(lake)
+    job = _Sync(lake, store, now, dry_run, run, info, base, previous, recheck, names)
     emit(
         f"lake {lake}: {len(run.vouched)} symbols vouched, latest session "
         f"{max(run.vouched.values())}, taken from {job.floor}; D_G {job.d_g}"
@@ -374,7 +394,15 @@ def sync(
         outcomes = list(pool.map(job.take, sorted(info)))
     taken = {o.symbol: o.entry for o in outcomes if o.entry is not None}
     released = sorted((set(previous.symbols) | strays) - set(taken))
-    _report(outcomes, released, emit)
+    fills = {
+        symbol: name
+        for symbol, entry in base.symbols.items()
+        if entry.source != lake_mod.LAKE_SOURCE
+        and symbol not in taken
+        and manifest_mod.unnamed(symbol, entry.name)
+        and (name := names.name(symbol)) is not None
+    }
+    _report(outcomes, released, sorted(fills), emit)
     if dry_run:
         emit("dry run: nothing written")
         return 0
@@ -417,6 +445,7 @@ def sync(
     def change(document: Any) -> dict[str, Any]:
         manifest = Manifest.model_validate(document or {})
         lake_mod.apply_lake(manifest, overlay, job.d_g)
+        manifest_mod.fill_names(manifest, fills)
         return manifest.to_json()
 
     written = Manifest.model_validate(
