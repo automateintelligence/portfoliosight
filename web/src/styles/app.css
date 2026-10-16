@@ -857,7 +857,8 @@ button {
   stroke-width: 1;
 }
 
-.fund-dot text {
+.fund-dot text,
+.fund-shown {
   fill: var(--text-2);
   font-family: var(--font-mono);
   font-size: 9.5px;
@@ -865,6 +866,18 @@ button {
   stroke: var(--chart-bg);
   stroke-width: 3px;
   stroke-linejoin: round;
+}
+
+/* A ticker that would sit on another is hidden; its dot names it on hover or tap. */
+.fund-dot .fund-hit {
+  fill: transparent;
+  stroke: none;
+  opacity: 1;
+  cursor: help;
+}
+
+.fund-shown {
+  pointer-events: none;
 }
 
 /* Chart labels (DOM text, never canvas) */
@@ -1015,6 +1028,81 @@ button {
   padding: 10px 12px;
 }
 
+/* The selected mix's card, pinned in a corner of the plot (pin.ts): opaque in every look, so the
+ * map never shows through, and it takes the pointer so the map's own card does not open under it. */
+.pinned-card {
+  z-index: 6;
+  overflow-y: auto;
+  background: var(--elevated);
+  pointer-events: auto;
+}
+
+.legend.is-covered {
+  visibility: hidden;
+}
+
+/* On a phone the pinned card is short, so a corner can leave the selected point clear: the
+ * per-year note goes (the card's own figures say "Risk" and "Expected return") and the largest
+ * holdings run in three columns without their bars. */
+.pinned-card.is-compact {
+  padding: 6px 9px;
+  font-size: 11px;
+}
+
+.pinned-card.is-compact .mixcard h3 {
+  margin-bottom: 3px;
+  font-size: 10px;
+}
+
+.pinned-card.is-compact .mixcard .tip-range {
+  font-size: 12.5px;
+}
+
+.pinned-card.is-compact .mixcard .tip-range span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 4px;
+}
+
+.pinned-card.is-compact .mixcard .tip-range small {
+  display: inline;
+}
+
+.pinned-card.is-compact .mixcard .tip-sub-year,
+.pinned-card.is-compact .mixcard .wbar {
+  display: none;
+}
+
+.pinned-card.is-compact .mixcard .tip-facts,
+.pinned-card.is-compact .mixcard ul {
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.pinned-card.is-compact .mixcard ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px 12px;
+}
+
+.pinned-card.is-compact .mixcard li {
+  display: flex;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.pinned-card.is-compact .mixcard .tip-tech {
+  margin-top: 4px;
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.pinned-card.is-compact .tip-more {
+  margin-top: 3px;
+  font-size: 10px;
+}
+
 /* One card for every mix the chart names (the three markers and the spot under the pointer). */
 .mixcard h3 {
   display: flex;
@@ -1106,6 +1194,10 @@ button {
   color: var(--muted);
   font-size: 10.5px;
   line-height: 1.4;
+}
+
+.pinned-card .tip-more {
+  margin-top: 6px;
 }
 
 .tooltip .tip-more {
@@ -1506,6 +1598,32 @@ button {
 .readout-tech {
   font-size: 10.5px;
   color: var(--muted);
+}
+
+/* Phone, details on: the slider's method is one line that opens. */
+.readout-method {
+  pointer-events: auto;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.readout-method summary {
+  cursor: pointer;
+  width: max-content;
+  color: var(--text-2);
+}
+
+.readout-method .readout-tech {
+  display: block;
+  margin-top: 2px;
+}
+
+.chart-notes dd span {
+  display: block;
+}
+
+.chart-notes dd span + span {
+  margin-top: 3px;
 }
 
 [data-theme="grid"] .readout-cap {
@@ -2905,6 +3023,11 @@ button {
   .tooltip {
     padding: 10px 12px;
   }
+
+  .pinned-card {
+    padding: 8px 10px;
+    font-size: 11.5px;
+  }
 }
 
 /* ── HUD: red and gold instrument glass ─────────────────────────────────────────
@@ -3197,6 +3320,12 @@ button {
   border-color: rgba(255, 210, 150, 0.38);
   backdrop-filter: blur(14px) saturate(1.4);
   box-shadow: inset 0 1px 0 rgba(255, 240, 220, 0.1), 0 0 22px rgba(232, 64, 28, 0.3), 0 18px 44px -18px rgba(0, 0, 0, 0.8);
+}
+
+/* The pinned card is solid even in the HUD: its figures must read over the colour map. */
+[data-theme="hud"] .pinned-card {
+  background: var(--elevated);
+  backdrop-filter: none;
 }
 
 /* The fund picker's list is opaque: the help text under the search box must not show through. */

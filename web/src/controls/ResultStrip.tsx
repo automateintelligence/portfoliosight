@@ -32,11 +32,13 @@ type Props = {
   details: boolean;
   facts: DetailFacts;
   staleAsof: string | null;
+  /** Phone: the chart's axis and legend technical lines are shown here instead of on the chart. */
+  chartNotes?: boolean;
   onToggleDetails: () => void;
 };
 
 /** "Selected mix": the one-year range, the quiet diversification word, and the details toggle. */
-export function ResultStrip({ low, typical, high, normal, scale, value, word, details, facts, staleAsof, onToggleDetails }: Props) {
+export function ResultStrip({ low, typical, high, normal, scale, value, word, details, facts, staleAsof, chartNotes = false, onToggleDetails }: Props) {
   // A small picture of the range on one scale for the menu and window: the Bad-to-Good band with
   // its two ends marked, the typical year, and 0%. A figure past an end is drawn at that end with
   // an overflow mark. The bar is always in percent.
@@ -107,7 +109,7 @@ export function ResultStrip({ low, typical, high, normal, scale, value, word, de
           {word}
         </span>
       </div>
-      <button type="button" className="btn details-btn" data-testid="details-toggle" aria-pressed={details} onClick={onToggleDetails}>
+      <button type="button" className="btn details-btn" data-testid="details-toggle" data-keeps-pin="" aria-pressed={details} onClick={onToggleDetails}>
         <SlidersHorizontal size={15} aria-hidden="true" />
         <span>{plain.details}</span>
       </button>
@@ -122,6 +124,22 @@ export function ResultStrip({ low, typical, high, normal, scale, value, word, de
             {`This mix ${enbLine(facts.enb.toFixed(1), facts.enbRef.toFixed(1))}.`} <span className="hint">({technical.enbName})</span>
           </p>
           {facts.sigma < 0.01 && <p className="wide">{plain.lowRisk}</p>}
+          {chartNotes && (
+            <dl className="wide chart-notes" data-testid="details-chart">
+              <dt>{plain.chartNotes}</dt>
+              <dd>
+                <span>
+                  {plain.yAxis}: {technical.yAxis}.
+                </span>
+                <span>
+                  {plain.xAxis.split(":")[0]}: {technical.xAxis}.
+                </span>
+                <span>
+                  {plain.heatLegend}: {technical.heatLegend}.
+                </span>
+              </dd>
+            </dl>
+          )}
           {value?.status === "unknown_price" && (
             <p className="wide" data-testid="details-no-price">
               {stripNoPrice(value.funds)}

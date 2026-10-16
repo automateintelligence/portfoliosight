@@ -76,7 +76,7 @@ export function DivSlider({ t, moved, disabled, horizontal, details, onChange, o
 
   if (horizontal) {
     return (
-      <div className="divs divs-h">
+      <div className="divs divs-h" data-keeps-pin="">
         <div className="divs-row">
           <span className="divs-end">{plain.divMoreReturn}</span>
           {reset}
@@ -92,7 +92,7 @@ export function DivSlider({ t, moved, disabled, horizontal, details, onChange, o
     );
   }
   return (
-    <div className="divs">
+    <div className="divs" data-keeps-pin="">
       <span className="divs-end">{plain.divMoreReturn}</span>
       <div ref={ref} className="vslider" data-testid="div-slider" onKeyDown={onKeyDown} {...aria} {...slide}>
         <span className="v-track" />

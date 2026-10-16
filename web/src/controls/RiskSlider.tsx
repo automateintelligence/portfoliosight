@@ -68,7 +68,7 @@ export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, 
   const readoutX = Math.min(Math.max(thumbX, half), Math.max(half, width - half));
 
   return (
-    <div className={details ? "risk has-tech" : "risk"}>
+    <div className={details ? "risk has-tech" : "risk"} data-keeps-pin="">
       <div
         ref={ref}
         className="rslider"
@@ -106,7 +106,13 @@ export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, 
             <b className="num">{typ}</b>
           </span>
         </span>
-        {details && <span className="readout-tech">{technical.riskSlider}</span>}
+        {details && !phone && <span className="readout-tech">{technical.riskSlider}</span>}
+        {details && phone && (
+          <details className="readout-method" data-testid="risk-method">
+            <summary>{plain.method}</summary>
+            <span className="readout-tech">{technical.riskSlider}</span>
+          </details>
+        )}
       </div>
       {single && <p className="risk-note">{plain.riskDisabled}</p>}
     </div>

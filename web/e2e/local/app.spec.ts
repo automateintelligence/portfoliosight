@@ -392,6 +392,12 @@ test("the square and the open circle show the same card as the selected mix", as
   await open(page);
   const card = page.getByTestId("mix-card");
   const titles: Record<string, string> = { selected: "Selected mix", current: "The mix you entered", div: "Optimized" };
+  if (isPhone(testInfo.project.name)) {
+    // at rest on Optimized the selected point sits on the open circle, and a tap there reaches the
+    // point (it pins its card); move the point off the circle first
+    await page.getByTestId("div-slider").focus();
+    for (let i = 0; i < 12; i++) await page.keyboard.press("ArrowLeft");
+  }
   for (const kind of ["current", "div", "selected"]) {
     const mark = page.locator(`[data-mark="${kind}"]`);
     if (isPhone(testInfo.project.name)) {
@@ -821,7 +827,11 @@ test("the axis title and its details line sit inside the chart frame, under the 
     if ((await page.getByTestId("details-toggle").getAttribute("aria-pressed")) !== "true") await page.getByTestId("details-toggle").click();
     await page.evaluate(() => window.scrollTo(0, 0));
     const title = page.getByTestId("x-title");
-    await expect(title.locator(".tech")).toHaveText("Standard deviation of yearly return");
+    if (isPhone(testInfo.project.name)) {
+      // on a phone the axes' technical lines are in the details under the chart
+      await expect(title.locator(".tech")).toHaveCount(0);
+      await expect(page.getByTestId("details-chart")).toContainText("Standard deviation of yearly return");
+    } else await expect(title.locator(".tech")).toHaveText("Standard deviation of yearly return");
     const facts = await page.getByTestId("chart").evaluate((chart) => {
       const c = chart.getBoundingClientRect();
       const t = chart.querySelector(".x-title")!.getBoundingClientRect();
@@ -984,4 +994,206 @@ test("a shared link over the public limit is refused with a message and the defa
   expect(await posts(page), "nothing is built for the refused menu").toEqual([]);
   await expect(page.getByTestId("preset-menu")).toHaveAccessibleName(/Example Portfolio/);
   await expect.poll(() => page.url()).not.toContain("MOCKF");
+});
+
+// ── The pinned card (owner direction 2026-10-16) ─────────────────────────────────────────────
+type Box = { x: number; y: number; width: number; height: number };
+const overlap = (a: Box, b: Box) => a.x < b.x + b.width - 0.5 && b.x < a.x + a.width - 0.5 && a.y < b.y + b.height - 0.5 && b.y < a.y + a.height - 0.5;
+const centre = async (page: Page, id: string) => {
+  const b = await boxOf(page, id);
+  return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+};
+/** A click with a mouse, a tap with a finger. */
+const press = async (page: Page, phone: boolean, x: number, y: number) => {
+  if (phone) await page.touchscreen.tap(x, y);
+  else await page.mouse.click(x, y);
+};
+/** A drag of `dx`, `dy` px from (x, y): mouse buttons on a desktop, real touch events on a phone. */
+const dragBy = async (page: Page, phone: boolean, x: number, y: number, dx: number, dy: number) => {
+  if (!phone) {
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + dx, y + dy, { steps: 8 });
+    await page.mouse.up();
+    return;
+  }
+  const cdp = await page.context().newCDPSession(page);
+  const touch = (type: "touchStart" | "touchMove" | "touchEnd", px: number, py: number) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x: px, y: py, id: 1 }] });
+  await touch("touchStart", x, y);
+  for (let i = 1; i <= 8; i++) await touch("touchMove", x + (dx * i) / 8, y + (dy * i) / 8);
+  await touch("touchEnd", x + dx, y + dy);
+  await cdp.detach();
+};
+
+test("a click or tap on the selected point pins its card; it follows both sliders and a drag of the point, and keeps its place", async ({ page }, testInfo) => {
+  const phone = isPhone(testInfo.project.name);
+  await open(page);
+  const pinned = page.getByTestId("mix-card-pinned");
+  const point = page.getByTestId("point-selected");
+  await expect(pinned).toHaveCount(0);
+  const p0 = await centre(page, "point-selected");
+  await press(page, phone, p0.x, p0.y);
+  await expect(pinned).toBeVisible();
+  await expect(pinned.getByTestId("mix-card")).toHaveAttribute("data-for", "selected");
+  await expect(point).toHaveAttribute("aria-describedby", "mix-card-pinned");
+  const chart = await boxOf(page, "chart");
+  const where = async () => {
+    const b = (await pinned.boundingBox())!;
+    return { x: Math.round(b.x - chart.x), y: Math.round(b.y - chart.y), corner: await pinned.getAttribute("data-corner"), box: b };
+  };
+  const inPlace = async (what: string) => {
+    const now = await where();
+    const c = await centre(page, "point-selected");
+    expect(now.box.x >= chart.x && now.box.x + now.box.width <= chart.x + chart.width + 0.5, `${what}: the card stays inside the chart across`).toBe(true);
+    expect(now.box.y >= chart.y, `${what}: the card starts inside the chart`).toBe(true);
+    if (!phone) expect({ x: now.x, y: now.y, corner: now.corner }, `${what}: the card keeps its top-left anchor`).toEqual({ x: first.x, y: first.y, corner: "top-left" });
+    else {
+      // on a phone the card takes the first corner (top-left, top-right, bottom-left, bottom-right)
+      // that leaves the point clear; only when none can (data-clear=false) the one farthest from it
+      expect(["top-left", "top-right", "bottom-left", "bottom-right"]).toContain(now.corner);
+      if ((await pinned.getAttribute("data-clear")) !== "false") {
+        const covered = c.x > now.box.x - 8 && c.x < now.box.x + now.box.width + 8 && c.y > now.box.y - 8 && c.y < now.box.y + now.box.height + 8;
+        expect(covered, `${what}: the card leaves the point clear`).toBe(false);
+      }
+    }
+    // the legend is covered while the card sits on it
+    if (now.corner === "top-left") await expect(page.getByTestId("chart-legend")).toBeHidden();
+  };
+  const first = await where();
+  await expect(pinned, "the default view leaves the point clear").toHaveAttribute("data-clear", "true");
+  await inPlace("pinned");
+  const text = async () => (await pinned.innerText()).replace(/\s+/g, " ");
+  let before = await text();
+
+  // the risk slider, pressed at another place along it
+  const rs = await boxOf(page, "risk-slider");
+  await press(page, phone, rs.x + rs.width * 0.75, rs.y + rs.height / 2);
+  await expect.poll(text, { message: "the card follows the risk slider" }).not.toBe(before);
+  await expect(pinned).toBeVisible();
+  await inPlace("after the risk slider");
+  before = await text();
+
+  // the diversification slider, pressed near its "More diversified" end
+  const ds = await boxOf(page, "div-slider");
+  const horizontal = (await page.getByTestId("div-slider").getAttribute("aria-orientation")) === "horizontal";
+  await press(page, phone, horizontal ? ds.x + ds.width * 0.85 : ds.x + ds.width / 2, horizontal ? ds.y + ds.height / 2 : ds.y + ds.height * 0.85);
+  await expect.poll(text, { message: "the card follows the diversification slider" }).not.toBe(before);
+  await expect(pinned).toBeVisible();
+  await inPlace("after the diversification slider");
+  before = await text();
+
+  // a drag of the point moves it and leaves the card pinned
+  const p1 = await centre(page, "point-selected");
+  await dragBy(page, phone, p1.x, p1.y, -50, 0);
+  await expect.poll(text, { message: "the card follows a drag of the point" }).not.toBe(before);
+  await expect(pinned).toBeVisible();
+  await inPlace("after a drag");
+  await expect(pinned).toContainText(/Bad\s*[+−]?\d+\.\d%/);
+  await expect(pinned.getByTestId("mix-card-word")).toHaveText(/^(Good|Average|Fair|Poor)$/);
+
+  // a second click or tap on the point lets it go
+  const p2 = await centre(page, "point-selected");
+  await press(page, phone, p2.x, p2.y);
+  await expect(pinned).toHaveCount(0);
+  await expect(page.getByTestId("chart-legend")).toBeVisible();
+
+  // so does a click or tap outside the chart
+  await press(page, phone, p2.x, p2.y);
+  await expect(pinned).toBeVisible();
+  const adv = await boxOf(page, "range-typical");
+  await press(page, phone, adv.x + adv.width / 2, adv.y + adv.height / 2);
+  await expect(pinned).toHaveCount(0);
+
+  // and Escape, from the keyboard: Enter on the focused point pins it
+  if (!phone) {
+    await point.focus();
+    await page.keyboard.press("Enter");
+    await expect(pinned).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(pinned).toHaveCount(0);
+  }
+});
+
+test("unpinned, hovering still shows each card by the pointer; pinned, the map's card never sits on the pinned one @desktop-only", async ({ page }) => {
+  await open(page);
+  const chart = await boxOf(page, "chart");
+  const cell = page.locator('[data-testid="mix-card"][data-for="cell"]');
+  const pinned = page.getByTestId("mix-card-pinned");
+  await page.getByTestId("point-selected").hover({ force: true });
+  await expect(page.locator('[role="tooltip"] [data-testid="mix-card"]')).toHaveAttribute("data-for", "selected");
+  await page.mouse.move(chart.x + chart.width * 0.6, chart.y + chart.height * 0.75);
+  await expect(cell).toBeVisible();
+  const p = await centre(page, "point-selected");
+  await page.mouse.click(p.x, p.y);
+  await expect(pinned).toBeVisible();
+  // hovering the point no longer opens a second card for it
+  await expect(page.getByTestId("mix-card")).toHaveCount(1);
+  const pin = (await pinned.boundingBox())!;
+  // across the map, near the pinned card and away from it: one cell card at most, never on the pinned one
+  for (const [fx, fy] of [[0.6, 0.75], [0.3, 0.72], [0.25, 0.5], [0.45, 0.4], [0.5, 0.85]]) {
+    await page.mouse.move(chart.x + chart.width * fx, chart.y + chart.height * fy);
+    await page.waitForTimeout(80);
+    if ((await cell.count()) === 0) continue;
+    const b = (await cell.boundingBox())!;
+    expect(overlap(b, pin), `cell card at ${fx},${fy} sits on the pinned card`).toBe(false);
+  }
+  await page.mouse.move(chart.x + chart.width * 0.6, chart.y + chart.height * 0.75);
+  await expect(cell).toBeVisible();
+  await expect(pinned).toBeVisible();
+});
+
+test("details on: the legend, the axis titles and their technical lines do not overlap, and no fund tickers touch", async ({ page }, testInfo) => {
+  const phone = isPhone(testInfo.project.name);
+  const sizes = phone ? [null] : [{ width: 1024, height: 768 }, { width: 1280, height: 800 }, { width: 1366, height: 900 }, { width: 1920, height: 1080 }];
+  for (const look of ["ks-dark", "hud", "grid", "light"]) {
+    for (const size of sizes) {
+      if (size) await page.setViewportSize(size);
+      await open(page, `t=${look}&x=1`);
+      if ((await page.getByTestId("details-toggle").getAttribute("aria-pressed")) !== "true") await page.getByTestId("details-toggle").click();
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await expect(page.locator(".fund-dot").first()).toBeVisible();
+      const what = `${look} ${size ? size.width : "phone"}`;
+      const boxes = await page.getByTestId("chart").evaluate((el) => {
+        const r = (q: string) => Array.from(el.querySelectorAll(q)).map((n) => {
+          const b = n.getBoundingClientRect();
+          return { x: b.x, y: b.y, width: b.width, height: b.height, name: q, text: (n.textContent ?? "").slice(0, 24) };
+        });
+        return {
+          text: [...r(".y-title"), ...r(".x-title"), ...r(".legend-title"), ...r(".legend-tech"), ...r(".legend .ramp"), ...r(".legend .keys")].filter((b) => b.width > 0),
+          funds: r(".fund-dot text").filter((b) => b.width > 0),
+          dots: el.querySelectorAll(".fund-dot").length,
+        };
+      });
+      for (let i = 0; i < boxes.text.length; i++)
+        for (let j = i + 1; j < boxes.text.length; j++) {
+          const [a, b] = [boxes.text[i], boxes.text[j]];
+          if (a.name.startsWith(".legend") && b.name.startsWith(".legend")) continue; // parts of one stacked block
+          expect(overlap(a, b), `${what}: ${a.name} "${a.text}" overlaps ${b.name} "${b.text}"`).toBe(false);
+        }
+      for (let i = 0; i < boxes.funds.length; i++)
+        for (let j = i + 1; j < boxes.funds.length; j++) expect(overlap(boxes.funds[i], boxes.funds[j]), `${what}: tickers ${boxes.funds[i].text} and ${boxes.funds[j].text} overlap`).toBe(false);
+      expect(boxes.dots, `${what}: every fund keeps its dot`).toBeGreaterThan(boxes.funds.length - 1);
+      if (phone) {
+        // the long technical lines are under the chart, in the details; the slider's method opens
+        await expect(page.locator(".legend-tech")).toHaveCount(0);
+        await expect(page.locator(".y-title .tech")).toHaveCount(0);
+        await expect(page.getByTestId("details-chart")).toContainText("Shrunk expected return");
+        await expect(page.getByTestId("details-chart")).toContainText("Standard deviation of yearly return");
+        await expect(page.getByTestId("details-chart")).toContainText("minimum torsion");
+        const method = page.getByTestId("risk-method");
+        await expect(method.locator(".readout-tech")).toBeHidden();
+        await method.locator("summary").click();
+        await expect(method.locator(".readout-tech")).toBeVisible();
+      }
+    }
+  }
+  // a hidden ticker is named when its dot is hovered or tapped
+  const quiet = page.locator(".fund-dot.is-quiet");
+  if ((await quiet.count()) > 0) {
+    const id = (await quiet.first().getAttribute("data-fund"))!;
+    const dot = (await quiet.first().locator("circle.fund-hit").boundingBox())!;
+    await expect(page.getByTestId(`fund-label-${id}`)).toHaveCount(0);
+    await press(page, phone, dot.x + dot.width / 2, dot.y + dot.height / 2);
+    await expect(page.getByTestId(`fund-label-${id}`)).toBeVisible();
+  }
 });
