@@ -8,8 +8,12 @@ The files are read from the local QSE checkout with `git cat-file blob <commit>:
 QSE working tree is never read or touched. Each file is written, then closed with `chmod a-w`.
 `qse/` is edited only in QSE: merge there, then re-run this script at the new commit.
 
-Exit codes: 0 done or clean, 1 drift found by --check, 2 bad arguments, 3 the QSE checkout or
-commit is not there, 4 a listed path is not in the commit.
+Before anything is written or closed, both modes refuse (exit 2) a root that is the QSE checkout,
+lies inside it or contains it, and any destination (a listed file, the lock, or a directory between
+them and the root) that is a link or resolves outside `<root>/qse`.
+
+Exit codes: 0 done or clean, 1 drift found by --check, 2 bad arguments or an unsafe root or
+destination, 3 the QSE checkout or commit is not there, 4 a listed path is not in the commit.
 """
 
 from __future__ import annotations
@@ -79,6 +83,40 @@ def read_blobs(qse_dir: Path, commit: str) -> dict[str, bytes]:
     return blobs
 
 
+def _inside(path: Path, base: Path) -> bool:
+    return path == base or base in path.parents
+
+
+def guard(root: Path, qse_dir: Path) -> Path:
+    """The resolved root, once it and every destination under it are safe to write and close.
+
+    A root that overlaps the QSE checkout, or a destination that is a symbolic link, a second
+    hard link or a path outside `<root>/qse`, would let a sync or a --check overwrite or chmod
+    files of the QSE working tree.
+    """
+    real_root, real_qse = root.resolve(), qse_dir.resolve()
+    if _inside(real_root, real_qse) or _inside(real_qse, real_root):
+        raise SyncError(
+            f"refusing: the root {real_root} and the QSE checkout {real_qse} overlap; "
+            "--root must name the PortfolioSight checkout",
+            2,
+        )
+    base = real_root / "qse"
+    for name in (*FILES, LOCK_NAME):
+        path = real_root
+        for part in Path(name).parts:
+            path = path / part
+            if path.is_symlink():
+                raise SyncError(
+                    f"refusing: {path.relative_to(real_root).as_posix()} is a symbolic link", 2
+                )
+        if not _inside(path.resolve(), base):
+            raise SyncError(f"refusing: {name} resolves outside {base}", 2)
+        if path.is_file() and path.stat().st_nlink > 1:
+            raise SyncError(f"refusing: {name} has another hard link", 2)
+    return real_root
+
+
 def _write_closed(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
@@ -88,6 +126,7 @@ def _write_closed(path: Path, data: bytes) -> None:
 
 
 def sync(commit: str, qse_dir: Path, root: Path) -> dict:
+    root = guard(root, qse_dir)
     blobs = read_blobs(qse_dir, commit)
     for name, data in blobs.items():
         _write_closed(root / name, data)
@@ -105,8 +144,9 @@ def _close(path: Path) -> None:
         path.chmod(path.stat().st_mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
 
 
-def check(root: Path) -> list[str]:
+def check(root: Path, qse_dir: Path) -> list[str]:
     """Every drift from the lock, one line each; every listed file is closed again."""
+    root = guard(root, qse_dir)
     drifts: list[str] = []
     lock_path = root / LOCK_NAME
     listed: dict[str, str] = {}
@@ -145,7 +185,11 @@ def check(root: Path) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Pull QSE files at a pinned commit.")
     parser.add_argument("--commit", help="the 40-hex QSE commit to pull")
-    parser.add_argument("--qse-dir", type=Path, help="QSE checkout (default: $PS_QSE_DIR)")
+    parser.add_argument(
+        "--qse-dir",
+        type=Path,
+        help="QSE checkout (default: $PS_QSE_DIR); --check uses it only to refuse an overlap",
+    )
     parser.add_argument("--root", type=Path, default=REPO, help="repository root to write into")
     parser.add_argument("--check", action="store_true", help="verify qse/ against the lock")
     args = parser.parse_args(argv)
@@ -154,8 +198,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("give --commit <40 hex> to sync, or --check to verify (not both)")
     if commit is not None and not COMMIT_RE.fullmatch(commit):
         parser.error("--commit must be 40 lowercase hex characters")
+    qse_dir: Path = args.qse_dir or default_qse_dir()
     if commit is None:
-        drifts = check(args.root)
+        try:
+            drifts = check(args.root, qse_dir)
+        except SyncError as exc:
+            print(str(exc), file=sys.stderr)
+            return exc.code
         for line in drifts:
             print(f"drift: {line}")
         if drifts:
@@ -168,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"qse/ matches {LOCK_NAME}")
         return 0
     try:
-        lock = sync(commit, args.qse_dir or default_qse_dir(), args.root)
+        lock = sync(commit, qse_dir, args.root)
     except SyncError as exc:
         print(str(exc), file=sys.stderr)
         return exc.code

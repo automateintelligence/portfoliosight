@@ -381,3 +381,106 @@ def test_a_directory_that_is_not_a_repository_is_refused(tmp_path: Path):
     not_a_repo.mkdir()
     done = _run_script("--commit", PIN, "--qse-dir", not_a_repo, "--root", root)
     assert done.returncode == 3 and list(root.iterdir()) == []
+
+
+# ------------------------------------- a root or a destination that reaches the QSE checkout
+
+
+def _snapshot(tree: Path) -> dict[str, tuple[int, bytes]]:
+    """Mode and bytes of every file under `tree` (not following links), `.git` excluded."""
+    return {
+        path.relative_to(tree).as_posix(): (_mode(path), path.read_bytes())
+        for path in sorted(tree.rglob("*"))
+        if ".git" not in path.relative_to(tree).parts and path.is_file()
+    }
+
+
+@pytest.mark.parametrize("where", ["the checkout", "inside the checkout", "a link to it"])
+def test_a_root_in_the_qse_checkout_is_refused_before_anything_is_written(
+    qse_repo: dict, tmp_path: Path, where: str
+):
+    repo = qse_repo["repo"]
+    if where == "the checkout":
+        root = repo
+    elif where == "inside the checkout":
+        root = repo / "sub"
+        root.mkdir()
+    else:
+        root = tmp_path / "link"
+        root.symlink_to(repo, target_is_directory=True)
+    before = _snapshot(repo)
+    status_before = _git(repo, "status", "--porcelain")
+    for args in (
+        ("--commit", qse_repo["first"], "--qse-dir", repo, "--root", root),
+        ("--check", "--qse-dir", repo, "--root", root),
+    ):
+        done = _run_script(*args)
+        assert done.returncode == 2, done.stdout + done.stderr
+        assert "QSE checkout" in done.stderr and "Traceback" not in done.stderr
+    assert _snapshot(repo) == before
+    assert _git(repo, "status", "--porcelain") == status_before
+
+
+def test_a_qse_checkout_inside_the_root_is_refused(qse_repo: dict, tmp_path: Path):
+    # The fixture's checkout lives at tmp_path/qse-checkout, so tmp_path contains it.
+    repo = qse_repo["repo"]
+    before = _snapshot(repo)
+    done = _sync(qse_repo, tmp_path, qse_repo["first"])
+    assert done.returncode == 2 and "QSE checkout" in done.stderr
+    assert not (tmp_path / "qse").exists()
+    assert _snapshot(repo) == before
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "qse",
+        "qse/distributions",
+        "qse/distributions/joint",
+        "qse/exceptions.py",
+        "qse/qse.lock.json",
+    ],
+)
+def test_a_destination_that_is_a_link_is_refused_by_sync_and_check(
+    qse_repo: dict, tmp_path: Path, link: str
+):
+    # Each link points into a stand-in for a working tree outside the root: an open copy.
+    outside = tmp_path / "outside"
+    shutil.copytree(QSE_DIR, outside / "qse", ignore=shutil.ignore_patterns("__pycache__"))
+    for path in (outside / "qse").rglob("*"):
+        if path.is_file():
+            path.chmod(0o644)
+    root = tmp_path / "ps"
+    shutil.copytree(outside, root)
+    target = root / link
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+    target.symlink_to(outside / link, target_is_directory=(outside / link).is_dir())
+    before = _snapshot(outside)
+    for args in (
+        ("--commit", qse_repo["first"], "--qse-dir", qse_repo["repo"], "--root", root),
+        ("--check", "--qse-dir", qse_repo["repo"], "--root", root),
+    ):
+        done = _run_script(*args)
+        assert done.returncode == 2, done.stdout + done.stderr
+        assert "link" in done.stderr and link in done.stderr
+        assert "Traceback" not in done.stderr
+    assert _snapshot(outside) == before
+
+
+def test_a_destination_with_a_second_hard_link_is_refused(qse_repo: dict, tmp_path: Path):
+    # A hard link writes through to the other name's bytes and mode, as a symbolic link would.
+    root = tmp_path / "ps"
+    assert _sync(qse_repo, root, qse_repo["first"]).returncode == 0
+    other = tmp_path / "other.py"
+    os.link(root / "qse/exceptions.py", other)
+    other.chmod(0o644)
+    for args in (
+        ("--commit", qse_repo["second"], "--qse-dir", qse_repo["repo"], "--root", root),
+        ("--check", "--qse-dir", qse_repo["repo"], "--root", root),
+    ):
+        done = _run_script(*args)
+        assert done.returncode == 2 and "qse/exceptions.py" in done.stderr, done.stderr
+    assert other.read_bytes() == _blob("qse/exceptions.py", 1) and _mode(other) == 0o644
