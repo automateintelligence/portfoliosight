@@ -345,6 +345,55 @@ def test_a_catalog_write_keeps_a_name_another_writer_stored(tmp_path):
     assert [row["name"] for row in listed] == ["Bare Holdings Inc."]
 
 
+def test_status_transitions_and_the_monthly_retry_of_unavailable(tmp_path):
+    entries = {
+        "OKA": _entry("tiingo", "ok", FEB20, FEB20, tier=1),
+        "GONE": _entry("tiingo", "unavailable", None, None, reason="no data"),
+        "OUT": _entry("tiingo", "ok", FEB20, FEB20, tier=3),
+    }
+    store = _seed_store(tmp_path, entries, {"OKA": (FEB20, FEB20), "OUT": (FEB20, FEB20)})
+    provider = FakeProvider(gone={"GONE"})
+    symbols = ["OKA", "GONE"]
+
+    def refresh(day: date, available: date) -> list:
+        provider.available["OKA"] = available
+        code, calls = _go("refresh", store, provider, Clock(day), symbols)
+        assert code == 0
+        return calls
+
+    # 02-23 (D_G 02-20): current, nothing fetched; the catalog is written all the same.
+    assert refresh(date(2026, 2, 23), FEB20) == []
+    assert sorted(_listed(store)) == ["OKA", "OUT"]
+    # 02-27 (D_G 02-26), the provider stuck at 02-23 = D-3 sessions: fetched, still ok.
+    assert refresh(FEB27, FEB23) == [("daily", "OKA", date(2026, 2, 13))]
+    assert _manifest(store)["OKA"]["status"] == "ok"
+    # 02-28 (D_G 02-27): four sessions behind -> stale, and no longer listed. OUT, outside the
+    # configured set, is never fetched but falls out of the served list as well.
+    assert refresh(date(2026, 2, 28), FEB23) == [("daily", "OKA", date(2026, 2, 16))]
+    now = _manifest(store)
+    assert now["OKA"]["status"] == "stale" and now["OKA"]["reason"] == "no data since 2026-02-23"
+    assert now["OUT"]["status"] == "stale" and _listed(store) == []
+    assert json.loads(store.get("meta/symbols.json"))["tiers_served"] == []
+    # 03-01 (D_G 02-27): one successful fetch restores ok; the 1st retries the unavailable one.
+    calls = refresh(date(2026, 3, 1), FEB27)
+    assert calls == [
+        ("daily", "OKA", date(2026, 2, 16)),
+        ("daily", "GONE", download.FULL_HISTORY_START),
+    ]
+    now = _manifest(store)
+    assert now["OKA"]["status"] == "ok" and now["OKA"]["reason"] is None
+    assert now["GONE"]["status"] == "unavailable" and now["GONE"]["reason"] == "no data"
+    assert not store.exists("prices/GONE.parquet") and _listed(store) == ["OKA"]
+    # 03-02: not the 1st any more.
+    assert refresh(date(2026, 3, 2), FEB27) == []
+    # 04-01: the symbol exists now -> fetched in full and served.
+    provider.gone.clear()
+    provider.available["GONE"] = date(2026, 3, 31)
+    calls = refresh(date(2026, 4, 1), date(2026, 3, 31))
+    assert ("daily", "GONE", download.FULL_HISTORY_START) in calls
+    assert _manifest(store)["GONE"]["status"] == "ok" and "GONE" in _listed(store)
+
+
 def test_empty_tail_makes_a_served_symbol_unavailable_and_keeps_its_record(tmp_path):
     store = _seed_store(
         tmp_path, {"OKA": _entry("tiingo", "ok", FEB20, FEB20)}, {"OKA": (FEB20, FEB20)}
