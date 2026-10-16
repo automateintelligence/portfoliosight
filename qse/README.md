@@ -23,6 +23,6 @@ never touched, rewrites the files and the lock, and closes the files.
 1. Agents: `.claude/settings.json` denies `Edit` and `Write` under `qse/`.
 2. Disk: `scripts/sync_qse.py` closes every file it writes with `chmod a-w` (mode 0444).
    After a fresh clone the files are writable again; `scripts/sync_qse.py --check` closes them.
-3. Backstop: `tests/test_qse_sync.py` fails on any drift from the lock, on any Python file under
+3. Backstop: `tests/test_qse_sync.py` fails on any drift from the lock, on any file under
    `qse/` that the lock does not name, and on a lock that is not the pinned commit. There is no
    pre-commit setup in this repository, so there is no hook.
