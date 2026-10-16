@@ -52,6 +52,41 @@ class Manifest(BaseModel):
         return self.model_dump(mode="json")
 
 
+def unnamed(symbol: str, name: str | None) -> bool:
+    """True when ``name`` is no name: empty, or only the ticker itself."""
+    return name is None or not name.strip() or name.strip() == symbol
+
+
+def keep_stored_names(manifest: Manifest, stored: Any) -> None:
+    """Give an entry of ``manifest`` that has no name the name another writer stored for it.
+
+    ``stored`` is the manifest document as read from the store; nothing else in it is taken.
+    """
+    rows = stored.get("symbols") if isinstance(stored, Mapping) else None
+    if not isinstance(rows, Mapping):
+        return
+    names = {
+        str(symbol): row["name"]
+        for symbol, row in rows.items()
+        if isinstance(row, Mapping) and isinstance(row.get("name"), str)
+    }
+    fill_names(manifest, names)
+
+
+def fill_names(manifest: Manifest, names: Mapping[str, str]) -> list[str]:
+    """Give each entry that has no name its name from ``names``; returns the symbols named.
+
+    An entry that already has a name keeps it, and ``names`` that are no name are ignored.
+    """
+    named: list[str] = []
+    for symbol, name in names.items():
+        entry = manifest.symbols.get(symbol)
+        if entry is not None and unnamed(symbol, entry.name) and not unnamed(symbol, name):
+            entry.name = name.strip()
+            named.append(symbol)
+    return sorted(named)
+
+
 def load_manifest(store: store_mod.Store) -> Manifest:
     """The stored manifest, or an empty one when the store has none yet."""
     try:

@@ -462,3 +462,69 @@ def test_the_claim_comes_first_and_a_record_that_cannot_be_stored_is_retried(lak
     assert [key for key in recording.puts if key.startswith("prices/")] == ["prices/AAPL.parquet"]
     assert _manifest(store)["AAPL"]["status"] == "ok"
     assert lake_mod.load_lake(store).generated_at == GENERATED
+
+
+def _fundamentals(lake: Path, files: dict[str, str]) -> None:
+    folder = lake / lake_mod.FUNDAMENTALS_DIR
+    folder.mkdir(exist_ok=True)
+    for symbol, text in files.items():
+        (folder / f"{symbol}.json").write_text(text)
+
+
+def _general(name: str) -> str:
+    return json.dumps({"General": {"Name": name}, "Highlights": {"MarketCapitalization": 1}})
+
+
+def test_taken_symbols_carry_the_lake_name_and_unnamed_entries_get_it(lake, store):
+    """AAPL is named by its fundamentals file; MSFT's file is empty and PART has none, so they
+    keep their ticker; BND's file has no ``General.Name``, so it keeps the catalog's name. OLD
+    (not taken, no name) gets the lake's name; VTI (the provider's) keeps its own."""
+    _fundamentals(
+        lake,
+        {
+            "AAPL": _general(" Apple Inc. "),
+            "MSFT": "",
+            "BND": json.dumps({"static": {"sector": "Bonds"}}),
+            "OLD": _general("Old Industries Inc"),
+            "VTI": _general("Vanguard Total Stock Market Index Fund ETF Shares"),
+        },
+    )
+    before = _snapshot(lake)
+    code, lines = _sync(lake, store)
+    assert code == 0, lines
+    assert _snapshot(lake) == before
+    entries = _manifest(store)
+    assert entries["AAPL"]["name"] == "Apple Inc."
+    assert entries["MSFT"]["name"] == "MSFT" and entries["PART"]["name"] == "PART"
+    assert entries["BND"]["name"] == "Vanguard Total Bond Market ETF"
+    assert entries["OLD"]["name"] == "Old Industries Inc" and entries["OLD"]["source"] == "seed"
+    assert entries["VTI"]["name"] == "Vanguard Total Stock Market ETF"
+    assert lake_mod.load_lake(store).symbols["AAPL"].name == "Apple Inc."
+    listed = {
+        r["id"]: r["name"] for r in store_mod.get_json(store, manifest_mod.SYMBOLS_KEY)["symbols"]
+    }
+    assert listed["AAPL"] == "Apple Inc." and listed["VTI"] == "Vanguard Total Stock Market ETF"
+    assert (
+        "names: 2 taken entries have only their ticker; "
+        "1 entries other writers keep get the lake's name"
+    ) in lines
+
+
+def test_a_name_only_change_rewrites_the_entry_not_the_record(lake, store):
+    assert _sync(lake, store)[0] == 0
+    assert _manifest(store)["MSFT"]["name"] == "MSFT"
+    # The next lake run changes no price file, only MSFT's fundamentals.
+    vouched = json.loads((lake / "_adjusted_through.json").read_text())["symbols"]
+    _write_lake(lake, vouched, generated="2026-10-15T13:52:00+00:00")
+    _fundamentals(lake, {"MSFT": _general("Microsoft Corporation")})
+    recording = Recording(store)
+    code, lines = _sync(lake, recording, now=datetime(2026, 10, 15, 14, 30, tzinfo=UTC))
+    assert code == 0, lines
+    assert [key for key in recording.puts if key.startswith("prices/")] == []
+    assert "taken 4 (0 written, 4 unchanged); status {'ok': 4}" in "\n".join(lines)
+    assert _manifest(store)["MSFT"]["name"] == "Microsoft Corporation"
+    assert lake_mod.load_lake(store).symbols["MSFT"].name == "Microsoft Corporation"
+    listed = {
+        r["id"]: r["name"] for r in store_mod.get_json(store, manifest_mod.SYMBOLS_KEY)["symbols"]
+    }
+    assert listed["MSFT"] == "Microsoft Corporation"

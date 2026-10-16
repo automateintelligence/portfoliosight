@@ -108,7 +108,7 @@ def test_the_provider_walk_spends_nothing_on_lake_symbols_and_keeps_their_entrie
         _put_record(store, symbol, behind, behind)
     base = {
         symbol: {
-            "name": symbol,
+            "name": f"{symbol} Corp",  # named: no meta request
             "kind": "stock",
             "tier": 3,
             "income": False,
@@ -312,7 +312,12 @@ def test_a_symbol_the_sync_takes_mid_walk_is_neither_fetched_nor_written_over(tm
         symbols=["FIRST", "LAKE", "SAME"],
     )
     assert code == 0
-    assert [call[1] for call in provider.calls] == ["FIRST", "SAME"]  # LAKE never fetched
+    # LAKE never fetched; FIRST, which has no name, also gets its meta request, SAME does not.
+    assert provider.calls == [
+        ("daily", "FIRST", date(2026, 2, 13)),
+        ("meta", "FIRST", None),
+        ("daily", "SAME", date(2026, 2, 13)),
+    ]
     assert store.get("prices/LAKE.parquet") == lake_record
     assert store.get("prices/SAME.parquet") == lake_record  # the fetched tail was not written
     entries = store_mod.get_json(store, manifest_mod.MANIFEST_KEY)["symbols"]
@@ -349,3 +354,52 @@ def test_a_missing_record_whose_refetch_cannot_be_stored_keeps_its_entry(tmp_pat
     assert report.exit_code == 1 and report.errors[0]["provider"] == "store"
     entry = store_mod.get_json(store, manifest_mod.MANIFEST_KEY)["symbols"]["GONE"]
     assert entry["last_date"] == entry["adjusted_through"] == behind.isoformat()
+
+
+def _write_fundamentals(lake, files: dict[str, str]) -> None:
+    folder = lake / lake_mod.FUNDAMENTALS_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    for symbol, text in files.items():
+        (folder / f"{symbol}.json").write_text(text)
+
+
+def test_lake_names_read_general_name_then_the_symbol_list(tmp_path):
+    lake = tmp_path / "lake"
+    _write_fundamentals(
+        lake,
+        {
+            "AAPL": json.dumps({"General": {"Code": "AAPL", "Name": "  Apple Inc. "}}),
+            "EMPTY": "",
+            "BROKEN": '{"General": {"Name": "Cut',
+            "STATIC": json.dumps({"static": {"sector": "Utilities"}}),
+            "NONAME": json.dumps({"General": {"Code": "NONAME", "Name": "   "}}),
+            "LISTED": json.dumps({"General": {"Code": "LISTED"}}),
+            "TICK": json.dumps({"General": {"Name": "TICK"}}),
+            "LIST": json.dumps([1, 2]),
+        },
+    )
+    (lake / "symbols").mkdir()
+    (lake / lake_mod.LISTING_FILE).write_text(
+        "Code,Name,Country,Exchange,Currency,Type,Isin\n"
+        "LISTED,Listed Holdings Corp,USA,NYSE,USD,Common Stock,US0000000001\n"
+        "STATIC,IDACORP Inc,USA,NYSE,USD,Common Stock,US4511071064\n"
+        "AAPL,Apple Inc,USA,NASDAQ,USD,Common Stock,US0378331005\n"
+        "TWICE,Twice Fund A,USA,PINK,USD,FUND,\n"
+        "TWICE,Twice Fund B,USA,NYSE,USD,ETF,\n"
+        "ONLY,Only Listed ETF,USA,NYSE ARCA,USD,ETF,\n"
+    )
+    names = lake_mod.LakeNames(lake)
+    assert names.name("AAPL") == "Apple Inc."  # the fundamentals file wins, issuer's case kept
+    assert names.name("STATIC") == "IDACORP Inc"  # no General: the symbol list
+    assert names.name("LISTED") == "Listed Holdings Corp"  # General without Name
+    assert names.name("ONLY") == "Only Listed ETF"  # no fundamentals file
+    for symbol in ("EMPTY", "BROKEN", "NONAME", "TICK", "LIST", "TWICE", "MISSING"):
+        assert names.name(symbol) is None, symbol  # nothing usable, or a code listed twice
+
+
+def test_lake_names_without_a_symbol_list_use_the_fundamentals_only(tmp_path):
+    lake = tmp_path / "lake"
+    _write_fundamentals(lake, {"C": json.dumps({"General": {"Name": "Citigroup Inc."}})})
+    names = lake_mod.LakeNames(lake)
+    assert names.listing == {}
+    assert names.name("C") == "Citigroup Inc." and names.name("AAPL") is None

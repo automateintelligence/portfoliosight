@@ -13,8 +13,9 @@
 //   GET  /__mock/posts           recorded POST /api/tensors bodies
 //   GET  /__mock/ranges          recorded POST /api/range bodies
 //   POST /__mock/config          {"stale": 3, "unavailable": "10y", "challenge": 1, "build409": 2, "ranges": true,
-//                                 "noGeneration": true, "tier": "admin", "manySymbols": true}
-//                                (manySymbols adds 120 served stand-ins MOCKF001 ... MOCKF120)
+//                                 "noGeneration": true, "tier": "admin", "manySymbols": true, "stocks": true}
+//                                (manySymbols adds 120 served stand-ins MOCKF001 ... MOCKF120;
+//                                stocks adds stocks whose tickers contain C or AAPL, for the search)
 //   POST /__mock/reset           clears the switches and the recorded bodies
 import fs from "node:fs";
 import http from "node:http";
@@ -229,12 +230,26 @@ function tensorFor(hash, lookback) {
   return copy;
 }
 
-const DEFAULTS = { stale: 0, unavailable: null, challenge: 0, build409: 0, ranges: false, noGeneration: false, tier: "public", manySymbols: false };
+const DEFAULTS = { stale: 0, unavailable: null, challenge: 0, build409: 0, ranges: false, noGeneration: false, tier: "public", manySymbols: false, stocks: false };
 const MANY = Array.from({ length: 120 }, (_, i) => {
   const id = `MOCKF${String(i + 1).padStart(3, "0")}`;
   return { id, name: `Mock stand-in fund ${id}`, kind: "etf", tier: 3, first_date: "2010-01-04" };
 });
-const servedSymbols = () => (config.manySymbols ? { ...symbols, symbols: [...symbols.symbols, ...MANY] } : symbols);
+// Stocks as the lake serves them, named by their issuers: the search must find C before every
+// ticker that merely contains a C, and Apple by its name.
+const STOCKS = [
+  ["AAAC", "AAA Capital Corp"],
+  ["AACAF", "AAC Technologies Holdings Inc"],
+  ["AACG", "ATA Creativity Global"],
+  ["ABCB", "Ameris Bancorp"],
+  ["ACN", "Accenture plc"],
+  ["CAT", "Caterpillar Inc."],
+  ["CB", "Chubb Limited"],
+  ["C", "Citigroup Inc."],
+  ["AAPL", "Apple Inc."],
+  ["APLE", "Apple Hospitality REIT, Inc."],
+].map(([id, name]) => ({ id, name, kind: "stock", tier: 3, first_date: "2010-01-04" }));
+const servedSymbols = () => ({ ...symbols, symbols: [...symbols.symbols, ...(config.manySymbols ? MANY : []), ...(config.stocks ? STOCKS : [])] });
 let config = { ...DEFAULTS };
 // As the service does: an unusable window is a failed build that is not retried (409).
 const windowUnavailable = (lookback) => ({ status: "failed", error: "window_unavailable", attempts: 1, retry: false, details: { lookback, reason: "not enough shared history", rows: 61 } });

@@ -33,7 +33,7 @@
     "A-PS-06": {
       "entry": "40ff86b46b7a57474d85cfda7e2d965e599e36b5557fcae5b0739e4e2d54d550",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_06_budget_ledger.py": "c4bab19819a96d91602d6cd2b17b3ddc89ea387a227d0fc58ed07574c34b091a"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_06_budget_ledger.py": "eb70cba0cc4b5eb6246b2136bb112032ebde2dfadc79b7a0f6c3b0f9b8cb34ae"
       }
     },
     "A-PS-07": {

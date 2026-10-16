@@ -4,10 +4,15 @@ The lake is only ever read, and only on the owner's laptop (the seed and ``scrip
 What the sync takes from it is recorded in ``meta/lake.json``, which only the sync writes. Every
 writer of ``meta/manifest.json`` applies that overlay with ``apply_lake`` just before it writes,
 so neither the sync nor the nightly can drop the other's entries.
+
+Names come from the lake too: ``General.Name`` of the symbol's EODHD fundamentals file, else
+the name EODHD's US symbol list gives it (``LakeNames``).
 """
 
 from __future__ import annotations
 
+import csv
+import json
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -22,6 +27,9 @@ from portfoliosight.data.manifest import Manifest, ManifestEntry
 from portfoliosight.data.refresh import LAKE_SOURCE
 
 LAKE_KEY = "meta/lake.json"
+DEFAULT_LAKE = "~/tft-quantile-forecaster/data/tft/raw/eodhd/datalake_us_core"
+FUNDAMENTALS_DIR = "fundamentals_full"
+LISTING_FILE = "symbols/US_active.csv"
 
 RELEASED_SOURCE = "seed"
 EOD_COLUMNS = ["date", "close", "adj_close"]
@@ -64,6 +72,62 @@ def unusable_reason(frame: pd.DataFrame) -> str | None:
     if not (np.isfinite(close).all() and (close > 0).all()):
         return "close is missing or not positive"
     return None
+
+
+def clean_name(value: Any) -> str | None:
+    """A name as the issuer gives it, with surrounding whitespace removed; ``None`` for none."""
+    if not isinstance(value, str):
+        return None
+    return value.strip() or None
+
+
+def fundamentals_name(lake: Path, symbol: str) -> str | None:
+    """``General.Name`` of ``fundamentals_full/{symbol}.json``.
+
+    ``None`` when the file is missing, empty or unreadable, or has no ``General.Name``.
+    """
+    path = lake / FUNDAMENTALS_DIR / f"{symbol}.json"
+    try:
+        doc = json.loads(path.read_bytes())
+    except (OSError, ValueError):
+        return None
+    general = doc.get("General") if isinstance(doc, dict) else None
+    return clean_name(general.get("Name")) if isinstance(general, dict) else None
+
+
+def listing_names(lake: Path) -> dict[str, str]:
+    """Code to name from EODHD's US symbol list in the lake (empty when it cannot be read).
+
+    A code listed under two different names is left out rather than guessed.
+    """
+    names: dict[str, str | None] = {}
+    try:
+        with (lake / LISTING_FILE).open(newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                code = (row.get("Code") or "").strip().upper()
+                name = clean_name(row.get("Name"))
+                if not code or name is None:
+                    continue
+                if code in names and names[code] != name:
+                    names[code] = None
+                else:
+                    names.setdefault(code, name)
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return {}
+    return {code: name for code, name in names.items() if name is not None}
+
+
+class LakeNames:
+    """The lake's name of a symbol: its fundamentals file first, then the US symbol list."""
+
+    def __init__(self, lake: Path):
+        self.lake = lake
+        self.listing = listing_names(lake)
+
+    def name(self, symbol: str) -> str | None:
+        """The name, or ``None`` when the lake has none other than the ticker itself."""
+        found = fundamentals_name(self.lake, symbol) or self.listing.get(symbol)
+        return None if found is None or manifest_mod.unnamed(symbol, found) else found
 
 
 class LakeEntry(ManifestEntry):
