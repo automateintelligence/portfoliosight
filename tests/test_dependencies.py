@@ -105,11 +105,17 @@ NEVER_PULLED = (
     "plotly",
     "pydantic",
 )
-# A fit of a 300-row GARCH(1,1) series runs `arch`'s lazy import. The child starts with only the
-# standard library, this checkout's `qse` and the packages of the closure: every other installed
-# module is blocked, so a soft import by pandas (pyarrow), by pyarrow (cloudpickle) or by numpy
-# (charset_normalizer) cannot hide a real dependency, and a hard one fails the fit. It reports
-# every top-level package that was loaded from site-packages.
+# A fit of a 300-row GARCH(1,1) series runs `arch`'s lazy import. The child runs it twice.
+# Blocked: it starts with only the standard library, this checkout's `qse` and the packages of the
+# closure, every other installed module set to None, so a hard dependency outside the closure fails
+# the fit (sufficiency). Unblocked: nothing is set to None, as in an ordinary import, and none of
+# NEVER_PULLED may load. The unblocked leg cannot require "only the closure": pandas soft-imports
+# pyarrow when it is installed, pyarrow soft-imports cloudpickle, and numpy's f2py soft-imports
+# charset_normalizer. Those are optional imports of the closure packages themselves, which the
+# blocked leg proves the fit does not need. The child imports only the standard library before
+# `qse`, so it loads nothing of NEVER_PULLED itself. It reports every top-level package loaded
+# from site-packages during the import and the fit, and every top-level module name in
+# `sys.modules` at the end.
 QSE_CHILD = """
 import json, sys, sysconfig
 from pathlib import Path
@@ -139,7 +145,9 @@ for name in set(sys.modules) - before:
     tops.update(
         path.relative_to(site).parts[0].split(".")[0] for site in sites if site in path.parents
     )
-print(json.dumps({"tops": sorted(tops), "status": list(fit.status), "messages": fit.messages}))
+modules = sorted({name.split(".")[0] for name in sys.modules})
+print(json.dumps({"tops": sorted(tops), "modules": modules, "status": list(fit.status),
+                  "messages": fit.messages}))
 """
 
 
@@ -168,6 +176,17 @@ def _closure(roots: tuple[str, ...]) -> set[str]:
     return seen
 
 
+def _run_qse_child(blocked: list[str]) -> dict:
+    done = subprocess.run(
+        [sys.executable, "-I", "-c", QSE_CHILD, str(ROOT), json.dumps(blocked)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert done.returncode == 0, done.stderr[-2000:]
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
 def test_qse_import_closure() -> None:
     owners = importlib.metadata.packages_distributions()
     allowed = _closure(QSE_ROOTS)
@@ -179,14 +198,7 @@ def test_qse_import_closure() -> None:
     )
     # The probe must really hide what QSE's own dependency list would bring.
     assert set(NEVER_PULLED) & set(owners) <= set(blocked)
-    done = subprocess.run(
-        [sys.executable, "-I", "-c", QSE_CHILD, str(ROOT), json.dumps(blocked)],
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
-    assert done.returncode == 0, done.stderr[-2000:]
-    report = json.loads(done.stdout.strip().splitlines()[-1])
+    report = _run_qse_child(blocked)
     assert report["status"] == ["garch", "garch"], report["messages"]
     tops = set(report["tops"])
     unowned = sorted(tops - set(owners))
@@ -197,3 +209,10 @@ def test_qse_import_closure() -> None:
     )
     assert {"numpy", "pandas", "scipy", "arch", "statsmodels"} <= tops
     assert not set(NEVER_PULLED) & tops
+
+    # An ordinary import, nothing blocked: the same fit, and nothing of NEVER_PULLED loads.
+    plain = _run_qse_child([])
+    assert plain["status"] == report["status"], plain["messages"]
+    assert {"numpy", "pandas", "scipy", "arch", "statsmodels"} <= set(plain["tops"])
+    loaded = sorted(set(NEVER_PULLED) & (set(plain["modules"]) | set(plain["tops"])))
+    assert not loaded, f"an ordinary import of qse.distributions.joint loads {loaded}"
