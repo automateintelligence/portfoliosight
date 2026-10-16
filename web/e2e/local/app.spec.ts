@@ -1096,6 +1096,8 @@ test("a click or tap on the selected point pins its card; it follows both slider
   await press(page, phone, p2.x, p2.y);
   await expect(pinned).toHaveCount(0);
   await expect(page.getByTestId("chart-legend")).toBeVisible();
+  // on a phone the tap that unpins does not leave the ordinary card open in its place
+  if (phone) await expect(page.getByTestId("mix-card")).toHaveCount(0);
 
   // so does a click or tap outside the chart
   await press(page, phone, p2.x, p2.y);

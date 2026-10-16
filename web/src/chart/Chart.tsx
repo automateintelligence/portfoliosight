@@ -7,7 +7,7 @@ import type { Range, Stats, View } from "../math/view";
 import { Heatmap, NO_LIMITS, type Ghost } from "./Heatmap";
 import { MixCard, topHoldings, type CardMix } from "./MixCard";
 import { Overlay, type LineEnd, type MarkId } from "./Overlay";
-import { avoidPinned, KEEPS_PIN, PIN_START, PIN_WIDTH, pinnedPlacement, pinStep } from "./pin";
+import { avoidPinned, CLICK_SLOP, KEEPS_PIN, PIN_START, PIN_WIDTH, pinnedPlacement, pinStep } from "./pin";
 import { X_TITLE_GAP, type ChartScales } from "./scales";
 
 type Props = {
@@ -212,16 +212,35 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
   const [pinH, setPinH] = useState(260);
   useEffect(() => {
     if (!pin.pinned) return;
-    const away = (e: PointerEvent) => {
-      if (!(e.target instanceof Element) || !e.target.closest(KEEPS_PIN)) onPin({ type: "outside" });
+    // A completed tap or click outside unpins; a press that travels (a scroll on a phone) does not.
+    let start: { id: number; x: number; y: number } | null = null;
+    const outside = (e: Event) => !(e.target instanceof Element) || !e.target.closest(KEEPS_PIN);
+    const down = (e: PointerEvent) => {
+      start = outside(e) ? { id: e.pointerId, x: e.clientX, y: e.clientY } : null;
     };
+    const up = (e: PointerEvent) => {
+      const s = start;
+      start = null;
+      if (s && s.id === e.pointerId && outside(e) && Math.max(Math.abs(e.clientX - s.x), Math.abs(e.clientY - s.y)) < CLICK_SLOP) onPin({ type: "outside" });
+    };
+    const cancel = () => {
+      start = null;
+    };
+    // Escape meant for a dialog, a menu or a text field is theirs.
     const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onPin({ type: "escape" });
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (e.target instanceof Element && e.target.closest("input, textarea, select, dialog, [role=dialog], [role=menu], [role=listbox]")) return;
+      if (document.querySelector("dialog[open], [role=dialog]")) return;
+      onPin({ type: "escape" });
     };
-    document.addEventListener("pointerdown", away, true);
+    document.addEventListener("pointerdown", down, true);
+    document.addEventListener("pointerup", up, true);
+    document.addEventListener("pointercancel", cancel, true);
     document.addEventListener("keydown", key);
     return () => {
-      document.removeEventListener("pointerdown", away, true);
+      document.removeEventListener("pointerdown", down, true);
+      document.removeEventListener("pointerup", up, true);
+      document.removeEventListener("pointercancel", cancel, true);
       document.removeEventListener("keydown", key);
     };
   }, [pin.pinned]);
@@ -251,7 +270,6 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
           data-clear={pinBox.clear}
           role="region"
           aria-label={`${plain.selectedMix}, pinned`}
-          aria-live="polite"
           style={{ left: pinBox.left, top: pinBox.top, width: pinBox.width, maxHeight: scales.height - pinBox.top - 4 }}
         >
           {card("selected", plain.selectedMix, selMix)}

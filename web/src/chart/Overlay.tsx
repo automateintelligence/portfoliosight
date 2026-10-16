@@ -1,6 +1,6 @@
 import { axisBottom, axisLeft } from "d3-axis";
 import { select } from "d3-selection";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { plain } from "../copy";
 import { avoidPinned, type Box, type PinEvent } from "./pin";
 import type { ChartScales } from "./scales";
@@ -141,6 +141,7 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
   // marker unless it moves far enough to be a drag of the selected point.
   const drag = useRef<{ x0: number; y0: number; grabDx: number; axis: "x" | "y" | null; fromMark: boolean } | null>(null);
   const fresh = useRef(false); // focus has just shown a card: the click that follows must not turn it over
+  const tapped = useRef(0); // when a tap on the selected point last pinned or unpinned: the focus it brings opens no card
   const [dragging, setDragging] = useState(false);
   const [tip, setTip] = useState<MarkId | null>(null);
   const [cardH, setCardH] = useState(250);
@@ -155,6 +156,15 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
     select(yAxisRef.current).select(".domain").remove();
   }, [x, y, phone]);
 
+  // A ticker named by a tap stays until the next press anywhere but on a fund's dot.
+  useEffect(() => {
+    if (fundShown === null) return;
+    const away = (e: PointerEvent) => {
+      if (!(e.target instanceof Element) || !e.target.closest("[data-fund]")) setFundShown(null);
+    };
+    document.addEventListener("pointerdown", away, true);
+    return () => document.removeEventListener("pointerdown", away, true);
+  }, [fundShown]);
   // A card opened by a tap stays until the next press anywhere else.
   useEffect(() => {
     if (tip === null) return;
@@ -203,20 +213,26 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
   };
   // The selected point: a press that comes back up without travelling is a click (pin or unpin
   // its card); one that travels is a drag of the point (pin.ts decides which).
+  // While a tensor loads the point is disabled, and so is its pin.
   const onPointerDown = (e: ReactPointerEvent<SVGGElement>) => {
-    if (e.pointerType !== "mouse" || e.button === 0) onPin({ type: "press", x: e.clientX, y: e.clientY });
+    if (!busy && (e.pointerType !== "mouse" || e.button === 0)) onPin({ type: "press", id: e.pointerId, x: e.clientX, y: e.clientY });
     startDrag(e, false);
   };
   const onSelectedMove = (e: ReactPointerEvent<SVGGElement>) => {
-    onPin({ type: "move", x: e.clientX, y: e.clientY });
+    onPin({ type: "move", id: e.pointerId, x: e.clientX, y: e.clientY });
     onPointerMove(e);
   };
-  const onSelectedUp = () => {
-    onPin({ type: "release" });
+  const onSelectedUp = (e: ReactPointerEvent<SVGGElement>) => {
+    // a tap that pins or unpins is not also a tap that opens the ordinary card beside the point
+    if (e.pointerType === "touch" && drag.current && drag.current.axis === null) {
+      tapped.current = e.timeStamp;
+      setTip(null);
+    }
+    onPin({ type: "release", id: e.pointerId });
     endDrag();
   };
-  const onSelectedCancel = () => {
-    onPin({ type: "cancel" });
+  const onSelectedCancel = (e: ReactPointerEvent<SVGGElement>) => {
+    onPin({ type: "cancel", id: e.pointerId });
     endDrag();
   };
   const onPointerMove = (e: ReactPointerEvent<SVGGElement>) => {
@@ -248,7 +264,7 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
   const onKeyDown = (e: KeyboardEvent<SVGGElement>) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      onPin({ type: "key" });
+      if (!busy) onPin({ type: "key" });
       return;
     }
     const moves: Record<string, [number, number]> = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowDown: [0, 1], ArrowUp: [0, -1] };
@@ -276,8 +292,9 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
     onPointerLeave: (e: ReactPointerEvent) => {
       if (e.pointerType !== "touch" && !drag.current) setTip(null);
     },
-    onFocus: () => {
+    onFocus: (e: FocusEvent) => {
       fresh.current = true;
+      if (id === "selected" && e.timeStamp - tapped.current < 1000) return;
       setTip(id);
     },
     onBlur: () => setTip(null),
@@ -344,7 +361,7 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
             aria-valuenow={Number(position.s.toFixed(4))}
             aria-valuetext={selectedLabel}
             aria-disabled={busy || undefined}
-            aria-describedby={pinned ? pinnedId : tip === "selected" ? CARD_ID : undefined}
+            aria-describedby={pinned ? pinnedId : tip === "selected" && placed ? CARD_ID : undefined}
             data-pinned={pinned || undefined}
             onPointerDown={onPointerDown}
             onPointerMove={onSelectedMove}
@@ -415,13 +432,13 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
             </text>
           ))}
         {phone && selectedEl}
-        <g className={phone ? "mark drags" : "mark"} data-mark="div" tabIndex={0} role="img" aria-label={divLabel} aria-describedby={tip === "div" ? CARD_ID : undefined} {...show("div")} {...tapToggle("div")} {...markDrag} {...through("div")}>
+        <g className={phone ? "mark drags" : "mark"} data-mark="div" tabIndex={0} role="img" aria-label={divLabel} aria-describedby={tip === "div" && placed ? CARD_ID : undefined} {...show("div")} {...tapToggle("div")} {...markDrag} {...through("div")}>
           <circle className="hit" cx={at.div!.px} cy={at.div!.py} r={hitR("div", phone ? HIT : 13)} />
           <circle className="pt-div" data-testid="point-div" cx={at.div!.px} cy={at.div!.py} r={4.5} />
         </g>
         {!phone && selectedEl}
         {at.current && (
-          <g className="mark drags" data-mark="current" tabIndex={0} role="img" aria-label={currentLabel} aria-describedby={tip === "current" ? CARD_ID : undefined} {...show("current")} {...tapToggle("current")} {...squareDrag} {...through("current")}>
+          <g className="mark drags" data-mark="current" tabIndex={0} role="img" aria-label={currentLabel} aria-describedby={tip === "current" && placed ? CARD_ID : undefined} {...show("current")} {...tapToggle("current")} {...squareDrag} {...through("current")}>
             <circle className="hit" cx={at.current.px} cy={at.current.py} r={hitR("current", squareHit)} />
             <rect className="pt-current" data-testid="point-current" x={at.current.px - 6.5} y={at.current.py - 6.5} width={13} height={13} rx={2} />
           </g>

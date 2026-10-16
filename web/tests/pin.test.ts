@@ -6,7 +6,7 @@ import { avoidPinned, CLICK_SLOP, intersects, PIN_INSET, PIN_INSET_PHONE, PIN_ST
 import { makeScales } from "../src/chart/scales";
 
 const run = (events: PinEvent[], from: PinState = PIN_START) => events.reduce(pinStep, from);
-const click = (x = 100, y = 100): PinEvent[] => [{ type: "press", x, y }, { type: "release" }];
+const click = (x = 100, y = 100): PinEvent[] => [{ type: "press", id: 1, x, y }, { type: "release", id: 1 }];
 
 describe("pin state machine", () => {
   it("a click pins the card and a second click unpins it", () => {
@@ -17,19 +17,31 @@ describe("pin state machine", () => {
   });
 
   it("a press that moves less than the slop is still a click", () => {
-    const s = run([{ type: "press", x: 100, y: 100 }, { type: "move", x: 100 + CLICK_SLOP - 1, y: 100 }, { type: "release" }]);
+    const s = run([{ type: "press", id: 1, x: 100, y: 100 }, { type: "move", id: 1, x: 100 + CLICK_SLOP - 1, y: 100 }, { type: "release", id: 1 }]);
     expect(s.pinned).toBe(true);
   });
 
   it("a drag never toggles the pin, in either state", () => {
-    const drag: PinEvent[] = [{ type: "press", x: 100, y: 100 }, { type: "move", x: 104, y: 100 }, { type: "move", x: 140, y: 120 }, { type: "move", x: 101, y: 100 }, { type: "release" }];
+    const drag: PinEvent[] = [{ type: "press", id: 1, x: 100, y: 100 }, { type: "move", id: 1, x: 104, y: 100 }, { type: "move", id: 1, x: 140, y: 120 }, { type: "move", id: 1, x: 101, y: 100 }, { type: "release", id: 1 }];
     expect(run(drag).pinned).toBe(false);
     const pinned = run(click());
     expect(run(drag, pinned).pinned).toBe(true);
   });
 
+  it("only the pointer that began the press moves or ends it", () => {
+    const pressed = run([{ type: "press", id: 1, x: 100, y: 100 }]);
+    // a second finger lands, moves and lifts: nothing changes
+    expect(run([{ type: "press", id: 2, x: 300, y: 300 }, { type: "move", id: 2, x: 340, y: 300 }, { type: "release", id: 2 }], pressed)).toBe(pressed);
+    expect(run([{ type: "release", id: 1 }], pressed).pinned).toBe(true);
+  });
+
+  it("uses the drag's own measure: the larger of the two travels", () => {
+    expect(run([{ type: "press", id: 1, x: 0, y: 0 }, { type: "move", id: 1, x: CLICK_SLOP - 1, y: CLICK_SLOP - 1 }, { type: "release", id: 1 }]).pinned).toBe(true);
+    expect(run([{ type: "press", id: 1, x: 0, y: 0 }, { type: "move", id: 1, x: 0, y: CLICK_SLOP }, { type: "release", id: 1 }]).pinned).toBe(false);
+  });
+
   it("a cancelled press does nothing", () => {
-    expect(run([{ type: "press", x: 1, y: 1 }, { type: "cancel" }, { type: "release" }]).pinned).toBe(false);
+    expect(run([{ type: "press", id: 1, x: 1, y: 1 }, { type: "cancel", id: 1 }, { type: "release", id: 1 }]).pinned).toBe(false);
   });
 
   it("a press outside, or Escape, unpins; neither pins", () => {
@@ -47,11 +59,11 @@ describe("pin state machine", () => {
   });
 
   it("moves that change nothing return the same state, so nothing re-renders", () => {
-    const pressed = pinStep(PIN_START, { type: "press", x: 0, y: 0 });
-    expect(pinStep(pressed, { type: "move", x: 1, y: 1 })).toBe(pressed);
-    const dragged = pinStep(pressed, { type: "move", x: 50, y: 0 });
-    expect(pinStep(dragged, { type: "move", x: 60, y: 0 })).toBe(dragged);
-    expect(pinStep(PIN_START, { type: "move", x: 60, y: 0 })).toBe(PIN_START);
+    const pressed = pinStep(PIN_START, { type: "press", id: 1, x: 0, y: 0 });
+    expect(pinStep(pressed, { type: "move", id: 1, x: 1, y: 1 })).toBe(pressed);
+    const dragged = pinStep(pressed, { type: "move", id: 1, x: 50, y: 0 });
+    expect(pinStep(dragged, { type: "move", id: 1, x: 60, y: 0 })).toBe(dragged);
+    expect(pinStep(PIN_START, { type: "move", id: 1, x: 60, y: 0 })).toBe(PIN_START);
   });
 });
 

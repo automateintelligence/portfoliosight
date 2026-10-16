@@ -105,10 +105,17 @@ describe("the pinned card", () => {
   it("a press outside the chart and the sliders unpins; one on a slider or the chart does not", () => {
     chart(at(0.5, 0.3));
     click();
-    fireEvent.pointerDown(screen.getByTestId("a-slider"));
-    fireEvent.pointerDown(screen.getByTestId("chart"));
+    const tap = (el: HTMLElement, x = 10, y = 10, x1 = x, y1 = y) => {
+      fireEvent.pointerDown(el, { pointerId: 7, clientX: x, clientY: y });
+      fireEvent.pointerUp(el, { pointerId: 7, clientX: x1, clientY: y1 });
+    };
+    tap(screen.getByTestId("a-slider"));
+    tap(screen.getByTestId("chart"));
     expect(pinnedCard()).not.toBeNull();
-    fireEvent.pointerDown(screen.getByTestId("elsewhere"));
+    // a press that travels outside (a scroll) keeps it
+    tap(screen.getByTestId("elsewhere"), 10, 10, 10, 80);
+    expect(pinnedCard()).not.toBeNull();
+    tap(screen.getByTestId("elsewhere"));
     expect(pinnedCard()).toBeNull();
   });
 
@@ -116,6 +123,11 @@ describe("the pinned card", () => {
     chart(at(0.5, 0.3));
     fireEvent.keyDown(point(), { key: "Enter" });
     expect(pinnedCard()).not.toBeNull();
+    // Escape typed in a text field is the field's
+    const field = document.body.appendChild(document.createElement("input"));
+    fireEvent.keyDown(field, { key: "Escape" });
+    expect(pinnedCard()).not.toBeNull();
+    field.remove();
     act(() => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     });

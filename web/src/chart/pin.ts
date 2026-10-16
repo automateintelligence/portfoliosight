@@ -7,15 +7,16 @@ export const CLICK_SLOP = 6;
 
 export type PinState = {
   pinned: boolean;
-  /** The press in progress on the selected point: where it began, and whether it became a drag. */
-  press: { x0: number; y0: number; dragged: boolean } | null;
+  /** The press in progress on the selected point: its pointer, where it began, and whether it became a drag. */
+  press: { id: number; x0: number; y0: number; dragged: boolean } | null;
 };
 
+/** Pointer events carry the pointer's id: only the pointer that began the press moves or ends it. */
 export type PinEvent =
-  | { type: "press"; x: number; y: number }
-  | { type: "move"; x: number; y: number }
-  | { type: "release" }
-  | { type: "cancel" }
+  | { type: "press"; id: number; x: number; y: number }
+  | { type: "move"; id: number; x: number; y: number }
+  | { type: "release"; id: number }
+  | { type: "cancel"; id: number }
   | { type: "outside" }
   | { type: "escape" }
   | { type: "key" };
@@ -26,20 +27,23 @@ export const PIN_START: PinState = { pinned: false, press: null };
 export function pinStep(state: PinState, event: PinEvent): PinState {
   switch (event.type) {
     case "press":
-      return { ...state, press: { x0: event.x, y0: event.y, dragged: false } };
+      // a second finger while one is down is not a new press
+      if (state.press && state.press.id !== event.id) return state;
+      return { ...state, press: { id: event.id, x0: event.x, y0: event.y, dragged: false } };
     case "move": {
       const p = state.press;
-      if (!p || p.dragged) return state;
-      if (Math.hypot(event.x - p.x0, event.y - p.y0) < CLICK_SLOP) return state;
+      if (!p || p.dragged || p.id !== event.id) return state;
+      // the same measure as the point's own drag (Overlay.tsx AXIS_LOCK): the larger of the two travels
+      if (Math.max(Math.abs(event.x - p.x0), Math.abs(event.y - p.y0)) < CLICK_SLOP) return state;
       return { ...state, press: { ...p, dragged: true } };
     }
     case "release": {
       const p = state.press;
-      if (!p) return state;
+      if (!p || p.id !== event.id) return state;
       return { pinned: p.dragged ? state.pinned : !state.pinned, press: null };
     }
     case "cancel":
-      return state.press ? { ...state, press: null } : state;
+      return state.press && state.press.id === event.id ? { ...state, press: null } : state;
     case "outside":
     case "escape":
       return state.pinned ? { ...state, pinned: false } : state;
