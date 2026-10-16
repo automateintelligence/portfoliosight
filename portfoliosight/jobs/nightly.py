@@ -9,9 +9,9 @@ missing, and only when all twelve exist write ``meta/{G}/presets.json`` and swit
 symbols at the deadline, by default 30 minutes before the next scheduled start
 (``PS_NIGHTLY_DEADLINE_MINUTES_BEFORE_NEXT``), so that start is never skipped; ``status.json``
 records ``deadline`` and ``stopped``, and the walk resumes on the next run. (5) Delete every
-generation older than the previous one. (6) Write ``meta/status.json``. (7) Evict the scratch
-cache. A rerun after an interruption resumes at the first missing tensor; nothing under
-``meta/{G}/`` is ever rewritten.
+generation older than the previous one, except those ``meta/pinned.json`` names. (6) Write
+``meta/status.json``. (7) Evict the scratch cache. A rerun after an interruption resumes at the
+first missing tensor; nothing under ``meta/{G}/`` is ever rewritten.
 
 "The previous one" is the generation ``meta/current.json`` pointed at before the last switch,
 which visitors may still hold. ``meta/previous.json`` records it just before each switch;
@@ -55,6 +55,7 @@ install_redaction([logger.name])
 CURRENT_KEY = "meta/current.json"
 STATUS_KEY = "meta/status.json"
 PREVIOUS_KEY = "meta/previous.json"
+PINNED_KEY = "meta/pinned.json"
 PROVIDERS_ENV = "PS_NIGHTLY_PROVIDERS"
 FIXTURE_DIR_ENV = "PS_FIXTURE_DIR"
 FIXED_NOW_ENV = "PS_FIXED_NOW"
@@ -111,19 +112,40 @@ def previous_generation(store: store_mod.Store, current: str) -> tuple[bool, str
     return True, previous if isinstance(previous, str) else None
 
 
+def pinned_generations(store: store_mod.Store) -> set[str] | None:
+    """The generations ``meta/pinned.json`` keeps as rollback points: ``{"generations": [...]}``.
+
+    Empty when the file is absent; ``None`` when it cannot be read as that shape.
+    """
+    try:
+        record = store_mod.get_json(store, PINNED_KEY)
+    except KeyError:
+        return set()
+    except ValueError:
+        return None
+    names = record.get("generations") if isinstance(record, dict) else None
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        return None
+    return set(names)
+
+
 def prune_generations(store: store_mod.Store, current: str) -> list[str]:
     """Delete every generation older than the previous one; returns those deleted.
 
-    Kept: ``current``, the generation published before it, and anything newer than ``current``
-    (a generation being built). Without a record of the previous generation nothing is deleted.
+    Kept: ``current``, the generation published before it, anything newer than ``current``
+    (a generation being built) and every generation ``meta/pinned.json`` names. Without a record
+    of the previous generation, or with a pin file that cannot be read, nothing is deleted.
     """
     known, previous = previous_generation(store, current)
-    if not known:
+    pinned = pinned_generations(store)
+    if not known or pinned is None:
         return []
     doomed = [
         generation
         for generation in stored_generations(store)
-        if _order(generation) < _order(current) and generation != previous
+        if _order(generation) < _order(current)
+        and generation != previous
+        and generation not in pinned
     ]
     for generation in doomed:
         for key in store.list(f"meta/{generation}/") + store.list(f"tensors/{generation}/"):
