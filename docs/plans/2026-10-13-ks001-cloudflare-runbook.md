@@ -555,6 +555,30 @@ Checked live 2026-10-15 after `make deploy-backend` (image `5a085ff`) and `make 
 | `GET /?admin=off` | 302, `ps_admin=; …; Max-Age=0` |
 | `POST /api/tensors`, 31 funds and lookback `4y` (refused before any build) | public and forged header: `funds` "at most 30" and `lookback`; admin cookie: `lookback` only |
 
+## Rollback points
+
+The nightly never prunes a generation named in `meta/pinned.json` (`{"generations": [...]}`), so each rollback point below keeps its data. Remove a generation from that file once its rollback point is retired.
+
+### `dashboard-bootstrap-2026-10-15`: before the simulation engines
+
+The dashboard with bootstrap ranges (engine 0.2.0), tagged before any GARCH or copula code.
+
+- Commit: `4a17431c6a9a8c466057af3e741d1bef2fc8963a` (tag `dashboard-bootstrap-2026-10-15`)
+- KS-001 image: `portfoliosight:4a17431c6a9a8c466057af3e741d1bef2fc8963a`, id `sha256:7a2e5446ca378faaae56087ddd3ded70f9b1db7b247f99511e8a68072b21cf04`
+- Worker version: `6a9a30c7-19c0-4a9c-987f-03c9fa365280`
+- Generation: `2026-10-14-0.2.0` (pinned)
+
+To roll back, run all three from the main checkout, in this order (the page may show errors for the minute between them):
+
+```bash
+make deploy-backend SHA=4a17431c6a9a8c466057af3e741d1bef2fc8963a
+set -a; . ~/.secrets/portfoliosight.env; set +a
+.venv/bin/python -c "from datetime import UTC, datetime; from portfoliosight.data import store as s; s.put_json(s.store_from_env(), 'meta/current.json', {'generation': '2026-10-14-0.2.0', 'published_at': datetime.now(UTC).isoformat()})"
+(cd web && npx wrangler rollback 6a9a30c7-19c0-4a9c-987f-03c9fa365280)
+```
+
+The rolled-back nightly builds engine 0.2.0 generations again, so the next night publishes a current one and the pointer moves on by itself.
+
 ## Measured
 
 - Provider tier and limits: Tiingo Starter; 45 requests per hour, 900 per day, 450 unique symbols
