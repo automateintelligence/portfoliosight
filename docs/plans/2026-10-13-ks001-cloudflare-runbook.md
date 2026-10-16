@@ -15,6 +15,8 @@ Conventions used in every command here:
 Done: steps 1, 2, 3, 4, 6, the Worker part of step 7, the timer and the cron line of step 8, and
 the first generation (`2026-10-12-0.1.0`, both presets, twelve tensors, served from R2).
 
+> **Status 2026-10-15:** steps 5 and 8 below are done. The owner added the `api.portfoliosight.ai` route to the `contabo-backend` tunnel in the dashboard on 2026-10-13, and remounted `/mnt/d` with uid/gid (fstab line added). Verified 2026-10-15: `/api/health` on the site answers 200, and a custom menu (AAPL, MSFT, BND, VNQ, 5y) built through the site in about 10 s; `scripts/r2_backup.sh` exits 0 and the DoD-28 restore dry run uploads nothing. The entries below are kept as the record of the attempts.
+
 Not done, each waiting on the owner (issue #86, details under "Remaining"):
 
 - Step 5: `api.portfoliosight.ai` is not routed. The tunnel takes its ingress from Cloudflare
@@ -586,6 +588,8 @@ Owner steps (issue #86). Every block assumes the repository root and
 `set -a; . ~/.secrets/portfoliosight.env; set +a`.
 
 ### 1. Route `api.portfoliosight.ai` through the tunnel (step 5)
+
+Done 2026-10-13 by the owner (dashboard); verified 2026-10-15. See the status note at the top.
 
 Either of:
 
