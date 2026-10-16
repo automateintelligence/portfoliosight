@@ -31,6 +31,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 SOURCE = "automateintelligence/quant-scenario-engine"
 LOCK_NAME = "qse/qse.lock.json"
+# PortfolioSight's own files under qse/, which the lock does not name.
+UNLOCKED = ("qse/README.md", LOCK_NAME)
 # `qse/distributions/__init__.py` is empty at the pin; it is copied so that `qse.distributions`
 # stays a regular package. Not copied: `qse/distributions/validation/__init__.py` (it imports
 # outside the closure); QSE has no `qse/__init__.py` or `fitters/__init__.py`, so those
@@ -175,13 +177,27 @@ def check(root: Path, qse_dir: Path) -> list[str]:
             drifts.append(f"{name}: differs from the lock")
         _close(path)
     _close(lock_path)
-    base = root / "qse"
-    if base.is_dir():
-        for path in sorted(base.rglob("*.py")):
-            name = path.relative_to(root).as_posix()
-            if "__pycache__" not in path.parts and name not in listed:
-                drifts.append(f"{name}: not named by the lock")
+    drifts.extend(
+        f"{name}: not named by the lock" for name in _unlisted(root) if name not in listed
+    )
     return drifts
+
+
+def _unlisted(root: Path) -> list[str]:
+    """Every file or link under qse/, links not followed, but the README, the lock and bytecode.
+
+    Bytecode is a `*.pyc` file directly inside a `__pycache__` directory, where Python writes it.
+    """
+    found: list[str] = []
+    for top, dirs, files in os.walk(root / "qse"):
+        here = Path(top)
+        links = [name for name in dirs if (here / name).is_symlink()]
+        for name in (*links, *files):
+            path = here / name
+            bytecode = here.name == "__pycache__" and name.endswith(".pyc")
+            if not (bytecode and not path.is_symlink()):
+                found.append(path.relative_to(root).as_posix())
+    return sorted(set(found) - set(UNLOCKED))
 
 
 def main(argv: list[str] | None = None) -> int:
