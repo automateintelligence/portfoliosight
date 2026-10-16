@@ -1,0 +1,180 @@
+"""Pull the QSE files PortfolioSight needs, byte-identical, at a pinned commit (spec 3 item 3).
+
+Usage, from the repo root:
+    python scripts/sync_qse.py --commit <40 hex>   copy the ten files, write qse/qse.lock.json
+    python scripts/sync_qse.py --check             verify the copy against the lock
+
+The files are read from the local QSE checkout with `git cat-file blob <commit>:<path>`, so the
+QSE working tree is never read or touched. Each file is written, then closed with `chmod a-w`.
+`qse/` is edited only in QSE: merge there, then re-run this script at the new commit.
+
+Exit codes: 0 done or clean, 1 drift found by --check, 2 bad arguments, 3 the QSE checkout or
+commit is not there, 4 a listed path is not in the commit.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+SOURCE = "automateintelligence/quant-scenario-engine"
+LOCK_NAME = "qse/qse.lock.json"
+# `qse/distributions/__init__.py` is empty at the pin; it is copied so that `qse.distributions`
+# stays a regular package. Not copied: `qse/distributions/validation/__init__.py` (it imports
+# outside the closure); QSE has no `qse/__init__.py` or `fitters/__init__.py`, so those
+# directories are namespace packages here, as in QSE.
+FILES = (
+    "qse/distributions/__init__.py",
+    "qse/distributions/joint/__init__.py",
+    "qse/distributions/joint/fhs.py",
+    "qse/distributions/joint/panel_fit.py",
+    "qse/distributions/joint/portfolio.py",
+    "qse/distributions/fitters/garch_t_fitter.py",
+    "qse/distributions/garch_recursion.py",
+    "qse/distributions/validation/stationarity.py",
+    "qse/distributions/models.py",
+    "qse/exceptions.py",
+)
+COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+READ_ONLY = 0o444
+
+
+class SyncError(Exception):
+    def __init__(self, message: str, code: int) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def default_qse_dir() -> Path:
+    env = os.environ.get("PS_QSE_DIR")
+    return Path(env) if env else Path.home() / "programming" / "quant-scenario-engine"
+
+
+def _git(qse_dir: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(["git", "-C", str(qse_dir), *args], capture_output=True)
+
+
+def read_blobs(qse_dir: Path, commit: str) -> dict[str, bytes]:
+    """The bytes of every listed file at `commit`; nothing is written before all are read."""
+    if not qse_dir.is_dir():
+        raise SyncError(f"QSE checkout not found at {qse_dir}", 3)
+    if _git(qse_dir, "cat-file", "-e", f"{commit}^{{commit}}").returncode != 0:
+        raise SyncError(
+            f"commit {commit} is not in {qse_dir}: fetch QSE's `github` remote and retry", 3
+        )
+    blobs: dict[str, bytes] = {}
+    for name in FILES:
+        done = _git(qse_dir, "cat-file", "blob", f"{commit}:{name}")
+        if done.returncode != 0:
+            raise SyncError(f"{name} is not in QSE commit {commit}", 4)
+        blobs[name] = done.stdout
+    return blobs
+
+
+def _write_closed(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        path.chmod(path.stat().st_mode | stat.S_IWUSR)
+    path.write_bytes(data)
+    path.chmod(READ_ONLY)
+
+
+def sync(commit: str, qse_dir: Path, root: Path) -> dict:
+    blobs = read_blobs(qse_dir, commit)
+    for name, data in blobs.items():
+        _write_closed(root / name, data)
+    lock = {
+        "source": SOURCE,
+        "commit": commit,
+        "files": {name: hashlib.sha256(blobs[name]).hexdigest() for name in sorted(blobs)},
+    }
+    _write_closed(root / LOCK_NAME, (json.dumps(lock, indent=2, sort_keys=True) + "\n").encode())
+    return lock
+
+
+def _close(path: Path) -> None:
+    if path.is_file():
+        path.chmod(path.stat().st_mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
+
+
+def check(root: Path) -> list[str]:
+    """Every drift from the lock, one line each; every listed file is closed again."""
+    drifts: list[str] = []
+    lock_path = root / LOCK_NAME
+    listed: dict[str, str] = {}
+    if not lock_path.is_file():
+        drifts.append(f"{LOCK_NAME}: missing")
+    else:
+        try:
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+            listed = dict(lock["files"])
+            if lock["source"] != SOURCE or not COMMIT_RE.fullmatch(str(lock["commit"])):
+                drifts.append(f"{LOCK_NAME}: source or commit is malformed")
+        except (ValueError, KeyError, TypeError) as exc:
+            drifts.append(f"{LOCK_NAME}: unreadable ({exc!r})")
+        for name in sorted(set(listed) ^ set(FILES)):
+            where = (
+                "the lock but not the script" if name in listed else "the script but not the lock"
+            )
+            drifts.append(f"{name}: named by {where}")
+    for name in sorted(listed):
+        path = root / name
+        if not path.is_file():
+            drifts.append(f"{name}: missing")
+        elif hashlib.sha256(path.read_bytes()).hexdigest() != listed[name]:
+            drifts.append(f"{name}: differs from the lock")
+        _close(path)
+    _close(lock_path)
+    base = root / "qse"
+    if base.is_dir():
+        for path in sorted(base.rglob("*.py")):
+            name = path.relative_to(root).as_posix()
+            if "__pycache__" not in path.parts and name not in listed:
+                drifts.append(f"{name}: not named by the lock")
+    return drifts
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Pull QSE files at a pinned commit.")
+    parser.add_argument("--commit", help="the 40-hex QSE commit to pull")
+    parser.add_argument("--qse-dir", type=Path, help="QSE checkout (default: $PS_QSE_DIR)")
+    parser.add_argument("--root", type=Path, default=REPO, help="repository root to write into")
+    parser.add_argument("--check", action="store_true", help="verify qse/ against the lock")
+    args = parser.parse_args(argv)
+    commit: str | None = args.commit
+    if args.check == (commit is not None):
+        parser.error("give --commit <40 hex> to sync, or --check to verify (not both)")
+    if commit is not None and not COMMIT_RE.fullmatch(commit):
+        parser.error("--commit must be 40 lowercase hex characters")
+    if commit is None:
+        drifts = check(args.root)
+        for line in drifts:
+            print(f"drift: {line}")
+        if drifts:
+            print(
+                f"{len(drifts)} drift(s): restore with `git checkout -- qse`, or re-run "
+                "scripts/sync_qse.py --commit <sha>",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"qse/ matches {LOCK_NAME}")
+        return 0
+    try:
+        lock = sync(commit, args.qse_dir or default_qse_dir(), args.root)
+    except SyncError as exc:
+        print(str(exc), file=sys.stderr)
+        return exc.code
+    print(f"{len(lock['files'])} files pulled at {lock['commit']}; wrote {LOCK_NAME}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
