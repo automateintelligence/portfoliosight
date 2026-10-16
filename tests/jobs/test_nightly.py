@@ -435,6 +435,41 @@ def test_nothing_is_pruned_without_a_record_of_the_previous_generation(tmp_path)
     assert nightly.prune_generations(store, current) == ["2026-10-08-0.1.0", "2026-10-09-0.1.0"]
 
 
+def test_a_pinned_generation_is_never_pruned(tmp_path):
+    store = store_mod.LocalStore(tmp_path)
+    for name in ("2026-10-08-0.1.0", "2026-10-09-0.1.0", "2026-10-11-0.1.0", "2026-10-12-0.1.0"):
+        _old_generation(store, name)
+    current = "2026-10-12-0.1.0"
+    store_mod.put_json(
+        store, "meta/previous.json", {"current": current, "previous": "2026-10-11-0.1.0"}
+    )
+    store_mod.put_json(store, "meta/pinned.json", {"generations": ["2026-10-08-0.1.0"]})
+    assert nightly.pinned_generations(store) == {"2026-10-08-0.1.0"}
+    assert nightly.prune_generations(store, current) == ["2026-10-09-0.1.0"]
+    assert nightly.stored_generations(store) == [
+        "2026-10-08-0.1.0",
+        "2026-10-11-0.1.0",
+        "2026-10-12-0.1.0",
+    ]
+
+
+def test_an_unreadable_pin_file_prunes_nothing(tmp_path):
+    store = store_mod.LocalStore(tmp_path)
+    for name in ("2026-10-08-0.1.0", "2026-10-12-0.1.0"):
+        _old_generation(store, name)
+    current = "2026-10-12-0.1.0"
+    store_mod.put_json(store, "meta/previous.json", {"current": current, "previous": None})
+    bad = (b"not json", b"[]", b'{"generations": "2026-10-08-0.1.0"}', b'{"generations": [1]}')
+    for body in bad:
+        store.put("meta/pinned.json", body)
+        assert nightly.pinned_generations(store) is None
+        assert nightly.prune_generations(store, current) == []
+    assert len(nightly.stored_generations(store)) == 2
+    store.delete("meta/pinned.json")
+    assert nightly.pinned_generations(store) == set()
+    assert nightly.prune_generations(store, current) == ["2026-10-08-0.1.0"]
+
+
 def test_an_abandoned_generation_is_not_mistaken_for_the_previous_one(unpublished, generation):
     """Published G1, a G2 that died half-built, then G3: visitors hold G1, so G1 is kept."""
     store = unpublished
