@@ -93,3 +93,24 @@ test("the strip in dollars", async ({ page, request }, testInfo) => {
   await expect(page.getByTestId("strip-sub")).toHaveText(/^over one year on your \$[\d,]+$/);
   await page.screenshot({ path: path.join(OUT, `2026-10-15_strip-dollars_ks-dark_${size}.png`) });
 });
+
+// The pinned card (owner direction 2026-10-16), details off and on, in the Dark and HUD looks.
+for (const theme of ["ks-dark", "hud"] as const) {
+  test(`pinned card ${theme}`, async ({ page, request }, testInfo) => {
+    if (process.env.PS_SHOT_DRAFT) return;
+    await request.post("/__mock/reset");
+    const size = testInfo.project.name.includes("phone") ? "phone" : "desktop";
+    for (const details of [false, true]) {
+      await ready(page, `t=${theme}${details ? "&x=1" : ""}`);
+      if ((await page.getByTestId("details-toggle").getAttribute("aria-pressed")) !== String(details)) await page.getByTestId("details-toggle").click();
+      await page.evaluate(() => window.scrollTo(0, 0));
+      const b = (await page.getByTestId("point-selected").boundingBox())!;
+      if (size === "phone") await page.touchscreen.tap(b.x + b.width / 2, b.y + b.height / 2);
+      else await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+      await expect(page.getByTestId("mix-card-pinned")).toBeVisible();
+      if (size === "desktop") await page.mouse.move(2, 2);
+      await page.waitForTimeout(300);
+      await page.screenshot({ path: path.join(OUT, `2026-10-16_sticky-card_${size}_${theme}${details ? "_details" : ""}.png`) });
+    }
+  });
+}

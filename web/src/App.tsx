@@ -456,6 +456,7 @@ export default function App() {
               defaultPoint: tensor.ladder.default_point,
             }}
             staleAsof={state.staleness?.asof ?? null}
+            chartNotes={phone}
             onToggleDetails={() => dispatch({ type: "setDetails", details: !state.details })}
           />
         )}

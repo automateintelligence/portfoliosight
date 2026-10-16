@@ -1,6 +1,8 @@
 import { axisBottom, axisLeft } from "d3-axis";
 import { select } from "d3-selection";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { plain } from "../copy";
+import { avoidPinned, type Box, type PinEvent } from "./pin";
 import type { ChartScales } from "./scales";
 
 export type Mark = { sigma: number; mu: number };
@@ -41,6 +43,14 @@ type Props = {
   onDivDrag: (dy: number, start: boolean) => void;
   /** Keyboard on the point: arrows step the two sliders. */
   onNudge: (ds: number, dt: number) => void;
+  /** The selected mix's card is pinned open (Chart draws it): the hover card for the point gives way. */
+  pinned: boolean;
+  /** Where the pinned card is, so a marker's hover card never sits on it. */
+  pinnedBox: Box | null;
+  /** The id of the pinned card, which then describes the point. */
+  pinnedId: string;
+  /** Presses, moves and keys on the selected point, for the pin state machine (pin.ts). */
+  onPin: (e: PinEvent) => void;
 };
 
 const fmtTick = (v: number) => `${Number((v * 100).toFixed(1))}%`;
@@ -49,6 +59,33 @@ const AXIS_LOCK = 6; // px of travel before a drag commits to one direction
 const LABEL_STEP = 14; // px between two line labels that would otherwise touch
 const CARD_ID = "mix-card-tip"; // the open card describes the marker it belongs to
 const CARD_W = { desktop: 260, phone: 224 };
+
+/** A fund's ticker beside its dot: to the right, to the left, or hidden (null) when both would touch another. */
+export type FundLabel = { id: string; px: number; py: number; side: "right" | "left" | null };
+
+const FUND_CHAR_W = 6; // 9.5 px monospace, as measured
+const FUND_LABEL_H = 13;
+const FUND_GAP = 5; // px between a dot and its ticker
+
+/**
+ * Fund tickers that would overlap are not drawn on top of each other: each label goes to the right
+ * of its dot, else to its left, else it is hidden (its dot stays, and hovering or tapping the dot
+ * names it). Funds are placed in menu order, so the result is the same on every render.
+ */
+export function placeFundLabels(funds: { id: string; px: number; py: number }[], width: number): FundLabel[] {
+  const boxes: { x0: number; x1: number; y0: number; y1: number }[] = [];
+  const hit = (b: { x0: number; x1: number; y0: number; y1: number }) => boxes.some((o) => b.x0 < o.x1 + 2 && o.x0 < b.x1 + 2 && b.y0 < o.y1 + 1 && o.y0 < b.y1 + 1);
+  return funds.map((f) => {
+    const w = f.id.length * FUND_CHAR_W;
+    const y0 = f.py - FUND_LABEL_H / 2;
+    const y1 = f.py + FUND_LABEL_H / 2;
+    const right = { x0: f.px + FUND_GAP, x1: f.px + FUND_GAP + w, y0, y1 };
+    const left = { x0: f.px - FUND_GAP - w, x1: f.px - FUND_GAP, y0, y1 };
+    const side = right.x1 <= width - 2 && !hit(right) ? "right" : left.x0 >= 2 && !hit(left) ? "left" : null;
+    if (side) boxes.push(side === "right" ? right : left);
+    return { ...f, side };
+  });
+}
 
 export type PlacedLabel = LineEnd & { ex: number; ey: number; x: number; y: number; anchor: "start" | "end"; leader: string | null };
 
@@ -95,7 +132,7 @@ export function placeLabels(lines: LineEnd[], scales: ChartScales, phone: boolea
  * frontier lines and the markers, each drawn at its mix's actual risk and return. Updates on
  * every slider tick.
  */
-export function Overlay({ scales, phone, ceiling, selected, optimized, current, funds, selectedLabel, divLabel, currentLabel, position, busy, cards, lines, hot, onRiskPixel, onDivDrag, onNudge }: Props) {
+export function Overlay({ scales, phone, ceiling, selected, optimized, current, funds, selectedLabel, divLabel, currentLabel, position, busy, cards, lines, hot, onRiskPixel, onDivDrag, onNudge, pinned, pinnedBox, pinnedId, onPin }: Props) {
   const xAxisRef = useRef<SVGGElement>(null);
   const yAxisRef = useRef<SVGGElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -104,9 +141,11 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
   // marker unless it moves far enough to be a drag of the selected point.
   const drag = useRef<{ x0: number; y0: number; grabDx: number; axis: "x" | "y" | null; fromMark: boolean } | null>(null);
   const fresh = useRef(false); // focus has just shown a card: the click that follows must not turn it over
+  const tapped = useRef(0); // when a tap on the selected point last pinned or unpinned: the focus it brings opens no card
   const [dragging, setDragging] = useState(false);
   const [tip, setTip] = useState<MarkId | null>(null);
   const [cardH, setCardH] = useState(250);
+  const [fundShown, setFundShown] = useState<string | null>(null);
   const { x, y, plot } = scales;
 
   useEffect(() => {
@@ -117,6 +156,15 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
     select(yAxisRef.current).select(".domain").remove();
   }, [x, y, phone]);
 
+  // A ticker named by a tap stays until the next press anywhere but on a fund's dot.
+  useEffect(() => {
+    if (fundShown === null) return;
+    const away = (e: PointerEvent) => {
+      if (!(e.target instanceof Element) || !e.target.closest("[data-fund]")) setFundShown(null);
+    };
+    document.addEventListener("pointerdown", away, true);
+    return () => document.removeEventListener("pointerdown", away, true);
+  }, [fundShown]);
   // A card opened by a tap stays until the next press anywhere else.
   useEffect(() => {
     if (tip === null) return;
@@ -133,6 +181,7 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
   }, [tip, cards]);
 
   const labels = useMemo(() => placeLabels(lines, scales, phone), [lines, scales, phone]);
+  const fundLabels = useMemo(() => (funds ? placeFundLabels(funds.map((f) => ({ id: f.id, px: x(f.sigma), py: y(f.mu) })), scales.width) : []), [funds, x, y, scales.width]);
 
   const sx = x(selected.sigma);
   const sy = y(selected.mu);
@@ -162,7 +211,30 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
     setDragging(true);
     setTip("selected");
   };
-  const onPointerDown = (e: ReactPointerEvent<SVGGElement>) => startDrag(e, false);
+  // The selected point: a press that comes back up without travelling is a click (pin or unpin
+  // its card); one that travels is a drag of the point (pin.ts decides which).
+  // While a tensor loads the point is disabled, and so is its pin.
+  const onPointerDown = (e: ReactPointerEvent<SVGGElement>) => {
+    if (!busy && (e.pointerType !== "mouse" || e.button === 0)) onPin({ type: "press", id: e.pointerId, x: e.clientX, y: e.clientY });
+    startDrag(e, false);
+  };
+  const onSelectedMove = (e: ReactPointerEvent<SVGGElement>) => {
+    onPin({ type: "move", id: e.pointerId, x: e.clientX, y: e.clientY });
+    onPointerMove(e);
+  };
+  const onSelectedUp = (e: ReactPointerEvent<SVGGElement>) => {
+    // a tap that pins or unpins is not also a tap that opens the ordinary card beside the point
+    if (e.pointerType === "touch" && drag.current && drag.current.axis === null) {
+      tapped.current = e.timeStamp;
+      setTip(null);
+    }
+    onPin({ type: "release", id: e.pointerId });
+    endDrag();
+  };
+  const onSelectedCancel = (e: ReactPointerEvent<SVGGElement>) => {
+    onPin({ type: "cancel", id: e.pointerId });
+    endDrag();
+  };
   const onPointerMove = (e: ReactPointerEvent<SVGGElement>) => {
     const d = drag.current;
     if (!d) return;
@@ -190,6 +262,11 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
     setDragging(false);
   };
   const onKeyDown = (e: KeyboardEvent<SVGGElement>) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      if (!busy) onPin({ type: "key" });
+      return;
+    }
     const moves: Record<string, [number, number]> = { ArrowRight: [1, 0], ArrowLeft: [-1, 0], ArrowDown: [0, 1], ArrowUp: [0, -1] };
     const move = moves[e.key];
     if (!move || busy) return;
@@ -215,8 +292,9 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
     onPointerLeave: (e: ReactPointerEvent) => {
       if (e.pointerType !== "touch" && !drag.current) setTip(null);
     },
-    onFocus: () => {
+    onFocus: (e: FocusEvent) => {
       fresh.current = true;
+      if (id === "selected" && e.timeStamp - tapped.current < 1000) return;
       setTip(id);
     },
     onBlur: () => setTip(null),
@@ -242,9 +320,22 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
   const fromMark = { onPointerDown: (e: ReactPointerEvent<SVGGElement>) => startDrag(e, true), onPointerMove, onPointerUp: endDrag, onPointerCancel: endDrag, onLostPointerCapture: endDrag };
   const markDrag = phone ? fromMark : {};
   const squareDrag = fromMark;
+  // A click or tap on the selected point's centre always reaches the point (and pins its card);
+  // keyboard focus still reaches every marker. A marker drawn right on the point (as is
+  // the open circle while the slider rests on Optimized, where the two mixes are one) lets presses
+  // through; one close by draws its hit area short of the point's centre.
+  const fromPoint = (id: MarkId) => {
+    const p = at[id];
+    return p ? Math.hypot(p.px - sx, p.py - sy) : Infinity;
+  };
+  const yields = (id: MarkId) => fromPoint(id) < (phone ? HIT / 2 : 6);
+  const through = (id: MarkId) => (yields(id) ? { style: { pointerEvents: "none" as const } } : {});
+  const hitR = (id: MarkId, base: number) => Math.max(6, Math.min(base, fromPoint(id) - 6));
 
-  // The card sits beside its marker, on the side with room, and never leaves the chart.
-  const where = tip ? at[tip] : null;
+  // The card sits beside its marker, on the side with room, and never leaves the chart; while the
+  // selected mix's card is pinned, the point's own hover card gives way to it and the other
+  // markers' cards keep off it.
+  const where = tip && !(pinned && tip === "selected") ? at[tip] : null;
   const cardW = phone ? CARD_W.phone : CARD_W.desktop;
   let cardLeft = 0;
   let cardTop = 0;
@@ -253,6 +344,7 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
     cardLeft = Math.max(4, Math.min(cardLeft, scales.width - cardW - 4));
     cardTop = Math.max(4, Math.min(where.py - cardH / 2, scales.height - cardH - 4));
   }
+  const placed = where ? avoidPinned({ left: cardLeft, top: cardTop, width: cardW, height: cardH }, pinnedBox, where, scales) : null;
 
   const selectedEl = (
     <g
@@ -269,12 +361,13 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
             aria-valuenow={Number(position.s.toFixed(4))}
             aria-valuetext={selectedLabel}
             aria-disabled={busy || undefined}
-            aria-describedby={tip === "selected" ? CARD_ID : undefined}
+            aria-describedby={pinned ? pinnedId : tip === "selected" && placed ? CARD_ID : undefined}
+            data-pinned={pinned || undefined}
             onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={endDrag}
-            onPointerCancel={endDrag}
-            onLostPointerCapture={endDrag}
+            onPointerMove={onSelectedMove}
+            onPointerUp={onSelectedUp}
+            onPointerCancel={onSelectedCancel}
+            onLostPointerCapture={onSelectedCancel}
             {...show("selected")}
             onKeyDown={onKeyDown}
           >
@@ -307,31 +400,55 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
           <line className="ceiling-back" x1={cx} x2={cx} y1={plot.bottom} y2={cTop} />
           <line className="ceiling" x1={cx} x2={cx} y1={plot.bottom} y2={cTop} />
         </g>
-        {funds?.map((f) => (
-          <g key={f.id} className="fund-dot" transform={`translate(${x(f.sigma)},${y(f.mu)})`}>
+        {fundLabels.map((f) => (
+          <g
+            key={f.id}
+            className={f.side ? "fund-dot" : "fund-dot is-quiet"}
+            data-fund={f.id}
+            transform={`translate(${f.px},${f.py})`}
+            {...(f.side
+              ? {}
+              : {
+                  onPointerEnter: (e: ReactPointerEvent) => e.pointerType !== "touch" && setFundShown(f.id),
+                  onPointerLeave: (e: ReactPointerEvent) => e.pointerType !== "touch" && setFundShown((was) => (was === f.id ? null : was)),
+                  // a mouse names it on hover; a finger, tap by tap
+                  onPointerUp: (e: ReactPointerEvent) => e.pointerType === "touch" && setFundShown((was) => (was === f.id ? null : f.id)),
+                })}
+          >
+            {!f.side && <circle className="fund-hit" r={9} />}
             <circle r={2.6} />
-            <text x={5} y={3}>
-              {f.id}
-            </text>
+            {f.side && (
+              <text data-testid={`fund-label-${f.id}`} x={f.side === "right" ? FUND_GAP : -FUND_GAP} y={3} textAnchor={f.side === "right" ? "start" : "end"}>
+                {f.id}
+              </text>
+            )}
           </g>
         ))}
+        {fundLabels
+          .filter((f) => !f.side && f.id === fundShown)
+          .map((f) => (
+            <text key={f.id} className="fund-shown" data-testid={`fund-label-${f.id}`} x={f.px + FUND_GAP} y={f.py + 3}>
+              {f.id}
+            </text>
+          ))}
         {phone && selectedEl}
-        <g className={phone ? "mark drags" : "mark"} data-mark="div" tabIndex={0} role="img" aria-label={divLabel} aria-describedby={tip === "div" ? CARD_ID : undefined} {...show("div")} {...tapToggle("div")} {...markDrag}>
-          <circle className="hit" cx={at.div!.px} cy={at.div!.py} r={phone ? HIT : 13} />
+        <g className={phone ? "mark drags" : "mark"} data-mark="div" tabIndex={0} role="img" aria-label={divLabel} aria-describedby={tip === "div" && placed ? CARD_ID : undefined} {...show("div")} {...tapToggle("div")} {...markDrag} {...through("div")}>
+          <circle className="hit" cx={at.div!.px} cy={at.div!.py} r={hitR("div", phone ? HIT : 13)} />
           <circle className="pt-div" data-testid="point-div" cx={at.div!.px} cy={at.div!.py} r={4.5} />
         </g>
         {!phone && selectedEl}
         {at.current && (
-          <g className="mark drags" data-mark="current" tabIndex={0} role="img" aria-label={currentLabel} aria-describedby={tip === "current" ? CARD_ID : undefined} {...show("current")} {...tapToggle("current")} {...squareDrag}>
-            <circle className="hit" cx={at.current.px} cy={at.current.py} r={squareHit} />
+          <g className="mark drags" data-mark="current" tabIndex={0} role="img" aria-label={currentLabel} aria-describedby={tip === "current" && placed ? CARD_ID : undefined} {...show("current")} {...tapToggle("current")} {...squareDrag} {...through("current")}>
+            <circle className="hit" cx={at.current.px} cy={at.current.py} r={hitR("current", squareHit)} />
             <rect className="pt-current" data-testid="point-current" x={at.current.px - 6.5} y={at.current.py - 6.5} width={13} height={13} rx={2} />
           </g>
         )}
       </svg>
-      {tip && where && cards[tip] && (
-        <div ref={cardRef} id={CARD_ID} className="tooltip" role="tooltip" style={{ left: cardLeft, top: cardTop, width: cardW }}>
+      {tip && placed && cards[tip] && (
+        <div ref={cardRef} id={CARD_ID} className="tooltip" role="tooltip" style={{ left: placed.left, top: placed.top, width: cardW }}>
           {cards[tip]}
           {tip !== "selected" && under(tip) && cards[under(tip)!] && <p className="tip-more">{phone ? "Tap" : "Click"} again for the marker underneath.</p>}
+          {tip === "selected" && <p className="tip-more">{phone ? plain.pinHintPhone : plain.pinHint}</p>}
         </div>
       )}
     </>

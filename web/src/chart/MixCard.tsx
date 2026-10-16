@@ -58,7 +58,7 @@ export function MixCard({ kind, title, mix, details, enbRef, extra }: Props) {
           </span>
         </div>
       )}
-      {mix.range && <p className="tip-sub">{plain.resultStripSuffix}</p>}
+      {mix.range && <p className="tip-sub tip-sub-range">{plain.resultStripSuffix}</p>}
       <dl className="tip-facts">
         <div>
           <dt>{plain.cardRisk}</dt>
@@ -73,7 +73,7 @@ export function MixCard({ kind, title, mix, details, enbRef, extra }: Props) {
           <dd data-testid="mix-card-word">{mix.word}</dd>
         </div>
       </dl>
-      <p className="tip-sub">{plain.cardPerYear}</p>
+      <p className="tip-sub tip-sub-year">{plain.cardPerYear}</p>
       {details && (
         <p className="tip-tech">
           {`This mix ${enbLine(mix.enb.toFixed(1), enbRef.toFixed(1))}.`}

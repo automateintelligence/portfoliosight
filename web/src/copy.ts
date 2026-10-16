@@ -34,6 +34,14 @@ export const plain = {
   currentMix: "The mix you entered",
   selectedMix: "Selected mix",
   cellMix: "The mix at this spot",
+  /** The selected mix's card: how to keep it open, and how to let it go once pinned. */
+  pinHint: "Click the point to keep this card open.",
+  pinHintPhone: "Tap the point to keep this card open.",
+  pinned: "Pinned: click the selected point again, click outside the chart or press Escape to close.",
+  pinnedPhone: "Pinned. Tap the point again to close.",
+  /** Phone, details on: the chart's technical lines, moved under it so they never crowd the plot. */
+  chartNotes: "On the chart",
+  method: "Method",
   cardRisk: "Risk",
   cardReturn: "Expected return",
   cardPerYear: "Risk and expected return are per year.",

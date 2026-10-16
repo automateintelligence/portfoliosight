@@ -271,3 +271,18 @@ the docstring is authoritative for that test.
   percent when shares are held in a fund without a last close. The bar's marks carry
   `data-over="low"|"high"` when drawn clamped at an end. Asserted by `web/tests/` and
   `web/e2e/local/app.spec.ts`.
+- Pinned card and phone details, 2026-10-16 (owner direction; spec §3.1 "Pinned card", §3.4).
+  New test ids, asserted by `web/e2e/local/app.spec.ts` and `web/tests/` and free for later gate
+  assertions: `mix-card-pinned` (the selected mix's card pinned by a click or tap on
+  `point-selected`; `data-corner` = `top-left` | `top-right` | `bottom-left` | `bottom-right`,
+  `data-clear` = whether that corner keeps the point clear; while it is open `point-selected` has
+  `aria-describedby="mix-card-pinned"` and `data-pinned`), `chart-legend` (the colour map's key,
+  hidden while the pinned card sits on it), `y-title` (the return-axis title), `details-chart`
+  (phone, details on: the axes' and the legend's technical lines, under the chart instead of on
+  it), `risk-method` (phone, details on: the risk slider's technical paragraph behind a "Method"
+  line, a `<details>` element), `fund-label-{ID}` (a fund's ticker on the chart, details on; a
+  ticker that would overlap another is not drawn until its dot is hovered or tapped). A press on
+  `point-selected` that travels 6 px or more is a drag and never pins; a press elsewhere than the
+  chart, `risk-slider`, `div-slider` (and their containers) and `details-toggle` unpins. No gate
+  test changes: on a phone with details on, "Standard deviation of yearly return" and "minimum
+  torsion" are now read from `details-chart` (still in the page's visible text, A-PS-48).
