@@ -108,14 +108,14 @@ NEVER_PULLED = (
 # A fit of a 300-row GARCH(1,1) series runs `arch`'s lazy import. The child runs it twice.
 # Blocked: it starts with only the standard library, this checkout's `qse` and the packages of the
 # closure, every other installed module set to None, so a hard dependency outside the closure fails
-# the fit (sufficiency). Unblocked: nothing is set to None, as in an ordinary import, and none of
-# NEVER_PULLED may load. The unblocked leg cannot require "only the closure": pandas soft-imports
-# pyarrow when it is installed, pyarrow soft-imports cloudpickle, and numpy's f2py soft-imports
-# charset_normalizer. Those are optional imports of the closure packages themselves, which the
-# blocked leg proves the fit does not need. The child imports only the standard library before
-# `qse`, so it loads nothing of NEVER_PULLED itself. It reports every top-level package loaded
-# from site-packages during the import and the fit, and every top-level module name in
-# `sys.modules` at the end.
+# the fit (sufficiency). Unblocked: nothing is set to None, as in an ordinary import; every
+# distribution that loads must be one the five declare, their optional extras included (pandas
+# soft-imports pyarrow when it is installed, pyarrow cloudpickle, numpy's f2py charset_normalizer:
+# all declared as extras somewhere in the closure), and none of NEVER_PULLED may load. The blocked
+# leg proves the fit needs none of those optional imports. The child imports only the standard
+# library before `qse`, so it loads nothing of NEVER_PULLED itself. It reports every top-level
+# package loaded from site-packages during the import and the fit, and every top-level module
+# name in `sys.modules` at the end.
 QSE_CHILD = """
 import json, sys, sysconfig
 from pathlib import Path
@@ -155,8 +155,11 @@ def _normalized(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def _closure(roots: tuple[str, ...]) -> set[str]:
-    """Normalized names of the roots and of everything they require that is installed."""
+def _closure(roots: tuple[str, ...], *, extras: bool = False) -> set[str]:
+    """Normalized names of the roots and of everything they require that is installed.
+
+    With `extras`, a requirement behind one of the package's declared extras counts as declared
+    too (environment markers still apply)."""
     seen: set[str] = set()
     todo = [_normalized(name) for name in roots]
     while todo:
@@ -165,12 +168,15 @@ def _closure(roots: tuple[str, ...]) -> set[str]:
             continue
         try:
             requires = importlib.metadata.requires(name) or []
+            offered = importlib.metadata.metadata(name).get_all("Provides-Extra") or []
         except importlib.metadata.PackageNotFoundError:
             continue
         seen.add(name)
+        environments = [{"extra": ""}] + ([{"extra": e} for e in offered] if extras else [])
         for text in requires:
             requirement = Requirement(text)
-            if requirement.marker is not None and not requirement.marker.evaluate({"extra": ""}):
+            marker = requirement.marker
+            if marker is not None and not any(marker.evaluate(env) for env in environments):
                 continue
             todo.append(_normalized(requirement.name))
     return seen
@@ -214,5 +220,11 @@ def test_qse_import_closure() -> None:
     plain = _run_qse_child([])
     assert plain["status"] == report["status"], plain["messages"]
     assert {"numpy", "pandas", "scipy", "arch", "statsmodels"} <= set(plain["tops"])
+    unowned = sorted(set(plain["tops"]) - set(owners))
+    assert not unowned, f"loaded from site-packages without an installed distribution: {unowned}"
+    declared = _closure(QSE_ROOTS, extras=True)
+    assert allowed <= declared
+    beyond = sorted({_normalized(dist) for top in plain["tops"] for dist in owners[top]} - declared)
+    assert not beyond, f"an ordinary import loads what {QSE_ROOTS} do not declare: {beyond}"
     loaded = sorted(set(NEVER_PULLED) & (set(plain["modules"]) | set(plain["tops"])))
     assert not loaded, f"an ordinary import of qse.distributions.joint loads {loaded}"
