@@ -64,7 +64,7 @@ class FundInput:
     id: str
     name: str
     kind: str  # etf | mutual_fund | stock | tsp
-    source: str  # seed | tiingo | tsp | seed+tiingo
+    source: str  # seed | tiingo | tsp | seed+tiingo | lake
     adjusted_through: str  # ISO date the corporate actions are verified through
     fetched_at: str  # ISO timestamp of the last provider fetch
     last_close: float | None = None  # raw close on asof, None when unknown

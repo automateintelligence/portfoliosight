@@ -38,7 +38,7 @@ const schema = z.strictObject({
           id: text,
           name: text,
           kind: z.enum(["etf", "mutual_fund", "stock", "tsp"]),
-          source: z.enum(["seed", "tiingo", "tsp", "seed+tiingo"]),
+          source: z.enum(["seed", "tiingo", "tsp", "seed+tiingo", "lake"]),
           adjusted_through: date,
           fetched_at: text,
           last_close: optional,

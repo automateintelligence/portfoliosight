@@ -51,7 +51,7 @@
               "id": {"type": "string", "minLength": 1},
               "name": {"type": "string", "minLength": 1},
               "kind": {"enum": ["etf", "mutual_fund", "stock", "tsp"]},
-              "source": {"enum": ["seed", "tiingo", "tsp", "seed+tiingo"]},
+              "source": {"enum": ["seed", "tiingo", "tsp", "seed+tiingo", "lake"]},
               "adjusted_through": {"$ref": "#/$defs/date"},
               "fetched_at": {"type": "string", "minLength": 1},
               "last_close": {"type": ["number", "null"]}
