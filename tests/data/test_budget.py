@@ -87,6 +87,26 @@ def test_month_budget_refuses_new_symbols_only(store):
     assert ledger.months["2026-04"] == ["D"]
 
 
+def test_two_ledgers_on_one_store_share_the_counts(store):
+    """The nightly and a one-time job spending the same budget see each other's requests."""
+    clock = Clock(2026, 3, 14, 12, 5)
+    nightly, backfill = _ledger(store, clock, hour=4, day=6), _ledger(store, clock, hour=4, day=6)
+    for i in range(2):
+        nightly.before_request(f"N{i}")
+        backfill.before_request(f"B{i}")
+    assert clock.slept == []
+    nightly.before_request("N2")  # the fifth request of the hour waits for the next hour
+    assert clock.slept == [55 * 60.0]
+    backfill.before_request("B2")
+    with pytest.raises(budget.BudgetSpent) as spent:
+        nightly.before_request("N3")
+    assert spent.value.scope == "day"
+    doc = json.loads(store.get("meta/budget.json"))
+    assert doc["days"] == {"2026-03-14": 6}
+    assert doc["hours"] == {"2026-03-14T12": 4, "2026-03-14T13": 2}
+    assert doc["months"]["2026-03"] == ["B0", "B1", "B2", "N0", "N1", "N2"]
+
+
 def test_old_buckets_are_pruned(store):
     clock = Clock(2026, 1, 10, 8, 0)
     ledger = _ledger(store, clock, hour=100, day=100, month=100)
