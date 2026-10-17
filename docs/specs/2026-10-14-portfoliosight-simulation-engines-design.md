@@ -54,20 +54,20 @@ The stationary block bootstrap of demo spec §4.9: the mix's daily returns over 
 
 **Shape panel.** For the funds included in the window (demo spec §4.2 rule; a fund set aside for the lookback is not in the panel), the last `S = 2,520` rows of the calendar ending at `D_G` (the union of the included funds' trading days): each fund's daily total returns on its own available rows, `NaN` elsewhere. A fund with less than ten years contributes what it has. The panel is the same for every lookback whose included fund set is the same; its digest (`shape.sample_sha256`, the §4.9 `sample_digest` with `NaN` encoded as the canonical quiet NaN) is stored.
 
-**Fit.** `qse.distributions.joint.fit_garch_t_panel(panel)`: per fund, by maximum likelihood on its non-missing rows,
+**Fit.** `qse.distributions.joint.fit_garch_t_panel(log1p(panel))`: per fund, on its daily log returns `ℓ_t = ln(1 + r_t)` (a missing return stays missing), by maximum likelihood on its non-missing rows,
 
 ```
-r_t = μ + ε_t,   ε_t = σ_t z_t,   σ²_t = ω + α ε²_{t−1} + β σ²_{t−1},   z_t ~ t_ν scaled to unit variance
+ℓ_t = μ + ε_t,   ε_t = σ_t z_t,   σ²_t = ω + α ε²_{t−1} + β σ²_{t−1},   z_t ~ t_ν scaled to unit variance
 ```
 
-returning `(μ, ω, α, β, ν)` in the units of the returns (QSE's fitter lets `arch` rescale the series for its optimizer and converts the parameters back; nothing is scaled here), the conditional volatility `σ_t`, the standardized residuals `z_t = ε_t / σ_t` on the fund's rows, and a status. The fund's own full history fits its volatility persistence and tail; only the cross-fund dependence is limited to the overlap.
+returning `(μ, ω, α, β, ν)` in the units of the log returns (QSE's fitter lets `arch` rescale the series for its optimizer and converts the parameters back; nothing is scaled here), the conditional volatility `σ_t`, the standardized residuals `z_t = ε_t / σ_t` on the fund's rows, and a status. The fund's own full history fits its volatility persistence and tail; only the cross-fund dependence is limited to the overlap. **[choice]** Log returns (`method.returns = "log"`): a simulated simple return can fall below −100%, a log return cannot. TSP C's ten-year fit in simple returns (`α = 0.159`, `β = 0.837`, `ν = 5.5`) put 4 path-days at or below −100% (worst −228%) on 8 of 2,000 paths at 10y (measured 2026-10-17), so no mix holding it could be compounded; fitted in log returns, its worst simulated day is −91%. The panel and its digest stay the simple total returns. A day at or below −100% has no log return and fails the build with the fund and date named. The fallbacks below, the residuals, the pool, the splice guard and the outliers all read the log-space fit (the `near_constant` threshold applies to the log series).
 
 **Fallbacks** (QSE's rules, adopted as they are; the tensor records the status of every fund):
 
 | status | rule | simulated as |
 |---|---|---|
 | `garch` | fit converged, parameters valid | the recursion above |
-| `insufficient_history` | fewer than 252 rows | constant volatility: `α = β = 0`, `ω` = sample variance, `z = (r − mean) / sd` |
+| `insufficient_history` | fewer than 252 rows | constant volatility: `α = β = 0`, `ω` = sample variance, `z = (ℓ − mean) / sd` |
 | `near_constant` | daily sd below `3e-4` (about 0.5%/yr): TSP G (0.3%/yr) always; SGOV, BIL and SHV sit near the line and fall on either side by window, so the rule decides and the tensor names them | constant volatility as above; sd at or below `1e-12` means zero residuals |
 | `fit_failed` | optimizer failed, parameters invalid or non-finite | constant volatility |
 | `non_stationary` | `α + β ≥ 1 − 1e-4` (no long-run variance) | constant volatility |
@@ -78,7 +78,7 @@ A fallback fund goes through the same recursion with its shock merely scaled, so
 
 **Splice guard.** The store's total-return index of a seeded fund is the lake's back-adjusted history spliced with the provider's tail at `adjusted_through` (demo spec §5.1). A missing corporate action is fund-specific; a crash is cross-sectional. So a fund whose standardized residual on its own splice date has `|z_n| > 6` **and** sits more than 6 away from the median residual of the other included funds that day (`|z_n − median_m z_m| > 6`) fails the build with the fund and date named (nothing is clipped). `|z| > 6` on any other date, or on the splice date with the rest of the menu moving too, is recorded in `shape.outliers` (fund, date, `z`) for the validation report and fails nothing. A missing small dividend (a 1% drop on a fund with 1% daily volatility is `z ≈ −1`) passes this guard; the provider cross-check of demo spec §4.1 is the defence there.
 
-**Simulation.** `simulate_fhs_panel(fit, P, H, row_indices=I_pool, start="long_run")` gives `R` of shape `P × H × N`: at every (path, day) one pool row is drawn and that whole row is the day's shock for every fund, so funds keep moving together as they did on real days; each fund runs its own recursion from its long-run variance `ω / (1 − α − β)`. Memory: `2,000 × 252 × 23 × 8` bytes is 93 MB (30 funds: 121 MB); QSE measured a 126 MB peak at 30 funds on 2 CPUs in 0.14 to 0.22 s. The fitted drift `μ` and the long-run variance are replaced by the level step (§4.5), so the simulation supplies shape only.
+**Simulation.** `simulate_fhs_panel(fit, P, H, row_indices=I_pool, start="long_run")` gives the daily log returns `ℓ` of shape `P × H × N`: at every (path, day) one pool row is drawn and that whole row is the day's shock for every fund, so funds keep moving together as they did on real days; each fund runs its own recursion from its long-run variance `ω / (1 − α − β)`. Memory: `2,000 × 252 × 23 × 8` bytes is 93 MB (30 funds: 121 MB); QSE measured a 126 MB peak at 30 funds on 2 CPUs in 0.14 to 0.22 s. The fitted drift `μ` and the long-run variance are replaced by the level step (§4.5), so the simulation supplies shape only.
 
 ### 4.4 Copula
 
@@ -96,21 +96,25 @@ What the copula adds over the row bootstrap: joint bad days the history does not
 
 Chart moments for the selected lookback (demo spec §4.3): per fund the blended expected return `μ_{s,i}` and volatility `σ_i`; for a mix `μ_w = μ_s'w`, `σ_w = √(w'Σw)`. Daily targets invert the chart's annualization: `m_i = μ_{s,i} / 252`, `s_i = σ_i / √252`, `m_w = μ_w / 252`, `s_w = σ_w / √252`.
 
-Step 1, per fund (level of each fund): with `R̄_n` and `sd_n` the mean and population standard deviation of fund `n` over all paths and days of the simulated panel,
+Step 1, per fund, in log space (level of each fund): with `ℓ̄_n` and `sd_n` the mean and population standard deviation of fund `n`'s log returns over all paths and days of the simulated panel, and `(m̃_n, s̃_n)` the log-return equivalents of the daily targets by lognormal moment matching,
 
 ```
-R'_{p,t,n} = m_n + (R_{p,t,n} − R̄_n) · s_n / sd_n        (a constant fund, sd_n ≤ rounding: R' = m_n)
+s̃²_n = ln(1 + s²_n / (1 + m_n)²),   m̃_n = ln(1 + m_n) − s̃²_n / 2
+ℓ'_{p,t,n} = m̃_n + (ℓ_{p,t,n} − ℓ̄_n) · s̃_n / sd_n,   R'_{p,t,n} = e^{ℓ'_{p,t,n}} − 1 > −1
+                                                     (a constant fund, sd_n ≤ rounding: R' = m_n exactly)
 ```
 
-Step 2, per mix (level of the mix): `y_{p,t} = Σ_n w_n R'_{p,t,n}` has pooled mean exactly `m_w`; with `sd(y)` its pooled standard deviation,
+Step 2, per mix, in simple space (level of the mix): `y_{p,t} = Σ_n w_n R'_{p,t,n}`; with `R̄'` and `Σ_R'` the pooled mean vector and (`ddof = 0`) covariance of `R'` over all paths and days, computed once per (fund set, engine, lookback), `ȳ = w·R̄'` and `sd(y)² = w' Σ_R' w`,
 
 ```
-y'_{p,t} = m_w + k_w (y_{p,t} − m_w),   k_w = s_w / sd(y)        (sd(y) = 0: y' = m_w)
+y'_{p,t} = m_w + k_w (y_{p,t} − ȳ),   k_w = s_w / sd(y)        (sd(y) = 0: y' = m_w)
 ```
 
-`sd(y)² = w' Σ_sim w` exactly, with `Σ_sim` the pooled (`ddof = 0`) covariance of the `R'` panel over all paths and days, computed once per (fund set, engine, lookback); so `k_w` needs no pass over the paths. `k_w ≠ 1` because the simulated correlations are the shape window's and the chart's risk uses the lookback's shrunk ones. The year is `Y_p = ∏_t (1 + y'_{p,t}) − 1`; a day at or below −100% raises, as today, and no such mix enters a tensor. Implementation note: both steps are affine, so `y'` is the raw panel times the effective weights `k_w w_n s_n / sd_n` plus one constant per mix; the raw simulated panel is the only large array, and the 673 mixes of a tensor are compounded in blocks of `B` mixes over path chunks with a work buffer of at most 64 MB (`B · P · H · 8` bytes, `B ≈ 16`), never all at once (which would be 2.7 GB). Typical sits near `e^{μ_w − σ_w²/2} − 1`, and the existing check (Typical within `0.25σ` of that figure) applies to every engine.
+so every mix's days have pooled mean `m_w` and standard deviation `s_w` exactly, and `k_w` needs no pass over the paths. `k_w ≠ 1` because the simulated correlations are the shape window's and the chart's risk uses the lookback's shrunk ones. **[choice]** The scale `sd_n` is the pooled standard deviation (`method.scale = "sd"`). It is not robust: on TSP's log-space fit, leaving out the 20 paths (1%) with the largest excursion moves C's `sd_n` by 18% (S 5%, I 3.5%, F 2.5%; the fixture's 23 funds under 0.1%), because on a few paths the fitted volatility runs away (C: 14 path-days on one path above 10 times its largest in-sample conditional volatility; measured 2026-10-17). An IQR-matched scale was measured and rejected: it narrowed C's Bad year further (−15.6% against −19.7%; −23.4% with those 20 paths left out), because step 2 pins each mix's spread over all paths, runaway ones included. Only a cap on the simulated variance undoes that, and QSE's recursion has none yet.
 
-**[choice]** Two steps rather than QSE's one-step `rescale_to_targets` on the mix series: the one-step map weights funds by their ten-year volatilities inside the mix; step 1 gives each fund the lookback's own volatility before mixing (a bond fund in a 1-year view carries the weight the chart gives it) and step 2 pins the mix's risk to the chart's. The two-step form also decomposes exactly by fund, which §5.3 needs: `y'_{p,t} = Σ_n w_n [m_n + k_w (R'_{p,t,n} − m_n)]`.
+The year is `Y_p = ∏_t (1 + y'_{p,t}) − 1`. Under `replay` a day at or below −100% raises, as today, and no such mix enters a tensor (its days are real days). Under `garch` (and later `copula`) `R' > −1` always, but `k_w > 1` can still take a day of a mix to or below −100%; such a path is absorbed: its year is −100% (`method.ruin = "absorb"`), and the tensor records `engines.garch.ruin_paths`, the largest number of absorbed paths over every mix it carries, 0 normally. Implementation note: `R'` is a per-fund non-linear function of the raw simulated panel, which is the only large array; `R'` is computed per chunk of paths when needed (twice for its moments, once for the years), and the 673 mixes of a tensor are compounded in blocks over those chunks with work buffers of at most 64 MB in all, never all at once (which would be 2.7 GB). Typical sits near `e^{μ_w − σ_w²/2} − 1`, and the existing check (Typical within `0.25σ` of that figure) applies to every engine.
+
+**[choice]** Two steps rather than QSE's one-step `rescale_to_targets` on the mix series: the one-step map weights funds by their ten-year volatilities inside the mix; step 1 gives each fund the lookback's own volatility before mixing (a bond fund in a 1-year view carries the weight the chart gives it) and step 2 pins the mix's risk to the chart's. The two-step form also decomposes exactly by fund, which §5.3 needs: `y'_{p,t} = Σ_n w_n [m_n + k_w (R'_{p,t,n} − R̄'_n)]`.
 
 For `ew` the level is the weighted `μ_s`, `σ` and the shape is the same ten-year fit (the tensor's note says so). For `replay`, `R'` is the resampled sample row recentred per fund (`sample_{t,n} − mean_n + m_n`) and `k_w = 1`, which is what the engine does today.
 
@@ -137,7 +141,7 @@ a second-order cone program, the frontier's own program with another linear obje
 From the selected engine's paths of a mix, using the exact decomposition of §4.5. The contribution of fund `n` to path `p`'s additive year is
 
 ```
-C_{p,n} = Σ_t w_n [ m_n + k_w (R'_{p,t,n} − m_n) ] = w_n [ 252 m_n + k_w (S_{p,n} − 252 m_n) ],   S_{p,n} = Σ_t R'_{p,t,n}
+C_{p,n} = Σ_t w_n [ m_n + k_w (R'_{p,t,n} − R̄'_n) ] = w_n [ 252 m_n + k_w (S_{p,n} − 252 R̄'_n) ],   S_{p,n} = Σ_t R'_{p,t,n}
 ```
 
 so that `Σ_n C_{p,n} = Σ_t y'_{p,t}`. `S` (`P × N`) does not depend on the mix and is computed once per (fund set, engine, lookback); a mix's contributions are then a `P × N` product, and only the bad-year set below needs the mix's own paths, which the range computation already produces.
@@ -225,9 +229,10 @@ Owner direction (2026-10-14): design for 100 funds now, so a paid tier can be ad
 
 ```json
 "engines": {"replay": {"status": "ready", "method": {...as range_method today...}},
-            "garch":  {"status": "ready"|"unavailable", "reason": null|str,
+            "garch":  {"status": "ready"|"unavailable", "reason": null|str, "ruin_paths": int (ready) | null,
                        "method": {"name": "garch_t_fhs", "paths": 2000, "horizon_days": 252, "seed": 20261013,
-                                  "start": "long_run", "shape_rows": 2520, "qse": "ca8c0445a56712c92dc028e68845b94963fdd590", "arch": "8.0.0"}},
+                                  "start": "long_run", "shape_rows": 2520, "returns": "log", "scale": "sd", "ruin": "absorb",
+                                  "qse": "ca8c0445a56712c92dc028e68845b94963fdd590", "arch": "8.0.0"}},
             "copula": {"status": ..., "method": {"name": "vine_copula_fhs", "families": [...], "truncation": 5,
                                                  "margins": "empirical", "pyvinecopulib": "x.y.z", ...}}},
 "range_default": "replay",
