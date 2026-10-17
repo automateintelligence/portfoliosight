@@ -1,5 +1,7 @@
-// Every user-facing string of spec 3.6 and 3.7. `plain` is what the page shows by default;
-// `technical` appears only behind the details toggle. Formatting helpers live in format.ts.
+// Every user-facing string of spec 3.6 and 3.7 and of the engines spec 6 copy table. `plain` is
+// what the page shows by default; `technical` appears only behind the details toggle.
+// Formatting helpers live in format.ts.
+import type { EngineId } from "./state/url";
 
 export const plain = {
   wordmark: "PortfolioSight",
@@ -82,7 +84,42 @@ export const plain = {
   allSetAside: "The mix you entered uses only funds set aside in this view",
   lowRisk: "there is little risk here, but it may all be in one place",
   chips: { funds: "Funds & amounts", trades: "Trades", stress: "Stress tests", settings: "Settings" },
+  /** The Settings control that picks how the one-year ranges are simulated (engines spec 6). */
+  simulation: "Simulation",
+  /** Marks the engine the tensor calls its default in the Simulation control. */
+  engineDefault: "default",
+  /** Details: the sentence about how the range is made, above the technical Method line. */
+  howRangeIsMade: "How the range is made",
 } as const;
+
+/** The three simulations by name: the control's labels and, unchanged, the small tag beside the figures. */
+export const engineNames: Record<EngineId, string> = {
+  replay: "History replay",
+  garch: "Volatility model",
+  copula: "Copula",
+};
+
+/** One line under each name in the Simulation control. */
+export const engineDescriptions: Record<EngineId, string> = {
+  replay: "replays runs of real days from this history window",
+  garch: "fitted volatility clustering and fat tails; funds' shocks replayed together from up to ten years",
+  copula: "fitted dependence between funds, including joint bad days the history does not contain",
+};
+
+/** Details, in plain words: how each engine other than History replay makes the range (History replay says nothing new). */
+export const enginePlain: Record<Exclude<EngineId, "replay">, string> = {
+  garch: "Fitted volatility and fat tails per fund; funds' shocks replayed together from up to ten years; centred and scaled to this view's expected return and risk",
+  copula: "As the volatility model, with the funds' co-movement fitted, including joint bad days beyond those in the history",
+};
+
+/** Shown in the Simulation control for an engine of a tensor that says nothing about it (a tensor from before engines). */
+export const notComputed = "not computed for this menu";
+
+/** Volatility held at a constant level for the funds whose fit was not used (engines spec 6, copy table). */
+export const heldConstantLine = (funds: string[]) => `Volatility held constant: ${funds.join(", ")}`;
+export const heldConstantWhy = "near-constant (daily sd < 0.03%) or fewer than 252 days";
+/** The days all funds share in the pool the volatility model draws its shocks from. */
+export const poolLine = (rows: number) => `funds' shocks replayed together from ${rows.toLocaleString("en-US")} shared days`;
 
 export const technical = {
   xAxis: "Standard deviation of yearly return",
@@ -118,6 +155,27 @@ export const technical = {
     "The word tells you how evenly this mix's risk is shared out. We look at how many truly different kinds of investment are carrying the risk, and compare that with the most spread-out mix these funds can make. Good: at least three-quarters as spread out as that best mix. Average: at least half. Fair: at least 30%. Poor: less than that, so one or two holdings carry most of the risk.",
   cellPlace: (risk: string, floor: string) => `At risk ${risk}, earning at least ${floor}`,
 } as const;
+
+/** What the tensor's method block says about an engine, for the technical lines. */
+export type MethodFacts = { shapeRows: number; paths: number; horizonDays: number };
+
+/** The "Method" line's range sentence, per engine (engines spec 6, copy table). History replay: as before. */
+export const engineTechnical: Record<EngineId, (method: MethodFacts, constant: string[]) => string> = {
+  replay: () => technical.resultStrip,
+  garch: (m, constant) =>
+    `GARCH(1,1)-t per fund on up to ${m.shapeRows.toLocaleString("en-US")} days, joint filtered historical simulation (whole residual rows), long-run variance start, ${m.paths.toLocaleString("en-US")} × ${m.horizonDays}-day paths; mean and volatility rescaled to the lookback's μ, σ${constant.length > 0 ? `; constant volatility for: ${constant.join(", ")}` : ""}`,
+  copula: () =>
+    "R-vine copula on the residuals' pseudo-observations (BIC family selection, truncated at tree 5), Student-t margins with the fitted ν (empirical where ν < 2.5); shocks drawn from the copula into the same GARCH recursion",
+};
+
+/** The risk slider's technical line, per engine. History replay: as before. */
+export const engineRiskSliderTechnical: Record<EngineId, string> = {
+  replay: technical.riskSlider,
+  garch:
+    "2.5th percentile and median of the frontier mix's one-year return over 2,000 one-year paths of the volatility model (fitted GARCH(1,1)-t, shocks replayed together), centred and scaled to the mix's expected return and risk",
+  copula:
+    "2.5th percentile and median of the frontier mix's one-year return over 2,000 one-year paths of the copula model (R-vine copula shocks in the fitted volatility recursion), centred and scaled to the mix's expected return and risk",
+};
 
 export const disclaimer =
   "PortfolioSight is an educational tool. All figures are mathematical results computed from historical prices and are hypothetical; past performance does not predict future results. Nothing here is investment, tax or legal advice, and no output is a recommendation to buy or sell anything. PortfolioSight is not registered with the SEC, FINRA or any other regulator. You remain solely responsible for your decisions. Price data: Tiingo and tsp.gov.";
@@ -166,6 +224,8 @@ export const lookbackShort: Record<string, string> = {
 export const forbiddenDefault = [
   "bets", "knee", "Sharpe", "tangency", "covariance", "sigma", "quantile", "significant",
   "you should", "we recommend", "Risk Number", "Risk Score",
+  // the engines spec 6: the simulations are named plainly; the technical names stay behind details
+  "GARCH", "vine", "residual", "expected shortfall", "entropy",
 ] as const;
 
 // ── Sentence builders (all default copy) ─────────────────────────────────────
