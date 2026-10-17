@@ -322,6 +322,7 @@ def test_artifact_round_trips_through_json_and_npy_to_the_same_bytes(artifact):
     sim = simulate_panel(artifact)
     assert simulate_panel(back).tobytes() == sim.tobytes()
     assert doc["nu"][2] is None and doc["pool_rows"] == 200 and doc["name"] == "garch_t_fhs"
+    assert artifact.returns == back.returns == doc["returns"] == "log"  # the fit's own space
     # what does not belong together is refused, never repaired
     pool = pool_from_bytes(data)
     tampered = np.array(pool)
@@ -336,6 +337,9 @@ def test_artifact_round_trips_through_json_and_npy_to_the_same_bytes(artifact):
         artifact_from_json({**doc, "mu": doc["mu"][:-1]}, pool)
     with pytest.raises(ValueError, match="not a volatility model"):
         artifact_from_json({**doc, "name": "copula"}, pool)
+    for stale in ({k: v for k, v in doc.items() if k != "returns"}, {**doc, "returns": "simple"}):
+        with pytest.raises(ValueError, match="returns"):  # a fit in another space is not this one
+            artifact_from_json(stale, pool)
     objects = io.BytesIO()
     np.save(objects, np.array([{"a": 1}], dtype=object), allow_pickle=True)
     with pytest.raises(ValueError):

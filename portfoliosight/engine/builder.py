@@ -49,6 +49,7 @@ from .ranges import (
     range_model,
 )
 from .shape import (
+    RETURNS,
     GarchArtifact,
     fit_shape,
     garch_method,
@@ -280,10 +281,11 @@ def _build(inputs: TensorInputs, workers: int) -> BuildResult:
     if "garch" in engines:  # fitted before the ladders: a history it cannot use fails at once
         panel = shape_panel(frame, included, asof)
         given = inputs.garch_artifact
-        reuse = (  # the same panel, guarded with the same splice dates: the guard has run on it
+        reuse = (  # the same panel, guarded with the same splice dates, fitted in the same space
             given is not None
             and given.sample_sha256 == panel.sample_sha256
             and given.splice_dates == guarded_splice_dates(included, inputs.splice_dates)
+            and given.returns == RETURNS
         )
         artifact = given if reuse else fit_shape(panel, inputs.splice_dates)
     basis = torsion_basis(moments.cov)

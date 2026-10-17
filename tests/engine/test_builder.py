@@ -1099,6 +1099,11 @@ def test_a_fit_is_reused_only_for_its_own_panel(monkeypatch):
     other = build_tensor(_tsp_like_inputs(garch_artifact=fixture_artifact(), **SMALL_BOTH))
     assert len(calls) == 2 and list(calls[1][0].frame.columns) == TSP_LIKE  # not this menu's
     assert [fund["id"] for fund in other["shape"]["funds"]] == TSP_LIKE
+    stale = dataclasses.replace(fixture_artifact(), returns="simple")  # fitted in simple returns
+    refit = build_tensor_full(fixture_inputs("5y", garch_artifact=stale, **SMALL_BOTH))
+    assert len(calls) == 3 and refit.artifacts["garch"] is not stale
+    assert refit.artifacts["garch"].returns == "log"
+    assert _without_telemetry(refit.tensor) == _without_telemetry(reused)
 
 
 def test_a_fit_is_reused_only_under_the_splice_dates_it_was_guarded_with(

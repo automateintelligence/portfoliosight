@@ -123,6 +123,7 @@ class GarchArtifact:
     unavailable_reason: str | None
     qse: str  # the QSE commit the fit ran on
     arch: str  # the `arch` version the fit ran on
+    returns: str  # the space the fit and its pool are in: `RETURNS`
 
 
 def shape_panel(returns: pd.DataFrame, included: Sequence[str], asof) -> ShapePanel:
@@ -203,6 +204,7 @@ def fit_shape(panel: ShapePanel, splice_dates: Mapping[str, str] | None = None) 
         unavailable_reason=reason,
         qse=qse_commit(),
         arch=_arch_version(),
+        returns=RETURNS,
     )
 
 
@@ -265,13 +267,17 @@ def artifact_to_json(artifact: GarchArtifact) -> dict:
         "unavailable_reason": artifact.unavailable_reason,
         "qse": artifact.qse,
         "arch": artifact.arch,
+        "returns": artifact.returns,
     }
 
 
 def artifact_from_json(doc: Mapping, pool: np.ndarray | None) -> GarchArtifact:
-    """The artifact `artifact_to_json` described, with its pool; refuses a pool not its own."""
+    """The artifact `artifact_to_json` described, with its pool; refuses a pool not its own, and
+    a fit in another space than `RETURNS` (one written before the fit moved to log returns)."""
     if doc.get("name") != METHOD_NAME:
         raise ValueError(f"not a volatility model artifact: {doc.get('name')!r}")
+    if doc.get("returns") != RETURNS:
+        raise ValueError(f"an artifact's returns must be {RETURNS!r}, not {doc.get('returns')!r}")
     funds = tuple(str(fund) for fund in doc["funds"])
     arrays = {name: _array(doc[name]) for name in _PARAMETERS}
     lists = {name: list(doc[name]) for name in ("status", "messages", "n_obs")}
@@ -307,6 +313,7 @@ def artifact_from_json(doc: Mapping, pool: np.ndarray | None) -> GarchArtifact:
         unavailable_reason=doc["unavailable_reason"],
         qse=str(doc["qse"]),
         arch=str(doc["arch"]),
+        returns=RETURNS,
     )
 
 
