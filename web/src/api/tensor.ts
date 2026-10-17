@@ -2,6 +2,10 @@
 // portfoliosight/engine/tensor.schema.json, plus the array sizes a JSON Schema cannot express.
 // Weights and the shipped frontier curve are not re-checked here: the builder guarantees them
 // to the 4.11 tolerances and the page recomputes every statistic from the moments.
+// Schema 3 (simulation engines spec 7) adds `engines`, `range_default`, `shape` and the
+// per-engine `ranges` blocks; schema 2 documents, which have none of them, are still read, so
+// a backend rolled back to engine 0.2.0 never breaks the page. Nothing on the page reads the
+// new blocks yet.
 import { z } from "zod";
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -19,8 +23,72 @@ const range = <T extends z.ZodType>(of: T) =>
   z.strictObject({ bad: of, typical: of, good: of, normal: z.strictObject({ low: of, mid: of, high: of }) });
 const unitVector = z.array(z.number().min(0).max(1)).min(2);
 
+// One engine's own figures (schema 3): bad / typical / good only; the normal range is the same
+// for every engine and lives in the kept `range` blocks. History replay is always there.
+export const ENGINE_IDS = ["replay", "garch", "copula"] as const;
+const figures = <T extends z.ZodType>(of: T) => z.strictObject({ bad: of, typical: of, good: of });
+const byEngine = <T extends z.ZodType>(block: T) => z.strictObject({ replay: block, garch: block.optional(), copula: block.optional() });
+const frontierFigures = z.strictObject({ s_safe: z.number().min(0), bad: vector, typical: vector, good: vector });
+
+const replayMethod = z.strictObject({
+  name: text,
+  horizon_days: z.int().min(1),
+  paths: z.int().min(1),
+  mean_block_days: z.int().min(1),
+  percentiles: z.array(z.number()).length(3),
+  percentile_method: z.literal("linear"),
+  seed: z.int(),
+});
+const garchMethod = z.strictObject({
+  name: z.literal("garch_t_fhs"),
+  paths: z.int().min(1),
+  horizon_days: z.int().min(1),
+  seed: z.int(),
+  start: z.literal("long_run"),
+  shape_rows: z.int().min(1),
+  qse: z.string().regex(/^[0-9a-f]{7,40}$/),
+  arch: text,
+});
+// An engine is ready with a method and no reason, or unavailable with a reason and no method.
+const status = z.enum(["ready", "unavailable"]);
+const statusRule = (e: { status: string; reason: string | null; method: unknown }) =>
+  e.status === "ready" ? e.reason === null && e.method !== null : e.reason !== null && e.method === null;
+const statusMessage = { message: "a ready engine has a method and no reason; an unavailable one a reason and no method" };
+const engines = z.strictObject({
+  replay: z.strictObject({ status: z.literal("ready"), reason: z.null(), method: replayMethod }),
+  garch: z.strictObject({ status, reason: text.nullable(), method: garchMethod.nullable() }).refine(statusRule, statusMessage),
+  // the copula's method fields arrive with the engine
+  copula: z.strictObject({ status, reason: text.nullable(), method: z.strictObject({ name: text }).nullable() }).refine(statusRule, statusMessage),
+});
+const shape = z.strictObject({
+  rows: z.int().min(2),
+  start: date,
+  end: date,
+  sample_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  pool_rows: z.int().min(0),
+  funds: z
+    .array(
+      z.strictObject({
+        id: text,
+        status: z.enum(["garch", "near_constant", "fit_failed", "non_stationary", "insufficient_history"]),
+        rows: z.int().min(2),
+        mu: z.number(),
+        omega: z.number().min(0),
+        alpha: z.number().min(0),
+        beta: z.number().min(0),
+        nu: optional,
+        long_run_sigma_annual: z.number().min(0),
+        margin: z.enum(["empirical", "zero"]).nullable(),
+      }),
+    )
+    .min(2),
+  outliers: z.array(z.strictObject({ id: text, date, z: z.number() })),
+  lower_tail_5pct: matrix.nullable(),
+  tree_loglik_share: z.array(z.number()).min(1).nullable(),
+});
+
 const schema = z.strictObject({
-  schema: z.literal(2),
+  schema: z.union([z.literal(2), z.literal(3)]),
   engine_version: z.string().regex(/^[0-9]+(\.[0-9]+)*$/),
   generation: z.string().regex(/^\d{4}-\d{2}-\d{2}-[0-9.]+$/),
   built_at: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/),
@@ -70,7 +138,7 @@ const schema = z.strictObject({
     max: vector,
     rule: z.literal("max(0.25, 3/N)"),
   }),
-  frontier: z.strictObject({ x: vector, y: vector, w: matrix, s_safe: z.number().min(0), range: range(vector) }),
+  frontier: z.strictObject({ x: vector, y: vector, w: matrix, s_safe: z.number().min(0), range: range(vector), ranges: byEngine(frontierFigures).optional() }),
   ladder: z.strictObject({
     y: matrix,
     z: matrix,
@@ -83,6 +151,7 @@ const schema = z.strictObject({
     t_suggested: unitVector,
     y_suggested: vector,
     range: range(matrix),
+    ranges: byEngine(figures(matrix)).optional(),
   }),
   grid: z.strictObject({
     y: vector,
@@ -93,16 +162,13 @@ const schema = z.strictObject({
     w_div: matrix,
     y_sug: vector,
   }),
-  entered: z.strictObject({ w: vector, set_aside: z.number().min(0).max(1), range: range(z.number()) }).nullable(),
-  range_method: z.strictObject({
-    name: text,
-    horizon_days: z.int().min(1),
-    paths: z.int().min(1),
-    mean_block_days: z.int().min(1),
-    percentiles: z.array(z.number()).length(3),
-    percentile_method: z.literal("linear"),
-    seed: z.int(),
-  }),
+  entered: z
+    .strictObject({ w: vector, set_aside: z.number().min(0).max(1), range: range(z.number()), ranges: byEngine(figures(z.number())).optional() })
+    .nullable(),
+  range_method: replayMethod,
+  engines: engines.optional(),
+  range_default: z.enum(ENGINE_IDS).optional(),
+  shape: shape.nullable().optional(),
   enb_ref: z.number().min(1),
   stress: z.strictObject({ gfc2008: stressWindow, covid2020: stressWindow, rates2022: stressWindow }),
   notes: z.array(text),
@@ -166,8 +232,54 @@ function sizeErrors(t: Tensor): string[] {
   return errors;
 }
 
+/** What schema 3 adds, present exactly in a schema 3 document, consistent and of the right sizes. */
+function engineErrors(t: Tensor): string[] {
+  const added: [string, unknown][] = [
+    ["engines", t.engines],
+    ["range_default", t.range_default],
+    ["shape", t.shape],
+    ["frontier.ranges", t.frontier.ranges],
+    ["ladder.ranges", t.ladder.ranges],
+  ];
+  if (t.entered !== null) added.push(["entered.ranges", t.entered.ranges]);
+  if (t.schema === 2) return added.filter(([, value]) => value !== undefined).map(([name]) => `a schema 2 tensor has no ${name}`);
+  const missing = added.filter(([, value]) => value === undefined).map(([name]) => `a schema 3 tensor carries ${name}`);
+  if (missing.length > 0 || !t.engines || !t.frontier.ranges || !t.ladder.ranges || t.shape === undefined) return missing;
+
+  const errors: string[] = [];
+  const n = t.universe.funds.length;
+  const nx = t.frontier.x.length;
+  const levels = t.ladder.y[0]?.length ?? 0;
+  const ready = ENGINE_IDS.filter((id) => t.engines?.[id].status === "ready");
+  const carried = (block: Partial<Record<(typeof ENGINE_IDS)[number], unknown>>) => ENGINE_IDS.filter((id) => block[id] !== undefined);
+  const blocks: [string, Partial<Record<(typeof ENGINE_IDS)[number], unknown>>][] = [
+    ["frontier.ranges", t.frontier.ranges],
+    ["ladder.ranges", t.ladder.ranges],
+  ];
+  if (t.entered?.ranges) blocks.push(["entered.ranges", t.entered.ranges]);
+  for (const [name, block] of blocks) {
+    if (carried(block).join() !== ready.join()) errors.push(`${name} carries ${carried(block).join(", ")}, the ready engines are ${ready.join(", ")}`);
+  }
+  if (t.range_default !== undefined && !ready.includes(t.range_default)) errors.push(`range_default ${t.range_default} is not a ready engine`);
+  if (t.engines.garch.status === "ready" && t.shape === null) errors.push("a ready volatility model comes with its shape");
+  for (const id of ENGINE_IDS) {
+    const front = t.frontier.ranges[id];
+    const ladder = t.ladder.ranges[id];
+    for (const name of ["bad", "typical", "good"] as const) {
+      if (front && front[name].length !== nx) errors.push(`frontier.ranges.${id}.${name} has ${front[name].length} entries, expected ${nx}`);
+      if (ladder && (ladder[name].length !== nx || ladder[name].some((row) => row.length !== levels))) {
+        errors.push(`ladder.ranges.${id}.${name} is not ${nx} columns of ${levels} levels`);
+      }
+    }
+    if (front && front.s_safe > nx - 1) errors.push(`frontier.ranges.${id}.s_safe ${front.s_safe} is beyond the last column`);
+  }
+  if (t.shape && t.shape.funds.length !== n) errors.push(`shape.funds has ${t.shape.funds.length} entries, expected ${n}`);
+  return errors;
+}
+
 const tensor = schema.superRefine((value, ctx) => {
-  for (const message of sizeErrors(value)) ctx.addIssue({ code: "custom", message });
+  const sizes = sizeErrors(value);
+  for (const message of sizes.length > 0 ? sizes : engineErrors(value)) ctx.addIssue({ code: "custom", message });
 });
 
 /** Validates a tensor document (spec 7) and returns it typed; throws a `ZodError` on a bad one. */

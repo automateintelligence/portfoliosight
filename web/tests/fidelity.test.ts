@@ -141,11 +141,22 @@ const nodeMix = (rows: number[][], s: number) => {
 };
 
 describe("parseTensor", () => {
-  // every object of the JSON Schema, located at one place in a tensor
-  type SchemaNode = { $ref?: string; type?: string; required?: string[]; properties?: Record<string, SchemaNode>; items?: SchemaNode; additionalProperties?: boolean };
+  // every object of the JSON Schema, located at one place in a tensor (a nullable object by its
+  // object branch); those the fixture does not hold (an engine it does not carry) are left out
+  type SchemaNode = {
+    $ref?: string;
+    type?: string;
+    required?: string[];
+    properties?: Record<string, SchemaNode>;
+    items?: SchemaNode;
+    additionalProperties?: boolean;
+    anyOf?: SchemaNode[];
+  };
   function objects(node: SchemaNode, at: Path = [], out: { at: Path; required: string[] }[] = []) {
     const resolved: SchemaNode = node.$ref ? SCHEMA.$defs[node.$ref.split("/").pop() as string] : node;
-    if (resolved.type === "object") {
+    if (resolved.anyOf) {
+      for (const option of resolved.anyOf) objects(option, at, out);
+    } else if (resolved.type === "object") {
       expect(resolved.additionalProperties, `schema object at ${at.join(".")}`).toBe(false);
       out.push({ at, required: resolved.required ?? [] });
       for (const [key, child] of Object.entries(resolved.properties ?? {})) objects(child, [...at, key], out);
@@ -154,7 +165,8 @@ describe("parseTensor", () => {
     }
     return out;
   }
-  const OBJECTS = objects(SCHEMA);
+  const held = (at: Path) => at.reduce<unknown>((node, key) => (node == null ? undefined : (node as Node)[key]), withAside()) != null;
+  const OBJECTS = objects(SCHEMA).filter(({ at }) => held(at));
 
   it("returns the fixture unchanged and leaves its input alone", () => {
     const input = clone();
@@ -180,7 +192,7 @@ describe("parseTensor", () => {
         checked += 1;
       }
     }
-    expect(OBJECTS.length).toBe(21);
+    expect(OBJECTS.length).toBe(41);
     expect(checked).toBeGreaterThan(70);
   });
 
@@ -190,7 +202,8 @@ describe("parseTensor", () => {
 
   it("refuses values outside the JSON Schema's types, enums, patterns and limits", () => {
     const bad: [Path, unknown][] = [
-      [["schema"], 3],
+      [["schema"], 4],
+      [["schema"], 1],
       [["engine_version"], "v0.1"],
       [["generation"], "2026-10-12"],
       [["built_at"], "2026-10-13 12:18:20"],
@@ -231,6 +244,19 @@ describe("parseTensor", () => {
       [["enb_ref"], 0.5],
       [["stress", "covid2020", "r", 0], "n/a"],
       [["stress", "covid2020", "label"], ""],
+      [["engines", "garch", "status"], "maybe"],
+      [["engines", "garch", "method", "qse"], "CA8C0445"],
+      [["engines", "copula", "reason"], ""],
+      [["range_default"], "other"],
+      [["frontier", "ranges", "garch", "bad", 3], null],
+      [["frontier", "ranges", "garch", "s_safe"], -1],
+      [["ladder", "ranges", "garch", "good", 3, 1], "high"],
+      [["entered", "ranges", "garch", "typical"], "5%"],
+      [["shape", "pool_rows"], -1],
+      [["shape", "rows"], 2520.5],
+      [["shape", "funds", 0, "status"], "fine"],
+      [["shape", "funds", 0, "margin"], "parametric"],
+      [["shape", "funds", 0, "nu"], "4.5"],
       [["notes"], [""]],
       [["notes"], "none"],
     ];
