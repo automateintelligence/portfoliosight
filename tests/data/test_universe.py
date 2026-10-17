@@ -70,11 +70,11 @@ def test_tier2_is_appendix_a_with_income_tags():
 def test_tier3_is_the_qse_core_list_then_the_qse_portfoliosight_list():
     tiers = universe.load_tiers()
     core, added = _file_symbols(QSE_CORE), _file_symbols(QSE_PORTFOLIOSIGHT)
-    assert len(core) == 1038 and len(added) == 358 == len(set(added))
+    assert len(core) == 1038 and len(added) == 356 == len(set(added))
     assert not set(core) & set(added)
     assert list(tiers.tier3) == core + added
     overlap = set(tiers.tier3) & set(tiers.tier2)
-    assert len(tiers.tier3_only()) == 1038 + 358 - len(overlap)
+    assert len(tiers.tier3_only()) == 1038 + 356 - len(overlap)
     assert not set(tiers.tier3_only()) & set(tiers.tier2)
     assert {"VTI", "SGOV", "AGG", "IWB"} <= overlap  # IWB is in the added list and in tier 2
     assert list(tiers.tier3_only()[-3:]) == ["XRAY", "YETI", "ZION"]

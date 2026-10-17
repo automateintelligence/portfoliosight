@@ -1,3 +1,4 @@
+# Copy of qse/config/universes/datalake_portfoliosight.txt at QSE commit 2b5e3c5 (356 symbols).
 ADC
 AEIS
 AFG
@@ -179,7 +180,6 @@ KNF
 KNSL
 KNX
 KRC
-KRG
 KTOS
 LAD
 LAMR
@@ -257,7 +257,6 @@ PSN
 PVH
 QLYS
 R
-RBA
 RBC
 REXR
 RGA
