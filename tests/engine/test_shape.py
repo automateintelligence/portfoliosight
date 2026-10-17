@@ -419,13 +419,16 @@ def test_a_drop_of_the_whole_menu_on_the_splice_date_is_an_outlier_not_a_failure
     ]
 
 
-def test_a_splice_day_no_other_fund_traded_cannot_be_called_a_crash():
+def test_a_splice_day_no_other_fund_traded_is_an_outlier_not_a_failure():
+    """The build fails only when the move also sits more than 6 from the rest of the menu's
+    median; with no other fund's residual that day that cannot be shown, so it is recorded."""
     frame = _trio()
     frame.iloc[400, 0] = -0.30
     frame.iloc[400, 1:] = np.nan  # the rest of the menu has no return that day
-    with pytest.raises(ShapeError) as caught:
-        fit_shape(shape_panel(frame, ["A", "B", "C"], frame.index[-1]), {"A": _day(frame, 400)})
-    assert caught.value.fund == "A" and "no other fund" in str(caught.value)
+    day = _day(frame, 400)
+    fitted = fit_shape(shape_panel(frame, ["A", "B", "C"], frame.index[-1]), {"A": day})
+    assert [(o["id"], o["date"]) for o in fitted.outliers] == [("A", day)]
+    assert fitted.outliers[0]["z"] < -OUTLIER_Z and fitted.splice_dates == (("A", day),)
 
 
 def test_method_block_names_the_pinned_code(artifact):

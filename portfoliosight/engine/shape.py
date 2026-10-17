@@ -347,8 +347,8 @@ def _guard(panel: ShapePanel, z: np.ndarray, splice_dates: Sequence[tuple[str, s
 
     A missing corporate action is the fund's alone; a crash moves the menu. So a fund whose
     residual on its own splice date exceeds 6 and sits more than 6 from the median of the other
-    funds that day fails, and so does one that no other fund traded beside; every other large
-    residual is recorded and fails nothing.
+    funds' residuals that day fails. Every other large residual is recorded and fails nothing,
+    including one on a splice date no other fund has a residual for: nothing shows it apart.
     """
     funds = [str(fund) for fund in panel.frame.columns]
     days = [stamp.date().isoformat() for stamp in panel.frame.index]
@@ -362,13 +362,14 @@ def _guard(panel: ShapePanel, z: np.ndarray, splice_dates: Sequence[tuple[str, s
             continue
         others = np.delete(z[row], n)
         others = others[np.isfinite(others)]
-        where = f"{fund} moved {own:+.1f} standard deviations on {day}, the day its price history"
-        if others.size == 0:
-            message = f"{where} was spliced, and no other fund of the menu traded that day"
-            raise ShapeError(f"{message}: the history may miss a corporate action", fund, day)
+        if others.size == 0:  # the second condition cannot be shown: recorded below
+            continue
         centre = float(np.median(others))
         if abs(own - centre) > OUTLIER_Z:
-            message = f"{where} was spliced, while the rest of the menu moved {centre:+.1f}"
+            message = (
+                f"{fund} moved {own:+.1f} standard deviations on {day}, the day its price history "
+                f"was spliced, while the rest of the menu moved {centre:+.1f}"
+            )
             raise ShapeError(f"{message}: the history may miss a corporate action", fund, day)
     large = np.argwhere(np.abs(z) > OUTLIER_Z)  # a missing residual is never large
     return [{"id": funds[n], "date": days[row], "z": float(z[row, n])} for row, n in large]
