@@ -108,6 +108,8 @@ def _old_generation(store, generation: str, *, complete: bool = True) -> None:
     if complete:
         store_mod.put_json(store, f"meta/{generation}/presets.json", {"generation": generation})
     store.put(f"tensors/{generation}/{'ab' * 8}/5y.json", b"{}")
+    store.put(f"models/{generation}/{'cd' * 8}/garch.json", b"{}")
+    store.put(f"models/{generation}/{'cd' * 8}/pool.npy", b"")
 
 
 @pytest.fixture
@@ -142,6 +144,7 @@ def test_interrupted_run_publishes_nothing_and_the_rerun_resumes(unpublished, ge
     meta = store_mod.get_json(store, f"meta/{generation}/generation.json")
     assert meta["generation"] == generation and meta["asof"] == d_g.isoformat()
     assert meta["engine_version"] == ENGINE_VERSION and meta["bounds_rule"] == "max(0.25, 3/N)"
+    assert meta["engines"] == ["replay", "garch"]  # what the presets compute (PS_ENGINES)
     assert meta["lookbacks"]["ew"] == {"rows": 1260, "ew_halflife_days": 252}
     assert meta["lookbacks"]["1y"] == {"rows": 252, "ew_halflife_days": None}
     assert meta["created_at"].startswith("2026-10-13T09:00")
@@ -168,8 +171,9 @@ def test_interrupted_run_publishes_nothing_and_the_rerun_resumes(unpublished, ge
         for preset in presets["presets"]
         for entry in preset["lookbacks"].values()
     )
-    # The generation before the previous one is gone; the previous one is whole.
+    # The generation before the previous one is gone, its models too; the previous one is whole.
     assert store.list(f"meta/{old}/") == [] and store.list(f"tensors/{old}/") == []
+    assert store.list(f"models/{old}/") == [] and len(store.list(f"models/{previous}/")) == 2
     assert len(store.list(f"meta/{previous}/") + store.list(f"tensors/{previous}/")) == 3
     assert store_mod.get_json(store, "meta/previous.json") == {
         "current": generation,
@@ -412,6 +416,24 @@ def test_generations_are_ordered_by_date_then_version(tmp_path):
     assert nightly.stored_generations(store) == ["2026-10-12-0.2.0", "2026-10-12-0.10.0"]
     assert store.exists("meta/manifest.json")
     assert store.exists("tensors/not-a-generation/x/1y.json")
+    assert store.list("models/") == [
+        f"models/{name}/{'cd' * 8}/{file}"
+        for name in ("2026-10-12-0.10.0", "2026-10-12-0.2.0")
+        for file in ("garch.json", "pool.npy")
+    ]
+
+
+def test_a_generation_left_only_as_models_is_found_and_pruned(tmp_path):
+    """A run that stored a fit and died before any tensor still leaves its generation."""
+    store = store_mod.LocalStore(tmp_path)
+    current = "2026-10-12-0.3.0"
+    _old_generation(store, current)
+    store.put(f"models/2026-10-08-0.3.0/{'ef' * 8}/garch.json", b"{}")
+    assert nightly.stored_generations(store) == ["2026-10-08-0.3.0", current]
+    store_mod.put_json(store, "meta/previous.json", {"current": current, "previous": None})
+    assert nightly.prune_generations(store, current) == ["2026-10-08-0.3.0"]
+    assert store.list("models/2026-10-08-0.3.0/") == []
+    assert len(store.list(f"models/{current}/")) == 2
 
 
 def test_nothing_is_pruned_without_a_record_of_the_previous_generation(tmp_path):
@@ -446,6 +468,8 @@ def test_a_pinned_generation_is_never_pruned(tmp_path):
     store_mod.put_json(store, "meta/pinned.json", {"generations": ["2026-10-08-0.1.0"]})
     assert nightly.pinned_generations(store) == {"2026-10-08-0.1.0"}
     assert nightly.prune_generations(store, current) == ["2026-10-09-0.1.0"]
+    assert len(store.list("models/2026-10-08-0.1.0/")) == 2  # a pin keeps its models
+    assert store.list("models/2026-10-09-0.1.0/") == []
     assert nightly.stored_generations(store) == [
         "2026-10-08-0.1.0",
         "2026-10-11-0.1.0",
@@ -554,6 +578,14 @@ def test_entry_point_publishes_real_tensors_offline(unpublished, generation, mon
     status = store_mod.get_json(store, "meta/status.json")
     assert status["published"] is True and status["finished"]
     assert status["preset_tensors_built"] == {"guide2017": 6, "tsp": 6}
+    # One volatility model per fund set: every view of a preset shares its fit (engines spec 7).
+    shapes = {
+        json.loads(store.get(key))["shape"]["sample_sha256"][:16]
+        for key in _expected_keys(generation)
+    }
+    models = store.list(f"models/{generation}/")
+    assert len(shapes) == 2 and {key.split("/")[2] for key in models} == shapes
+    assert len(models) == 4  # a pool and its description each
     # The recorded tsp.gov slice ends in March: the L funds it adds are behind, not a failure.
     catalog = manifest_mod.load_manifest(store).symbols
     assert catalog["TSP-L2030"].status == "stale" and catalog["TSP-G"].status == "ok"
@@ -573,6 +605,8 @@ def test_entry_point_publishes_real_tensors_offline(unpublished, generation, mon
         {"PS_NIGHTLY_DEADLINE_MINUTES_BEFORE_NEXT": "soon"},
         {"PS_NIGHTLY_DEADLINE_MINUTES_BEFORE_NEXT": "1440"},
         {"PS_NIGHTLY_DEADLINE_MINUTES_BEFORE_NEXT": "-5"},
+        {"PS_ENGINES": "garch"},
+        {"PS_ENGINES_CUSTOM": "replay,copula"},
     ],
 )
 def test_entry_point_refuses_a_bad_environment(unpublished, monkeypatch, capsys, env):
@@ -691,3 +725,12 @@ def test_a_new_symbol_whose_record_write_fails_gets_no_entry(unpublished):
     )
     assert report.exit_code == 1 and report.errors[0]["symbol"] == "NEWF"
     assert "NEWF" not in manifest_mod.load_manifest(store).symbols
+
+
+def test_the_generation_records_the_engines_its_presets_compute(
+    unpublished, generation, monkeypatch
+):
+    monkeypatch.setenv("PS_ENGINES", "replay")
+    nightly.run(store=unpublished, now=NOW, providers=_providers(), build_fn=_FastBuild())
+    meta = store_mod.get_json(unpublished, f"meta/{generation}/generation.json")
+    assert meta["engines"] == ["replay"]
