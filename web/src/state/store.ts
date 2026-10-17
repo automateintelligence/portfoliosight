@@ -21,9 +21,10 @@ import {
 import type { Tensor } from "../api/tensor";
 import { linkTooManyFunds } from "../copy";
 import { amountsToWeights, amountsValue, percentTotal } from "../math/amounts";
+import { carries, resolveEngine, safeStart } from "../math/engines";
 import { portfolioMath } from "../math/portfolio";
 import { positionOfCeiling } from "../math/view";
-import { decode, encode, type UrlState } from "./url";
+import { decode, encode, ENGINES, type EngineId, type UrlState } from "./url";
 
 export type Unit = UrlState["unit"];
 export type LookbackId = UrlState["lookback"];
@@ -52,6 +53,8 @@ export type State = {
   t: number | "auto";
   theme: ThemeId;
   details: boolean;
+  /** The simulation engine the visitor chose; the tensor on screen carries it (`applyTensor` puts the default back when it does not). */
+  engine: EngineId;
   presets: PresetsBody | null;
   previewOn: boolean;
   /** This browser's access tier and menu limit (engines spec 6.2); public until `/api/tier` answers. */
@@ -83,6 +86,7 @@ export type Action =
   | { type: "selectPreset"; id: string }
   | { type: "setTheme"; theme: ThemeId }
   | { type: "setDetails"; details: boolean }
+  | { type: "setEngine"; engine: EngineId }
   | { type: "toggleGhost"; lookback: LookbackId }
   | { type: "loadGhosts" }
   | { type: "loadSymbols" }
@@ -136,6 +140,7 @@ export function toUrlState(state: State, haveR: boolean): UrlState {
     d: state.t,
     theme: state.theme,
     details: state.details,
+    engine: state.engine,
   };
 }
 
@@ -208,6 +213,7 @@ export function createStore(init: { search: string }): Store {
     t: url.d,
     theme: url.theme ?? storedTheme() ?? "ks-dark",
     details: url.details,
+    engine: url.engine,
     presets: null,
     previewOn: false,
     tier: PUBLIC_TIER,
@@ -306,7 +312,9 @@ export function createStore(init: { search: string }): Store {
 
   function applyTensor(tensor: Tensor, lookback: LookbackId) {
     const math = portfolioMath(tensor);
-    const domain = math.riskSliderDomain();
+    // The address names what the tensor on screen carries: an engine it does not carry is put back to its default.
+    const engine = resolveEngine(tensor, state.engine);
+    const domain = math.riskSliderDomain(engine);
     const clamp = (v: number) => Math.min(domain.s_max, Math.max(domain.s_safe, v));
     let s: number;
     let t = state.t;
@@ -327,6 +335,7 @@ export function createStore(init: { search: string }): Store {
     set({
       tensor,
       tensorLookback: lookback,
+      engine,
       s,
       t,
       rows: state.rows.map((r) => (r.name === r.id && names.has(r.id) ? { ...r, name: names.get(r.id) as string } : r)),
@@ -659,6 +668,22 @@ export function createStore(init: { search: string }): Store {
       case "setDetails":
         set({ details: action.details });
         return;
+      case "setEngine": {
+        // Everything is in the tensor: no request follows. The risk position is clamped into the
+        // engine's own domain, and a clamp moves the point, so the diversification position
+        // returns to suggested (as when a new tensor lands).
+        if (!ENGINES.includes(action.engine) || action.engine === state.engine) return;
+        const { tensor } = state;
+        if (!tensor) {
+          set({ engine: action.engine });
+          return;
+        }
+        if (!carries(tensor, action.engine)) return;
+        const lo = safeStart(tensor, action.engine);
+        const s = Math.min(tensor.frontier.x.length - 1, Math.max(lo, state.s));
+        set({ engine: action.engine, s, ...(Math.abs(s - state.s) > 1e-12 ? { t: "auto" as const } : {}) });
+        return;
+      }
       case "toggleGhost": {
         if (action.lookback === state.lookback || !LOOKBACKS.includes(action.lookback)) return;
         const on = state.ghosts.includes(action.lookback);

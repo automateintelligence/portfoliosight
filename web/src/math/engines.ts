@@ -23,3 +23,8 @@ export function engineReason(tensor: Tensor, id: EngineId): string | null {
 
 /** The engine a view reads: the one asked for when the tensor carries it, else the tensor's default. */
 export const resolveEngine = (tensor: Tensor, wanted: EngineId): EngineId => (carries(tensor, wanted) ? wanted : defaultEngine(tensor));
+
+/** The left end of the risk slider under `engine`: its own `s_safe` when the tensor carries one, else the kept `frontier.s_safe`. */
+export function safeStart(tensor: Tensor, engine: EngineId): number {
+  return engine === defaultEngine(tensor) ? tensor.frontier.s_safe : (tensor.frontier.ranges?.[engine]?.s_safe ?? tensor.frontier.s_safe);
+}

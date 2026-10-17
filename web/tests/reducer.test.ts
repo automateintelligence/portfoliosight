@@ -469,3 +469,135 @@ describe("store: staleness (expectation F13)", () => {
     expect((await boot("")).getState().staleness).toBeNull();
   });
 });
+
+describe("store: the simulation engine (engines spec 6)", () => {
+  const OLD = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "tests/tensor-schema2.json"), "utf8"));
+  // A tensor whose two engines have different slider domains whatever the fixture's numbers are.
+  const domains = (t: typeof RAW) => {
+    t.frontier.s_safe = 3;
+    t.frontier.ranges.replay.s_safe = 3;
+    t.frontier.ranges.garch.s_safe = 1;
+  };
+  const withoutGarch = (t: typeof RAW) => {
+    t.engines.garch = { status: "unavailable", reason: "not enough shared history for the volatility model", method: null };
+    delete t.frontier.ranges.garch;
+    delete t.ladder.ranges.garch;
+    delete t.entered.ranges.garch;
+  };
+  const serve = (patch: (t: typeof RAW) => void) => {
+    tensorRoute = (call) =>
+      call.method === "POST" ? json(200, { status: "ready", url: `/api/tensors/${G}/${H1}/${JSON.parse(call.body as string).lookback}` }) : json(200, tensorFor(call.path.split("/").pop() as string, patch));
+  };
+  const lastUrl = () => decode(new URL(replaced[replaced.length - 1], "https://portfoliosight.ai").search);
+
+  it("starts on replay, and an address that names an engine opens on it", async () => {
+    expect((await boot("")).getState().engine).toBe("replay");
+    expect((await boot("?u=guide2017&e=garch")).getState().engine).toBe("garch");
+    expect((await boot("?u=guide2017&e=foo")).getState().engine).toBe("replay");
+  });
+
+  it("setEngine writes e to the address, leaves it out for replay, and makes no request of any kind", async () => {
+    const store = await boot("?u=guide2017&r=30");
+    await advance(500);
+    const before = calls.length;
+    store.dispatch({ type: "setEngine", engine: "garch" });
+    expect(store.getState().engine).toBe("garch");
+    await advance(500);
+    expect(calls.length, "no request on an engine change").toBe(before);
+    expect(lastUrl().engine).toBe("garch");
+    expect(new URL(replaced[replaced.length - 1], "https://portfoliosight.ai").search).toMatch(/&e=garch$/);
+    store.dispatch({ type: "setEngine", engine: "replay" });
+    await advance(500);
+    expect(calls.length).toBe(before);
+    expect(new URL(replaced[replaced.length - 1], "https://portfoliosight.ai").searchParams.has("e")).toBe(false);
+  });
+
+  it("a reload reproduces the engine: the address of one store opens the next on the same engine and position", async () => {
+    const first = await boot("?u=guide2017&r=30.5&d=0.25");
+    first.dispatch({ type: "setEngine", engine: "garch" });
+    await advance(500);
+    const search = new URL(replaced[replaced.length - 1], "https://portfoliosight.ai").search;
+    const second = await boot(search);
+    expect(second.getState().engine).toBe("garch");
+    expect(second.getState().s).toBe(30.5);
+    expect(second.getState().t).toBe(0.25);
+  });
+
+  it("ignores an engine the page does not know, and one the tensor on screen does not carry", async () => {
+    const store = await boot("?u=guide2017");
+    store.dispatch({ type: "setEngine", engine: "copula" });
+    expect(store.getState().engine, "the fixture's copula is unavailable").toBe("replay");
+    store.dispatch({ type: "setEngine", engine: "vine" as never });
+    expect(store.getState().engine).toBe("replay");
+    serve(withoutGarch);
+    const bare = await boot("?u=guide2017");
+    bare.dispatch({ type: "setEngine", engine: "garch" });
+    expect(bare.getState().engine).toBe("replay");
+  });
+
+  it("a tensor that does not carry the engine puts the default back, and the address says so", async () => {
+    serve(withoutGarch);
+    const store = await boot("?u=guide2017&e=garch&r=30");
+    expect(store.getState().tensor).not.toBeNull();
+    expect(store.getState().engine).toBe("replay");
+    await advance(500);
+    expect(new URL(replaced[replaced.length - 1], "https://portfoliosight.ai").searchParams.has("e")).toBe(false);
+  });
+
+  it("a schema 2 tensor (a rollback generation) answers the default for every engine", async () => {
+    tensorRoute = (call) => (call.method === "POST" ? json(200, { status: "ready", url: `/api/tensors/${G}/${H1}/5y` }) : json(200, OLD));
+    for (const e of ["garch", "copula"]) {
+      const store = await boot(`?u=guide2017&e=${e}`);
+      expect(store.getState().tensor!.schema).toBe(2);
+      expect(store.getState().engine).toBe("replay");
+    }
+    const store = await boot("?u=guide2017");
+    store.dispatch({ type: "setEngine", engine: "garch" });
+    expect(store.getState().engine).toBe("replay");
+  });
+
+  it("switching lookback to a window whose tensor lacks the engine puts the default back", async () => {
+    const store = await boot("?u=guide2017&e=garch&r=30");
+    expect(store.getState().engine).toBe("garch");
+    serve(withoutGarch);
+    store.dispatch({ type: "setLookback", lookback: "1y" });
+    await flush();
+    await advance(500);
+    expect(store.getState().tensor!.lookback.id).toBe("1y");
+    expect(store.getState().engine).toBe("replay");
+  });
+
+  it("an engine switch clamps s into the engine's domain and sends t back to auto only when the clamp moved it", async () => {
+    serve(domains);
+    const store = await boot("?u=guide2017&e=garch&r=1.5&d=0.4");
+    expect(store.getState().s, "garch reaches further left").toBe(1.5);
+    expect(store.getState().t).toBe(0.4);
+    store.dispatch({ type: "setEngine", engine: "replay" });
+    expect(store.getState().s, "replay starts at 3").toBe(3);
+    expect(store.getState().t).toBe("auto");
+    store.dispatch({ type: "divSlider", t: 0.7 });
+    store.dispatch({ type: "setEngine", engine: "garch" });
+    expect(store.getState().s, "a wider domain moves nothing").toBe(3);
+    expect(store.getState().t).toBe(0.7);
+    store.dispatch({ type: "riskSlider", s: 20 });
+    store.dispatch({ type: "setEngine", engine: "replay" });
+    expect(store.getState().s).toBe(20);
+    expect(store.getState().t).toBe(0.7);
+  });
+
+  it("a shared link keeps the position the engine allows: r below replay's left end survives under garch", async () => {
+    serve(domains);
+    expect((await boot("?u=guide2017&e=garch&r=1.2")).getState().s).toBe(1.2);
+    expect((await boot("?u=guide2017&r=1.2")).getState().s).toBe(3);
+  });
+
+  it("an engine chosen before the tensor arrives is kept while it loads and judged when it lands", async () => {
+    const store = createStore({ search: "?u=guide2017" });
+    store.dispatch({ type: "setEngine", engine: "garch" });
+    expect(store.getState().engine).toBe("garch");
+    store.dispatch({ type: "start" });
+    await flush();
+    await advance(500);
+    expect(store.getState().engine).toBe("garch");
+  });
+});

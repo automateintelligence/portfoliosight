@@ -4,7 +4,7 @@
 // (`tensor.ladder`) and mirrors `interpolate` and `_ladder_mix` in portfoliosight/engine/surface.py.
 import type { Tensor } from "../api/tensor";
 import type { EngineId } from "../state/url";
-import { carries, defaultEngine } from "./engines";
+import { carries, defaultEngine, safeStart } from "./engines";
 
 export type Stats = { mu: number; sigma: number; enb: number };
 /** A one-year range (spec 4.9): the bad, typical and good year (2.5th, 50th, 97.5th percentiles). */
@@ -176,8 +176,7 @@ export function portfolioMath(tensor: Tensor): PortfolioMath {
   const domainOf = (engine: EngineId): Domain => {
     let domain = domains.get(engine);
     if (!domain) {
-      const own = engine === standard ? undefined : frontier.ranges?.[engine];
-      domain = { s_safe: own ? own.s_safe : frontier.s_safe, s_max: nx - 1 };
+      domain = { s_safe: safeStart(tensor, engine), s_max: nx - 1 };
       domains.set(engine, domain);
     }
     return domain;

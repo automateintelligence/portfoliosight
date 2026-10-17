@@ -1,12 +1,13 @@
-// URL codec (spec 8.1): the ten keys, their canonical order and formats, and the debounced write.
+// URL codec (spec 8.1, engines spec 6): the eleven keys, their canonical order and formats, and the debounced write.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LOOKBACKS, clampR, decode, encode, scheduleUrlWrite, writeUrl, type UrlState } from "../src/state/url";
+import { ENGINE_IDS } from "../src/api/tensor";
+import { ENGINES, LOOKBACKS, clampR, decode, encode, scheduleUrlWrite, writeUrl, type UrlState } from "../src/state/url";
 
-const EMPTY: UrlState = { preset: null, funds: [], unit: "pct", caps: [], lookback: "5y", ghosts: [], r: null, d: "auto", theme: null, details: false };
+const EMPTY: UrlState = { preset: null, funds: [], unit: "pct", caps: [], lookback: "5y", ghosts: [], r: null, d: "auto", theme: null, details: false, engine: "replay" };
 const GUIDE: UrlState = { ...EMPTY, preset: "guide2017" };
-const KEYS = ["u", "f", "unit", "c", "lb", "g", "r", "d", "t", "x"];
+const KEYS = ["u", "f", "unit", "c", "lb", "g", "r", "d", "t", "x", "e"];
 const keysOf = (search: string) => Array.from(new URLSearchParams(search).keys());
 const valueOf = (search: string, key: string) => new URLSearchParams(search).get(key);
 
@@ -28,6 +29,7 @@ describe("encode and decode", () => {
       d: 0.5,
       theme: null,
       details: true,
+      engine: "replay",
     });
     expect(encode(decode(custom))).toBe(custom);
   });
@@ -38,7 +40,7 @@ describe("encode and decode", () => {
     expect(encode({ ...EMPTY, unit: "pct", details: false, theme: null })).not.toMatch(/unit|x=|t=/);
   });
 
-  it("writes every key once, in the order u f unit c lb g r d t x", () => {
+  it("writes every key once, in the order u f unit c lb g r d t x e", () => {
     const state: UrlState = {
       preset: null,
       funds: [{ id: "VTI", amount: 60.5 }, { id: "TSP-L2030", amount: null }, { id: "BRK.B", amount: 0 }],
@@ -50,10 +52,11 @@ describe("encode and decode", () => {
       d: 0.25,
       theme: "ks-dark",
       details: true,
+      engine: "garch",
     };
-    expect(encode(state)).toBe("?f=VTI:60.5,TSP-L2030,BRK.B:0&unit=usd&c=VTI:5:40,BRK.B::&lb=10y&g=1y,ew&r=12.5&d=0.25&t=ks-dark&x=1");
+    expect(encode(state)).toBe("?f=VTI:60.5,TSP-L2030,BRK.B:0&unit=usd&c=VTI:5:40,BRK.B::&lb=10y&g=1y,ew&r=12.5&d=0.25&t=ks-dark&x=1&e=garch");
     expect(decode(encode(state))).toEqual(state);
-    expect(keysOf(encode({ ...state, preset: "tsp", funds: [] }))).toEqual(["u", "unit", "c", "lb", "g", "r", "d", "t", "x"]);
+    expect(keysOf(encode({ ...state, preset: "tsp", funds: [] }))).toEqual(["u", "unit", "c", "lb", "g", "r", "d", "t", "x", "e"]);
     expect(keysOf(encode(state))).toEqual(KEYS.filter((key) => key !== "u"));
   });
 
@@ -167,6 +170,7 @@ describe("encode and decode", () => {
         d: rnd() < 0.4 ? "auto" : Math.round(rnd() * 1e6) / 1e6,
         theme: pick([null, "ks-dark", "light", "hud", "grid"] as const),
         details: rnd() < 0.5,
+        engine: pick(ENGINES),
       };
       const search = encode(state);
       expect(decode(search), search).toEqual(state);
@@ -176,6 +180,35 @@ describe("encode and decode", () => {
       keys.forEach((key) => seen.add(key));
     }
     expect([...seen].sort()).toEqual([...KEYS].sort());
+  });
+
+  it("writes e only when it is not replay, after x, and reads it back", () => {
+    expect(encode(GUIDE)).toBe("?u=guide2017&lb=5y&d=auto");
+    for (const engine of ["garch", "copula"] as const) {
+      const state: UrlState = { ...GUIDE, r: 19.25, theme: "hud", details: true, engine };
+      expect(encode(state)).toBe(`?u=guide2017&lb=5y&r=19.25&d=auto&t=hud&x=1&e=${engine}`);
+      expect(decode(encode(state))).toEqual(state);
+      expect(keysOf(encode(state)).at(-1)).toBe("e");
+    }
+    // without details, e still follows the other keys
+    expect(encode({ ...GUIDE, engine: "garch" })).toBe("?u=guide2017&lb=5y&d=auto&e=garch");
+    // an address that names replay is read as replay and written without it
+    expect(decode("?u=guide2017&e=replay").engine).toBe("replay");
+    expect(encode(decode("?u=guide2017&lb=5y&d=auto&e=replay"))).toBe("?u=guide2017&lb=5y&d=auto");
+  });
+
+  it("reads an unknown or blank e as replay, and the first of a repeated e", () => {
+    for (const value of ["foo", "", "GARCH", "Garch", "garch ", "vine", "1", "replay,garch", "constructor"]) {
+      expect(decode(`?u=tsp&e=${encodeURIComponent(value)}`).engine, `e=${value}`).toBe("replay");
+    }
+    expect(decode("?e=garch&e=copula").engine).toBe("garch");
+    expect(encode(decode("?u=tsp&e=foo"))).toBe("?u=tsp&lb=5y&d=auto");
+  });
+
+  it("names the engines of the tensor contract", () => {
+    expect([...ENGINES]).toEqual([...ENGINE_IDS]);
+    const schema = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "../portfoliosight/engine/tensor.schema.json"), "utf-8"));
+    expect(Object.keys(schema.properties.engines.properties)).toEqual([...ENGINES]);
   });
 
   it("knows the lookbacks of the tensor contract", () => {
