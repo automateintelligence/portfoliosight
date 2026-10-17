@@ -297,7 +297,7 @@
     "A-PS-50": {
       "entry": "bcf2ca1c28f3d9abedfb3fbac1700b93ce3c8c93c44d74fc43b7b3905fcb6710",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_50_stress_cards_coverage.py": "7d17b16905a84db8383f92decd07ef998009f443d3eace393124a35a64da003f"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_50_stress_cards_coverage.py": "79a8b3f74a3398405327d82a836c96c4b02abb33e3740da0aec3763c8057183f"
       }
     },
     "A-PS-51": {
