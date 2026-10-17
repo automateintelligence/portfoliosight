@@ -99,19 +99,25 @@ class EngineSettings(BaseModel):
 
 
 def _engine_list(name: str) -> tuple[str, ...] | None:
-    """The engines a comma-separated variable names, in ``KNOWN_ENGINES`` order; ``None`` when
-    it is unset or blank."""
+    """``parse_engines`` of the variable ``name``; ``None`` when it is unset or blank."""
     raw = (os.environ.get(name) or "").strip()
-    if not raw:
-        return None
+    return parse_engines(raw, name) if raw else None
+
+
+def parse_engines(raw: str, source: str) -> tuple[str, ...]:
+    """The engines a comma-separated list names, once each, in ``KNOWN_ENGINES`` order.
+
+    Raises ``SettingsError`` naming ``source`` for an id this engine does not compute and for a
+    list without History replay.
+    """
     named = [part.strip() for part in raw.split(",") if part.strip()]
     unknown = [engine for engine in named if engine not in KNOWN_ENGINES]
     if unknown:
         raise SettingsError(
-            f"{name}: unknown engine {unknown[0]!r}; a build computes {', '.join(KNOWN_ENGINES)}"
+            f"{source}: unknown engine {unknown[0]!r}; a build computes {', '.join(KNOWN_ENGINES)}"
         )
     if DEFAULT_ENGINE not in named:
-        raise SettingsError(f"{name} must name {DEFAULT_ENGINE}: every build computes it")
+        raise SettingsError(f"{source} must name {DEFAULT_ENGINE}: every build computes it")
     return tuple(engine for engine in KNOWN_ENGINES if engine in named)
 
 

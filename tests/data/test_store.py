@@ -50,6 +50,28 @@ def test_the_five_methods(store):
     assert isinstance(store, store_mod.Store)
 
 
+def test_a_read_only_store_reads_and_never_writes(store):
+    store.put("prices/VTI.parquet", b"two")
+    store_mod.put_json(store, "meta/manifest.json", {"symbols": {}})
+    reader = store_mod.ReadOnlyStore(store)
+    assert isinstance(reader, store_mod.Store)
+    assert reader.get("prices/VTI.parquet") == b"two" and reader.exists("prices/VTI.parquet")
+    assert reader.list("prices/") == ["prices/VTI.parquet"] and reader.size("meta/none") is None
+    assert store_mod.get_json(reader, "meta/manifest.json") == {"symbols": {}}
+    assert reader.describe() == f"{store.describe()} (read-only)"
+    before = {key: store.get(key) for key in store.list()}
+    writes = (
+        lambda: reader.put("prices/VTI.parquet", b"other"),
+        lambda: reader.put("meta/new.json", b"{}"),
+        lambda: reader.delete("prices/VTI.parquet"),
+        lambda: store_mod.update_json(reader, "meta/manifest.json", lambda value: value),
+    )
+    for write in writes:
+        with pytest.raises(PermissionError, match="read-only"):
+            write()
+    assert {key: store.get(key) for key in store.list()} == before
+
+
 @pytest.mark.parametrize("key", ["", "/abs", "a//b", "../escape", "a/../b", "a/./b"])
 def test_bad_keys_are_refused(store, key):
     with pytest.raises(ValueError, match="invalid store key"):
