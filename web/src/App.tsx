@@ -10,6 +10,7 @@ import { RiskSlider } from "./controls/RiskSlider";
 import { ShareDialog } from "./controls/ShareDialog";
 import { ThemeSwitch } from "./controls/ThemeSwitch";
 import { disclaimer, family, lookbackLine, lookbackNames, plain } from "./copy";
+import { defaultEngine, resolveEngine } from "./math/engines";
 import { portfolioMath, type YearRange } from "./math/portfolio";
 import { stripScale, tensorBounds } from "./math/stripScale";
 import { atNode, ceilingAt, deriveView, limitsBind, positionOfCeiling } from "./math/view";
@@ -113,11 +114,17 @@ export default function App() {
 
   const { tensor } = state;
   const math = useMemo(() => (tensor ? portfolioMath(tensor) : null), [tensor]);
-  const nodeView = useMemo(() => (tensor && math ? deriveView(tensor, math, state.s, state.t) : null), [tensor, math, state.s, state.t]);
+  // Everything on the page reads one engine: the tensor's ranges, the slider's left end, the exact
+  // ranges from the service and the entered mix's range. The tensor on screen carries it (the
+  // store puts the default back when it does not).
+  const engine = tensor ? resolveEngine(tensor, state.engine) : state.engine;
+  // the service is told the engine only when it is not the tensor's default
+  const askEngine = tensor && engine !== defaultEngine(tensor) ? engine : null;
+  const nodeView = useMemo(() => (tensor && math ? deriveView(tensor, math, state.s, state.t, engine) : null), [tensor, math, state.s, state.t, engine]);
   const rangeKey = useMemo(() => (tensor ? { generation: tensor.generation, hash: tensor.universe.hash, lookback: tensor.lookback.id } : null), [tensor]);
   // The selected mix's exact one-year range comes from the service once the sliders rest; at a
   // column's level the tensor's own figure is already exact, so nothing is asked.
-  const selectedExact = useExactRange(rangeKey, tensor && nodeView && !atNode(tensor, nodeView.s, nodeView.t) ? nodeView.weights : null);
+  const selectedExact = useExactRange(rangeKey, tensor && nodeView && !atNode(tensor, nodeView.s, nodeView.t) ? nodeView.weights : null, askEngine);
   const view = useMemo(() => (nodeView && selectedExact ? { ...nodeView, range: selectedExact } : nodeView), [nodeView, selectedExact]);
   // The strip's bar keeps one scale per (menu, history window), from the shown tensor's own nodes
   // only: the sliders, the service's exact ranges and the ghost windows' tensors never move it.
@@ -140,10 +147,12 @@ export default function App() {
   const builtIn = useMemo((): YearRange | null => {
     const entered = tensor?.entered;
     const w = mix?.weights;
-    if (!entered || !w || entered.w.length !== w.length || entered.w.some((v, i) => Math.abs(v - w[i]) > 1e-9)) return null;
-    return { low: entered.range.bad, typical: entered.range.typical, high: entered.range.good };
-  }, [tensor, mix]);
-  const enteredExact = useExactRange(rangeKey, builtIn === null && mix?.weights ? mix.weights : null);
+    if (!tensor || !entered || !w || entered.w.length !== w.length || entered.w.some((v, i) => Math.abs(v - w[i]) > 1e-9)) return null;
+    // the kept range is the default engine's; the others sit in `ranges`
+    const figures = engine === defaultEngine(tensor) ? entered.range : entered.ranges?.[engine];
+    return figures ? { low: figures.bad, typical: figures.typical, high: figures.good } : null;
+  }, [tensor, mix, engine]);
+  const enteredExact = useExactRange(rangeKey, builtIn === null && mix?.weights ? mix.weights : null, askEngine);
   const current = useMemo(() => {
     if (!math || !mix?.weights || !currentStats) return null;
     return { stats: currentStats, range: builtIn ?? enteredExact, weights: mix.weights };

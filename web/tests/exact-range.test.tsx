@@ -50,7 +50,7 @@ it("asks once the weights rest, shows the answer, and serves the same mix from m
 
 it("a move before the weights rest drops the earlier mix, and a late answer for it is not shown", async () => {
   let release: (v: unknown) => void = () => undefined;
-  postRange.mockImplementationOnce((_k: unknown, _w: unknown, signal: AbortSignal) => new Promise((resolve) => {
+  postRange.mockImplementationOnce((_k: unknown, _w: unknown, _e: unknown, signal: AbortSignal) => new Promise((resolve) => {
     release = resolve;
     signal.addEventListener("abort", () => resolve(null));
   }));
@@ -88,4 +88,40 @@ it("a mix that stays on screen keeps its answer after many other mixes have been
   }
   held.rerender();
   expect(held.result.current).toEqual(answerFor([0.25]));
+});
+
+it("asks the default engine with no engine named, and another engine by name", async () => {
+  renderHook(() => useExactRange(key, [0.2, 0.8]));
+  renderHook(() => useExactRange(key, [0.2, 0.8], "garch"));
+  await settle();
+  expect(postRange).toHaveBeenCalledTimes(2);
+  expect(postRange.mock.calls.map((call) => call[2]).sort()).toEqual(["garch", null]);
+});
+
+it("keeps one answer per engine: the same mix under another engine is asked again and never served from the first", async () => {
+  postRange.mockImplementation(async (_k: unknown, w: ArrayLike<number>, engine: string | null) => ({ ...answerFor(w), typical: engine === "garch" ? -1 : 1 }));
+  const { result, rerender } = renderHook(({ e }) => useExactRange(key, [0.2, 0.8], e), { initialProps: { e: null as "garch" | null } });
+  await settle();
+  expect(result.current?.typical).toBe(1);
+  rerender({ e: "garch" });
+  // until the answer for the new engine arrives, the old engine's figure is not shown
+  expect(result.current).toBeNull();
+  await settle();
+  expect(postRange).toHaveBeenCalledTimes(2);
+  expect(result.current?.typical).toBe(-1);
+  rerender({ e: null });
+  expect(result.current?.typical).toBe(1);
+  await settle();
+  expect(postRange).toHaveBeenCalledTimes(2);
+});
+
+it("an answer that arrives after the engine changed is dropped", async () => {
+  let release: (v: unknown) => void = () => undefined;
+  postRange.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+  const { result, rerender } = renderHook(({ e }) => useExactRange(key, [0.2, 0.8], e), { initialProps: { e: null as "garch" | null } });
+  await settle();
+  rerender({ e: "garch" });
+  release({ low: 9, typical: 9, high: 9 });
+  await settle();
+  expect(result.current).toEqual(answerFor([0.2]));
 });

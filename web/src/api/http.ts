@@ -1,6 +1,7 @@
 // Same-origin /api/* calls (spec 6, 9.3). Site-relative URLs only: the page never names another
 // origin. Importing this module has no side effects and needs no DOM.
 import { z } from "zod";
+import { ENGINES, type EngineId } from "../state/url";
 import { parseTensor, type Tensor } from "./tensor";
 
 /** Thrown when a response carries `cf-mitigated: challenge` (spec 3.2, 9.4). */
@@ -157,24 +158,36 @@ export async function getTensor(url: string, lookback: string): Promise<TensorAn
   return tensorAnswer(await call(url), lookback);
 }
 
-const rangeSchema = z.object({ bad: z.number(), typical: z.number(), good: z.number() }).passthrough();
+// The answer of spec 6 and engines spec 7: the three figures, the engine that produced them, and the
+// loss-sources block (`null` until engines Phase 2). Nothing else is read, so a later field is tolerated.
+const rangeSchema = z
+  .object({ bad: z.number(), typical: z.number(), good: z.number(), engine: z.enum(ENGINES).optional(), loss_sources: z.unknown().optional() })
+  .passthrough();
 
 /** Where a tensor lives: the three parts of its key (spec 6). */
 export type TensorKey = { generation: string; hash: string; lookback: string };
 
 /**
  * `POST /api/range` (spec 6): the one-year bad / typical / good year of exact weights on a built
- * tensor. `null` whenever the service cannot answer (409 when the history behind the tensor has
- * changed, any refusal, a challenge, a network failure): the caller then keeps the figures it
- * has. Never throws, so a missing range never interrupts the page.
+ * tensor. `engine` names the simulation to ask for and is left out of the body when it is `null`
+ * (the tensor's default, as before); an answer that does not say it came from the engine asked
+ * for is not used. `null` whenever the service cannot answer (409 when the history behind the
+ * tensor has changed or the engine is not carried, any refusal, a challenge, a network failure):
+ * the caller then keeps the figures it has. Never throws, so a missing range never interrupts the page.
  */
-export async function postRange(key: TensorKey, weights: ArrayLike<number>, signal?: AbortSignal): Promise<{ low: number; typical: number; high: number } | null> {
+export async function postRange(
+  key: TensorKey,
+  weights: ArrayLike<number>,
+  engine: EngineId | null,
+  signal?: AbortSignal,
+): Promise<{ low: number; typical: number; high: number } | null> {
   try {
-    const body = JSON.stringify({ generation: key.generation, hash: key.hash, lookback: key.lookback, weights: Array.from(weights) });
+    const body = JSON.stringify({ generation: key.generation, hash: key.hash, lookback: key.lookback, weights: Array.from(weights), ...(engine === null ? {} : { engine }) });
     const res = await call("/api/range", { method: "POST", headers: { "content-type": "application/json" }, body, signal });
     if (res.status !== 200) return null;
     const range = rangeSchema.safeParse(await jsonOf(res));
-    return range.success ? { low: range.data.bad, typical: range.data.typical, high: range.data.good } : null;
+    if (!range.success || (engine !== null && range.data.engine !== engine)) return null;
+    return { low: range.data.bad, typical: range.data.typical, high: range.data.good };
   } catch {
     return null;
   }
