@@ -37,7 +37,7 @@ from qse.distributions.garch_recursion import (
     simulate_garch11,
     standardized_t_shocks,
 )
-from qse.distributions.joint import draw_row_indices
+from qse.distributions.joint import draw_row_indices, fit_garch_t_panel
 from tests.engine.helpers import FIXTURE_ASOF, ROOT
 
 MU = np.array([3e-4, 5e-4])
@@ -62,9 +62,10 @@ def _garch_pair(rows: int, seed: int) -> np.ndarray:
 
 
 def _igarch(rows: int) -> np.ndarray:
-    """A series whose volatility never reverts: its fit has alpha + beta at 1."""
-    shocks = standardized_t_shocks(np.random.default_rng(5), 8.0, (1, rows))
-    return simulate_garch11(shocks, mu=0.0, omega=1e-7, alpha=0.12, beta=0.88, sigma2_init=1e-4)[0]
+    """Simple returns whose log-return volatility never reverts: the fit has alpha + beta at 1."""
+    shocks = standardized_t_shocks(np.random.default_rng(6), 8.0, (1, rows))
+    logs = simulate_garch11(shocks, mu=0.0, omega=1e-7, alpha=0.12, beta=0.88, sigma2_init=1e-4)
+    return np.expm1(logs[0])
 
 
 @pytest.fixture(scope="module")
@@ -214,7 +215,7 @@ def test_fit_names_every_fund_s_status_and_keeps_the_fallbacks_constant(mixed, a
     assert np.all(a.nu[garch] > 2.0) and np.isnan(a.nu[~garch]).all()
     assert np.all(a.alpha[~garch] == 0.0) and np.all(a.beta[~garch] == 0.0)
     assert np.all(a.alpha[garch] + a.beta[garch] < 1.0 - 1e-4)
-    values = mixed.frame.to_numpy()
+    values = np.log1p(mixed.frame.to_numpy())  # the fit is on log returns
     for n in np.flatnonzero(~garch):
         own = values[~np.isnan(values[:, n]), n]
         assert a.mu[n] == pytest.approx(own.mean(), rel=1e-12)
@@ -230,6 +231,33 @@ def test_fit_names_every_fund_s_status_and_keeps_the_fallbacks_constant(mixed, a
     for field in ("mu", "omega", "alpha", "beta", "nu", "long_run_sigma_annual"):
         with pytest.raises(ValueError, match="read-only"):
             getattr(a, field)[0] = 1.0
+
+
+def test_the_fit_is_qse_s_on_the_panel_s_log_returns(mixed, artifact):
+    """QSE fits `log1p` of the panel (a missing return stays missing); the panel itself, and so
+    its digest, stays the simple daily returns."""
+    fit = fit_garch_t_panel(np.log1p(mixed.frame))
+    for field in ("mu", "omega", "alpha", "beta", "nu"):
+        assert getattr(artifact, field).tobytes() == np.asarray(getattr(fit, field)).tobytes()
+    assert artifact.status == tuple(fit.status) and artifact.n_obs == tuple(fit.n_obs)
+    assert artifact.pool_rows == fit.n_common_rows
+    simple = fit_garch_t_panel(mixed.frame)
+    assert not np.array_equal(artifact.omega, simple.omega)  # not the simple returns' fit
+    days = [stamp.date().isoformat() for stamp in mixed.frame.index]
+    simple_values = mixed.frame.to_numpy(copy=True)
+    simple_values[np.isnan(simple_values)] = shape.CANONICAL_NAN
+    assert artifact.sample_sha256 == sample_digest(list(mixed.frame.columns), days, simple_values)
+
+
+def test_a_day_that_loses_everything_has_no_log_return_and_fails_the_fit():
+    frame = _trio()
+    frame.iloc[250, 1] = -1.0
+    day = _day(frame, 250)
+    with pytest.raises(ShapeError, match="at or below -100%") as caught:
+        fit_shape(shape_panel(frame, ["A", "B", "C"], frame.index[-1]))
+    assert caught.value.fund == "B" and caught.value.date == day and day in str(caught.value)
+    frame.iloc[250, 1] = -0.999  # a loss short of everything has a log return
+    assert fit_shape(shape_panel(frame, ["A", "B", "C"], frame.index[-1])).pool is not None
 
 
 def test_pool_is_the_common_rows_restandardised(artifact):
@@ -441,6 +469,9 @@ def test_method_block_names_the_pinned_code(artifact):
         "seed": 20261013,
         "start": "long_run",
         "shape_rows": 2520,
+        "returns": "log",
+        "scale": "sd",
+        "ruin": "absorb",
         "qse": lock["commit"],
         "arch": "8.0.0",
     }

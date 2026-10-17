@@ -11,23 +11,28 @@ rows, the row draw and the recursion. This module only arranges them:
    least one of them has a return) ending at the generation's day, each fund on its own rows and
    NaN elsewhere, with the digest of exactly that panel. Two lookbacks that include the same funds
    have the same panel, so they share one fit.
-2. `fit_shape`: QSE's panel fit with its defaults. A fund that cannot be fitted (too short, too
-   calm, the optimizer failed, no long-run variance) is held at constant volatility by QSE and the
-   status says so; nothing is filled in or clipped. The pool is the common rows, each column
-   re-standardized to mean 0 and variance 1. Fewer than 126 such rows leave the engine
-   unavailable for the tensor. Before anything else the splice guard looks at each seeded fund's
-   splice date: a move of more than 6 standard deviations there that the rest of the menu did not
-   share is a corporate action the record missed, and the build fails naming fund and date.
-   The splice dates the guard checked are part of the artifact (`splice_dates`): a fit is
-   reused only by a build that names the same ones, so no build skips the guard.
-3. `simulate_panel`: 2,000 one-year paths of 252 days from the artifact alone. One draw of pool
-   rows (seed 20261013) is shared by every fund, so the funds keep moving together as they did on
-   real days, and each fund runs its own recursion from its long-run variance. The result is
-   exactly what QSE's `simulate_fhs_panel(fit, ..., row_indices=..., start="long_run")` returns;
-   building it from the artifact lets a build and a later range request share the same bytes.
+2. `fit_shape`: QSE's panel fit with its defaults, on the panel's daily log returns `log1p(r)`
+   (a missing return stays missing; a day at or below -100% has none and fails the fit). A fund
+   that cannot be fitted (too short, too calm, the optimizer failed, no long-run variance) is held
+   at constant volatility by QSE and the status says so; nothing is filled in or clipped. The
+   splice guard, the outliers and the statuses all read that fit's residuals, in log space. The
+   pool is the common rows, each column re-standardized to mean 0 and variance 1. Fewer than 126
+   such rows leave the engine unavailable for the tensor. Before anything else the splice guard
+   looks at each seeded fund's splice date: a move of more than 6 standard deviations there that
+   the rest of the menu did not share is a corporate action the record missed, and the build
+   fails naming fund and date. The splice dates the guard checked are part of the artifact
+   (`splice_dates`): a fit is reused only by a build that names the same ones, so no build skips
+   the guard.
+3. `simulate_panel`: 2,000 one-year paths of 252 days of daily log returns, from the artifact
+   alone. One draw of pool rows (seed 20261013) is shared by every fund, so the funds keep moving
+   together as they did on real days, and each fund runs its own recursion from its long-run
+   variance. The result is exactly what QSE's
+   `simulate_fhs_panel(fit, ..., row_indices=..., start="long_run")` returns; building it from
+   the artifact lets a build and a later range request share the same bytes.
 
 The simulated panel supplies shape only: `ranges.garch_range_model` replaces each fund's drift
-and volatility with the chart's own (spec 4.5).
+and volatility with the chart's own (spec 4.5), in log space, and takes the days back to simple
+returns.
 """
 
 from __future__ import annotations
@@ -47,7 +52,7 @@ import pandas as pd
 from qse.distributions.garch_recursion import garch11_long_run_variance, simulate_garch11
 from qse.distributions.joint import draw_row_indices, fit_garch_t_panel, residual_pool
 
-from .ranges import HORIZON_DAYS, PATHS, SEED, sample_digest
+from .ranges import HORIZON_DAYS, PATHS, RUIN, SCALE, SEED, sample_digest
 from .stats import TRADING_DAYS
 
 SHAPE_ROWS = 2520  # ten years of trading days: the longest history a fund's shape is fitted on
@@ -55,6 +60,7 @@ MIN_POOL_ROWS = 126  # the fewest shared days that may be resampled, as a window
 OUTLIER_Z = 6.0  # a standardized move this large is recorded; on a splice date it is checked
 METHOD_NAME = "garch_t_fhs"
 START = "long_run"
+RETURNS = "log"  # the fit and the simulation are in daily log returns, log1p(r)
 UNAVAILABLE_REASON = "not enough shared history for the volatility model"
 # Every missing return is hashed as this one NaN, whatever sign or payload it arrived with.
 CANONICAL_NAN = np.array([0x7FF8000000000000], dtype=np.uint64).view(np.float64)[0]
@@ -64,7 +70,8 @@ _PARAMETERS = ("mu", "omega", "alpha", "beta", "nu", "long_run_sigma_annual")
 class ShapeError(ValueError):
     """The volatility model cannot be fitted to this menu's history as it stands.
 
-    `fund` and `date` name the fund and day when the splice guard tripped, else `None`.
+    `fund` and `date` name the fund and day when the splice guard tripped or a day lost
+    everything, else `None`.
     """
 
     def __init__(self, message: str, fund: str | None = None, day: str | None = None):
@@ -154,12 +161,15 @@ def shape_panel(returns: pd.DataFrame, included: Sequence[str], asof) -> ShapePa
 def fit_shape(panel: ShapePanel, splice_dates: Mapping[str, str] | None = None) -> GarchArtifact:
     """Fit the volatility model to a shape panel; `splice_dates` maps a seeded fund to its ISO day.
 
-    Raises `ShapeError` when the splice guard trips or the shared rows hold no information about
-    a fund that does vary (QSE's pool refuses it); a pool shorter than `MIN_POOL_ROWS` is not an
-    error but an artifact without a pool, whose `unavailable_reason` the tensor shows.
+    The fit is on the daily log returns `log1p(r)`. Raises `ShapeError` when a day loses
+    everything (it has no log return), when the splice guard trips, or when the shared rows hold
+    no information about a fund that does vary (QSE's pool refuses it); a pool shorter than
+    `MIN_POOL_ROWS` is not an error but an artifact without a pool, whose `unavailable_reason`
+    the tensor shows.
     """
     guarded = guarded_splice_dates([str(fund) for fund in panel.frame.columns], splice_dates)
-    fit = fit_garch_t_panel(panel.frame)
+    _refuse_total_losses(panel)
+    fit = fit_garch_t_panel(np.log1p(panel.frame))
     outliers = _guard(panel, fit.std_residuals, guarded)
     pool: np.ndarray | None
     reason = None
@@ -215,7 +225,7 @@ def guarded_splice_dates(
 def simulate_panel(
     artifact: GarchArtifact, paths: int = PATHS, horizon: int = HORIZON_DAYS, seed: int = SEED
 ) -> np.ndarray:
-    """`paths` x `horizon` x N simulated daily returns of the artifact's funds, float64.
+    """`paths` x `horizon` x N simulated daily log returns of the artifact's funds, float64.
 
     One pool row per (path, day) is the shock of every fund that day; each fund's recursion
     starts at its long-run variance. A fallback fund's shock is merely scaled by its constant
@@ -337,9 +347,23 @@ def garch_method(artifact: GarchArtifact) -> dict:
         "seed": SEED,
         "start": START,
         "shape_rows": SHAPE_ROWS,
+        "returns": RETURNS,
+        "scale": SCALE,
+        "ruin": RUIN,
         "qse": artifact.qse,
         "arch": artifact.arch,
     }
+
+
+def _refuse_total_losses(panel: ShapePanel) -> None:
+    """A daily return at or below -100% has no log return: the fit fails naming fund and day."""
+    lost = np.argwhere(panel.frame.to_numpy() <= -1.0)  # a missing return is never a loss
+    if lost.size:
+        row, n = (int(k) for k in lost[0])
+        fund = str(panel.frame.columns[n])
+        day = [stamp.date().isoformat() for stamp in panel.frame.index][row]
+        message = f"{fund} lost everything on {day}: a daily return at or below -100%"
+        raise ShapeError(f"{message} has no log return to fit", fund, day)
 
 
 def _guard(panel: ShapePanel, z: np.ndarray, splice_dates: Sequence[tuple[str, str]]) -> list[dict]:

@@ -256,20 +256,32 @@
     "garch_engine": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "reason", "method"],
+      "required": ["status", "reason", "method", "ruin_paths"],
       "properties": {
         "status": {"enum": ["ready", "unavailable"]},
         "reason": {"type": ["string", "null"], "minLength": 1},
-        "method": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/garch_method"}]}
+        "method": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/garch_method"}]},
+        "ruin_paths": {"type": ["integer", "null"], "minimum": 0}
       },
       "if": {"required": ["status"], "properties": {"status": {"const": "ready"}}},
-      "then": {"properties": {"reason": {"type": "null"}, "method": {"type": "object"}}},
-      "else": {"properties": {"reason": {"type": "string"}, "method": {"type": "null"}}}
+      "then": {
+        "properties": {
+          "reason": {"type": "null"}, "method": {"type": "object"}, "ruin_paths": {"type": "integer"}
+        }
+      },
+      "else": {
+        "properties": {
+          "reason": {"type": "string"}, "method": {"type": "null"}, "ruin_paths": {"type": "null"}
+        }
+      }
     },
     "garch_method": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "paths", "horizon_days", "seed", "start", "shape_rows", "qse", "arch"],
+      "required": [
+        "name", "paths", "horizon_days", "seed", "start", "shape_rows", "returns", "scale", "ruin",
+        "qse", "arch"
+      ],
       "properties": {
         "name": {"const": "garch_t_fhs"},
         "paths": {"type": "integer", "minimum": 1},
@@ -277,6 +289,9 @@
         "seed": {"type": "integer"},
         "start": {"const": "long_run"},
         "shape_rows": {"type": "integer", "minimum": 1},
+        "returns": {"const": "log"},
+        "scale": {"const": "sd"},
+        "ruin": {"const": "absorb"},
         "qse": {"type": "string", "pattern": "^[0-9a-f]{7,40}$"},
         "arch": {"type": "string", "minLength": 1}
       }

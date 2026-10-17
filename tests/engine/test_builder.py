@@ -228,6 +228,18 @@ def test_schema_accepts_the_build_and_is_not_permissive(fixture_tensor):
         "unavailable with a method": lambda d: d["engines"]["copula"].update(method={"name": "x"}),
         "short qse commit": lambda d: d["engines"]["garch"]["method"].update(qse="ca8c"),
         "another start": lambda d: d["engines"]["garch"]["method"].update(start="last"),
+        "simple returns": lambda d: d["engines"]["garch"]["method"].update(returns="simple"),
+        "another scale": lambda d: d["engines"]["garch"]["method"].update(scale="iqr"),
+        "another ruin rule": lambda d: d["engines"]["garch"]["method"].update(ruin="raise"),
+        "no ruin rule": lambda d: d["engines"]["garch"]["method"].pop("ruin"),
+        "no ruin_paths": lambda d: d["engines"]["garch"].pop("ruin_paths"),
+        "negative ruin_paths": lambda d: d["engines"]["garch"].update(ruin_paths=-1),
+        "fractional ruin_paths": lambda d: d["engines"]["garch"].update(ruin_paths=0.5),
+        "ready without a ruin count": lambda d: d["engines"]["garch"].update(ruin_paths=None),
+        "unavailable with a ruin count": lambda d: d["engines"].update(
+            garch={"status": "unavailable", "reason": "r", "method": None, "ruin_paths": 0}
+        ),
+        "ruin_paths on the copula": lambda d: d["engines"]["copula"].update(ruin_paths=None),
         "unknown default engine": lambda d: d.update(range_default="other"),
         "unknown fund status": lambda d: d["shape"]["funds"][0].update(status="fine"),
         "negative omega": lambda d: d["shape"]["funds"][0].update(omega=-1e-9),
@@ -249,8 +261,9 @@ def test_schema_accepts_the_build_and_is_not_permissive(fixture_tensor):
         lambda d: d.update(shape=None),
         lambda d: d["shape"]["funds"][0].update(nu=None, margin="empirical"),
         lambda d: d["engines"].update(
-            garch={"status": "unavailable", "reason": "r", "method": None}
+            garch={"status": "unavailable", "reason": "r", "method": None, "ruin_paths": None}
         ),
+        lambda d: d["engines"]["garch"].update(ruin_paths=12),
         lambda d: [d[k]["ranges"].pop("garch") for k in ("frontier", "ladder", "entered")],
         lambda d: d["engines"].update(
             copula={"status": "ready", "reason": None, "method": {"name": "vine_copula_fhs"}}
@@ -985,8 +998,14 @@ def test_engines_block_names_every_engine_with_its_status_and_method(fixture_ten
     assert engines["replay"] == {"status": "ready", "reason": None, "method": builder.METHOD}
     assert engines["replay"]["method"] == fixture_tensor["range_method"]  # the kept field
     method = garch_method(fixture_artifact())
-    assert engines["garch"] == {"status": "ready", "reason": None, "method": method}
+    assert engines["garch"] == {
+        "status": "ready",
+        "reason": None,
+        "method": method,
+        "ruin_paths": 0,
+    }
     assert method["qse"] == "ca8c0445a56712c92dc028e68845b94963fdd590" and method["arch"] == "8.0.0"
+    assert (method["returns"], method["scale"], method["ruin"]) == ("log", "sd", "absorb")
     assert engines["copula"] == {
         "status": "unavailable",
         "reason": "not computed for this menu",
@@ -1125,6 +1144,7 @@ def test_engines_not_asked_for_are_unavailable_with_their_reason():
         "status": "unavailable",
         "reason": "not computed for this menu",
         "method": None,
+        "ruin_paths": None,
     }
     assert preset["shape"] is None and preset["range_default"] == "replay"
     for key in ("frontier", "ladder", "entered"):
@@ -1163,6 +1183,7 @@ def test_an_unavailable_volatility_model_is_reported_and_not_simulated():
         "status": "unavailable",
         "reason": "not enough shared history for the volatility model",
         "method": None,
+        "ruin_paths": None,
     }
     assert t["shape"]["pool_rows"] == 100 and len(t["shape"]["funds"]) == 23
     for key in ("frontier", "ladder", "entered"):
@@ -1210,6 +1231,32 @@ def test_a_riskless_mix_has_one_year_on_every_path(fixture_frame):
         assert front["bad"][0] <= front["typical"][0] <= front["good"][0]
         assert front["good"][0] - front["bad"][0] <= 5e-4  # at most the chart's floor of risk
         assert abs(front["typical"][0] - np.expm1(252 * np.log1p(daily))) <= 1e-5
+
+
+def test_ruin_paths_is_the_most_paths_any_carried_mix_lost(monkeypatch):
+    """`engines.garch.ruin_paths`: over the ladder's mixes and the entered one, the largest
+    number of paths the volatility model absorbed (a day at or below -100%); 0 for the fixture."""
+    real = builder.one_year_ranges
+    lost = {"ladder": 4, "entered": 0}
+
+    def counted(model, weights):
+        out = real(model, weights)
+        if model.engine == "garch" and np.ndim(weights) == 1:  # the entered mix
+            out["ruined"] = np.array([lost["entered"]])
+        elif model.engine == "garch":  # the ladder's mixes: one of them loses the most
+            out["ruined"] = np.minimum(np.arange(len(out["bad"])), lost["ladder"])
+        return out
+
+    monkeypatch.setattr(builder, "one_year_ranges", counted)
+    tensor = build_tensor(fixture_inputs("5y", **SMALL_BOTH))
+    validate_tensor(tensor)
+    assert tensor["engines"]["garch"]["ruin_paths"] == 4  # the ladder's worst mix
+    lost.update(entered=9)
+    assert build_tensor(fixture_inputs("5y", **SMALL_BOTH))["engines"]["garch"]["ruin_paths"] == 9
+    alone = build_tensor(fixture_inputs("5y", allocation=None, **SMALL_BOTH))
+    assert alone["entered"] is None and alone["engines"]["garch"]["ruin_paths"] == 4
+    monkeypatch.setattr(builder, "one_year_ranges", real)
+    assert build_tensor(fixture_inputs("5y", **SMALL_BOTH))["engines"]["garch"]["ruin_paths"] == 0
 
 
 def test_post_check_refuses_ranges_out_of_order(monkeypatch):
