@@ -1,7 +1,12 @@
-"""Build one tensor from the canonical store (spec 6, 4.12, 5.3).
+"""Build one tensor from the canonical store (spec 6, 4.12, 5.3; engines spec 7).
 
 A build reads ``meta/{G}/generation.json`` for ``D_G``, the catalog as it is now and only the
 price records it needs, uses rows up to ``D_G``, and never writes over a tensor that exists.
+
+The volatility model is fitted once per fund set and generation, not per lookback: its files
+``models/{G}/{shape16}/garch.json`` and ``pool.npy`` (``shape16`` the first 16 hex digits of the
+shape panel's digest) are written before the first tensor that uses them, never overwritten,
+read back through the scratch cache, and pruned with their generation.
 """
 
 from __future__ import annotations
@@ -10,12 +15,15 @@ import hashlib
 import json
 import os
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, cast
 
+import numpy as np
 import pandas as pd
 
+from portfoliosight.api.presets import model_key
 from portfoliosight.data import cache as cache_mod
 from portfoliosight.data import manifest as manifest_mod
 from portfoliosight.data import store as store_mod
@@ -25,18 +33,29 @@ from portfoliosight.engine import ENGINE_VERSION
 from portfoliosight.engine.caps import CapsError
 from portfoliosight.engine.ladder import LEVELS
 from portfoliosight.engine.optimize import NX
-from portfoliosight.engine.ranges import METHOD, RangeModel, frame_digest, range_model
+from portfoliosight.engine.ranges import ENGINES, METHOD, RangeModel, frame_digest, range_model
+from portfoliosight.engine.shape import (
+    GarchArtifact,
+    artifact_from_json,
+    artifact_to_json,
+    pool_bytes,
+    pool_from_bytes,
+)
 from portfoliosight.engine.stats import RISK_FREE_SOURCES
 from portfoliosight.engine.surface import NY
 from portfoliosight.engine.tensor import (
+    BuildResult,
     FundInput,
     TensorInputs,
     WindowUnavailable,
-    build_tensor,
+    build_tensor_full,
     canonical_json,
+    shape_panel_for,
 )
 
 CUSTOM_MENU_NAME = "Custom menu"
+GARCH_FILE = "garch.json"  # the fitted volatility model's parameters, statuses and pool digest
+POOL_FILE = "pool.npy"  # its re-standardized shock rows; absent when the model is unavailable
 
 
 class BuildRefused(Exception):
@@ -162,12 +181,26 @@ def _fund_input(
     )
 
 
-def build_from_store(
+def _splice_date(record: pd.DataFrame) -> str | None:
+    """The day a seeded record's provider tail starts (engines spec 4.3, the splice guard).
+
+    Seed rows carry no actions and provider rows do, so it is the first row whose
+    ``split_factor`` is known while the row before it is not. A record with actions on every row
+    (a provider's, or TSP's 0 and 1) or on none (a seed or lake record) has no splice.
+    """
+    known = record["split_factor"].notna().to_numpy()
+    starts = np.flatnonzero(known[1:] & ~known[:-1])
+    if starts.size == 0:
+        return None
+    return pd.Timestamp(record["date"].iloc[int(starts[0]) + 1]).date().isoformat()
+
+
+def inputs_from_store(
     store: store_mod.Store,
     *,
-    generation: str,
     funds: Sequence[Mapping[str, Any]],
     lookback: str,
+    asof: date,
     cache_dir: str | os.PathLike[str],
     universe_name: str = CUSTOM_MENU_NAME,
     preset_id: str | None = None,
@@ -175,27 +208,17 @@ def build_from_store(
     nx: int = NX,
     ny: int = NY,
     levels: int = LEVELS,
-) -> dict[str, Any]:
-    """The tensor of one (generation, menu, lookback), from the store as it is now.
+    engines: Sequence[str] = ENGINES,
+) -> TensorInputs:
+    """The inputs of one (menu, lookback) build at ``D_G`` = ``asof``, from the store as it is now.
 
     ``funds`` is the requested policy, ``[{"id", "min", "max"}]`` in display order;
-    ``allocation`` is the entered mix of a preset, amounts by fund id, when it has one. Raises
-    ``GenerationGone`` when the generation's metadata is absent, and ``BuildRefused`` when the
-    window has too little shared history, the caps cannot be met by the funds in the window, or
-    the generation belongs to another engine version.
+    ``allocation`` is the entered mix of a preset, amounts by fund id, when it has one. Reads the
+    catalog and the records of the menu's served funds (and of the served risk-free funds)
+    through the scratch cache, uses rows up to ``asof``, and writes nothing to the store. Each
+    seeded fund's splice date goes with the inputs, for the volatility model's splice guard.
     """
-    try:
-        meta = store_mod.get_json(store, generation_key(generation))
-    except KeyError:
-        raise GenerationGone(generation) from None
-    if meta.get("engine_version") != ENGINE_VERSION:
-        raise BuildRefused(
-            "engine_version_mismatch",
-            f"generation {generation} belongs to engine {meta.get('engine_version')}, "
-            f"this is engine {ENGINE_VERSION}",
-        )
-    d_g = date.fromisoformat(str(meta["asof"]))
-    asof = datetime.combine(d_g, time())
+    when = datetime.combine(asof, time())
     catalog = manifest_mod.load_manifest(store).symbols
     root = Path(cache_dir)
 
@@ -204,7 +227,7 @@ def build_from_store(
         if entry is None or entry.status != "ok":
             return None
         record = _cached_record(store, root, symbol, entry.fetched_at or "")
-        return None if record is None else _upto(record, asof)
+        return None if record is None else _upto(record, when)
 
     ids = [str(fund["id"]) for fund in funds]
     records = {fund: served_record(fund) for fund in ids}
@@ -214,11 +237,12 @@ def build_from_store(
         record = priced[symbol] if symbol in priced else served_record(symbol)
         if record is not None:
             rf_series[symbol] = _tr_series(record).pct_change().dropna()
-    inputs = TensorInputs(
-        funds=[_fund_input(fund, catalog.get(fund), records[fund], asof) for fund in ids],
+    splices = {fund: _splice_date(record) for fund, record in priced.items()}
+    return TensorInputs(
+        funds=[_fund_input(fund, catalog.get(fund), records[fund], when) for fund in ids],
         returns=build_returns(priced),
         lookback=lookback,
-        asof=d_g,
+        asof=asof,
         universe_name=universe_name,
         preset_id=preset_id,
         requested_bounds=[
@@ -232,17 +256,149 @@ def build_from_store(
         nx=nx,
         ny=ny,
         levels=levels,
+        engines=tuple(engines),
+        splice_dates={fund: day for fund, day in splices.items() if day is not None},
+    )
+
+
+def _cached_bytes(store: store_mod.Store, key: str, cache_dir: Path) -> bytes:
+    """``store.get(key)`` through the scratch cache, for a key whose value never changes."""
+    path = cache_mod.fetch_into_cache(store, key, cache_dir=cache_dir)
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:  # evicted by another process between the fetch and the read
+        return store.get(key)
+
+
+def load_artifact(
+    store: store_mod.Store, generation: str, shape16: str, *, cache_dir: str | os.PathLike[str]
+) -> GarchArtifact | None:
+    """The volatility model stored under ``models/{generation}/{shape16}/``; ``None`` when the
+    store has none there. Its files are read through the scratch cache."""
+    root = Path(cache_dir)
+    try:
+        doc = json.loads(_cached_bytes(store, model_key(generation, shape16, GARCH_FILE), root))
+        pool = None
+        if doc.get("pool_sha256") is not None:
+            pool = pool_from_bytes(
+                _cached_bytes(store, model_key(generation, shape16, POOL_FILE), root)
+            )
+    except KeyError:
+        return None
+    return artifact_from_json(doc, pool)
+
+
+def put_artifact(store: store_mod.Store, generation: str, artifact: GarchArtifact) -> None:
+    """Store a fitted volatility model under its generation and shape digest.
+
+    The pool goes first and the JSON that describes it last, so a reader that finds the JSON
+    finds its pool. Each file is written only when absent: a stored model is never overwritten,
+    and two builders racing to store one fit write the same bytes.
+    """
+    shape16 = artifact.sample_sha256[:16]
+    files = []
+    if artifact.pool is not None:
+        files.append((POOL_FILE, pool_bytes(artifact)))
+    files.append((GARCH_FILE, canonical_json(artifact_to_json(artifact)).encode("utf-8")))
+    for name, data in files:
+        key = model_key(generation, shape16, name)
+        if not store.exists(key):
+            store.put(key, data)
+
+
+def build_with_artifacts(
+    store: store_mod.Store,
+    generation: str,
+    inputs: TensorInputs,
+    *,
+    cache_dir: str | os.PathLike[str],
+    workers: int | None = None,
+) -> tuple[BuildResult, bool]:
+    """``build_tensor_full`` with the volatility model taken from, and kept in, ``store``.
+
+    When the inputs ask for the volatility model, the fit stored for their shape panel (if any)
+    is offered to the build, which uses it when it is that panel's; a fit the build makes is
+    stored before this returns, so a tensor is always written after the model behind it.
+    Returns the result and whether a stored fit was used. Raises what ``build_tensor_full``
+    raises.
+    """
+    offered = None
+    if "garch" in inputs.engines:
+        try:
+            panel = shape_panel_for(inputs)
+        except WindowUnavailable:
+            panel = None  # the build refuses the window itself, after what it checks first
+        if panel is not None:
+            offered = load_artifact(
+                store, generation, panel.sample_sha256[:16], cache_dir=cache_dir
+            )
+            inputs = replace(inputs, garch_artifact=offered)
+    result = build_tensor_full(inputs, workers=workers)
+    fitted = result.artifacts.get("garch")
+    reused = fitted is not None and fitted is offered
+    if fitted is not None and not reused:
+        put_artifact(store, generation, fitted)
+    return result, reused
+
+
+def build_from_store(
+    store: store_mod.Store,
+    *,
+    generation: str,
+    funds: Sequence[Mapping[str, Any]],
+    lookback: str,
+    cache_dir: str | os.PathLike[str],
+    universe_name: str = CUSTOM_MENU_NAME,
+    preset_id: str | None = None,
+    allocation: Mapping[str, float] | None = None,
+    nx: int = NX,
+    ny: int = NY,
+    levels: int = LEVELS,
+    engines: Sequence[str] = ENGINES,
+) -> dict[str, Any]:
+    """The tensor of one (generation, menu, lookback), from the store as it is now.
+
+    ``inputs_from_store`` at the generation's ``D_G``, then ``build_with_artifacts``: the
+    volatility model's files are in the store when this returns, the tensor is the caller's to
+    write. Raises ``GenerationGone`` when the generation's metadata is absent, and
+    ``BuildRefused`` when the window has too little shared history, the caps cannot be met by
+    the funds in the window, or the generation belongs to another engine version.
+    """
+    try:
+        meta = store_mod.get_json(store, generation_key(generation))
+    except KeyError:
+        raise GenerationGone(generation) from None
+    if meta.get("engine_version") != ENGINE_VERSION:
+        raise BuildRefused(
+            "engine_version_mismatch",
+            f"generation {generation} belongs to engine {meta.get('engine_version')}, "
+            f"this is engine {ENGINE_VERSION}",
+        )
+    d_g = date.fromisoformat(str(meta["asof"]))
+    if f"{d_g.isoformat()}-{ENGINE_VERSION}" != generation:
+        raise RuntimeError(f"generation {generation} is not dated {d_g.isoformat()}")
+    inputs = inputs_from_store(
+        store,
+        funds=funds,
+        lookback=lookback,
+        asof=d_g,
+        cache_dir=cache_dir,
+        universe_name=universe_name,
+        preset_id=preset_id,
+        allocation=allocation,
+        nx=nx,
+        ny=ny,
+        levels=levels,
+        engines=engines,
     )
     try:
-        tensor = build_tensor(inputs)
+        result, _ = build_with_artifacts(store, generation, inputs, cache_dir=cache_dir)
     except WindowUnavailable as exc:
         details = {"lookback": lookback, "reason": exc.reason, "rows": exc.selection.rows}
         raise BuildRefused("window_unavailable", str(exc), details) from exc
     except CapsError as exc:
         raise BuildRefused("caps_infeasible", str(exc), {"reason": str(exc)}) from exc
-    if tensor["generation"] != generation:
-        raise RuntimeError(f"built {tensor['generation']}, not the requested {generation}")
-    return tensor
+    return result.tensor
 
 
 def range_model_from_store(

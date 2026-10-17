@@ -6,23 +6,33 @@ import json
 from datetime import UTC, date, datetime, timedelta
 from typing import cast
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from portfoliosight.api.presets import tensor_key
+from portfoliosight.api.hashing import universe_hash
+from portfoliosight.api.presets import model_key, tensor_key
+from portfoliosight.api.queue import build_job
 from portfoliosight.data import manifest as manifest_mod
+from portfoliosight.data import returns as returns_mod
 from portfoliosight.data import store as store_mod
+from portfoliosight.data.providers import tiingo
+from portfoliosight.engine import ENGINE_VERSION, builder
 from portfoliosight.engine.ranges import one_year_ranges
-from portfoliosight.engine.tensor import canonical_json, validate_tensor
+from portfoliosight.engine.shape import ShapeError, artifact_from_json, pool_from_bytes
+from portfoliosight.engine.tensor import build_tensor, canonical_json, validate_tensor
 from portfoliosight.jobs.build import (
     BuildRefused,
     GenerationGone,
     KeyExists,
     RangeUnavailable,
     build_from_store,
+    inputs_from_store,
+    load_artifact,
     put_tensor,
     range_model_from_store,
 )
+from tests.data.test_splice import CUT, SEAM, VTI, _seed_record
 
 MENU = ["VTI", "BND", "VNQ", "FIENX"]
 GRID = {"nx": 12, "ny": 8, "levels": 3}
@@ -441,3 +451,254 @@ def test_a_record_deleted_from_the_store_mid_build_is_no_data(
     monkeypatch.setattr(cache_mod, "fetch_into_cache", fetch_then_delete_everywhere)
     tensor = _build(store, generation, tmp_path, ids=["VTI", "BND", "VNQ"])
     assert [fund["id"] for fund in tensor["universe"]["funds"]] == ["VTI", "BND"]
+
+
+# --- inputs from the store, splice dates, and the volatility model's files (plan Phase 3) ---
+
+
+def _inputs(store, d_g, tmp_path, ids=MENU, lookback="1y", **kwargs):
+    return inputs_from_store(
+        store,
+        funds=_funds(ids),
+        lookback=lookback,
+        asof=d_g,
+        cache_dir=tmp_path / "cache",
+        **GRID,
+        **kwargs,
+    )
+
+
+def test_inputs_from_store_are_the_inputs_of_a_build(store, generation, d_g, tmp_path):
+    held = {"VTI": 300.0, "BND": 100.0, "FIENX": 100.0}
+    inputs = _inputs(store, d_g, tmp_path, allocation=held)
+    assert [fund.id for fund in inputs.funds] == MENU and inputs.lookback == "1y"
+    assert inputs.asof == d_g and inputs.engines == ("replay", "garch")
+    assert inputs.universe_name == "Custom menu" and inputs.preset_id is None
+    assert inputs.allocation == held and inputs.garch_artifact is None
+    assert (inputs.nx, inputs.ny, inputs.levels) == (12, 8, 3)
+    assert inputs.requested_bounds == _funds(MENU)
+    # only served funds are priced; rows after D_G are never read
+    served = {fund: store_mod.get_record(store, fund) for fund in MENU[:3]}
+    expected = returns_mod.build_returns(served).loc[: pd.Timestamp(d_g)]
+    pd.testing.assert_frame_equal(inputs.returns, expected, check_freq=False)
+    assert sorted(inputs.tr_index or {}) == sorted(MENU[:3])
+    assert sorted(inputs.rf_series or {}) == ["TSP-G"]
+    # the fixture's records carry their actions on every row: nothing was spliced
+    assert inputs.splice_dates == {}
+    built = _build(store, generation, tmp_path, allocation=held)
+    assert _scrub(build_tensor(inputs)) == _scrub(built)
+    replay_only = _inputs(store, d_g, tmp_path, engines=("replay",))
+    assert replay_only.engines == ("replay",)
+
+
+def _with_catalog_version(store, symbol: str, at: str) -> None:
+    catalog = manifest_mod.load_manifest(store)
+    catalog.symbols[symbol].fetched_at = at
+    manifest_mod.write_catalog(store, catalog, datetime(2026, 10, 14, tzinfo=UTC))
+
+
+def test_splice_dates_mark_where_a_seeded_record_s_provider_tail_starts(store, d_g, tmp_path):
+    """Seed rows carry no actions, provider rows do (tests/data/test_splice.py's records)."""
+    rows = json.loads(VTI.read_text())
+    seeded, _ = returns_mod.splice_tail(_seed_record(rows), tiingo.rows_to_frame(rows), CUT)
+    store_mod.put_record(store, "VTI", seeded)
+    _with_catalog_version(store, "VTI", "2026-10-14T09:00:00+00:00")
+    lake = store_mod.get_record(store, "BND")  # a lake record: no actions on any row
+    lake["div_cash"] = lake["split_factor"] = np.nan
+    store_mod.put_record(store, "BND", lake)
+    _with_catalog_version(store, "BND", "2026-10-14T09:00:00+00:00")
+    inputs = _inputs(store, d_g, tmp_path, ids=["VTI", "BND", "VNQ", "TSP-C"])
+    # the provider-only VNQ and the TSP fund carry actions on every row: no splice either
+    assert inputs.splice_dates == {"VTI": SEAM}
+
+
+def _seeded_before(store, fund: str, day: str, drop: float = 0.0) -> None:
+    """Make a fixture record look seeded up to ``day`` (no actions), optionally with a fall."""
+    record = store_mod.get_record(store, fund)
+    head = record["date"] < pd.Timestamp(day)
+    record.loc[head, ["div_cash", "split_factor"]] = np.nan
+    record.loc[~head, "tr_index"] = record.loc[~head, "tr_index"] * (1.0 + drop)
+    store_mod.put_record(store, fund, record)
+    _with_catalog_version(store, fund, "2026-10-14T09:00:00+00:00")
+
+
+def test_a_corporate_action_missed_at_the_splice_fails_the_build_naming_fund_and_date(
+    store, generation, tmp_path
+):
+    day = "2024-03-01"
+    _seeded_before(store, "VTI", day, drop=-0.3)
+    with pytest.raises(ShapeError) as caught:
+        _build(store, generation, tmp_path, ids=["VTI", "BND", "VNQ"], lookback="5y")
+    assert (caught.value.fund, caught.value.date) == ("VTI", day)
+    assert store.list("models/") == []
+
+
+def test_the_same_fall_away_from_the_splice_is_an_outlier(store, generation, tmp_path):
+    _seeded_before(store, "VTI", "2024-03-01")
+    record = store_mod.get_record(store, "VTI")
+    later = record["date"] >= pd.Timestamp("2025-06-02")
+    record.loc[later, "tr_index"] = record.loc[later, "tr_index"] * 0.7
+    store_mod.put_record(store, "VTI", record)
+    _with_catalog_version(store, "VTI", "2026-10-15T09:00:00+00:00")
+    tensor = _build(store, generation, tmp_path, ids=["VTI", "BND", "VNQ"], lookback="5y")
+    outliers = [(entry["id"], entry["date"]) for entry in tensor["shape"]["outliers"]]
+    assert ("VTI", "2025-06-02") in outliers
+
+
+@pytest.fixture
+def job_env(monkeypatch, tmp_path):
+    """What ``build_job`` reads: a scratch cache, a small grid, both engines everywhere."""
+    monkeypatch.setenv("PS_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("PS_CACHE_MAX_MB", "300")
+    monkeypatch.setenv("PS_GRID_NX", "12")
+    monkeypatch.setenv("PS_GRID_NY", "8")
+    monkeypatch.setenv("PS_GRID_LEVELS", "3")
+    monkeypatch.delenv("PS_ENGINES", raising=False)
+    monkeypatch.delenv("PS_ENGINES_CUSTOM", raising=False)
+    return monkeypatch
+
+
+class _Writes:
+    """A store that records every key written, in order."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.puts: list[str] = []
+        self.gets: list[str] = []
+
+    def put(self, key, data):
+        self.puts.append(key)
+        return self._inner.put(key, data)
+
+    def get(self, key):
+        self.gets.append(key)
+        return self._inner.get(key)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+@pytest.fixture
+def fits(monkeypatch):
+    """The panels the volatility model was fitted to, in order."""
+    seen: list = []
+    real = builder.fit_shape
+
+    def counted(panel, splice_dates=None):
+        seen.append(panel)
+        return real(panel, splice_dates)
+
+    monkeypatch.setattr(builder, "fit_shape", counted)
+    return seen
+
+
+def _job(store, generation, lookback, ids=("VTI", "BND", "VNQ"), **names):
+    funds = _funds(ids)
+    uhash = universe_hash(funds)
+    build_job(store, generation, uhash, lookback, funds, **names)
+    return json.loads(store.get(tensor_key(generation, uhash, lookback)))
+
+
+def test_a_build_stores_its_fit_before_its_tensor_and_other_lookbacks_reuse_it(
+    store, generation, job_env, fits
+):
+    writes = _Writes(store)
+    first = _job(writes, generation, "1y")
+    shape16 = first["shape"]["sample_sha256"][:16]
+    files = [model_key(generation, shape16, name) for name in ("pool.npy", "garch.json")]
+    tensor = tensor_key(generation, first["universe"]["hash"], "1y")
+    assert writes.puts == [*files, tensor]  # the pool, its description, then the tensor
+    assert len(fits) == 1 and first["engines"]["garch"]["status"] == "ready"
+    doc = json.loads(store.get(files[1]))
+    stored = artifact_from_json(doc, pool_from_bytes(store.get(files[0])))
+    assert stored.sample_sha256 == first["shape"]["sample_sha256"]
+    assert stored.funds == ("VTI", "BND", "VNQ") and stored.pool_rows == first["shape"]["pool_rows"]
+    writes.puts.clear()
+    for lookback in ("5y", "ew"):
+        again = _job(writes, generation, lookback)
+        assert again["shape"] == first["shape"] and again["engines"] == first["engines"]
+    assert len(fits) == 1  # one fit for the fund set, whatever the lookback
+    assert [key for key in writes.puts if key.startswith("models/")] == []
+
+
+def test_a_lookback_that_admits_another_fund_fits_and_stores_its_own_model(
+    store, generation, job_env, fits
+):
+    young = store_mod.get_record(store, "VNQ")
+    recent = young.loc[young["date"] >= pd.Timestamp("2023-01-03")].reset_index(drop=True)
+    recent["tr_index"] = recent["tr_index"] / recent["tr_index"].iloc[0]
+    store_mod.put_record(store, "VNQ", recent)
+    five = _job(store, generation, "5y")
+    one = _job(store, generation, "1y")
+    assert [f["id"] for f in five["shape"]["funds"]] == ["VTI", "BND"]
+    assert [f["id"] for f in one["shape"]["funds"]] == ["VTI", "BND", "VNQ"]
+    assert len(fits) == 2
+    folders = {key.split("/")[2] for key in store.list(f"models/{generation}/")}
+    assert folders == {five["shape"]["sample_sha256"][:16], one["shape"]["sample_sha256"][:16]}
+    two = _job(store, generation, "2y")  # VNQ is in this view too: the 1y fit serves it
+    assert two["shape"] == one["shape"] and len(fits) == 2
+
+
+def test_a_stored_model_is_never_overwritten(store, generation, job_env, fits, tmp_path):
+    first = _job(store, generation, "1y")
+    shape16 = first["shape"]["sample_sha256"][:16]
+    key = model_key(generation, shape16, "garch.json")
+    # A model stored under this folder that is not this panel's (another digest with the same
+    # first 16 digits): the build fits its own and leaves the stored files as they are.
+    doc = json.loads(store.get(key))
+    doc["sample_sha256"] = shape16 + "0" * 48
+    foreign = canonical_json(doc).encode()
+    store.put(key, foreign)
+    pool = store.get(model_key(generation, shape16, "pool.npy"))
+    assert not (tmp_path / "cache" / "models").exists()  # so the next build reads the store's
+    again = _job(store, generation, "5y")
+    assert len(fits) == 2 and again["shape"] == first["shape"]
+    assert store.get(key) == foreign
+    assert store.get(model_key(generation, shape16, "pool.npy")) == pool
+
+
+def test_model_files_are_read_through_the_scratch_cache_within_its_cap(
+    store, generation, job_env, tmp_path
+):
+    first = _job(store, generation, "1y")
+    shape16 = first["shape"]["sample_sha256"][:16]
+    cache = tmp_path / "cache"
+    assert not (cache / "models").exists()  # written to the store, not to the cache
+    _job(store, generation, "5y")
+    for name in ("garch.json", "pool.npy"):
+        assert (cache / "models" / generation / shape16 / name).is_file()
+    reads = _Writes(store)
+    loaded = load_artifact(reads, generation, shape16, cache_dir=cache)
+    assert loaded is not None and loaded.sample_sha256 == first["shape"]["sample_sha256"]
+    assert [key for key in reads.gets if key.startswith("models/")] == []  # a cache hit
+    assert load_artifact(store, generation, "f" * 16, cache_dir=cache) is None
+    job_env.setenv("PS_CACHE_MAX_MB", "0.05")
+    _job(store, generation, "ew")
+    cached = [path for path in cache.rglob("*") if path.is_file()]
+    assert sum(path.stat().st_size for path in cached) <= 50_000
+
+
+def test_an_unavailable_model_is_stored_without_a_pool_and_reused(
+    store, generation, job_env, fits, monkeypatch
+):
+    from portfoliosight.engine import shape as shape_mod
+
+    monkeypatch.setattr(shape_mod, "MIN_POOL_ROWS", 10_000)  # no fund set has that many days
+    first = _job(store, generation, "1y")
+    assert first["engines"]["garch"]["status"] == "unavailable"
+    shape16 = first["shape"]["sample_sha256"][:16]
+    assert store.list(f"models/{generation}/") == [model_key(generation, shape16, "garch.json")]
+    again = _job(store, generation, "5y")
+    assert again["engines"]["garch"] == first["engines"]["garch"] and len(fits) == 1
+
+
+def test_a_generation_whose_name_and_day_disagree_is_not_built(store, d_g, tmp_path):
+    named = f"{(d_g - timedelta(days=1)).isoformat()}-{ENGINE_VERSION}"
+    store_mod.put_json(
+        store,
+        f"meta/{named}/generation.json",
+        {"generation": named, "asof": d_g.isoformat(), "engine_version": ENGINE_VERSION},
+    )
+    with pytest.raises(RuntimeError, match="is not dated"):
+        _build(store, named, tmp_path)
+    assert store.list("models/") == []
