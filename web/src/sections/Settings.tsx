@@ -1,9 +1,11 @@
 import { Share2 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import type { Tensor } from "../api/tensor";
-import { adminLine, adminTag, capsRule, lookbackNames, plain, technical } from "../copy";
+import { adminLine, adminTag, capsRule, engineDescriptions, engineNames, lookbackNames, plain, technical } from "../copy";
 import { pctPlain } from "../format";
+import { defaultEngine, engineReason } from "../math/engines";
 import { LOOKBACKS, type Cap, type LookbackId } from "../state/store";
+import { ENGINES, type EngineId } from "../state/url";
 
 type Props = {
   tensor: Tensor;
@@ -16,6 +18,9 @@ type Props = {
   problem: string | null;
   /** Set in admin mode (engines spec 6.2): the menu limit it allows. */
   adminMenuMax: number | null;
+  /** The simulation on screen (the tensor carries it). */
+  engine: EngineId;
+  onEngine: (engine: EngineId) => void;
   onLookback: (lookback: LookbackId) => void;
   onGhost: (lookback: LookbackId) => void;
   onCaps: (caps: Cap[]) => void;
@@ -56,7 +61,7 @@ export function validateCaps(ids: string[], draft: Draft, defaultMaxPct: number)
   return errors;
 }
 
-export function Settings({ tensor, lookback, ghosts, caps, unavailable, details, busy, problem, adminMenuMax, onLookback, onGhost, onCaps, onShare }: Props) {
+export function Settings({ tensor, lookback, ghosts, caps, unavailable, details, busy, problem, adminMenuMax, engine, onEngine, onLookback, onGhost, onCaps, onShare }: Props) {
   const uid = useId();
   const funds = tensor.universe.funds;
   const ids = funds.map((f) => f.id);
@@ -102,34 +107,61 @@ export function Settings({ tensor, lookback, ghosts, caps, unavailable, details,
           <span>{adminLine(adminMenuMax)}</span>
         </p>
       )}
-      <div className="set-block">
-        <h3 className="heading">Years of history</h3>
-        <div className="opts" role="radiogroup" aria-label="Years of history">
-          {LOOKBACKS.map((id) => {
-            const note = unavailable[id];
-            return (
-              <label key={id} className="opt">
-                <input type="radio" name={`${uid}-lb`} data-testid={`lookback-${id}`} checked={lookback === id} disabled={Boolean(note)} onChange={() => onLookback(id)} />
-                <span>{lookbackNames[id]}</span>
-                {note && <small>{note}</small>}
-              </label>
-            );
-          })}
+      <div className="set-col">
+        <div className="set-block">
+          <h3 className="heading">Years of history</h3>
+          <div className="opts" role="radiogroup" aria-label="Years of history">
+            {LOOKBACKS.map((id) => {
+              const note = unavailable[id];
+              return (
+                <label key={id} className="opt">
+                  <input type="radio" name={`${uid}-lb`} data-testid={`lookback-${id}`} checked={lookback === id} disabled={Boolean(note)} onChange={() => onLookback(id)} />
+                  <span>{lookbackNames[id]}</span>
+                  {note && <small>{note}</small>}
+                </label>
+              );
+            })}
+          </div>
+          {excluded.length > 0 && (
+            <>
+              <p className="hint" style={{ marginTop: 10 }}>
+                Set aside in this view:
+              </p>
+              <ul className="list-plain">
+                {excluded.map((e) => (
+                  <li key={e.id} data-testid="excluded-note">
+                    <span className="num">{e.id}</span>: {e.reason}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </div>
-        {excluded.length > 0 && (
-          <>
-            <p className="hint" style={{ marginTop: 10 }}>
-              Set aside in this view:
-            </p>
-            <ul className="list-plain">
-              {excluded.map((e) => (
-                <li key={e.id} data-testid="excluded-note">
-                  <span className="num">{e.id}</span>: {e.reason}
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
+        <div className="set-block">
+          <h3 className="heading">{plain.simulation}</h3>
+          <div className="opts opts-engine" role="radiogroup" aria-label={plain.simulation}>
+            {ENGINES.map((id) => {
+              const reason = engineReason(tensor, id);
+              return (
+                <label key={id} className="opt opt-engine">
+                  <input type="radio" name={`${uid}-engine`} data-testid={`engine-${id}`} checked={engine === id} disabled={reason !== null} onChange={() => onEngine(id)} />
+                  <span className="opt-body">
+                    <span className="opt-name">
+                      {engineNames[id]}
+                      {id === defaultEngine(tensor) && <small className="opt-default">{plain.engineDefault}</small>}
+                    </span>
+                    <span className="opt-desc">{engineDescriptions[id]}</span>
+                    {reason !== null && (
+                      <small className="opt-reason" data-testid={`engine-${id}-reason`}>
+                        {reason}
+                      </small>
+                    )}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
       </div>
       <div className="set-block">
         <h3 className="heading">{plain.ghosts}</h3>

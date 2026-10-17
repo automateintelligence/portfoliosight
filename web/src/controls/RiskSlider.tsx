@@ -1,6 +1,8 @@
 import { useCallback, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import { plain, technical } from "../copy";
+import { engineRiskSliderTechnical, plain } from "../copy";
 import { signedPct } from "../format";
+import type { EngineId } from "../state/url";
+import { EngineTag } from "./EngineTag";
 import { useSlide } from "./useSlide";
 
 type Props = {
@@ -16,6 +18,8 @@ type Props = {
   typical: number;
   details: boolean;
   phone: boolean;
+  /** The simulation behind the two readouts. */
+  engine: EngineId;
   /** Height of the dashed stem that links the thumb to the chart's risk axis. */
   stem: number;
   /** A tensor is loading: the slider waits. */
@@ -24,7 +28,7 @@ type Props = {
 };
 
 /** One thumb on the chart's risk axis; its two readouts always move together (spec 3.2). */
-export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, phone, stem, busy = false, onChange }: Props) {
+export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, phone, engine, stem, busy = false, onChange }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const readoutRef = useRef<HTMLDivElement>(null);
   const [readoutW, setReadoutW] = useState(0);
@@ -58,7 +62,7 @@ export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, 
   const typ = signedPct(typical);
   useLayoutEffect(() => {
     if (readoutRef.current) setReadoutW(readoutRef.current.offsetWidth);
-  }, [bad, typ, details, phone]);
+  }, [bad, typ, details, phone, engine]);
 
   const thumbX = xOf(s);
   const railLeft = xOf(0);
@@ -92,7 +96,10 @@ export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, 
         <span className="r-thumb" style={{ left: thumbX }} />
       </div>
       <div ref={readoutRef} className="readout" style={phone ? undefined : { left: readoutX, transform: "translateX(-50%)" }}>
-        <span className="readout-cap">{plain.riskSlider}</span>
+        <span className="readout-head">
+          <span className="readout-cap">{plain.riskSlider}</span>
+          <EngineTag engine={engine} />
+        </span>
         <span className="readout-figs">
           <span data-testid="risk-readout-bad">
             {plain.riskBad}
@@ -106,11 +113,11 @@ export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, 
             <b className="num">{typ}</b>
           </span>
         </span>
-        {details && !phone && <span className="readout-tech">{technical.riskSlider}</span>}
+        {details && !phone && <span className="readout-tech">{engineRiskSliderTechnical[engine]}</span>}
         {details && phone && (
           <details className="readout-method" data-testid="risk-method">
             <summary>{plain.method}</summary>
-            <span className="readout-tech">{technical.riskSlider}</span>
+            <span className="readout-tech">{engineRiskSliderTechnical[engine]}</span>
           </details>
         )}
       </div>

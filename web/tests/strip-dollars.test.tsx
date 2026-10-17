@@ -8,6 +8,7 @@ import { parseTensor } from "../src/api/client";
 import { ResultStrip, type DetailFacts } from "../src/controls/ResultStrip";
 import { dollars, signedDollars } from "../src/format";
 import { amountsValue } from "../src/math/amounts";
+import { engineFacts } from "../src/math/engines";
 import { stripScale } from "../src/math/stripScale";
 import { enteredValue, type Row } from "../src/state/store";
 
@@ -90,6 +91,7 @@ const strip = (value: Parameters<typeof ResultStrip>[0]["value"], details = fals
       word="Good"
       details={details}
       facts={facts}
+      engine={engineFacts(T5, "replay")}
       staleAsof={null}
       onToggleDetails={() => undefined}
     />,

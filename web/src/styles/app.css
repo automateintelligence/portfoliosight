@@ -1595,6 +1595,12 @@ button {
   color: var(--muted);
 }
 
+.readout-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .readout-tech {
   font-size: 10.5px;
   color: var(--muted);
@@ -1689,6 +1695,61 @@ button {
 .strip-label .sub {
   font-size: 11.5px;
   color: var(--muted);
+}
+
+.strip-head {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+
+/* The simulation behind the figures (engines spec 6): small, muted, never a headline. The mark
+   before the name is a ring for the replay of history, a dot for the fitted volatility and a
+   ringed dot for the copula; it takes the text colour, so every look keeps its own contrast. */
+.engine-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 85%, var(--muted));
+  border-radius: 999px;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.engine-mark {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1.25px solid currentColor;
+  opacity: 0.75;
+}
+
+.engine-tag[data-engine="garch"] .engine-mark {
+  background: currentColor;
+}
+
+.engine-tag[data-engine="copula"] .engine-mark {
+  background: radial-gradient(circle, currentColor 0 1px, transparent 1.5px);
+}
+
+[data-theme="hud"] .engine-tag {
+  border-radius: 2px;
+}
+
+[data-theme="grid"] .engine-tag {
+  border-radius: 0;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .range {
@@ -2474,6 +2535,77 @@ button {
 
 .opt small {
   color: var(--muted);
+}
+
+.set-col {
+  display: grid;
+  align-content: start;
+  gap: 22px;
+  min-width: 0;
+}
+
+/* The Simulation control: one option per line, each with its one-line description. */
+.opts-engine {
+  display: grid;
+  gap: 6px;
+}
+
+.opt-engine {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 12px;
+}
+
+.opt-engine input {
+  margin-top: 3px;
+}
+
+.opt-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.opt-name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.opt-default {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.opt-desc {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+
+.opt-reason {
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--muted);
+}
+
+/* An engine the tensor does not carry stays legible: its name and description dim, its reason does not. */
+.opt-engine:has(input:disabled) {
+  opacity: 1;
+}
+
+.opt-engine:has(input:disabled) input,
+.opt-engine:has(input:disabled) .opt-name,
+.opt-engine:has(input:disabled) .opt-desc {
+  opacity: 0.55;
+}
+
+.lead-cap::first-letter {
+  text-transform: uppercase;
 }
 
 .caps {

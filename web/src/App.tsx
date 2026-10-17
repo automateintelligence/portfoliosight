@@ -10,7 +10,7 @@ import { RiskSlider } from "./controls/RiskSlider";
 import { ShareDialog } from "./controls/ShareDialog";
 import { ThemeSwitch } from "./controls/ThemeSwitch";
 import { disclaimer, family, lookbackLine, lookbackNames, plain } from "./copy";
-import { defaultEngine, resolveEngine } from "./math/engines";
+import { defaultEngine, engineFacts, resolveEngine } from "./math/engines";
 import { portfolioMath, type YearRange } from "./math/portfolio";
 import { stripScale, tensorBounds } from "./math/stripScale";
 import { atNode, ceilingAt, deriveView, limitsBind, positionOfCeiling } from "./math/view";
@@ -120,6 +120,7 @@ export default function App() {
   const engine = tensor ? resolveEngine(tensor, state.engine) : state.engine;
   // the service is told the engine only when it is not the tensor's default
   const askEngine = tensor && engine !== defaultEngine(tensor) ? engine : null;
+  const stripEngine = useMemo(() => (tensor ? engineFacts(tensor, engine) : null), [tensor, engine]);
   const nodeView = useMemo(() => (tensor && math ? deriveView(tensor, math, state.s, state.t, engine) : null), [tensor, math, state.s, state.t, engine]);
   const rangeKey = useMemo(() => (tensor ? { generation: tensor.generation, hash: tensor.universe.hash, lookback: tensor.lookback.id } : null), [tensor]);
   // The selected mix's exact one-year range comes from the service once the sliders rest; at a
@@ -424,6 +425,7 @@ export default function App() {
               typical={view.frontRange.typical}
               details={state.details}
               phone={phone}
+              engine={engine}
               stem={scales.margins.bottom + 22}
               busy={busy}
               onChange={setS}
@@ -442,7 +444,7 @@ export default function App() {
           )}
         </div>
 
-        {view && tensor && (
+        {view && tensor && stripEngine && (
           <ResultStrip
             low={view.range.low}
             typical={view.range.typical}
@@ -464,6 +466,7 @@ export default function App() {
               notes: tensor.notes ?? [],
               defaultPoint: tensor.ladder.default_point,
             }}
+            engine={stripEngine}
             staleAsof={state.staleness?.asof ?? null}
             chartNotes={phone}
             onToggleDetails={() => dispatch({ type: "setDetails", details: !state.details })}
@@ -535,6 +538,8 @@ export default function App() {
               busy={busy}
               problem={state.menuError}
               adminMenuMax={state.tier.tier === "admin" ? state.tier.menuMax : null}
+              engine={engine}
+              onEngine={(next) => dispatch({ type: "setEngine", engine: next })}
               onLookback={(lookback: LookbackId) => dispatch({ type: "setLookback", lookback })}
               onGhost={(lookback: LookbackId) => dispatch({ type: "toggleGhost", lookback })}
               onCaps={(caps) => dispatch({ type: "setCaps", caps })}

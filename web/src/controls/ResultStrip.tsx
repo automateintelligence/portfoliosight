@@ -1,8 +1,10 @@
 import { SlidersHorizontal } from "lucide-react";
-import { enbLine, plain, rangeBarLabel, staleLine, stripFigure, stripNoPrice, stripOnTotal, technical } from "../copy";
+import { enbLine, engineTechnical, enginePlain, heldConstantLine, heldConstantWhy, plain, poolLine, rangeBarLabel, staleLine, stripFigure, stripNoPrice, stripOnTotal, technical } from "../copy";
 import { dollars, pct, signedDollars, signedPct } from "../format";
+import type { EngineFacts } from "../math/engines";
 import { stripPlace, type StripScale } from "../math/stripScale";
 import type { enteredValue } from "../state/store";
+import { EngineTag } from "./EngineTag";
 
 export type DetailFacts = {
   enb: number;
@@ -31,6 +33,8 @@ type Props = {
   word: string;
   details: boolean;
   facts: DetailFacts;
+  /** Which simulation produced the figures, and what the details say about it. */
+  engine: EngineFacts;
   staleAsof: string | null;
   /** Phone: the chart's axis and legend technical lines are shown here instead of on the chart. */
   chartNotes?: boolean;
@@ -38,7 +42,7 @@ type Props = {
 };
 
 /** "Selected mix": the one-year range, the quiet diversification word, and the details toggle. */
-export function ResultStrip({ low, typical, high, normal, scale, value, word, details, facts, staleAsof, chartNotes = false, onToggleDetails }: Props) {
+export function ResultStrip({ low, typical, high, normal, scale, value, word, details, facts, engine, staleAsof, chartNotes = false, onToggleDetails }: Props) {
   // A small picture of the range on one scale for the menu and window: the Bad-to-Good band with
   // its two ends marked, the typical year, and 0%. A figure past an end is drawn at that end with
   // an overflow mark. The bar is always in percent.
@@ -76,7 +80,10 @@ export function ResultStrip({ low, typical, high, normal, scale, value, word, de
   return (
     <section className={total === null ? "strip" : "strip strip-usd"} aria-label={plain.resultStrip}>
       <div className="strip-label">
-        <span className="heading">{plain.resultStrip}</span>
+        <span className="strip-head">
+          <span className="heading">{plain.resultStrip}</span>
+          <EngineTag engine={engine.id} />
+        </span>
         <span className="sub" data-testid="strip-sub">
           {total === null ? plain.resultStripSuffix : stripOnTotal(dollars(total))}
         </span>
@@ -163,6 +170,22 @@ export function ResultStrip({ low, typical, high, normal, scale, value, word, de
               {facts.lookbackStart} to {facts.lookbackEnd} ({facts.rows} trading days) · prices through {facts.asof}
             </dd>
           </dl>
+          {engine.id !== "replay" && (
+            <dl className="wide" data-testid="details-engine">
+              <dt>{plain.howRangeIsMade}</dt>
+              <dd>{enginePlain[engine.id]}</dd>
+              {engine.poolRows !== null && (
+                <dd className="lead-cap" data-testid="details-pool">
+                  {poolLine(engine.poolRows)}
+                </dd>
+              )}
+              {engine.fallbackFunds.length > 0 && (
+                <dd data-testid="details-held-constant">
+                  {heldConstantLine(engine.fallbackFunds)} <span className="hint">({heldConstantWhy})</span>
+                </dd>
+              )}
+            </dl>
+          )}
           <dl className="wide">
             <dt>What the diversification word means</dt>
             <dd data-testid="details-words">{technical.cutPoints}</dd>
@@ -172,7 +195,7 @@ export function ResultStrip({ low, typical, high, normal, scale, value, word, de
             <dd data-testid="details-suggested">{technical.optimized[facts.defaultPoint]}</dd>
           </dl>
           <p className="wide hint" data-testid="details-method">
-            Method. Range: {technical.resultStrip}. The line on the chart: {technical.frontier}. {plain.optimized}: {technical.optimizedMethod[facts.defaultPoint]}.{" "}
+            Method. Range: {engineTechnical[engine.id](engine.method, engine.fallbackFunds)}. The line on the chart: {technical.frontier}. {plain.optimized}: {technical.optimizedMethod[facts.defaultPoint]}.{" "}
             {facts.notes.filter((n) => !/^(the balanced point|one-year ranges)\b/i.test(n)).join(" ")}
           </p>
         </div>

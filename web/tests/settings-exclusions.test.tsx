@@ -15,7 +15,7 @@ afterEach(cleanup);
 
 function show(excluded: { id: string; reason: string; last_close: number | null }[]) {
   const tensor = parseTensor({ ...fixture, universe: { ...fixture.universe, excluded } });
-  render(<Settings tensor={tensor} lookback="10y" ghosts={[]} caps={[]} unavailable={{}} details={false} busy={false} problem={null} adminMenuMax={null} onLookback={noop} onGhost={noop} onCaps={noop} onShare={noop} />);
+  render(<Settings tensor={tensor} lookback="10y" ghosts={[]} caps={[]} unavailable={{}} details={false} busy={false} problem={null} adminMenuMax={null} engine="replay" onEngine={noop} onLookback={noop} onGhost={noop} onCaps={noop} onShare={noop} />);
 }
 
 it("lists each fund set aside in this view with its reason, one note per fund", () => {
@@ -37,7 +37,7 @@ it("shows no list and no note when every fund is in use", () => {
 it("shows a small Admin tag only in admin mode", () => {
   const tensor = parseTensor(fixture);
   const view = (adminMenuMax: number | null) =>
-    render(<Settings tensor={tensor} lookback="5y" ghosts={[]} caps={[]} unavailable={{}} details={false} busy={false} problem={null} adminMenuMax={adminMenuMax} onLookback={noop} onGhost={noop} onCaps={noop} onShare={noop} />);
+    render(<Settings tensor={tensor} lookback="5y" ghosts={[]} caps={[]} unavailable={{}} details={false} busy={false} problem={null} adminMenuMax={adminMenuMax} engine="replay" onEngine={noop} onLookback={noop} onGhost={noop} onCaps={noop} onShare={noop} />);
   view(null);
   expect(screen.queryByTestId("admin-tag")).toBeNull();
   cleanup();
