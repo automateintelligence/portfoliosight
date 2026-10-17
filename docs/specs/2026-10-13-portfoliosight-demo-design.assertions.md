@@ -161,7 +161,8 @@ why it is load-bearing.
 - **A-PS-37 — the client never waits on the server during a drag, recovers from an expired
   challenge by reloading, and stops after three failed builds.** (F8, F12, F14, §3.2)
 - **A-PS-38 — share validators, the fixed template and the caps.** (S18, F15, §9.3) The one outbound
-  channel; a link in any of the four themes is sent, any other theme refused.
+  channel; a link in any of the four themes is sent, any other theme refused; a link in any of the
+  three simulations (`e`) is sent, any other refused.
 - **A-PS-39 — the private-preview gate.** (M3 as reworded, §9.6) No key → 403 page without data;
   header passes; `?k=` sets the cookie and redirects; wrong key refused; preview off passes
   through; the secret is never echoed.
@@ -997,13 +998,15 @@ Phase 3 · unit (vitest)
 Phase 3 · unit (vitest)
 - **Claim.** `decode(encode(state)) == state` for every reachable state of `web/src/state/url.ts`
   (preset or custom funds with optional amounts, `unit` including `shares`, cap overrides,
-  lookback, ghosts, `r` decimal, `d` auto or decimal, theme, details), unknown keys are ignored,
-  `r` is clamped into the domain on load, and `encode` emits only the §8.1 keys.
+  lookback, ghosts, `r` decimal, `d` auto or decimal, theme, details, simulation `engine`),
+  unknown keys are ignored, `r` is clamped into the domain on load, and `encode` emits only the
+  §8.1 keys (and the engines spec's `e`, written last and only when it is not `replay`).
 - **Setup.** A generator over the state space (≥ 500 cases) with fund ids drawn from the fixture
   universe; a URL with an unknown key `zz=1` and a `k=` key; an `r` outside `[s_safe, NX−1]`.
 - **Observation.** Round-trip equality for all cases; the key set of every encoded URL ⊆
-  `{u, f, unit, c, lb, g, r, d, t, x}`; `?u=guide2017&lb=5y&r=19.25&d=auto&t=hud` decodes to the
-  obvious state and re-encodes to the same string; `zz` and `k` are dropped and do not appear
+  `{u, f, unit, c, lb, g, r, d, t, x, e}`; `?u=guide2017&lb=5y&r=19.25&d=auto&t=hud` decodes to
+  the obvious state and re-encodes to the same string; `…&t=hud&x=1&e=garch` re-encodes to itself
+  and an unknown `e` reads as `replay` and is not written back; `zz` and `k` are dropped and do not appear
   in re-encoded output; out-of-domain `r` decodes to the clamped value. **Must-not-contain:**
   any non-§8.1 key in `encode` output; a `k` value surviving a re-encode. Fail = any.
 - **Kind.** property (≥ 500 generated states).
@@ -1034,7 +1037,7 @@ Phase 3 · unit (vitest over `web/worker/share.ts`)
 - **Claim.** `POST /api/share` accepts only `{"to", "url"}` JSON ≤ 2 KB with `Origin:
   https://portfoliosight.ai`, one bare RFC 5322 addr-spec ≤ 254 chars, and a `url` that parses to
   `https://portfoliosight.ai/` with only §8.1 keys, `t` one of the four themes `ks-dark | light |
-  hud | grid`, and ≤ 2,048 chars; the MailChannels request
+  hud | grid`, `e` one of the three simulations `replay | garch | copula`, and ≤ 2,048 chars; the MailChannels request
   carries the **re-encoded** URL, `from.email = SHARE_FROM`, `name = "PortfolioSight"`, the fixed
   subject and body, `Reply-To = SHARE_REPLY_TO`, the DKIM fields; the `ShareLimiter` logic refuses
   the 2nd per IP per minute, the 4th per IP per day and the 51st global per day; with
@@ -1045,7 +1048,8 @@ Phase 3 · unit (vitest over `web/worker/share.ts`)
   255-char address; `url` on `https://example.com/`; `url` with a `javascript:` scheme; `url` with
   an extra key `zz=1`; `url` with `k=…`; a 3 KB body; a non-JSON body; a request with a foreign
   `Origin`; a `url` in each of the four themes and one with an unknown theme (`t=neon`, `t=HUD`,
-  `t=grid2`, …); the React dialog rendered with the client's preview flag on and off.
+  `t=grid2`, …); a `url` with each of the three simulations and one with an unknown
+  `e` (`foo`, `GARCH`, `garch,copula`, empty); the React dialog rendered with the client's preview flag on and off.
 - **Observation.** Valid → 202 `{"ok": true}` and exactly one MailChannels call whose JSON has
   `personalizations[0].to[0].email` equal to the input, `from.email == SHARE_FROM`, subject
   `"Someone shared a PortfolioSight view with you"`, text body consisting of the one fixed line,
@@ -1339,14 +1343,15 @@ Phase 3 · ui + unit
 
 ### A-PS-51 — the address reproduces the view in a fresh context
 Phase 3 · ui
-- **Claim.** After changing the risk slider, the diversification slider, the theme, the unit
-  and details, the address bar contains `u`, `r`, `d`, `t`, `x`, `unit` (and `lb`), opening that
-  URL in a fresh browser context reproduces the same `risk-readout-bad`, `range-low`, `div-word`,
-  `data-theme`, unit and details state, and `share-copy` places that exact URL on the clipboard.
+- **Claim.** After changing the risk slider, the diversification slider, the theme, the unit,
+  details and the simulation (Settings, the volatility model), the address bar contains `u`, `r`,
+  `d`, `t`, `x`, `unit`, `e` (and `lb`), opening that URL in a fresh browser context reproduces
+  the same `risk-readout-bad`, `range-low`, `div-word`, `data-theme`, unit, details state and
+  `engine-tag`, and `share-copy` places that exact URL on the clipboard.
 - **Setup.** As A-PS-41; clipboard permission granted; a second `browser.newContext()` with
   empty storage.
 - **Observation.** The URL after the changes parses to the expected keys; the fresh context's
-  five readouts equal the first context's text exactly; `navigator.clipboard.readText()` after
+  readouts (the engine tag among them) equal the first context's text exactly; `navigator.clipboard.readText()` after
   `share-copy` equals `location.href`; `share-link` shows the same string. **Must-not-contain:**
   a key outside §8.1; a readout that differs between contexts; a URL that depends on
   `localStorage` (the fresh context has none). Fail = any.

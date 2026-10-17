@@ -6,7 +6,7 @@ environment (no jsdom); importing `web/src/state/url.ts` must not need a DOM.
 
 Pinned interface (`web/src/state/url.ts`)
 - `encode(state: UrlState) -> string`: the query string with its leading `?`, holding only the
-  spec §8.1 keys `u, f, unit, c, lb, g, r, d, t, x`, each at most once.
+  spec §8.1 keys `u, f, unit, c, lb, g, r, d, t, x, e`, each at most once.
 - `decode(search: string, domain?: {s_safe: number, s_max: number}) -> UrlState`: reads only those
   keys, ignores every other key, and clamps `r` into `[s_safe, s_max]` when `domain` is given.
 - `UrlState` has exactly these fields:
@@ -17,7 +17,9 @@ Pinned interface (`web/src/state/url.ts`)
   `lookback: "1y" | "2y" | "3y" | "5y" | "10y" | "ew"` (`lb`; default `5y`),
   `ghosts: string[]` (`g`; lookback ids), `r: number | null` (`null` = not in the URL),
   `d: "auto" | number` (default `auto`), `theme: "ks-dark" | "light" | "hud" | null` (`t`; `null` =
-  not in the URL, so stored preference applies), `details: boolean` (`x=1`).
+  not in the URL, so stored preference applies), `details: boolean` (`x=1`),
+  `engine: "replay" | "garch" | "copula"` (`e`; the simulation, written only when it is not
+  `replay`; any other value reads as `replay`).
 - The spec example `?u=guide2017&lb=5y&r=19.25&d=auto&t=hud` must re-encode to itself, which fixes
   the key order `u, f, unit, c, lb, g, r, d, t, x`, that `lb` and `d` are written even at their
   defaults, and that `unit=pct`, an empty `f`/`c`/`g` and `x` off are omitted.
@@ -40,7 +42,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
-const ALLOWED = new Set(["u", "f", "unit", "c", "lb", "g", "r", "d", "t", "x"]);
+const ALLOWED = new Set(["u", "f", "unit", "c", "lb", "g", "r", "d", "t", "x", "e"]);
+const ENGINES = ["replay", "garch", "copula"];
 const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
 const UNITS = ["pct", "usd", "shares"];
 const THEMES = [null, "ks-dark", "light", "hud", "grid"];
@@ -106,6 +109,7 @@ function generate(rnd: () => number) {
   state.d = dk < 0.4 ? "auto" : dk < 0.5 ? 0 : dk < 0.6 ? 1 : round(rnd(), 6);
   state.theme = pick(THEMES);
   state.details = rnd() < 0.5;
+  state.engine = pick(ENGINES);
   return state;
 }
 
@@ -188,6 +192,7 @@ describe("A-PS-36", () => {
       d: "auto",
       theme: "hud",
       details: false,
+      engine: "replay",
     });
     expect(U.encode(state)).toBe(example);
     // the spec's custom-menu example
@@ -202,6 +207,19 @@ describe("A-PS-36", () => {
     expect(custom.d).toBe(0.5);
     expect(custom.theme).toBeNull();
     expect(custom.details).toBe(true);
+    expect(custom.engine).toBe("replay");
+    // the simulation (engines spec 6): written last, after x, and only when it is not replay
+    const engine = "?u=guide2017&lb=5y&r=19.25&d=auto&t=hud&x=1&e=garch";
+    expect(U.decode(engine).engine).toBe("garch");
+    expect(U.encode(U.decode(engine))).toBe(engine);
+    expect(U.encode({ ...U.decode(engine), engine: "replay" })).toBe("?u=guide2017&lb=5y&r=19.25&d=auto&t=hud&x=1");
+    expect(U.encode({ ...U.decode(engine), details: false, engine: "copula" })).toBe("?u=guide2017&lb=5y&r=19.25&d=auto&t=hud&e=copula");
+    // an unknown value reads as replay and is not written back
+    for (const bad of ["foo", "GARCH", "garch,copula", ""]) {
+      const read = U.decode(`?u=tsp&e=${bad}`);
+      expect(read.engine, `e=${bad}`).toBe("replay");
+      expect(keysOf(U.encode(read)), `e=${bad}`).not.toContain("e");
+    }
   });
 
   it("unknown keys zz and k are ignored and never re-encoded", () => {

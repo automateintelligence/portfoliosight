@@ -4,13 +4,14 @@ Phase 3, ui (Playwright against `vite preview`, run from pytest; desktop and pho
 only).
 
 One full state per viewport: the risk slider and the diversification slider are moved with arrow
-keys, the theme is switched to hud, the unit to Shares and details are turned on. The address then
-carries `u`, `r`, `d`, `t`, `x`, `unit` with the expected values and no key outside spec 8.1;
+keys, the theme is switched to hud, the unit to Shares, details are turned on and the Simulation
+(Settings, `engine-garch`) is switched to the volatility model. The address then
+carries `u`, `r`, `d`, `t`, `x`, `unit`, `e` with the expected values and no key outside spec 8.1;
 `share-link` shows exactly that address and `share-copy` puts it on the clipboard (clipboard
 permission granted). The copied address is opened in a second `browser.newContext()` with empty
 storage and the same device profile: `risk-readout-bad`, `range-low`, `div-word`, `data-theme`, the
-selected unit and the `details-enb` line equal the first context's text exactly, and the six keys
-keep their values.
+selected unit, the `details-enb` line and the `engine-tag` equal the first context's text exactly,
+and the seven keys keep their values.
 
 The Playwright spec mocks /api/* itself (page.route) from web/fixtures/guide2017_5y.json and
 data/holdings/holdings_guide2017_step2.csv: GET /api/presets (guide2017 with its "$" allocation and
@@ -337,7 +338,7 @@ async function advanceTheme(page: Page): Promise<string> {
 // ---------------------------------------------------------------------------------------------
 test.use({ permissions: ["clipboard-read", "clipboard-write"] });
 
-const URL_KEYS = ["u", "f", "unit", "c", "lb", "g", "r", "d", "t", "x"]; // spec 8.1, the whole set
+const URL_KEYS = ["u", "f", "unit", "c", "lb", "g", "r", "d", "t", "x", "e"]; // spec 8.1 and engines spec 6, the whole set
 const DECIMAL = /^\d+(\.\d+)?$/;
 
 // The focusable handle of a slider test id: the element itself or its inner ARIA slider / range input.
@@ -366,6 +367,7 @@ async function readouts(page: Page): Promise<Record<string, string>> {
     theme: (await page.locator("html").getAttribute("data-theme")) ?? "",
     unit: await selectedUnit(page),
     details: await text("details-enb"),
+    engine: norm((await page.getByTestId("engine-tag").first().textContent()) ?? ""),
   };
 }
 
@@ -407,9 +409,18 @@ test("url reproduces the view in a fresh context", async ({ page, browser, baseU
   // details on
   await page.getByTestId("details-toggle").click();
   await expect.poll(() => urlParam(page, "x")).toBe("1");
+  // simulation -> the volatility model (Settings); the figures move with it and the address says so
+  await expect(page.getByTestId("engine-tag").first()).toHaveText("History replay");
+  expect(urlParam(page, "e"), "History replay is the default and is not in the address").toBeNull();
+  await page.getByTestId("chip-settings").click();
+  await expect(page.getByTestId("section-settings")).toHaveAttribute("aria-expanded", "true");
+  await page.getByTestId("engine-garch").check({ force: true });
+  await expect(page.getByTestId("engine-garch")).toBeChecked();
+  await expect.poll(() => urlParam(page, "e")).toBe("garch");
+  await expect(page.getByTestId("engine-tag").first()).toHaveText("Volatility model");
 
   await expect
-    .poll(() => ["u", "r", "d", "t", "x", "unit"].filter((key) => urlParam(page, key) === null), { message: "URL keys still missing" })
+    .poll(() => ["u", "r", "d", "t", "x", "unit", "e"].filter((key) => urlParam(page, key) === null), { message: "URL keys still missing" })
     .toEqual([]);
   const href = page.url();
   const params = new URL(href).searchParams;
@@ -418,6 +429,8 @@ test("url reproduces the view in a fresh context", async ({ page, browser, baseU
   expect(params.get("t")).toBe("hud");
   expect(params.get("x")).toBe("1");
   expect(params.get("unit")).toBe("shares");
+  expect(params.get("e")).toBe("garch");
+  expect(Array.from(params.keys()).at(-1), "e is written after x").toBe("e");
   expect(params.get("r")!).toMatch(DECIMAL);
   expect(params.get("d")!).toMatch(DECIMAL);
   expect(Number(params.get("d"))).toBeGreaterThanOrEqual(0);
@@ -428,6 +441,7 @@ test("url reproduces the view in a fresh context", async ({ page, browser, baseU
   const first = await readouts(page);
   expect(first.theme).toBe("hud");
   expect(first.unit).toMatch(/shares/i);
+  expect(first.engine).toBe("Volatility model");
   expect(["Good", "Average", "Fair", "Poor"]).toContain(first.word);
   expect(first.bad).toMatch(/\d/);
   expect(first.low).toMatch(/\d/);
@@ -467,7 +481,7 @@ test("url reproduces the view in a fresh context", async ({ page, browser, baseU
     expect(again, "readouts in the fresh context").toEqual(first);
     const keys = Array.from(new URL(second.url()).searchParams.keys());
     for (const key of keys) expect(URL_KEYS, `URL key "${key}" is outside spec 8.1`).toContain(key);
-    for (const key of ["u", "r", "d", "t", "x", "unit"]) {
+    for (const key of ["u", "r", "d", "t", "x", "unit", "e"]) {
       expect(new URL(second.url()).searchParams.get(key), `URL key ${key} kept in the fresh context`).toBe(params.get(key));
     }
   } finally {

@@ -83,20 +83,23 @@ the docstring is authoritative for that test.
 ## TypeScript and the page
 
 - **Math** (`web/src/math/portfolio.ts`): `portfolioMath(tensor)` returns an object with
-  `stats(w) -> {mu, sigma, enb}`, `yearRange(s, t) -> {low, typical, high}` (the one-year bad,
-  typical and good year from `ladder.range`, blended between nodes as `interpolate` blends the
-  mixes), `normalRange(mu, sigma) -> {low, mid, high}` (`μ ∓ 1.96σ`, the bell-curve figure shown
+  `stats(w) -> {mu, sigma, enb}`, `yearRange(s, t, engine?) -> {low, typical, high}` (the one-year bad,
+  typical and good year from `ladder.range`, or from `ladder.ranges[engine]` for a simulation
+  that is not the tensor's default (`range_default`), blended between nodes as `interpolate`
+  blends the mixes; a schema 2 tensor answers `ladder.range` for every engine), `normalRange(mu, sigma) -> {low, mid, high}` (`μ ∓ 1.96σ`, the bell-curve figure shown
   in details only),
   `interpolate(s, t) -> number[]` (walks `ladder.w` with `ladder.hop`, spec 4.11),
-  `frontierCurve() -> {sigma: number[], mu: number[]}`, `riskSliderDomain() -> {s_safe, s_max}`
-  (`s_safe` is the tensor's `frontier.s_safe`), `tAuto(s) -> number` (from
+  `frontierCurve() -> {sigma: number[], mu: number[]}`, `riskSliderDomain(engine?) -> {s_safe, s_max}`
+  (`s_safe` is the tensor's `frontier.s_safe`, or `frontier.ranges[engine].s_safe` for another simulation), `tAuto(s) -> number` (from
   `ladder.t_suggested`).
 - **Tensor loader**: `parseTensor(json: unknown)` exported from `web/src/api/client.ts` (zod;
   throws on a bad tensor; importing the module has no side effects and needs no DOM).
 - **Worker**: `web/worker/index.ts` is the standard module shape, `export default { fetch(request,
   env, ctx) }`, and compares secrets with `crypto.subtle.timingSafeEqual`.
 - **DOM**: only the `data-testid`s of spec §10, the copy of spec §3.6 and §3.7,
-  `html[data-theme]`, the URL keys of spec §8.1 and standard ARIA. `chart-canvas` is the
+  `html[data-theme]`, the URL keys of spec §8.1 and engines spec §6 (`e`), the Simulation control
+  (`engine-replay`, `engine-garch`, `engine-copula`; radios in Settings) and its tag (`engine-tag`,
+  one beside the strip's label and one beside the risk slider's readouts) and standard ARIA. `chart-canvas` is the
   `<canvas>` element. Axes are d3-axis ticks (`g.tick` with a `line` and a percent `text`); the
   UI tests derive the chart scales from them.
 
@@ -123,7 +126,7 @@ the docstring is authoritative for that test.
   is the return value of `hmac.compare_digest`, called on every `/v1/` request. Switch off the
   FastAPI docs routes (`/docs/oauth2-redirect` contains `auth`).
 - Front end: `web/src/math/amounts.ts` (`amountsToWeights`, `percentTotal`, `tradeDeltas`);
-  `web/src/state/url.ts` (`encode`, `decode`, the `UrlState` shape); `web/src/state/store.ts`
+  `web/src/state/url.ts` (`encode`, `decode`, the `UrlState` shape with its `engine` field, `ENGINES`); `web/src/state/store.ts`
   (`createStore`); `web/worker/share.ts` (`handleShare`, `shareLimit`); `ShareDialog` props
   `{open, url, privatePreview, onClose}`; `diversificationWord` and `stressReturn` in
   `web/src/math/portfolio.ts` (see A-PS-47 and A-PS-50). `web/package.json` scripts `build`,

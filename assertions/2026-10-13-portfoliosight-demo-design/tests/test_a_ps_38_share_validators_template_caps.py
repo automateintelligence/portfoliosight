@@ -34,6 +34,9 @@ Pinned interface
 - Themes (spec 8.1, four themes since 2026-10-13): a link with `t` equal to any of `ks-dark`,
   `light`, `hud`, `grid` is sent with that theme in the link; any other `t` value is refused with
   `400 invalid_url` and nothing is sent.
+- Simulations (engines spec 6, URL key `e`): a link with `e` equal to `replay`, `garch` or `copula`
+  is sent with the page codec's own form (`e` written after `x`, and not at all for `replay`); any
+  other `e` value is refused with `400 invalid_url` and nothing is sent.
 - `web/src/controls/ShareDialog.tsx`: `ShareDialog` with props `{open: boolean, url: string,
   privatePreview: boolean, onClose: () => void}`, renderable with `react-dom/server` when `open`
   (no portal); the notice mentions "private preview" when `privatePreview` is true.
@@ -322,6 +325,33 @@ describe("A-PS-38", () => {
     expect(checked).toBe(11);
   });
 
+  it("a link in any of the three simulations is sent and an unknown simulation is refused", async () => {
+    const to = "reader@example.org";
+    let checked = 0;
+    for (const engine of ["replay", "garch", "copula"]) {
+      stubFetch();
+      const url = `${SITE}/?e=${engine}&x=1&t=hud&d=auto&lb=5y&u=guide2017`;
+      const res: Response = await S.handleShare(post({ to, url }), baseEnv(), allow);
+      expect(res.status, `e=${engine}`).toBe(202);
+      expect(sent.length, `e=${engine}`).toBe(1);
+      const link = lines(textPart(sent[0].json))[1];
+      expect(link, `e=${engine}`).toBe(`${SITE}/` + codec.encode(codec.decode(new URL(url).search)));
+      // e follows x; replay is the default and is not written
+      expect(link, `e=${engine}`).toBe(engine === "replay" ? `${SITE}/?u=guide2017&lb=5y&d=auto&t=hud&x=1` : `${SITE}/?u=guide2017&lb=5y&d=auto&t=hud&x=1&e=${engine}`);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+    for (const engine of ["foo", "GARCH", "Garch", "vine", "garch,copula", "garch%20", ""]) {
+      stubFetch();
+      const res: Response = await S.handleShare(post({ to, url: `${SITE}/?u=tsp&lb=5y&d=auto&e=${engine}` }), baseEnv(), allow);
+      expect(res.status, `e=${engine}`).toBe(400);
+      expect(await codeOf(res), `e=${engine}`).toBe("invalid_url");
+      expect(outbound, `e=${engine}: something was sent`).toBe(0);
+      checked += 1;
+    }
+    expect(checked).toBe(10);
+  });
+
   it("the caps refuse the 2nd per IP per minute, the 4th per IP per day and the 51st per day", async () => {
     // the per-IP sequences below carry no x-ps-gate header
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -459,6 +489,7 @@ EXPECTED_TITLES = {
     "every invalid input is refused with its code and nothing is sent",
     "keys outside the URL contract and visitor text never reach the message",
     "a link in any of the four themes is sent and an unknown theme is refused",
+    "a link in any of the three simulations is sent and an unknown simulation is refused",
     "the caps refuse the 2nd per IP per minute, the 4th per IP per day and the 51st per day",
     "the test key is a logged no-op",
     "the dialog shows the preview notice only while preview is on",

@@ -283,7 +283,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-36
-    claim: "decode(encode(state)) equals state for every reachable state of web/src/state/url.ts, unknown keys are ignored, r is clamped into the domain on load, and encode emits only the spec 8.1 keys."
+    claim: "decode(encode(state)) equals state for every reachable state of web/src/state/url.ts, unknown keys are ignored, r is clamped into the domain on load, and encode emits only the spec 8.1 keys (u, f, unit, c, lb, g, r, d, t, x and e, the simulation, written last and only when it is not replay; an unknown e reads as replay)."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_36_url_codec_roundtrip.py"
     setup: ""
     teardown: ""
@@ -299,7 +299,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-38
-    claim: "POST /api/share accepts only a valid same-origin {to, url} JSON request, sends the fixed MailChannels template carrying the re-encoded URL, refuses every invalid input without sending (a link in any of the four themes ks-dark, light, hud, grid is sent and any other theme is refused), enforces the per-IP minute and day caps and the global day cap (a valid x-ps-gate header lifts only the per-IP caps), sends nothing with the test key, and the dialog shows the preview notice while preview is on."
+    claim: "POST /api/share accepts only a valid same-origin {to, url} JSON request, sends the fixed MailChannels template carrying the re-encoded URL, refuses every invalid input without sending (a link in any of the four themes ks-dark, light, hud, grid is sent and any other theme is refused; a link in any of the three simulations replay, garch, copula is sent with e after x and any other e is refused), enforces the per-IP minute and day caps and the global day cap (a valid x-ps-gate header lifts only the per-IP caps), sends nothing with the test key, and the dialog shows the preview notice while preview is on."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_38_share_validators_template_caps.py"
     setup: ""
     teardown: ""
@@ -403,7 +403,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-51
-    claim: "After changing the risk slider, the diversification slider, the theme, the unit and details, the address holds u, r, d, t, x and unit with no key outside spec 8.1, opening it in a fresh browser context reproduces the same readouts, theme, unit and details state, and share-copy places that exact URL on the clipboard."
+    claim: "After changing the risk slider, the diversification slider, the theme, the unit, details and the simulation (the volatility model), the address holds u, r, d, t, x, unit and e with no key outside spec 8.1, opening it in a fresh browser context reproduces the same readouts, theme, unit, details state and engine tag, and share-copy places that exact URL on the clipboard."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_51_url_reproduces_view.py"
     setup: ""
     teardown: ""
