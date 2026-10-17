@@ -20,7 +20,11 @@ Prints JSON lines: the run (store, generation, engines, CPUs, load average); the
 `build_seconds`, the wall time, the time spent fitting the volatility model (`fit_seconds`, 0
 when a fit stored for the same fund set was reused, null when the model was not asked for),
 `reused`, the model's status, `shape16`, `pool_rows`, each fund's fit status, the funds that
-fell back to constant volatility, the outliers, the load average; last the totals.
+fell back to constant volatility, the outliers, the worst simulated day (`worst_day`: the fund
+and its daily simple return in the raw panel and after the level step of engines spec 4.5, step
+1), the paths the model counts as ruined (`ruin_paths`, when the tensor carries it), the
+Optimized point's bad, typical and good year under each engine at the slider's three reference
+columns (`s_safe`, the domain midpoint, `s_max`), the load average; last the totals.
 
 Exit status 0 when every tensor was built; 2 with one line on stderr naming the preset and
 lookback when a build is refused (the splice guard names the fund and the date: a data fix, not
@@ -35,10 +39,12 @@ import os
 import sys
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
+
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # this checkout's package
 
@@ -59,8 +65,10 @@ from portfoliosight.cpus import build_workers  # noqa: E402
 from portfoliosight.data.store import LocalStore, ReadOnlyStore  # noqa: E402
 from portfoliosight.engine import ENGINE_VERSION, builder, parallel  # noqa: E402
 from portfoliosight.engine.caps import CapsError  # noqa: E402
+from portfoliosight.engine.ranges import GarchRangeModel  # noqa: E402
 from portfoliosight.engine.shape import ShapeError  # noqa: E402
-from portfoliosight.engine.tensor import WindowUnavailable  # noqa: E402
+from portfoliosight.engine.stats import TRADING_DAYS  # noqa: E402
+from portfoliosight.engine.tensor import BuildResult, WindowUnavailable  # noqa: E402
 from portfoliosight.jobs.build import (  # noqa: E402
     build_with_artifacts,
     inputs_from_store,
@@ -68,6 +76,7 @@ from portfoliosight.jobs.build import (  # noqa: E402
 )
 
 FITTED = "garch"  # the fit status of a fund whose volatility follows its own fitted pattern
+FIGURES = ("bad", "typical", "good")
 
 
 @contextmanager
@@ -131,10 +140,60 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
     return args
 
 
-def _row(preset: str, lookback: str, tensor: dict, wall: float, fits: list[float], reused):
+def worst_day(model: GarchRangeModel, funds: list[str]) -> dict:
+    """The lowest simulated daily simple return, raw and after the per-fund level step.
+
+    The level step (engines spec 4.5, step 1) gives fund n the chart's daily mean and deviation:
+    `m_n + a_n (R_n - mean_n)` with `a_n = s_n / sd_n`, 0 for a fund that never varies. `a_n` is
+    never negative, so each fund's lowest day stays its lowest.
+    """
+    low = model.panel.min(axis=(0, 1))
+    daily_mean = model.mu_s / TRADING_DAYS
+    daily_sd = np.sqrt(np.diag(model.cov) / TRADING_DAYS)
+    scale = np.divide(daily_sd, model.sd, out=np.zeros_like(daily_sd), where=model.sd > 0)
+    level = daily_mean + scale * (low - model.mean)
+
+    def lowest(values: np.ndarray) -> dict:
+        n = int(np.argmin(values))
+        return {"id": funds[n], "value": float(values[n])}
+
+    return {"raw": lowest(low), "level": lowest(level)}
+
+
+def optimized_points(tensor: Mapping) -> dict:
+    """The Optimized point's bad, typical and good year under each engine the tensor carries, at
+    the slider's left end (`s_safe`), its midpoint and its right end (`s_max`)."""
+    ladder = tensor["ladder"]
+    last_column = len(ladder["t_suggested"]) - 1
+    last_level = len(ladder["y"][0]) - 1
+    left = int(tensor["frontier"]["s_safe"])
+    columns = {"s_safe": left, "mid": (left + last_column) // 2, "s_max": last_column}
+    points = {}
+    for name, column in columns.items():
+        level = round(ladder["t_suggested"][column] * last_level)
+        figures = {
+            engine: {figure: block[figure][column][level] for figure in FIGURES}
+            for engine, block in ladder["ranges"].items()
+        }
+        points[name] = {"column": column, "level": level, **figures}
+    return points
+
+
+def _row(
+    preset: str,
+    lookback: str,
+    result: BuildResult,
+    wall: float,
+    fits: list[float],
+    reused: bool,
+) -> dict:
+    tensor = result.tensor
     shape = tensor["shape"]
     funds = {} if shape is None else {fund["id"]: fund["status"] for fund in shape["funds"]}
     garch = tensor["engines"]["garch"]
+    model = result.models.get("garch")
+    if not isinstance(model, GarchRangeModel):
+        model = None
     return {
         "preset": preset,
         "lookback": lookback,
@@ -151,6 +210,9 @@ def _row(preset: str, lookback: str, tensor: dict, wall: float, fits: list[float
         "funds": funds,
         "fallback": [fund for fund, status in funds.items() if status != FITTED],
         "outliers": [] if shape is None else shape["outliers"],
+        "worst_day": None if model is None else worst_day(model, list(funds)),
+        "ruin_paths": garch.get("ruin_paths"),
+        "optimized": optimized_points(tensor),
         "load": _load(),
     }
 
@@ -218,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
                     wall = time.perf_counter() - started
                     all_fits.extend(fits)
                     built += 1
-                    row = _row(preset_id, lookback, result.tensor, wall, fits, reused)
+                    row = _row(preset_id, lookback, result, wall, fits, reused)
                     print(json.dumps(row), flush=True)
     finally:
         parallel.shutdown()

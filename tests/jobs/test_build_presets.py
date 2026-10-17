@@ -72,6 +72,17 @@ def test_builds_every_asked_tensor_and_never_writes_into_the_store(store, d_g, t
     assert set(first["funds"]) == {"TSP-G", "TSP-F", "TSP-C", "TSP-S", "TSP-I"}
     assert first["pool_rows"] > 126 and isinstance(first["outliers"], list)
     assert all(row["build_seconds"] > 0 for row in rows)
+    worst = first["worst_day"]
+    assert set(worst) == {"raw", "level"} and worst["raw"]["id"] in first["funds"]
+    assert -1.0 < worst["level"]["value"] < 0.0 and first["ruin_paths"] is None
+    for name in ("s_safe", "mid", "s_max"):
+        point = first["optimized"][name]
+        assert set(point) == {"column", "level", "replay", "garch"}
+        for engine in ("replay", "garch"):
+            figures = point[engine]
+            assert figures["bad"] < figures["typical"] < figures["good"]
+    columns = [first["optimized"][name]["column"] for name in ("s_safe", "mid", "s_max")]
+    assert columns == sorted(columns) and columns[-1] == 11  # the small grid's last column
     assert total == {**total, "tensors": 2, "fits": 1}
     files = sorted(path.relative_to(out).as_posix() for path in out.rglob("*") if path.is_file())
     expected = [tensor_key(generation, _tsp_hash(), lookback) for lookback in ("1y", "5y")]
@@ -126,6 +137,8 @@ def test_replay_only_builds_fit_nothing(script, store, d_g, tmp_path, monkeypatc
     row = json.loads(capsys.readouterr().out.splitlines()[1])
     assert row["garch"] == "not computed for this menu" and row["reused"] is None
     assert row["fit_seconds"] is None and row["funds"] == {} and row["shape16"] is None
+    assert row["worst_day"] is None
+    assert set(row["optimized"]["mid"]) == {"column", "level", "replay"}
     assert not (out / "models").exists()
 
 
