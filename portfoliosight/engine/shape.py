@@ -39,7 +39,6 @@ from datetime import date
 from functools import lru_cache
 from importlib import resources
 
-import arch
 import numpy as np
 import pandas as pd
 
@@ -187,7 +186,7 @@ def fit_shape(panel: ShapePanel, splice_dates: Mapping[str, str] | None = None) 
         outliers=tuple(outliers),
         unavailable_reason=reason,
         qse=qse_commit(),
-        arch=str(arch.__version__),
+        arch=_arch_version(),
     )
 
 
@@ -346,6 +345,15 @@ def _guard(panel: ShapePanel, z: np.ndarray, splice_dates: Mapping[str, str]) ->
             raise ShapeError(f"{message}: the history may miss a corporate action", fund, day)
     large = np.argwhere(np.abs(z) > OUTLIER_Z)  # a missing residual is never large
     return [{"id": funds[n], "date": days[row], "z": float(z[row, n])} for row, n in large]
+
+
+def _arch_version() -> str:
+    """The `arch` version the fit just ran on. QSE's fitter imports `arch` (and statsmodels with
+    it) only to fit; importing it here too, not at the top, keeps it out of every process that
+    imports the engine without fitting: the build's worker processes, the API."""
+    import arch
+
+    return str(arch.__version__)
 
 
 def _pool_digest(pool: np.ndarray) -> str:
