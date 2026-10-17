@@ -27,3 +27,34 @@ optional Claude re-review remains debt after quota recovery.
 
 Reviewed file: `docs/specs/2026-10-14-portfoliosight-simulation-engines-design.assertions.md`.
 Reviewed SHA-256: `e067049d3fbc3abb6fab6671033cf66ca06542051763ce6372fa3eefd11fbe79`.
+
+## Subsequent planning corrections
+
+The plan author identified a cross-phase dependency after the bounded assertion
+review: A-SE-16's Phase 1 budget observation also required its successor Phase 2.
+The Phase 2 repeat workload and 100-fund measurement were moved to A-SE-22;
+A-SE-16 stays owned by the Phase 1 validation phase. A-SE-11's null loss-sources
+observation was qualified to Phase 1 tensors lacking attribution capability so it
+does not reject the successor capability validated by A-SE-19. These changes keep
+the original source IDs and product requirements; the source hash above records
+the exact earlier bounded review rather than claiming these later edits were in it.
+The independent plan review and runnable-gate checks assess the resulting mapping.
+
+## Conductor execution plan
+
+Claude review — UNAVAILABLE (weekly quota); independent same-host Codex fallback.
+Reviewer: fresh `gpt-6-astra` session, high effort; not the plan author.
+Verdict on the final saved plan: pass for substance, no outstanding P0/P1/P2 findings.
+No product tests were run; this is plan review, not implementation approval.
+
+The reviewer found one P2 omission: the extra ENB peak random starts required for
+100-fund menus. Task 7.7 now covers bounded deterministic extra starts without
+changing small-menu baselines; task 9.5 measures both large-menu solvers. The
+reviewer verified the final saved update, scope coverage, preserved branches,
+acyclic assertion ownership, source math, explicit unresolved-decision checkpoints,
+full Conductor recipe, quota fallback, target-host evidence, one full-suite merge
+verification and the parked Copula/driver boundary.
+
+Reviewed plan: `docs/plans/2026-10-17-simulation-engines-conductor-plan.md`.
+Reviewed SHA-256: `2d5c244b0098659a6c62471220f92727d5c26c364df00de03047e0582e4a2641`.
+Opposite-host independence remains review debt; it was not silently substituted.

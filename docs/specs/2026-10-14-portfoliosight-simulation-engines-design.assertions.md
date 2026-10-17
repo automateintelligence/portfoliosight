@@ -360,7 +360,8 @@ Phase 1 · api · S3, S10, F4; §7
   calculation on its build draw within documented float32 error; changing weights or engine
   changes the nonconstant control as expected. Omission uses `range_default`. Unknown IDs
   return 422; unavailable/missing/digest-mismatch cases return 409 `range_unavailable`, with
-  no plausible range from replay or a prior cached answer. Phase 1 `loss_sources` is null.
+  no plausible range from replay or a prior cached answer. For Phase 1 tensors without
+  loss-attribution capability `loss_sources` is null; Phase 2 attribution is checked by A-SE-19.
   The actual route must load and verify artifacts; directly calling a numerical unit is
   insufficient. Host health reports enabled engines from the actual configuration.
   Count real fit calls to verify same-shape reuse across lookbacks/caps; artifacts remain
@@ -450,8 +451,8 @@ Phase 1 · ks001 · S11, M6; §9, §11
   one second. The output and consumed simulation arrays retain 2,000-by-252 paths; named
   fallbacks, host, cache conditions and timings are recorded in the runbook. A laptop
   microbenchmark, fabricated timing field or missing engine does not satisfy the claim.
-  Repeat this workload with Phase 2 enabled; separately record the specified 100-fund DR²
-  measurement without inventing a 30-second budget for 100 funds.
+  Phase 2's repeat workload and 100-fund measurement belong to A-SE-22 so Phase 1
+  completion does not depend on implementing its successor phase.
 - **Kind.** contract.
 
 ### Phase 2 — Diversification measures
@@ -571,6 +572,9 @@ Phase 2 · validation/unit · S8, F8, M3; §10.3/7, §11
   Trace metric rows to the evaluated weights and future prices; a heading or copied table
   is insufficient. Aggregation choices are disclosed rather than secretly tuned. A tie leaves
   ENB as the default, and the report cannot itself authorize a default/headline switch.
+  Repeat A-SE-16's full target-host workload with Phase 2 enabled, retaining the same
+  23-fund build, preset-nightly and warm-range budgets and full path count. Separately
+  record the specified 100-fund DR² measurement without inventing a 30-second budget for it.
   Owner screenshot interpretation and unresolved metric-aggregation choices remain in §2.
 - **Kind.** contract.
 
