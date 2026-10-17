@@ -56,6 +56,7 @@ from tests.engine.helpers import (
     CONVERTED,
     CONVERTED_REASON,
     FIXTURE_ASOF,
+    ROOT,
     converted_menu_inputs,
     fixture_artifact,
     fixture_inputs,
@@ -142,6 +143,25 @@ def test_two_builds_are_identical_apart_from_telemetry(fixture_tensor):
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", fixture_tensor["built_at"])
     assert 0.5 <= fixture_tensor["build_seconds"] <= 90.0  # really solved, and within the bound
     assert again["build_seconds"] <= 90.0
+
+
+def test_the_contract_is_chosen_by_the_schema_a_document_declares():
+    """Schema 3 is what this engine writes; schema 2 is what engine 0.2.0 wrote and a rollback
+    serves. Each document is checked against the contract its own `schema` names."""
+    old = json.loads((ROOT / "web" / "tests" / "tensor-schema2.json").read_text(encoding="utf-8"))
+    new = json.loads((ROOT / "web" / "fixtures" / "guide2017_5y.json").read_text(encoding="utf-8"))
+    assert (old["schema"], old["engine_version"], new["schema"]) == (2, "0.2.0", 3)
+    v2, v3 = load_schema(2), load_schema(3)
+    assert load_schema() is v3 and load_schema(builder.SCHEMA_VERSION) is v3
+    assert v2["properties"]["schema"] == {"const": 2} and v3["properties"]["schema"] == {"const": 3}
+    for contract, accepted, refused in ((v2, old, new), (v3, new, old)):
+        jsonschema.Draft202012Validator.check_schema(contract)
+        jsonschema.Draft202012Validator(contract).validate(accepted)
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.Draft202012Validator(contract).validate(refused)
+    for version in (1, 4, "3", 3.0, True, None):
+        with pytest.raises(ValueError, match="no tensor contract for schema"):
+            load_schema(version)  # type: ignore[arg-type]
 
 
 def test_schema_accepts_the_build_and_is_not_permissive(fixture_tensor):

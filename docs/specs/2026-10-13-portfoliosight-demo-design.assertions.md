@@ -1417,13 +1417,15 @@ Phase 4 · prod
 Phase 4 · prod
 - **Claim.** `GET /api/presets` carries `x-ps-source: r2`, a `generation`, and both presets with
   all six lookbacks `ready` and `/api/…` URLs; the `guide2017` 5y URL returns a tensor that
-  validates against `portfoliosight/engine/tensor.schema.json` with `Cache-Control: public,
-  max-age=86400, immutable`, an `ETag` and `x-ps-source: r2`; a `POST /api/tensors` with the
+  validates against the shipped contract its own `schema` field names
+  (`portfoliosight/engine/tensor.schema.json` for schema 3, `tensor.schema.v2.json` for schema 2)
+  with `Cache-Control: public, max-age=86400, immutable`, an `ETag` and `x-ps-source: r2`; a `POST /api/tensors` with the
   default preset's funds and all-`null` caps returns 200 with a `url` whose body is byte-identical
   to that tensor. The default tensor uses all 23 Step 2 funds and sets none aside; a `POST` for
   those 23 funds plus FIENX (the catalog's converted fund, not served) resolves to a tensor that
   sets exactly FIENX aside with the §5.1 reason (owner decision 2026-10-13, spec §2).
-- **Setup.** Header-bearing client; the schema file from the repo at the deployed SHA.
+- **Setup.** Header-bearing client; the schema contracts from the repo at the deployed SHA,
+  loaded by `portfoliosight.engine.tensor.load_schema(version)`.
 - **Observation.** Presets: headers and shape as stated; `presets[*].lookbacks` has exactly the
   six ids, each `status == "ready"`, each `url` starting `/api/tensors/{generation}/`. Tensor:
   schema-valid; `generation` and `asof` equal the presets body's; `universe.preset_id ==

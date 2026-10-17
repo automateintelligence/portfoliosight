@@ -69,6 +69,7 @@ from .torsion import torsion_basis
 from .windows import WindowSelection, renormalize_allocation, select_window
 
 SCHEMA_VERSION = 3
+CONTRACTS = {2: "tensor.schema.v2.json", SCHEMA_VERSION: "tensor.schema.json"}  # by `schema`
 HASH_SCHEMA = 2  # the universe hash's own version: a menu keeps its key across tensor schemas
 TELEMETRY_FIELDS = ("built_at", "build_seconds")
 NOTES = (
@@ -186,15 +187,25 @@ def canonical_json(tensor: Mapping) -> str:
     return json.dumps(tensor, separators=(",", ":"), sort_keys=True, allow_nan=False)
 
 
-@lru_cache(maxsize=1)
-def load_schema() -> dict:
-    """The tensor's JSON Schema, shipped next to this module."""
-    schema = resources.files("portfoliosight.engine").joinpath("tensor.schema.json")
-    return json.loads(schema.read_text(encoding="utf-8"))
+def load_schema(version: int = SCHEMA_VERSION) -> dict:
+    """The JSON Schema of tensor `schema` `version`, shipped next to this module.
+
+    3 is the contract this engine writes; 2 is the one engine 0.2.0 wrote, still served until the
+    first 0.3.0 generation and again after a rollback. A reader checks a document against the
+    contract its own `schema` names; any other version is refused with `ValueError`.
+    """
+    if type(version) is not int or version not in CONTRACTS:
+        raise ValueError(f"no tensor contract for schema {version!r}")
+    return _contract(CONTRACTS[version])
+
+
+@lru_cache(maxsize=len(CONTRACTS))
+def _contract(name: str) -> dict:
+    return json.loads(resources.files("portfoliosight.engine").joinpath(name).read_text("utf-8"))
 
 
 def validate_tensor(tensor: Mapping) -> None:
-    """Raise `jsonschema.ValidationError` unless `tensor` matches the schema."""
+    """Raise `jsonschema.ValidationError` unless `tensor` matches the schema this engine writes."""
     jsonschema.Draft202012Validator(load_schema()).validate(tensor)
 
 
