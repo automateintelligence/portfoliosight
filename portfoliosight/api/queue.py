@@ -19,7 +19,7 @@ from typing import Any
 
 from portfoliosight.api.hashing import universe_hash
 from portfoliosight.api.presets import preset_definitions, tensor_key, tensor_url
-from portfoliosight.api.settings import GridSettings
+from portfoliosight.api.settings import EngineSettings, GridSettings
 from portfoliosight.data import cache as cache_mod
 from portfoliosight.data import store as store_mod
 from portfoliosight.data.secrets import install_redaction
@@ -59,8 +59,10 @@ def build_job(
 
     The default ``build_fn`` of the queue worker and of the nightly. A key that exists is left
     alone: nothing is built and nothing is written. A preset that comes with an allocation has
-    it built in as the tensor's entered mix. The scratch cache is evicted to its cap afterwards
-    (spec 5.3).
+    it built in as the tensor's entered mix. A preset computes the engines of ``PS_ENGINES``, a
+    custom menu those of ``PS_ENGINES_CUSTOM`` (``EngineSettings``); the volatility model's files
+    are stored before the tensor. The scratch cache, model files included, is evicted to its cap
+    afterwards (spec 5.3).
     """
     key = tensor_key(generation, uhash, lookback)
     if store.exists(key):
@@ -69,6 +71,7 @@ def build_job(
         raise ValueError(f"universe hash {uhash} does not belong to the requested funds")
     cache_dir = cache_mod.cache_dir_from_env()
     grid = GridSettings.from_env()
+    engines = EngineSettings.from_env().for_menu(preset_id)
     try:
         tensor = build_from_store(
             store,
@@ -82,6 +85,7 @@ def build_job(
             nx=grid.nx,
             ny=grid.ny,
             levels=grid.levels,
+            engines=engines,
         )
         try:
             put_tensor(store, key, tensor)

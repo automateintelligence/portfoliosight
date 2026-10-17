@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 
@@ -285,3 +286,29 @@ def test_default_build_job_keeps_a_tensor_another_builder_wrote_first(
     monkeypatch.setattr(queue_mod, "build_from_store", build_while_another_writes)
     build_job(store, generation, uhash, "1y", funds)
     assert store.get(key) == b'{"first":true}'
+
+
+def test_custom_menus_get_ps_engines_custom_and_presets_ps_engines(
+    store, generation, api_env, monkeypatch
+):
+    """Engines spec 7: an engine a custom build does not compute is unavailable, with why."""
+    monkeypatch.delenv("PS_ENGINES", raising=False)
+    monkeypatch.setenv("PS_ENGINES_CUSTOM", "replay")
+    funds = [{"id": fund, "min": None, "max": None} for fund in ("VTI", "BND", "VNQ")]
+    uhash = universe_hash(funds)
+    build_job(store, generation, uhash, "1y", funds)
+    custom = json.loads(store.get(tensor_key(generation, uhash, "1y")))
+    assert custom["engines"]["garch"] == {
+        "status": "unavailable",
+        "reason": "not computed for custom menus",
+        "method": None,
+    }
+    assert custom["shape"] is None and list(custom["ladder"]["ranges"]) == ["replay"]
+    assert store.list("models/") == []
+    tsp = [{"id": fund, "min": None, "max": None} for fund in ("TSP-G", "TSP-C", "TSP-F")]
+    build_job(
+        store, generation, universe_hash(tsp), "1y", tsp, universe_name="TSP", preset_id="tsp"
+    )
+    preset = json.loads(store.get(tensor_key(generation, universe_hash(tsp), "1y")))
+    assert preset["engines"]["garch"]["status"] == "ready" and preset["shape"] is not None
+    assert len(store.list(f"models/{generation}/")) == 2
