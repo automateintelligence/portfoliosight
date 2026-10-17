@@ -162,16 +162,21 @@ Phase 1 · static/unit · S9, M2; §3.3, §8, §13.18
 - **Claim.** The copied QSE source is exactly the permitted source at the locked upstream commit,
   and any local source drift is rejected by the guard.
 - **Setup.** The selected upstream commit (Phase 1 initially
-  `ca8c0445a56712c92dc028e68845b94963fdd590`), a local QSE checkout, a clean temporary destination,
-  and the actual sync entry point; record the QSE working-tree state before the sync.
-- **Observation.** Run the sync and independently compare each copied source byte and lock hash
-  with `git show` at that commit. The tracked package contains only the selected source plus the
+  `ca8c0445a56712c92dc028e68845b94963fdd590`), trusted source hashes independently verified once
+  against its git objects and pinned in the frozen test, a tiny synthetic local git repository,
+  a clean temporary destination and the actual sync entry point. Ordinary gate execution needs
+  neither the private QSE checkout nor GitHub access.
+- **Observation.** Independently compare every copied source byte/hash and lock entry with the
+  trusted pinned hashes. Exercise the sync against the synthetic git repository and verify its
+  output against that repository's git objects. The tracked package contains only selected source plus the
   specified README/lock/package support files; no unlisted implementation may hide outside the
   lock. Source files are read-only after sync, and tracked agent settings deny editing/writing
   `qse/`. In a disposable copy, change a source byte and separately add an unlisted source file;
-  the real guard fails both. Re-sync restores the exact bytes without changing upstream files or
-  its working-tree state. Fail on any drift, an unpinned sync, a self-consistent forged local
-  lock that disagrees with upstream, or a guard that only checks file presence.
+  the real guard fails both with the private checkout unavailable. Re-sync against the synthetic
+  repository restores its exact bytes without changing upstream files or working-tree state.
+  Fail on any drift, an unpinned sync or a self-consistent forged local lock that disagrees with
+  the trusted hashes. The frozen test anchors provenance; the ordinary product guard rehashes
+  its local lock and is not required to contact upstream or perform this independent attestation.
 - **Kind.** contract.
 
 ### A-SE-02 — Engine use stays inside the declared dependency and data boundary
@@ -179,7 +184,9 @@ Phase 1 · static/unit/api · S9, M4; §3.3, §8, §10
 
 - **Claim.** Building and serving simulation results uses only the allowed QSE distribution
   surface and PortfolioSight's store, without QSE data/storage/provider access.
-- **Setup.** Install PortfolioSight's declared runtime dependencies into a clean environment;
+- **Setup.** Use an isolated environment containing PortfolioSight's declared runtime
+  dependencies, prepared and attested once; ordinary gate execution does not install packages
+  online. Isolate the import probe from unrelated preloaded application modules;
   provide complete temporary PortfolioSight price records; make QSE data, storage, credentials
   and provider-call routes fail if accessed. Exercise a real fit, tensor build, range request
   and a small validation run.
@@ -346,7 +353,9 @@ Phase 1 · api · S3, S10, F4; §7
 - **Setup.** A real built tensor and temporary model store, several unseen valid weights and
   both engines. Exercise optional/explicit engine IDs, an unknown ID, an uncarried engine,
   missing artifact, changed shape records and changed lookback records. Use fresh/cache-cleared
-  requests for each corruption and include the Worker `/api/range` forwarding leg.
+  requests for each corruption and include the Worker `/api/range` forwarding leg. Build the
+  same shape across different lookbacks and cap policies, and three distinct shapes; retain
+  pinned and unpinned generations in the temporary store.
 - **Observation.** Success identifies the requested engine and agrees with an independent
   calculation on its build draw within documented float32 error; changing weights or engine
   changes the nonconstant control as expected. Omission uses `range_default`. Unknown IDs
@@ -354,6 +363,11 @@ Phase 1 · api · S3, S10, F4; §7
   no plausible range from replay or a prior cached answer. Phase 1 `loss_sources` is null.
   The actual route must load and verify artifacts; directly calling a numerical unit is
   insufficient. Host health reports enabled engines from the actual configuration.
+  Count real fit calls to verify same-shape reuse across lookbacks/caps; artifacts remain
+  generation-scoped and immutable. After restart, requests reproduce the stored model's
+  results. Three distinct shapes evict the least-recently-used simulated panel so at most
+  two float32 panels remain; the separate lookback cache retains its stated eight-entry bound.
+  Generation pruning removes expired unpinned model artifacts and retains pinned ones.
 - **Kind.** contract.
 
 ### A-SE-12 — One engine switch updates every precomputed range surface
@@ -517,7 +531,11 @@ Phase 2 · ui/api · S7, S10, F4; §6, §7, §10.3
   interpolated response is pending, the nearer-level placeholder and eventual response follow
   the active engine/mix, including a selection change before a response arrives. The real
   share validator accepts `m`, canonical URL order/omitted defaults hold, absent `m` resolves
-  from the loaded tensor, and a fresh page reproduces state. Exact disputed ENLC normalization
+  from the loaded tensor, and a fresh page reproduces state. For DR² and ENB with `ref > 1`,
+  independently compute `q = (measure - 1)/(ref - 1)` and check the words immediately below,
+  at and above 0.30, 0.50 and 0.75: Poor, Fair, Average and Good follow the specified cut points.
+  Legacy `measure/ref` normalization or shifted boundary comparisons must fail.
+  Exact disputed ENLC normalization
   and `ref=1` presentation remain deferred in §2 rather than receiving invented constants.
 - **Kind.** contract.
 
