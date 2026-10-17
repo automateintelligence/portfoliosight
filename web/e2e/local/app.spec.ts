@@ -1,4 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
+import { parseTensor } from "../../src/api/tensor";
+import { signedPct } from "../../src/format";
+import { portfolioMath } from "../../src/math/portfolio";
+import { deriveView } from "../../src/math/view";
 
 // Local behaviour checks against `vite preview` with /api proxied to mock/server.mjs. They cover
 // what the frozen gate does not: failure paths, the mock's switches and the details-on layout.
@@ -1197,5 +1203,236 @@ test("details on: the legend, the axis titles and their technical lines do not o
     await expect(page.getByTestId(`fund-label-${id}`)).toHaveCount(0);
     await press(page, phone, dot.x + dot.width / 2, dot.y + dot.height / 2);
     await expect(page.getByTestId(`fund-label-${id}`)).toBeVisible();
+  }
+});
+
+// ── The Simulation control (engines spec 6; S2, S3, S5, S10, F1, F3, F4) ─────────────────────────
+const FIXTURE = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "fixtures/guide2017_5y.json"), "utf8"));
+const TENSOR = parseTensor(FIXTURE);
+const MATH = portfolioMath(TENSOR);
+const pctOfText = (text: string | null) => /([−+]?\d+\.\d%)/.exec(text ?? "")?.[1] ?? "";
+const figureOf = async (page: Page, id: string) => pctOfText(await page.getByTestId(id).textContent());
+const bodyText = (page: Page) => page.evaluate(() => document.body.innerText);
+/** The chart canvas's pixels as one string, once they have stopped changing (the first paint wipes in). */
+const canvasPixels = async (page: Page) => {
+  let last = "";
+  await expect
+    .poll(async () => {
+      const now = await page.getByTestId("chart-canvas").evaluate((el) => (el as HTMLCanvasElement).toDataURL());
+      const same = now === last;
+      last = now;
+      await page.waitForTimeout(250);
+      return same;
+    })
+    .toBe(true);
+  return last;
+};
+/** Chooses an engine in Settings with the keyboard, so that a pinned card stays pinned (a click outside the chart lets it go). */
+const chooseEngine = async (page: Page, id: string) => {
+  await page.getByTestId(`engine-${id}`).focus();
+  await page.keyboard.press("Space");
+  await expect(page.getByTestId(`engine-${id}`)).toBeChecked();
+};
+
+test("the page opens on History replay and the Simulation control offers the three, the copula with its reason (S2, F3)", async ({ page }) => {
+  await open(page, "u=guide2017&lb=5y");
+  await section(page, "settings");
+  const group = page.getByRole("radiogroup", { name: "Simulation" });
+  await expect(group).toBeVisible();
+  for (const [id, name] of [["replay", "History replay"], ["garch", "Volatility model"], ["copula", "Copula"]] as const) {
+    await expect(page.getByTestId(`engine-${id}`)).toBeVisible();
+    await expect(group).toContainText(name);
+  }
+  await expect(page.getByTestId("engine-replay")).toBeChecked();
+  await expect(page.getByTestId("engine-garch")).toBeEnabled();
+  await expect(page.getByTestId("engine-copula")).toBeDisabled();
+  await expect(page.getByTestId("engine-copula-reason")).toHaveText(FIXTURE.engines.copula.reason);
+  // both tags say so, and the address is as it was
+  await expect(page.getByTestId("engine-tag")).toHaveCount(2);
+  for (const tag of await page.getByTestId("engine-tag").all()) await expect(tag).toHaveText("History replay");
+  expect(new URL(page.url()).searchParams.has("e")).toBe(false);
+  // the technical names stay behind the details; "Copula" is the control's label and nothing else
+  const text = await bodyText(page);
+  expect(text).not.toMatch(/GARCH|\bvine\b|residual|expected shortfall|entropy/i);
+  expect(text.match(/copula/gi)?.length).toBe(1);
+  expect(await page.locator("body").evaluate((el) => el.textContent)).not.toMatch(/GARCH/);
+});
+
+test("the Simulation choice switches every range at once and without a request (S3, F4)", async ({ page }, testInfo) => {
+  const phone = isPhone(testInfo.project.name);
+  const requests: string[] = [];
+  const held: (() => Promise<void>)[] = [];
+  page.on("request", (r) => {
+    const url = new URL(r.url());
+    if (url.pathname.startsWith("/api/")) requests.push(`${r.method()} ${url.pathname}`);
+  });
+  // the service's exact range is held back, so only the tensor's own figures can have moved
+  await page.route("**/api/range", (route) => void held.push(() => route.continue()));
+  await open(page, "u=guide2017&lb=5y&r=20.5&d=0.4");
+  await section(page, "settings");
+  await page.evaluate(() => window.scrollTo(0, 0));
+  // the selected mix's card, pinned
+  const p0 = await centre(page, "point-selected");
+  await press(page, phone, p0.x, p0.y);
+  const pinned = page.getByTestId("mix-card-pinned");
+  await expect(pinned).toBeVisible();
+
+  const snapshot = async () => ({
+    strip: [await figureOf(page, "range-low"), await figureOf(page, "range-typical"), await figureOf(page, "range-high")],
+    readouts: [await figureOf(page, "risk-readout-bad"), await figureOf(page, "risk-readout-typical")],
+    tags: await page.getByTestId("engine-tag").allTextContents(),
+    card: (await pinned.innerText()).replace(/\s+/g, " "),
+    marks: await page.getByTestId("range-bar").evaluate((bar) => Array.from(bar.querySelectorAll("[data-testid^=range-mark]"), (m) => (m as HTMLElement).style.left)),
+    scale: [await page.getByTestId("range-bar").getAttribute("data-lo"), await page.getByTestId("range-bar").getAttribute("data-hi")],
+  });
+  const replay = deriveView(TENSOR, MATH, 20.5, 0.4, "replay");
+  const garch = deriveView(TENSOR, MATH, 20.5, 0.4, "garch");
+  const before = await snapshot();
+  const pixels = await canvasPixels(page);
+  expect(before.tags).toEqual(["History replay", "History replay"]);
+  expect(before.strip).toEqual([replay.range.low, replay.range.typical, replay.range.high].map((v) => signedPct(v)));
+  expect(before.readouts).toEqual([replay.frontRange.low, replay.frontRange.typical].map((v) => signedPct(v)));
+  requests.length = 0;
+
+  await chooseEngine(page, "garch");
+  // no timer and no response is waited for: the page already shows the volatility model's figures
+  await expect.poll(async () => (await snapshot()).tags, { timeout: 1500 }).toEqual(["Volatility model", "Volatility model"]);
+  const after = await snapshot();
+  expect(after.strip).toEqual([garch.range.low, garch.range.typical, garch.range.high].map((v) => signedPct(v)));
+  expect(after.readouts).toEqual([garch.frontRange.low, garch.frontRange.typical].map((v) => signedPct(v)));
+  expect(after.strip, "the strip's three figures moved").not.toEqual(before.strip);
+  expect(after.readouts, "the slider's readouts moved").not.toEqual(before.readouts);
+  expect(after.card, "the pinned card moved").not.toBe(before.card);
+  expect(after.card).toContain(signedPct(garch.range.low));
+  expect(after.marks, "the bar's marks moved").not.toEqual(before.marks);
+  expect(after.scale, "the bar's scale did not").toEqual(before.scale);
+  expect(await canvasPixels(page), "the chart's pixels did not change").toBe(pixels);
+  await expect(pinned).toBeVisible();
+
+  // nothing was fetched on the way: no tensor, no build; at most the exact-range ask, still held
+  expect(requests.filter((r) => !r.startsWith("POST /api/range"))).toEqual([]);
+
+  // the address says so, and a reload reproduces the view
+  await expect.poll(() => new URL(page.url()).searchParams.get("e")).toBe("garch");
+  expect(new URL(page.url()).search).toMatch(/&e=garch$/);
+  await page.reload();
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  expect(await page.getByTestId("engine-tag").allTextContents()).toEqual(["Volatility model", "Volatility model"]);
+  expect([await figureOf(page, "range-low"), await figureOf(page, "range-typical"), await figureOf(page, "range-high")]).toEqual(after.strip);
+
+  // and back: History replay leaves the address
+  await section(page, "settings");
+  await chooseEngine(page, "replay");
+  await expect.poll(() => new URL(page.url()).searchParams.has("e")).toBe(false);
+  expect([await figureOf(page, "range-low"), await figureOf(page, "range-typical"), await figureOf(page, "range-high")]).toEqual(before.strip);
+  // the held asks go on their way (a request the reload has already dropped is gone)
+  for (const release of held) await release().catch(() => undefined);
+});
+
+test("the exact range of the resting mix is asked of the service under the chosen engine, by name", async ({ page, request }) => {
+  await request.post("/__mock/config", { data: { ranges: true } });
+  await open(page, "u=guide2017&lb=5y&r=20.25&d=0.45");
+  await expect.poll(async () => ((await (await page.request.get("/__mock/ranges")).json()) as unknown[]).length).toBeGreaterThan(0);
+  await section(page, "settings");
+  await chooseEngine(page, "garch");
+  await expect
+    .poll(async () => ((await (await page.request.get("/__mock/ranges")).json()) as { engine?: string }[]).some((body) => body.engine === "garch"))
+    .toBe(true);
+  const asked = (await (await page.request.get("/__mock/ranges")).json()) as { engine?: string }[];
+  // History replay never names itself; the volatility model does
+  expect(asked.filter((body) => body.engine === undefined).length).toBeGreaterThan(0);
+  expect(asked.filter((body) => body.engine !== undefined).every((body) => body.engine === "garch")).toBe(true);
+  // the answer is the service's figure for that engine, not the replay's
+  const garch = deriveView(TENSOR, MATH, 20.25, 0.45, "garch");
+  await expect.poll(() => figureOf(page, "range-low"), { timeout: 5000 }).not.toBe(signedPct(garch.range.low));
+  expect(await page.request.get("/__mock/posts").then((r) => r.json())).toEqual([]);
+});
+
+test("the slider's left end follows the engine, a clamp sends the diversification slider back to Optimized", async ({ page, request }) => {
+  await request.post("/__mock/config", { data: { domains: true } });
+  await open(page, "u=guide2017&lb=5y&e=garch&r=1.5&d=0.4");
+  const slider = page.getByTestId("risk-slider");
+  await expect(slider).toHaveAttribute("aria-valuemin", "1");
+  await expect(slider).toHaveAttribute("aria-valuenow", "1.5");
+  await section(page, "settings");
+  await chooseEngine(page, "replay");
+  await expect(slider).toHaveAttribute("aria-valuemin", "3");
+  await expect(slider).toHaveAttribute("aria-valuenow", "3");
+  await expect.poll(() => new URL(page.url()).searchParams.get("r")).toBe("3");
+  await expect.poll(() => new URL(page.url()).searchParams.get("d")).toBe("auto");
+  // a link to a position replay cannot reach opens at the end of replay's slider
+  await open(page, "u=guide2017&lb=5y&r=1.2");
+  await expect(slider).toHaveAttribute("aria-valuenow", "3");
+  await open(page, "u=guide2017&lb=5y&e=garch&r=1.2&d=0.4");
+  await expect(slider).toHaveAttribute("aria-valuenow", "1.2");
+  expect(new URL(page.url()).searchParams.get("d")).toBe("0.4");
+});
+
+test("a tensor that lacks the volatility model puts the link back on History replay and says why; a schema 2 tensor offers replay alone", async ({ page, request }) => {
+  await request.post("/__mock/config", { data: { noGarch: true } });
+  await open(page, "u=guide2017&lb=5y&e=garch");
+  await section(page, "settings");
+  await expect(page.getByTestId("engine-replay")).toBeChecked();
+  await expect(page.getByTestId("engine-garch")).toBeDisabled();
+  await expect(page.getByTestId("engine-garch-reason")).toHaveText("not enough shared history for the volatility model");
+  for (const tag of await page.getByTestId("engine-tag").all()) await expect(tag).toHaveText("History replay");
+  await expect.poll(() => new URL(page.url()).searchParams.has("e")).toBe(false);
+
+  await request.post("/__mock/config", { data: { noGarch: false, schema2: true } });
+  await open(page, "u=guide2017&lb=5y&e=garch&r=20.5&d=0.4");
+  await section(page, "settings");
+  await expect(page.getByTestId("engine-replay")).toBeChecked();
+  for (const id of ["garch", "copula"]) {
+    await expect(page.getByTestId(`engine-${id}`)).toBeDisabled();
+    await expect(page.getByTestId(`engine-${id}-reason`)).toHaveText("not computed for this menu");
+  }
+  // every figure is the default engine's: the same as the fixture's kept blocks
+  const replay = deriveView(TENSOR, MATH, 20.5, 0.4, "replay");
+  expect(await figureOf(page, "range-low")).toBe(signedPct(replay.range.low));
+});
+
+test("the details name the engine's method, the shared days, and the funds whose volatility was held constant (S5, F3)", async ({ page, request }) => {
+  await request.post("/__mock/config", { data: { fallback: ["BND", "AGG"] } });
+  await open(page, "u=guide2017&lb=5y&e=garch");
+  // details off: no technical line, no fund list
+  let text = await bodyText(page);
+  expect(text).not.toMatch(/GARCH|held constant|shocks replayed|filtered historical/i);
+  await page.getByTestId("details-toggle").click();
+  await expect(page.getByTestId("details-engine")).toContainText("Fitted volatility and fat tails per fund");
+  await expect(page.getByTestId("details-pool")).toHaveText(`funds' shocks replayed together from ${FIXTURE.shape.pool_rows.toLocaleString("en-US")} shared days`);
+  await expect(page.getByTestId("details-held-constant")).toContainText("Volatility held constant: BND, AGG");
+  await expect(page.getByTestId("details-held-constant")).toContainText("near-constant (daily sd < 0.03%) or fewer than 252 days");
+  const method = page.getByTestId("details-method");
+  await expect(method).toContainText("GARCH(1,1)-t per fund on up to");
+  await expect(method).toContainText("constant volatility for: BND, AGG");
+  await expect(method).not.toContainText("stationary block bootstrap, mean block 21 days");
+  expect((await page.getByTestId("engine-tag").first().textContent())).toBe("Volatility model");
+  // History replay: today's Method line and none of the fit's
+  await section(page, "settings");
+  await chooseEngine(page, "replay");
+  await expect(page.getByTestId("details-engine")).toHaveCount(0);
+  await expect(page.getByTestId("details-held-constant")).toHaveCount(0);
+  await expect(method).toContainText("stationary block bootstrap, mean block 21 days");
+  text = await bodyText(page);
+  expect(text).not.toMatch(/GARCH|held constant/i);
+});
+
+test("a shared link opens with the simulation it was sent in (S10)", async ({ page, browser }, testInfo) => {
+  await open(page, "u=guide2017&lb=5y&r=20.5&d=0.4&e=garch");
+  await page.getByTestId("share-open").click();
+  const link = await page.getByTestId("share-link").inputValue();
+  expect(new URL(link).searchParams.get("e")).toBe("garch");
+  expect(new URL(link).search).toMatch(/&e=garch$/);
+  const strip = [await figureOf(page, "range-low"), await figureOf(page, "range-typical"), await figureOf(page, "range-high")];
+  const second = await browser.newContext(testInfo.project.use);
+  try {
+    const other = await second.newPage();
+    const base = new URL(page.url());
+    await other.goto(`${base.origin}/${new URL(link).search}`);
+    await expect(other.getByTestId("point-selected")).toBeVisible();
+    expect(await other.getByTestId("engine-tag").allTextContents()).toEqual(["Volatility model", "Volatility model"]);
+    expect([await figureOf(other, "range-low"), await figureOf(other, "range-typical"), await figureOf(other, "range-high")]).toEqual(strip);
+  } finally {
+    await second.close();
   }
 });

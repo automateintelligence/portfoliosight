@@ -114,3 +114,30 @@ for (const theme of ["ks-dark", "hud"] as const) {
     }
   });
 }
+
+// The Simulation control and the engine tag (engines spec 6, S3), for the owner to look at: the
+// volatility model chosen, details on, the first screen and Settings in one picture. Other looks
+// are drafts only (PS_SHOT_DRAFT=1, not committed).
+for (const theme of ["ks-dark", "light", "hud", "grid"] as const) {
+  test(`engine control ${theme}`, async ({ page, request }, testInfo) => {
+    if (theme !== "ks-dark" && !process.env.PS_SHOT_DRAFT) return;
+    await request.post("/__mock/reset");
+    const size = testInfo.project.name.includes("phone") ? "phone" : "desktop";
+    await ready(page, `u=guide2017&lb=5y&t=${theme}&x=1&e=garch`);
+    await expect(page.getByTestId("engine-tag").first()).toHaveText("Volatility model");
+    await page.getByTestId("chip-settings").click();
+    await expect(page.getByTestId("section-settings")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("engine-garch")).toBeChecked();
+    await page.waitForTimeout(900); // the section has scrolled into view
+    // a whole-page picture: the header stays at the top instead of crossing the page where it was scrolled to
+    await page.addStyleTag({ content: ".hdr { position: static !important; }" });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    // a phone's picture is taken at CSS pixels (390 wide): at its device scale the page is 14,000 px tall
+    const shot = { fullPage: true, scale: size === "phone" ? ("css" as const) : ("device" as const) };
+    if (process.env.PS_SHOT_DRAFT) {
+      await page.screenshot({ path: path.resolve(process.cwd(), "e2e", "artifacts", `draft_engine_${theme}_${size}.png`), ...shot });
+      return;
+    }
+    await page.screenshot({ path: path.join(OUT, `2026-10-17_engine-control_${size}_${theme}.png`), ...shot });
+  });
+}

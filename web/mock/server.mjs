@@ -238,6 +238,11 @@ function served(tensor) {
   if (config.fallback.length > 0 && t.shape) {
     t.shape.funds = t.shape.funds.map((f) => (config.fallback.includes(f.id) ? { ...f, status: "near_constant" } : f));
   }
+  if (config.domains && t.frontier.ranges) {
+    t.frontier.s_safe = 3;
+    t.frontier.ranges.replay.s_safe = 3;
+    if (t.frontier.ranges.garch) t.frontier.ranges.garch.s_safe = 1;
+  }
   if (config.noGarch && t.engines) {
     t.engines.garch = { status: "unavailable", reason: "not enough shared history for the volatility model", method: null };
     delete t.frontier.ranges.garch;
@@ -272,7 +277,7 @@ function plainTensorFor(hash, lookback) {
   return copy;
 }
 
-const DEFAULTS = { stale: 0, unavailable: null, challenge: 0, build409: 0, ranges: false, noGeneration: false, tier: "public", manySymbols: false, stocks: false, noGarch: false, schema2: false, fallback: [] };
+const DEFAULTS = { stale: 0, unavailable: null, challenge: 0, build409: 0, ranges: false, noGeneration: false, tier: "public", manySymbols: false, stocks: false, noGarch: false, schema2: false, fallback: [], domains: false };
 const MANY = Array.from({ length: 120 }, (_, i) => {
   const id = `MOCKF${String(i + 1).padStart(3, "0")}`;
   return { id, name: `Mock stand-in fund ${id}`, kind: "etf", tier: 3, first_date: "2010-01-04" };
