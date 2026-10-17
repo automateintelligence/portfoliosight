@@ -209,7 +209,7 @@ function twoFundTensor(lookback) {
     range_method: fixture.range_method,
     engines: {
       replay: { status: "ready", reason: null, method: fixture.range_method },
-      garch: { status: "unavailable", reason: "not computed for custom menus", method: null },
+      garch: { status: "unavailable", reason: "not computed for custom menus", method: null, ruin_paths: null },
       copula: { status: "unavailable", reason: "not computed for this menu", method: null },
     },
     range_default: "replay",
