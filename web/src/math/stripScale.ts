@@ -1,6 +1,7 @@
 // The scale of the "Selected mix" strip's bar: one fixed range per (menu, history window), taken
 // from the tensor's own nodes, so the bar does not jump as the sliders move. Pure.
 import type { Tensor } from "../api/tensor";
+import { ENGINES } from "../state/url";
 
 /** Bad and Good one-year returns bounding every mix a tensor carries. */
 export type Bounds = { min: number; max: number };
@@ -17,7 +18,8 @@ const finite = (values: Iterable<number>, pick: (a: number, b: number) => number
 };
 
 /**
- * The lowest Bad and the highest Good year over every mix a tensor carries a range for: the
+ * The lowest Bad and the highest Good year over every mix a tensor carries a range for, under
+ * every engine it carries (engines spec 6: switching engines moves the band, not the scale): the
  * frontier nodes, every ladder node (the most diversified mixes at its top end) and the mix
  * entered, when the tensor has one.
  */
@@ -27,6 +29,24 @@ export function tensorBounds(tensor: Tensor): Bounds {
   if (tensor.entered) {
     bad.push(tensor.entered.range.bad);
     good.push(tensor.entered.range.good);
+  }
+  // the kept blocks above are the default engine's; the other engines' figures sit beside them
+  for (const id of ENGINES) {
+    const front = tensor.frontier.ranges?.[id];
+    const ladder = tensor.ladder.ranges?.[id];
+    const entered = tensor.entered?.ranges?.[id];
+    if (front) {
+      bad.push(...front.bad);
+      good.push(...front.good);
+    }
+    if (ladder) {
+      bad.push(...ladder.bad.flat());
+      good.push(...ladder.good.flat());
+    }
+    if (entered) {
+      bad.push(entered.bad);
+      good.push(entered.good);
+    }
   }
   return { min: finite(bad, Math.min, Infinity), max: finite(good, Math.max, -Infinity) };
 }

@@ -1,6 +1,7 @@
 // What the first screen shows for one slider position, derived from the tensor with the
 // browser math of spec 4.9 and 4.11. Pure; statistics are recomputed, never interpolated.
 import type { Tensor } from "../api/tensor";
+import type { EngineId } from "../state/url";
 import { diversificationWord, portfolioMath, type NormalRange, type YearRange } from "./portfolio";
 
 export type PMath = ReturnType<typeof portfolioMath>;
@@ -88,9 +89,13 @@ export type View = {
   word: ReturnType<typeof diversificationWord>;
 };
 
-/** Everything the first screen needs at slider position (s, t | "auto"). About a millisecond. */
-export function deriveView(tensor: Tensor, math: PMath, sIn: number, tSetting: number | "auto"): View {
-  const domain = math.riskSliderDomain();
+/**
+ * Everything the first screen needs at slider position (s, t | "auto") under one engine (the
+ * tensor's default when none is given): the engine's slider domain and one-year ranges, and the
+ * same mixes and statistics for every engine. About a millisecond.
+ */
+export function deriveView(tensor: Tensor, math: PMath, sIn: number, tSetting: number | "auto", engine?: EngineId): View {
+  const domain = math.riskSliderDomain(engine);
   const s = Math.min(domain.s_max, Math.max(domain.s_safe, sIn));
   const disabled = ladderCollapsedAt(tensor, s);
   const tAuto = disabled ? 0 : math.tAuto(s);
@@ -112,13 +117,13 @@ export function deriveView(tensor: Tensor, math: PMath, sIn: number, tSetting: n
     ceilingMu: frontierMuAt(tensor.frontier_curve, ceiling),
     weights,
     selected,
-    range: math.yearRange(s, t),
+    range: math.yearRange(s, t, engine),
     normal: math.normalRange(selected.mu, selected.sigma),
     front,
-    frontRange: math.yearRange(s, 0),
+    frontRange: math.yearRange(s, 0, engine),
     optimized,
     optWeights,
-    optRange: math.yearRange(s, tAuto),
+    optRange: math.yearRange(s, tAuto, engine),
     peak: math.stats(math.interpolate(s, 1)),
     word: diversificationWord(selected.enb / tensor.enb_ref),
   };

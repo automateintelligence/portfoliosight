@@ -3,6 +3,8 @@
 // Nothing here clips or renormalizes weights. The interpolation walks each column's ladder
 // (`tensor.ladder`) and mirrors `interpolate` and `_ladder_mix` in portfoliosight/engine/surface.py.
 import type { Tensor } from "../api/tensor";
+import type { EngineId } from "../state/url";
+import { carries, defaultEngine } from "./engines";
 
 export type Stats = { mu: number; sigma: number; enb: number };
 /** A one-year range (spec 4.9): the bad, typical and good year (2.5th, 50th, 97.5th percentiles). */
@@ -16,16 +18,18 @@ export type DiversificationWord = "Good" | "Average" | "Fair" | "Poor";
 export interface PortfolioMath {
   /** Yearly expected return, yearly standard deviation and ENB of weights `w` (`enb` is NaN for a mix without variance). */
   stats(w: ArrayLike<number>): Stats;
-  /** The one-year range at `(s, t)` read off the tensor's node ranges (`ladder.range`), blended exactly as `interpolate` blends the mixes. Exact at a column's levels; between them a blend of exact figures. */
-  yearRange(s: number, t: number): YearRange;
+  /**
+   * The one-year range at `(s, t)` read off the tensor's node ranges for `engine`, blended exactly as `interpolate` blends the mixes. Exact at a column's levels; between them a blend of exact figures. The engine's own `ladder.ranges[engine]`; the kept `ladder.range` for the tensor's default engine (and so for every engine on a schema 2 tensor, or one the tensor does not carry). Without `engine`, the tensor's default.
+   */
+  yearRange(s: number, t: number, engine?: EngineId): YearRange;
   /** The bell-curve figure of a mix with yearly `(mu, sigma)`: `mu -+ 1.96 sigma`. */
   normalRange(mu: number, sigma: number): NormalRange;
   /** The mix at risk position `s` in `[0, nx - 1]` and diversification position `t` in `[0, 1]` (0 = frontier mix, 1 = the peak, the most diversified mix found at that risk). */
   interpolate(s: number, t: number): number[];
   /** Actual `(sigma, mu)` of the frontier mix at 8 sub-steps per column gap, recomputed from `frontier.w`. The same object on every call: do not mutate. */
   frontierCurve(): Curve;
-  /** The risk slider's domain: `s_safe` is the tensor's `frontier.s_safe` (the engine reads it off the one-year range, which needs the return history), `s_max = nx - 1`. The same object on every call. */
-  riskSliderDomain(): Domain;
+  /** The risk slider's domain: `s_safe` is the tensor's `frontier.ranges[engine].s_safe` (`frontier.s_safe` for the default engine; the engine reads it off the one-year range, which needs the return history), `s_max = nx - 1`. The same object on every call for the same engine. */
+  riskSliderDomain(engine?: EngineId): Domain;
   /** The diversification slider's default at `s`: `tSug` interpolated between the two neighbouring columns. */
   tAuto(s: number): number;
   /** The risk ceiling `X(s)`, interpolated between the two neighbouring columns. */
@@ -127,10 +131,15 @@ export function portfolioMath(tensor: Tensor): PortfolioMath {
     return lerp(ladder.w[j][level], ladder.w[j][level + 1], share);
   }
 
-  function columnRange(j: number, t: number): YearRange {
+  // The engine whose figures answer: the one asked for when the tensor carries it, else the default.
+  const standard = defaultEngine(tensor);
+  const engineOf = (asked: EngineId | undefined): EngineId => (asked !== undefined && carries(tensor, asked) ? asked : standard);
+  const figuresOf = (engine: EngineId) => (engine === standard ? ladder.range : (ladder.ranges?.[engine] ?? ladder.range));
+
+  function columnRange(j: number, t: number, engine: EngineId): YearRange {
     const { level, share } = step(j, t);
     const at = (rows: number[][]) => (1 - share) * rows[j][level] + share * rows[j][level + 1];
-    const { bad, typical, good } = ladder.range;
+    const { bad, typical, good } = figuresOf(engine);
     return { low: at(bad), typical: at(typical), high: at(good) };
   }
 
@@ -162,21 +171,33 @@ export function portfolioMath(tensor: Tensor): PortfolioMath {
     curve.sigma.push(point.sigma);
     curve.mu.push(point.mu);
   }
-  const domain: Domain = { s_safe: frontier.s_safe, s_max: nx - 1 };
+  // one domain object per engine, so a caller can hold on to it
+  const domains = new Map<EngineId, Domain>();
+  const domainOf = (engine: EngineId): Domain => {
+    let domain = domains.get(engine);
+    if (!domain) {
+      const own = engine === standard ? undefined : frontier.ranges?.[engine];
+      domain = { s_safe: own ? own.s_safe : frontier.s_safe, s_max: nx - 1 };
+      domains.set(engine, domain);
+    }
+    return domain;
+  };
+  const domain = domainOf(standard);
 
   return {
     stats,
-    yearRange(s, t) {
+    yearRange(s, t, engine) {
       if (!(t >= 0 && t <= 1)) throw new RangeError(`diversification position ${t} is outside [0, 1]`);
       const { j, lam } = split(s);
-      const a = columnRange(j, t);
-      const b = columnRange(j + 1, t);
+      const id = engineOf(engine);
+      const a = columnRange(j, t, id);
+      const b = columnRange(j + 1, t, id);
       return { low: (1 - lam) * a.low + lam * b.low, typical: (1 - lam) * a.typical + lam * b.typical, high: (1 - lam) * a.high + lam * b.high };
     },
     normalRange,
     interpolate,
     frontierCurve: () => curve,
-    riskSliderDomain: () => domain,
+    riskSliderDomain: (engine) => domainOf(engineOf(engine)),
     tAuto(s) {
       const { j, lam } = split(s);
       return (1 - lam) * tSug(j) + lam * tSug(j + 1);

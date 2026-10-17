@@ -9,6 +9,9 @@ export type Lookback = (typeof LOOKBACKS)[number];
 const PRESETS = ["guide2017", "tsp"] as const;
 const UNITS = ["pct", "usd", "shares"] as const;
 const THEMES = ["ks-dark", "light", "hud", "grid"] as const;
+/** The simulation engines (engines spec 4); `replay` is the default and is never written to the address. */
+export const ENGINES = ["replay", "garch", "copula"] as const;
+export type EngineId = (typeof ENGINES)[number];
 
 export type UrlState = {
   /** `u`; `null` is a custom menu. */

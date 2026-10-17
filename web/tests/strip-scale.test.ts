@@ -5,6 +5,7 @@ import { parseTensor } from "../src/api/client";
 import type { Tensor } from "../src/api/tensor";
 import { portfolioMath } from "../src/math/portfolio";
 import { STRIP_PAD, stripAt, stripPlace, stripScale, tensorBounds } from "../src/math/stripScale";
+import { carriedEngines } from "../src/math/engines";
 import { deriveView } from "../src/math/view";
 
 const RAW = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "fixtures/guide2017_5y.json"), "utf8"));
@@ -19,14 +20,29 @@ function variant(lookback: string, shift: number, hash = T5.universe.hash): Tens
   t.frontier.range = { ...t.frontier.range, bad: move(t.frontier.range.bad), good: move(t.frontier.range.good) };
   t.ladder.range = { ...t.ladder.range, bad: t.ladder.range.bad.map(move), good: t.ladder.range.good.map(move) };
   if (t.entered) t.entered = { ...t.entered, range: { ...t.entered.range, bad: t.entered.range.bad + shift, good: t.entered.range.good + shift } };
+  // every engine's own blocks move with the kept ones
+  for (const id of ["replay", "garch", "copula"] as const) {
+    const front = t.frontier.ranges?.[id];
+    if (front) t.frontier.ranges![id] = { ...front, bad: move(front.bad), good: move(front.good) };
+    const ladder = t.ladder.ranges?.[id];
+    if (ladder) t.ladder.ranges![id] = { ...ladder, bad: ladder.bad.map(move), good: ladder.good.map(move) };
+    const entered = t.entered?.ranges?.[id];
+    if (entered) t.entered!.ranges![id] = { ...entered, bad: entered.bad + shift, good: entered.good + shift };
+  }
   return t;
 }
 
 describe("the strip's fixed scale", () => {
-  it("bounds a tensor by the lowest Bad and highest Good of its frontier nodes, ladder nodes (peaks included) and entered mix", () => {
+  it("bounds a tensor by the lowest Bad and highest Good over every engine it carries: frontier nodes, ladder nodes (peaks included) and entered mix", () => {
     const b = tensorBounds(T5);
-    const bads = [...T5.frontier.range.bad, ...T5.ladder.range.bad.flat(), ...(T5.entered ? [T5.entered.range.bad] : [])];
-    const goods = [...T5.frontier.range.good, ...T5.ladder.range.good.flat(), ...(T5.entered ? [T5.entered.range.good] : [])];
+    const bads: number[] = [...T5.frontier.range.bad, ...T5.ladder.range.bad.flat(), ...(T5.entered ? [T5.entered.range.bad] : [])];
+    const goods: number[] = [...T5.frontier.range.good, ...T5.ladder.range.good.flat(), ...(T5.entered ? [T5.entered.range.good] : [])];
+    const engines = carriedEngines(T5);
+    expect(engines.length).toBeGreaterThan(1);
+    for (const id of engines) {
+      bads.push(...T5.frontier.ranges![id]!.bad, ...T5.ladder.ranges![id]!.bad.flat(), ...(T5.entered ? [T5.entered.ranges![id]!.bad] : []));
+      goods.push(...T5.frontier.ranges![id]!.good, ...T5.ladder.ranges![id]!.good.flat(), ...(T5.entered ? [T5.entered.ranges![id]!.good] : []));
+    }
     expect(b.min).toBe(Math.min(...bads));
     expect(b.max).toBe(Math.max(...goods));
     // The top ladder level (the most diversified mix at each risk) is inside.
@@ -38,19 +54,38 @@ describe("the strip's fixed scale", () => {
     expect(tensorBounds(far)).toEqual({ min: -0.9, max: 0.95 });
   });
 
-  it("holds every mix the sliders can reach, so no marker leaves the bar", () => {
+  it("spans every engine: the volatility model's wider year moves the bar's ends even when History replay is the default", () => {
+    const own = tensorBounds(T5);
+    const wide = structuredClone(T5);
+    wide.ladder.ranges!.garch!.bad[3][2] = own.min - 0.2;
+    wide.frontier.ranges!.garch!.good[5] = own.max + 0.3;
+    expect(tensorBounds(wide)).toEqual({ min: own.min - 0.2, max: own.max + 0.3 });
+    // and the kept default blocks alone would not have seen it
+    expect(Math.min(...wide.ladder.range.bad.flat())).toBeGreaterThan(own.min - 0.2);
+  });
+
+  it("holds every mix the sliders can reach under every carried engine, so no marker leaves the bar", () => {
     const math = portfolioMath(T5);
     const scale = stripScale(tensorBounds(T5));
-    const { s_safe, s_max } = math.riskSliderDomain();
-    for (let i = 0; i <= 20; i++) {
-      for (const t of [0, 0.25, 0.5, 0.75, 1]) {
-        const v = deriveView(T5, math, s_safe + ((s_max - s_safe) * i) / 20, t);
-        for (const x of [v.range.low, v.range.typical, v.range.high]) {
-          expect(stripAt(scale, x)).toBeGreaterThan(0);
-          expect(stripAt(scale, x)).toBeLessThan(1);
+    for (const engine of carriedEngines(T5)) {
+      const { s_safe, s_max } = math.riskSliderDomain(engine);
+      for (let i = 0; i <= 20; i++) {
+        for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+          const v = deriveView(T5, math, s_safe + ((s_max - s_safe) * i) / 20, t, engine);
+          for (const x of [v.range.low, v.range.typical, v.range.high]) {
+            expect(stripAt(scale, x), `${engine} ${x}`).toBeGreaterThan(0);
+            expect(stripAt(scale, x), `${engine} ${x}`).toBeLessThan(1);
+          }
         }
       }
     }
+  });
+
+  it("a schema 2 tensor is bounded by its kept blocks", () => {
+    const old = parseTensor(JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "tests/tensor-schema2.json"), "utf8")));
+    const b = tensorBounds(old);
+    expect(b.min).toBe(Math.min(...old.frontier.range.bad, ...old.ladder.range.bad.flat(), ...(old.entered ? [old.entered.range.bad] : [])));
+    expect(b.max).toBe(Math.max(...old.frontier.range.good, ...old.ladder.range.good.flat(), ...(old.entered ? [old.entered.range.good] : [])));
   });
 
   it("keeps 0% on the bar and pads each end by a share of the span", () => {
