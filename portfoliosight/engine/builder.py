@@ -47,7 +47,14 @@ from .ranges import (
     one_year_ranges,
     range_model,
 )
-from .shape import GarchArtifact, fit_shape, garch_method, shape_panel, simulate_panel
+from .shape import (
+    GarchArtifact,
+    fit_shape,
+    garch_method,
+    guarded_splice_dates,
+    shape_panel,
+    simulate_panel,
+)
 from .stats import (
     EW_HALFLIFE_DAYS,
     ROUNDING_NOISE,
@@ -139,7 +146,7 @@ class TensorInputs:
     levels: int = LEVELS
     engines: tuple[str, ...] = ENGINES  # what to compute; History replay always
     splice_dates: Mapping[str, str] | None = None  # ISO day each seeded fund's tail starts
-    garch_artifact: GarchArtifact | None = None  # a fit to reuse when it is this panel's
+    garch_artifact: GarchArtifact | None = None  # reused for its own panel and splice dates
 
 
 @dataclass(frozen=True)
@@ -260,7 +267,11 @@ def _build(inputs: TensorInputs, workers: int) -> BuildResult:
     if "garch" in engines:  # fitted before the ladders: a history it cannot use fails at once
         panel = shape_panel(frame, included, asof)
         given = inputs.garch_artifact
-        reuse = given is not None and given.sample_sha256 == panel.sample_sha256
+        reuse = (  # the same panel, guarded with the same splice dates: the guard has run on it
+            given is not None
+            and given.sample_sha256 == panel.sample_sha256
+            and given.splice_dates == guarded_splice_dates(included, inputs.splice_dates)
+        )
         artifact = given if reuse else fit_shape(panel, inputs.splice_dates)
     basis = torsion_basis(moments.cov)
     programs = MenuPrograms(mu_s, moments.cov, lo, hi)

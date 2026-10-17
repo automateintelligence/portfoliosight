@@ -18,6 +18,8 @@ rows, the row draw and the recursion. This module only arranges them:
    unavailable for the tensor. Before anything else the splice guard looks at each seeded fund's
    splice date: a move of more than 6 standard deviations there that the rest of the menu did not
    share is a corporate action the record missed, and the build fails naming fund and date.
+   The splice dates the guard checked are part of the artifact (`splice_dates`): a fit is
+   reused only by a build that names the same ones, so no build skips the guard.
 3. `simulate_panel`: 2,000 one-year paths of 252 days from the artifact alone. One draw of pool
    rows (seed 20261013) is shared by every fund, so the funds keep moving together as they did on
    real days, and each fund runs its own recursion from its long-run variance. The result is
@@ -88,7 +90,8 @@ class GarchArtifact:
 
     Arrays are per fund, in `funds` order, and read-only. Fallback funds have `alpha = beta = 0`,
     `omega` their sample variance and `nu` NaN. `pool` is `None` when the engine is unavailable;
-    `pool_rows` is then the number of shared rows there were.
+    `pool_rows` is then the number of shared rows there were. `splice_dates` are the (fund, ISO
+    day) pairs the splice guard checked, the panel's funds only, sorted (`guarded_splice_dates`).
     """
 
     funds: tuple[str, ...]
@@ -109,6 +112,7 @@ class GarchArtifact:
     pool_rows: int
     pool_sha256: str | None
     outliers: tuple[dict, ...]  # {"id", "date", "z"} for every |z| > OUTLIER_Z
+    splice_dates: tuple[tuple[str, str], ...]  # what the splice guard checked
     unavailable_reason: str | None
     qse: str  # the QSE commit the fit ran on
     arch: str  # the `arch` version the fit ran on
@@ -154,8 +158,9 @@ def fit_shape(panel: ShapePanel, splice_dates: Mapping[str, str] | None = None) 
     a fund that does vary (QSE's pool refuses it); a pool shorter than `MIN_POOL_ROWS` is not an
     error but an artifact without a pool, whose `unavailable_reason` the tensor shows.
     """
+    guarded = guarded_splice_dates([str(fund) for fund in panel.frame.columns], splice_dates)
     fit = fit_garch_t_panel(panel.frame)
-    outliers = _guard(panel, fit.std_residuals, splice_dates or {})
+    outliers = _guard(panel, fit.std_residuals, guarded)
     pool: np.ndarray | None
     reason = None
     try:
@@ -184,10 +189,27 @@ def fit_shape(panel: ShapePanel, splice_dates: Mapping[str, str] | None = None) 
         pool_rows=fit.n_common_rows,
         pool_sha256=None if pool is None else _pool_digest(pool),
         outliers=tuple(outliers),
+        splice_dates=guarded,
         unavailable_reason=reason,
         qse=qse_commit(),
         arch=_arch_version(),
     )
+
+
+def guarded_splice_dates(
+    funds: Sequence[str], splice_dates: Mapping[str, str] | None
+) -> tuple[tuple[str, str], ...]:
+    """The splice dates a fit of a panel of `funds` is guarded with: (fund, ISO day), sorted.
+
+    Every day must be an ISO date (a malformed one is the caller's error, not a missing splice);
+    a fund outside the panel has nothing to check and is left out. Two builds of one panel
+    guard alike exactly when this is equal, which is what lets a fit be reused.
+    """
+    days = {
+        str(fund): date.fromisoformat(day).isoformat() for fund, day in (splice_dates or {}).items()
+    }
+    members = {str(fund) for fund in funds}
+    return tuple(sorted((fund, day) for fund, day in days.items() if fund in members))
 
 
 def simulate_panel(
@@ -229,6 +251,7 @@ def artifact_to_json(artifact: GarchArtifact) -> dict:
         "pool_rows": artifact.pool_rows,
         "pool_sha256": artifact.pool_sha256,
         "outliers": [dict(entry) for entry in artifact.outliers],
+        "splice_dates": dict(artifact.splice_dates),
         "unavailable_reason": artifact.unavailable_reason,
         "qse": artifact.qse,
         "arch": artifact.arch,
@@ -244,6 +267,10 @@ def artifact_from_json(doc: Mapping, pool: np.ndarray | None) -> GarchArtifact:
     lists = {name: list(doc[name]) for name in ("status", "messages", "n_obs")}
     if any(len(values) != len(funds) for values in [*arrays.values(), *lists.values()]):
         raise ValueError("an artifact holds one entry per fund")
+    stored = {str(fund): str(day) for fund, day in doc["splice_dates"].items()}
+    splices = guarded_splice_dates(funds, stored)
+    if dict(splices) != stored:
+        raise ValueError("the splice dates are not in the form an artifact stores them")
     expected = doc["pool_sha256"]
     shape = (int(doc["pool_rows"]), len(funds))
     own = pool is not None and pool.shape == shape and _pool_digest(pool) == expected
@@ -266,6 +293,7 @@ def artifact_from_json(doc: Mapping, pool: np.ndarray | None) -> GarchArtifact:
             {"id": str(o["id"]), "date": str(o["date"]), "z": float(o["z"])}
             for o in doc["outliers"]
         ),
+        splice_dates=splices,
         unavailable_reason=doc["unavailable_reason"],
         qse=str(doc["qse"]),
         arch=str(doc["arch"]),
@@ -314,7 +342,7 @@ def garch_method(artifact: GarchArtifact) -> dict:
     }
 
 
-def _guard(panel: ShapePanel, z: np.ndarray, splice_dates: Mapping[str, str]) -> list[dict]:
+def _guard(panel: ShapePanel, z: np.ndarray, splice_dates: Sequence[tuple[str, str]]) -> list[dict]:
     """The splice guard (spec 4.3), then every |z| above `OUTLIER_Z` as `{"id", "date", "z"}`.
 
     A missing corporate action is the fund's alone; a crash moves the menu. So a fund whose
@@ -325,9 +353,8 @@ def _guard(panel: ShapePanel, z: np.ndarray, splice_dates: Mapping[str, str]) ->
     funds = [str(fund) for fund in panel.frame.columns]
     days = [stamp.date().isoformat() for stamp in panel.frame.index]
     row_of = {day: row for row, day in enumerate(days)}
-    for fund, day in splice_dates.items():
-        date.fromisoformat(day)  # a malformed day is the caller's error, not a missing splice
-        if fund not in funds or day not in row_of:
+    for fund, day in splice_dates:  # `guarded_splice_dates`: the panel's funds, ISO days
+        if day not in row_of:
             continue
         n, row = funds.index(fund), row_of[day]
         own = float(z[row, n])

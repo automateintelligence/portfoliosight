@@ -24,6 +24,7 @@ from portfoliosight.engine.shape import (
     artifact_to_json,
     fit_shape,
     garch_method,
+    guarded_splice_dates,
     pool_bytes,
     pool_from_bytes,
     qse_commit,
@@ -287,6 +288,7 @@ def test_artifact_round_trips_through_json_and_npy_to_the_same_bytes(artifact):
     assert back.funds == artifact.funds and back.status == artifact.status
     assert back.messages == artifact.messages and back.n_obs == artifact.n_obs
     assert back.outliers == artifact.outliers and back.qse == artifact.qse
+    assert back.splice_dates == artifact.splice_dates == () and doc["splice_dates"] == {}
     for field in ("mu", "omega", "alpha", "beta", "nu", "long_run_sigma_annual"):
         assert getattr(back, field).tobytes() == getattr(artifact, field).tobytes(), field
     sim = simulate_panel(artifact)
@@ -378,6 +380,29 @@ def test_the_same_drop_on_another_day_is_an_outlier_and_fails_nothing():
     assert fitted.pool is not None  # the day stays in the pool: nothing is clipped
     with pytest.raises(ValueError, match="2026/01/02"):
         fit_shape(panel, {"A": "2026/01/02"})
+
+
+def test_the_splice_dates_a_fit_was_guarded_with_are_part_of_the_artifact():
+    """What the guard checked travels with the fit: the panel's funds only, sorted, ISO days."""
+    frame = _trio()
+    panel = shape_panel(frame, ["A", "B", "C"], frame.index[-1])
+    day_a, day_c = _day(frame, 300), _day(frame, 120)
+    given = {"C": day_c.replace("-", ""), "ZZZ": _day(frame, 5), "A": day_a}
+    fitted = fit_shape(panel, given)
+    assert fitted.splice_dates == (("A", day_a), ("C", day_c))
+    assert guarded_splice_dates(["C", "B", "A"], given) == fitted.splice_dates
+    assert guarded_splice_dates(["A"], None) == () == fit_shape(panel).splice_dates
+    with pytest.raises(ValueError, match="2026/01/02"):  # checked even for a fund not in the panel
+        guarded_splice_dates(["A"], {"ZZZ": "2026/01/02"})
+    doc = json.loads(json.dumps(artifact_to_json(fitted), allow_nan=False))
+    assert doc["splice_dates"] == {"A": day_a, "C": day_c}
+    back = artifact_from_json(doc, fitted.pool)
+    assert back.splice_dates == fitted.splice_dates
+    assert artifact_to_json(back) == artifact_to_json(fitted)
+    # a stored listing not in that form was not written by `artifact_to_json`: refused
+    for wrong in ({"A": day_a, "ZZZ": day_c}, {"A": day_a.replace("-", "")}):
+        with pytest.raises(ValueError, match="splice dates"):
+            artifact_from_json({**doc, "splice_dates": wrong}, fitted.pool)
 
 
 def test_a_drop_of_the_whole_menu_on_the_splice_date_is_an_outlier_not_a_failure():

@@ -1062,6 +1062,43 @@ def test_a_fit_is_reused_only_for_its_own_panel(monkeypatch):
     assert [fund["id"] for fund in other["shape"]["funds"]] == TSP_LIKE
 
 
+def test_a_fit_is_reused_only_under_the_splice_dates_it_was_guarded_with(
+    fixture_frame, monkeypatch
+):
+    """The guard's inputs are part of a fit's identity: a fit guarded without a fund's splice
+    date is never accepted for a build that names one, so the guard always runs on it."""
+    day = "2023-03-13"
+    dropped = fixture_frame[TSP_LIKE].copy()
+    dropped.loc[day, "VTI"] = -0.30  # an ex-date the record never adjusted for
+    unguarded = build_tensor_full(
+        _tsp_like_inputs(returns=dropped, garch_artifact=None, **SMALL_BOTH)
+    ).artifacts["garch"]
+    assert unguarded.splice_dates == ()
+    with pytest.raises(ShapeError) as caught:
+        build_tensor(
+            _tsp_like_inputs(
+                returns=dropped, splice_dates={"VTI": day}, garch_artifact=unguarded, **SMALL_BOTH
+            )
+        )
+    assert caught.value.fund == "VTI" and caught.value.date == day
+    calls = []
+    real = builder.fit_shape
+    monkeypatch.setattr(builder, "fit_shape", lambda *args: calls.append(args) or real(*args))
+    elsewhere = {"VTI": "2024-01-02", "FIENX": "2024-10-30"}  # FIENX is not in the panel
+    guarded = build_tensor_full(
+        _tsp_like_inputs(
+            returns=dropped, splice_dates=elsewhere, garch_artifact=unguarded, **SMALL_BOTH
+        )
+    ).artifacts["garch"]
+    assert len(calls) == 1 and guarded.splice_dates == (("VTI", "2024-01-02"),)
+    again = build_tensor_full(  # the same guard, written another way: the fit is reused
+        _tsp_like_inputs(
+            returns=dropped, splice_dates={"VTI": "20240102"}, garch_artifact=guarded, **SMALL_BOTH
+        )
+    )
+    assert len(calls) == 1 and again.artifacts["garch"] is guarded
+
+
 def test_engines_not_asked_for_are_unavailable_with_their_reason():
     preset = build_tensor(fixture_inputs("5y", **SMALL))
     assert preset["engines"]["garch"] == {
