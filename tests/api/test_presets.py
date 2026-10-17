@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import csv
 
+import pytest
+
 from portfoliosight.api.hashing import universe_hash
 from portfoliosight.api.presets import (
     LOOKBACKS,
+    model_key,
     preset_definitions,
     preset_funds,
     presets_body,
@@ -81,3 +84,15 @@ def test_a_fund_the_catalog_does_not_know_is_named_by_its_id(store, generation, 
     body = presets_body(generation, d_g.isoformat(), store)
     assert body["presets"][0]["funds"][0] == {"id": "VTI", "name": "VTI"}
     assert body["presets"][1]["funds"][0] == {"id": "TSP-G", "name": "G Fund"}
+
+
+def test_model_files_live_under_their_generation_and_shape_digest():
+    """Engines spec 7: `models/{G}/{shape_sha256[:16]}/garch.json` and `pool.npy`."""
+    generation, shape16 = "2026-10-15-0.3.0", "0123456789abcdef"
+    assert model_key(generation, shape16, "garch.json") == (
+        "models/2026-10-15-0.3.0/0123456789abcdef/garch.json"
+    )
+    assert model_key(generation, shape16, "pool.npy").endswith("/0123456789abcdef/pool.npy")
+    for bad in ("0123456789abcde", "0123456789ABCDEF", "../../../../meta"):
+        with pytest.raises(ValueError, match="16 hex"):
+            model_key(generation, bad, "garch.json")
