@@ -1,4 +1,4 @@
-"""One-year ranges: the stationary block bootstrap and the normal range beside it."""
+"""One-year ranges: the stationary block bootstrap, the volatility model and the normal range."""
 
 from __future__ import annotations
 
@@ -7,13 +7,20 @@ import pytest
 
 from portfoliosight.engine import ranges
 from portfoliosight.engine.ranges import (
+    DEFAULT_ENGINE,
+    ENGINES,
     HORIZON_DAYS,
     MEAN_BLOCK_DAYS,
     PATHS,
+    SEED,
+    GarchRangeModel,
+    RangeModel,
     bootstrap_index,
+    garch_range_model,
     one_year_ranges,
     path_counts,
     range_model,
+    simulated_years,
 )
 
 ROWS = 1260
@@ -224,3 +231,198 @@ def test_method_is_declared():
         "percentile_method": "linear",
         "seed": ranges.SEED,
     }
+
+
+# ---- the volatility model's level and shape (simulation engines spec 4.5) -------------------
+
+CHART_MU = np.array([0.03, 0.06, 0.09, 0.02])
+CHART_SIGMA = np.array([0.05, 0.12, 0.22, 1e-4])  # the last fund is cash: sigma at the floor
+CHART_CORR = np.array(
+    [[1.0, 0.3, 0.2, 0.0], [0.3, 1.0, 0.7, 0.0], [0.2, 0.7, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+)
+CHART_COV = np.outer(CHART_SIGMA, CHART_SIGMA) * CHART_CORR
+SHAPE = (60, 25, 4)  # paths x days x funds: small enough to materialise every step
+
+
+def _simulated(shape=SHAPE, seed: int = 4410) -> np.ndarray:
+    """A small simulated panel: fat-tailed, correlated, the last fund constant."""
+    rng = np.random.default_rng(seed)
+    paths, days, funds = shape
+    common = rng.standard_t(5, (paths, days, 1))
+    own = rng.standard_t(5, (paths, days, funds))
+    scale = np.array([0.004, 0.009, 0.015, 0.0])
+    panel = 0.0004 + (0.6 * common + 0.8 * own) * scale
+    panel[..., 3] = 1e-4
+    return panel
+
+
+@pytest.fixture(scope="module")
+def garch_model() -> GarchRangeModel:
+    return garch_range_model(_simulated(), CHART_MU, CHART_COV)
+
+
+def _mixes() -> np.ndarray:
+    rng = np.random.default_rng(4411)
+    return np.vstack([rng.dirichlet(np.ones(4), size=6), np.eye(4)])  # the last row: cash alone
+
+
+def _levelled(model: GarchRangeModel) -> np.ndarray:
+    """Step 1, materialised: each fund at the chart's daily mean and volatility."""
+    m, s = CHART_MU / 252.0, CHART_SIGMA / np.sqrt(252.0)
+    scale = np.divide(s, model.sd, out=np.zeros(4), where=model.sd > 0)
+    return m + (model.panel - model.mean) * scale
+
+
+def _mix_days(model: GarchRangeModel, w: np.ndarray) -> np.ndarray:
+    """Step 2, materialised: the mix's days at the chart's mean and risk, P x H."""
+    y = _levelled(model) @ w
+    m_w, s_w = w @ CHART_MU / 252.0, np.sqrt(w @ CHART_COV @ w / 252.0)
+    spread = y.std()
+    return np.full_like(y, m_w) if spread == 0 else m_w + (y - m_w) * (s_w / spread)
+
+
+def test_engines_are_named_and_the_model_knows_its_own(garch_model):
+    assert ENGINES == ("replay", "garch") and DEFAULT_ENGINE == "replay"
+    assert RangeModel.engine == "replay" and GarchRangeModel.engine == "garch"
+    assert garch_model.engine == "garch" and garch_model.seed == SEED
+    sample = _normal_sample(300, np.array([0.1, 0.2]), 4412)
+    replay = range_model(sample, np.array([0.05, 0.07]), np.cov(sample, rowvar=False) * 252)
+    assert replay.engine == "replay" and replay.seed == SEED
+    other = range_model(sample, replay.mu_s, replay.cov, seed=SEED + 4)
+    assert other.seed == SEED + 4 and np.array_equal(
+        other.counts[0], np.bincount(bootstrap_index(300, seed=SEED + 4)[0], minlength=300)
+    )
+    assert not np.array_equal(other.counts, replay.counts)
+    assert path_counts(300, seed=SEED + 4) is path_counts(300, seed=SEED + 4)
+    assert garch_range_model(_simulated(), CHART_MU, CHART_COV, seed=7).seed == 7
+
+
+def test_pooled_statistics_are_those_of_every_path_and_day(garch_model, monkeypatch):
+    flat = _simulated().reshape(-1, 4)
+    assert np.abs(garch_model.mean - flat.mean(axis=0)).max() <= 1e-17
+    scale = np.abs(garch_model.cov_sim).max()  # the constant fund's entries are rounding
+    assert np.abs(garch_model.cov_sim - np.cov(flat, rowvar=False, ddof=0)).max() <= 1e-12 * scale
+    assert np.array_equal(garch_model.cov_sim, garch_model.cov_sim.T)
+    live = np.sqrt(np.diag(garch_model.cov_sim))[:3]
+    assert np.array_equal(garch_model.sd[:3], live) and garch_model.sd[3] == 0.0  # cash: none
+    assert np.array_equal(garch_model.panel, _simulated()) and not garch_model.panel.flags.writeable
+    monkeypatch.setattr(ranges, "WORK_BYTES", 2 * SHAPE[1] * SHAPE[2] * 8)  # two paths a chunk
+    chunked = garch_range_model(_simulated(), CHART_MU, CHART_COV)
+    assert np.abs(chunked.mean - garch_model.mean).max() <= 1e-17
+    assert np.abs(chunked.cov_sim - garch_model.cov_sim).max() <= 1e-12 * scale
+
+
+def test_a_fund_that_never_varies_is_constant_whatever_its_pooled_mean():
+    """A full-size panel: the mean of 504,000 equal numbers is not exactly that number, so the
+    deviation computed from it is rounding, never a volatility to scale up."""
+    panel = np.empty((PATHS, HORIZON_DAYS, 2))
+    panel[..., 0] = np.random.default_rng(4414).normal(4e-4, 0.01, (PATHS, HORIZON_DAYS))
+    panel[..., 1] = 0.00015
+    mu_s, sigma = np.array([0.10, 0.0389]), np.array([0.16, 1e-4])
+    model = garch_range_model(panel, mu_s, np.diag(sigma**2))
+    assert model.sd[1] == 0.0 and model.sd[0] > 0.009
+    cash = one_year_ranges(model, np.array([0.0, 1.0]))
+    expected = np.expm1(HORIZON_DAYS * np.log1p(mu_s[1] / 252.0))
+    for name in ("bad", "typical", "good"):
+        assert abs(cash[name][0] - expected) <= 1e-12  # its expected return, every day
+
+
+def test_step_one_gives_every_fund_the_chart_s_daily_mean_and_volatility(garch_model):
+    levelled = _levelled(garch_model).reshape(-1, 4)
+    m, s = CHART_MU / 252.0, CHART_SIGMA / np.sqrt(252.0)
+    assert np.abs(levelled.mean(axis=0) - m).max() <= 1e-12
+    assert np.abs(levelled[:, :3].std(axis=0) - s[:3]).max() <= 1e-12
+    assert (levelled[:, 3] == m[3]).all()  # a constant fund is its daily expected return
+
+
+def test_step_two_pins_every_mix_to_the_chart_s_return_and_risk(garch_model):
+    mixes = _mixes()
+    years = simulated_years(garch_model, mixes)
+    assert years.shape == (SHAPE[0], len(mixes))
+    a = np.divide(
+        CHART_SIGMA / np.sqrt(252.0), garch_model.sd, out=np.zeros(4), where=garch_model.sd > 0
+    )
+    for i, w in enumerate(mixes):
+        days = _mix_days(garch_model, w)
+        m_w, s_w = w @ CHART_MU / 252.0, np.sqrt(w @ CHART_COV @ w / 252.0)
+        assert abs(days.mean() - m_w) <= 1e-12
+        if i < len(mixes) - 1:
+            assert abs(days.std() - s_w) <= 1e-12
+            direct = (_levelled(garch_model) @ w).std()  # sd(y) without a pass: (w a)' S (w a)
+            assert abs(np.sqrt((w * a) @ garch_model.cov_sim @ (w * a)) - direct) <= 1e-12 * direct
+        else:  # cash alone has no simulated spread: every day is its expected return
+            assert (days == m_w).all() and np.ptp(years[:, i]) <= 1e-15
+        assert np.abs(years[:, i] - np.expm1(np.log1p(days).sum(axis=1))).max() <= 1e-12
+
+
+def test_chunked_compounding_equals_compounding_at_once(garch_model, monkeypatch):
+    mixes = _mixes()
+    at_once = simulated_years(garch_model, mixes)
+    monkeypatch.setattr(ranges, "MIX_BLOCK", 3)
+    monkeypatch.setattr(ranges, "WORK_BYTES", 2 * SHAPE[1] * 3 * 8)  # two paths, three mixes
+    chunked = simulated_years(garch_model, mixes)
+    assert np.abs(chunked - at_once).max() <= 1e-12
+    for i, w in enumerate(mixes):
+        one_shot = np.expm1(np.log1p(_mix_days(garch_model, w)).sum(axis=1))
+        assert np.abs(chunked[:, i] - one_shot).max() <= 1e-12
+
+
+def test_garch_ranges_are_the_percentiles_of_the_simulated_years(garch_model):
+    mixes = _mixes()[:6]
+    out = one_year_ranges(garch_model, mixes)
+    bad, typical, good = np.percentile(
+        simulated_years(garch_model, mixes), [2.5, 50.0, 97.5], axis=0
+    )
+    assert np.array_equal(out["bad"], bad) and np.array_equal(out["good"], good)
+    assert np.array_equal(out["typical"], typical)
+    assert (out["bad"] < out["typical"]).all() and (out["typical"] < out["good"]).all()
+    mu, sigma = mixes @ CHART_MU, np.sqrt(np.einsum("ij,jk,ik->i", mixes, CHART_COV, mixes))
+    assert np.abs(out["normal"]["mid"] - mu).max() <= 1e-15
+    assert np.abs(out["normal"]["low"] - (mu - 1.96 * sigma)).max() <= 1e-15
+    for i in (0, 5):  # one mix alone gives what it gives among others
+        alone = one_year_ranges(garch_model, mixes[i])
+        for name in ("bad", "typical", "good"):
+            assert alone[name].shape == (1,) and abs(alone[name][0] - out[name][i]) <= 1e-12
+
+
+def test_replay_years_are_the_bootstrap_s_compounded_paths(model):
+    mixes = np.random.default_rng(4413).dirichlet(np.ones(4), size=5)
+    years = simulated_years(model, mixes)
+    assert years.shape == (PATHS, 5)
+    out = one_year_ranges(model, mixes)
+    assert np.array_equal(out["bad"], np.percentile(years, 2.5, axis=0))
+    daily = model.sample @ mixes[2]
+    daily = daily - daily.mean() + (model.mu_s @ mixes[2]) / 252.0
+    direct = np.prod(1.0 + daily[bootstrap_index(ROWS)], axis=1) - 1.0
+    assert np.abs(years[:, 2] - direct).max() <= 1e-12
+
+
+def test_a_simulated_day_that_loses_everything_raises():
+    panel = _simulated()
+    panel[7, 3, 0] = -2.0
+    wild = CHART_SIGMA.copy()
+    wild[0] = 5.0  # a fund so risky that the scaled day is still below -100%
+    model = garch_range_model(panel, CHART_MU, np.outer(wild, wild) * CHART_CORR)
+    with pytest.raises(ValueError, match="cannot be compounded"):
+        one_year_ranges(model, np.eye(4)[0])
+    assert np.isfinite(one_year_ranges(model, np.eye(4)[1])["bad"]).all()  # another mix is fine
+
+
+def test_garch_model_and_mix_are_checked(garch_model):
+    panel = _simulated()
+    with pytest.raises(ValueError, match="P x H x N"):
+        garch_range_model(panel[0], CHART_MU, CHART_COV)
+    with pytest.raises(ValueError, match="P x H x N"):
+        garch_range_model(panel[:1, :1], CHART_MU, CHART_COV)
+    with pytest.raises(ValueError, match="same funds"):
+        garch_range_model(panel, CHART_MU[:3], CHART_COV)
+    with pytest.raises(ValueError, match="same funds"):
+        garch_range_model(panel, CHART_MU, CHART_COV[:3, :3])
+    holed = panel.copy()
+    holed[3, 4, 1] = np.nan
+    with pytest.raises(ValueError, match="non-finite"):
+        garch_range_model(holed, CHART_MU, CHART_COV)
+    with pytest.raises(ValueError, match="has 4 weights"):
+        simulated_years(garch_model, np.array([0.5, 0.5]))
+    with pytest.raises(ValueError, match="has 4 weights"):
+        one_year_ranges(garch_model, np.zeros((2, 2, 4)))
