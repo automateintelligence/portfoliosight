@@ -41,6 +41,14 @@ Preflight passed for host `codex` (10/10 conducted skills). The registered run h
 an isolated integration branch and worktree under `.worktrees/`; no feature code
 was merged as part of this reconciliation. Main has no server-side branch
 protection (GitHub API returned 404); Conductor merge rules remain necessary.
+The new integration branch rejects force pushes and deletion (GitHub protection
+API confirmed both flags disabled).
+
+Rollback evidence was checked against the local annotated tag and its remote:
+`dashboard-bootstrap-2026-10-15` resolves to `4a17431c6a9a8c466057af3e741d1bef2fc8963a`.
+The runbook records its image, Worker version and all three rollback commands.
+A read-only R2 check confirmed `meta/pinned.json` still retains
+`2026-10-14-0.2.0`. No production state was changed by that check.
 
 The installed CLI is partly migrated to per-run state. `run show --run` and
 `gate-dir --run` resolve this registered run's hashed names, while legacy
