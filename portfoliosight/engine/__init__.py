@@ -5,4 +5,4 @@ many worker processes a build may use is the host's to say, and `portfoliosight.
 the count changes how long a build takes, never what it computes.
 """
 
-ENGINE_VERSION = "0.2.0"
+ENGINE_VERSION = "0.3.0"
