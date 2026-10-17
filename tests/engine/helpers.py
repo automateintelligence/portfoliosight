@@ -6,6 +6,7 @@ import dataclasses
 import importlib.util
 import json
 import sys
+from functools import lru_cache
 from pathlib import Path
 from types import ModuleType
 
@@ -13,9 +14,11 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+from threadpoolctl import threadpool_limits
 
 from portfoliosight.engine.ladder import EnbProgram
 from portfoliosight.engine.optimize import Frontier, MenuPrograms, frontier
+from portfoliosight.engine.shape import GarchArtifact, fit_shape, shape_panel
 from portfoliosight.engine.tensor import FundInput, TensorInputs
 from portfoliosight.engine.torsion import TorsionBasis, enb, torsion_basis
 
@@ -58,8 +61,25 @@ def fixture_metadata(path: Path = FIXTURE) -> dict:
     return json.loads(metadata[METADATA_KEY])
 
 
+@lru_cache(maxsize=1)
+def fixture_artifact() -> GarchArtifact:
+    """The volatility model fitted to the fixture's 23 funds at its asof, once per session.
+
+    It is fitted as a build fits it (BLAS on one thread). A build reuses it only for its own
+    panel (`TensorInputs.garch_artifact`): any build whose included funds or returns differ fits
+    its own, and the CLI's builds always fit.
+    """
+    frame = pd.read_parquet(FIXTURE)
+    with threadpool_limits(limits=1, user_api="blas"):
+        return fit_shape(shape_panel(frame, list(frame.columns), FIXTURE_ASOF))
+
+
 def fixture_inputs(lookback: str = "5y", **changes) -> TensorInputs:
-    """`TensorInputs` for the synthetic fixture, as the build CLI derives them from the parquet."""
+    """`TensorInputs` for the synthetic fixture, as the build CLI derives them from the parquet.
+
+    The fixture's fitted volatility model is offered for reuse (`fixture_artifact`); pass
+    `garch_artifact=None` to make the build fit it.
+    """
     frame = pd.read_parquet(FIXTURE)
     meta = fixture_metadata()
     funds = [
@@ -85,6 +105,8 @@ def fixture_inputs(lookback: str = "5y", **changes) -> TensorInputs:
         "preset_id": meta["universe"]["preset_id"],
         "allocation": meta["universe"]["allocation"],
     }
+    if "garch_artifact" not in changes and "garch" in changes.get("engines", ("garch",)):
+        fields["garch_artifact"] = fixture_artifact()
     return TensorInputs(**{**fields, **changes})
 
 

@@ -1,9 +1,16 @@
-"""Build one tensor (spec 7) from prepared inputs.
+"""Build one tensor (spec 7; simulation engines spec 7) from prepared inputs.
 
 `build_tensor` is the engine's entry point. It reads nothing and writes nothing: the caller
 hands it the menu's returns and catalog facts and stores the document it returns. Building twice
 from the same inputs gives the same document apart from the telemetry fields `built_at` and
-`build_seconds`.
+`build_seconds`. `build_tensor_full` returns the same document with the range models and the
+fitted artifacts behind it, for a caller that stores the artifacts or answers ranges later.
+
+Every build computes History replay, the default engine, whose figures fill the fields older
+readers know (`frontier.range`, `ladder.range`, `entered.range`, `range_method`). The engines
+the inputs ask for (`replay` and `garch` unless told otherwise) each add their own figures under
+`ranges`; `engines` says, for every engine the page offers, whether the tensor carries it and if
+not why.
 """
 
 from __future__ import annotations
@@ -29,15 +36,33 @@ from .caps import RULE, requested_caps, resolve_bounds
 from .invariants import TOL, InvariantError, check_floor, check_risk_line, check_weights
 from .ladder import LEVELS, EnbProgram
 from .optimize import NX, Frontier, MenuPrograms, frontier
-from .ranges import METHOD, RangeModel, frame_digest, one_year_ranges, range_model
-from .stats import EW_HALFLIFE_DAYS, estimate_moments, menu_beta_blend, risk_free_rate
+from .ranges import (
+    DEFAULT_ENGINE,
+    ENGINES,
+    METHOD,
+    GarchRangeModel,
+    RangeModel,
+    frame_digest,
+    garch_range_model,
+    one_year_ranges,
+    range_model,
+)
+from .shape import GarchArtifact, fit_shape, garch_method, shape_panel, simulate_panel
+from .stats import (
+    EW_HALFLIFE_DAYS,
+    ROUNDING_NOISE,
+    estimate_moments,
+    menu_beta_blend,
+    risk_free_rate,
+)
 from .stress import segments_from_returns, stress_returns
 from .suggest import DEFAULT_POINT, balanced_level, suggested_level
 from .surface import NY, Raster, Surface, frontier_curve, raster, s_safe, surface
 from .torsion import torsion_basis
 from .windows import WindowSelection, renormalize_allocation, select_window
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+HASH_SCHEMA = 2  # the universe hash's own version: a menu keeps its key across tensor schemas
 TELEMETRY_FIELDS = ("built_at", "build_seconds")
 NOTES = (
     "Expected returns are a 50/50 blend of the sample mean and a menu-beta heuristic.",
@@ -55,6 +80,27 @@ EW_NOTE = (
     "In the recent-weighted view the weights set each range's centre; its shape comes from the "
     "same five years of daily history, unweighted."
 )
+# One sentence for each simulation engine a tensor carries beyond History replay, whose own
+# sentence is the last of NOTES. They start "One-year ranges" like it (the page's details leave
+# such sentences to the Method line).
+ENGINE_NOTES = {
+    "garch": (
+        "One-year ranges under the volatility model are the same percentiles of 2,000 one-year "
+        "paths in which each fund's volatility follows the pattern fitted to up to ten years of "
+        "its daily history and the funds' shocks are replayed together from days they all "
+        "share, centred and scaled to this view's expected return and risk."
+    ),
+}
+EW_ENGINE_NOTES = {
+    "garch": (
+        "One-year ranges under the volatility model take their centre and their risk from the "
+        "recent-weighted view and their shape from the same ten years as every other view."
+    ),
+}
+FIGURES = ("bad", "typical", "good")  # an engine's own figures; the normal range is shared
+NOT_COMPUTED = "not computed for this menu"
+NOT_COMPUTED_CUSTOM = "not computed for custom menus"
+COPULA = {"status": "unavailable", "reason": NOT_COMPUTED, "method": None}
 
 
 @dataclass(frozen=True)
@@ -91,6 +137,18 @@ class TensorInputs:
     nx: int = NX
     ny: int = NY
     levels: int = LEVELS
+    engines: tuple[str, ...] = ENGINES  # what to compute; History replay always
+    splice_dates: Mapping[str, str] | None = None  # ISO day each seeded fund's tail starts
+    garch_artifact: GarchArtifact | None = None  # a fit to reuse when it is this panel's
+
+
+@dataclass(frozen=True)
+class BuildResult:
+    """A tensor with the range models behind its figures and the artifacts fitted for it."""
+
+    tensor: dict
+    models: dict[str, RangeModel | GarchRangeModel]  # by engine, for each engine it carries
+    artifacts: dict[str, GarchArtifact]  # by engine, for each engine whose fit ran
 
 
 class WindowUnavailable(ValueError):
@@ -111,7 +169,7 @@ def universe_hash(funds: Sequence[Mapping[str, object]]) -> str:
     rows = [{"id": str(f["id"]), "min": f.get("min"), "max": f.get("max")} for f in funds]
     rows.sort(key=lambda row: row["id"])
     canonical = json.dumps(
-        {"schema": SCHEMA_VERSION, "funds": rows}, sort_keys=True, separators=(",", ":")
+        {"schema": HASH_SCHEMA, "funds": rows}, sort_keys=True, separators=(",", ":")
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
@@ -137,23 +195,33 @@ def build_tensor(inputs: TensorInputs, *, workers: int | None = None) -> dict:
     """Compute the tensor of one (menu, lookback, asof).
 
     Raises `WindowUnavailable` when the window has too little shared history, `CapsError` when
-    the requested caps cannot be met by the funds included in the window, `TorsionError` when
-    the funds' correlation matrix is singular (every varying fund switching between two values
-    in lockstep leaves Ledoit-Wolf nothing to shrink; nothing is regularized), and an error from
-    the post-check when any computed mix breaks an invariant.
+    the requested caps cannot be met by the funds included in the window, `ShapeError` when the
+    volatility model cannot use the menu's history (a fund's splice date shows a move the rest of
+    the menu did not make, or the shared days say nothing about a fund that varies),
+    `TorsionError` when the funds' correlation matrix is singular (every varying fund switching
+    between two values in lockstep leaves Ledoit-Wolf nothing to shrink; nothing is
+    regularized), `ValueError` for an engine it cannot compute, and an error from the post-check
+    when any computed mix breaks an invariant.
 
     A build is thousands of small matrix operations, where BLAS threads only get in each
     other's way; they are held to one for its duration. The risk columns' ladders are solved on
     `workers` processes, by default as many as the host lets this process use
-    (`portfoliosight.cpus.build_workers`); the tensor is the same whatever the number.
+    (`portfoliosight.cpus.build_workers`); the tensor is the same whatever the number. The
+    volatility model is fitted and simulated once, in the build's own process.
     """
+    return build_tensor_full(inputs, workers=workers).tensor
+
+
+def build_tensor_full(inputs: TensorInputs, *, workers: int | None = None) -> BuildResult:
+    """`build_tensor`, with the range models and the fitted artifacts behind the tensor."""
     count = build_workers() if workers is None else workers
     with threadpool_limits(limits=1, user_api="blas"):
         return _build(inputs, count)
 
 
-def _build(inputs: TensorInputs, workers: int) -> dict:
+def _build(inputs: TensorInputs, workers: int) -> BuildResult:
     started = time.perf_counter()
+    engines = _engines(inputs.engines)
     funds = list(inputs.funds)
     ids = [fund.id for fund in funds]
     if len(set(ids)) != len(ids):
@@ -188,6 +256,12 @@ def _build(inputs: TensorInputs, workers: int) -> dict:
         {symbol: series.loc[:asof] for symbol, series in (inputs.rf_series or {}).items()}
     )
     mu_s, _ = menu_beta_blend(moments.mu, moments.cov, rf)
+    artifact = None
+    if "garch" in engines:  # fitted before the ladders: a history it cannot use fails at once
+        panel = shape_panel(frame, included, asof)
+        given = inputs.garch_artifact
+        reuse = given is not None and given.sample_sha256 == panel.sample_sha256
+        artifact = given if reuse else fit_shape(panel, inputs.splice_dates)
     basis = torsion_basis(moments.cov)
     programs = MenuPrograms(mu_s, moments.cov, lo, hi)
     front = frontier(programs, inputs.nx, workers)
@@ -204,9 +278,22 @@ def _build(inputs: TensorInputs, workers: int) -> dict:
         inputs.nx,
         workers,
     )
-    model = range_model(sample, mu_s, moments.cov)
-    ladder_range = _range_block(one_year_ranges(model, surf.w.reshape(-1, len(mu_s))), surf.y.shape)
+    models: dict[str, RangeModel | GarchRangeModel] = {
+        "replay": range_model(sample, mu_s, moments.cov)
+    }
+    if artifact is not None and artifact.pool is not None:
+        models["garch"] = garch_range_model(simulate_panel(artifact), mu_s, moments.cov)
+    mixes = surf.w.reshape(-1, len(mu_s))
+    computed = {engine: one_year_ranges(model, mixes) for engine, model in models.items()}
+    for engine, ranges in computed.items():
+        _check_ranges(engine, ranges, "ladder", surf.y.shape)
+    ladder_range = _range_block(computed[DEFAULT_ENGINE], surf.y.shape)
     front_range = _column(ladder_range, 0)
+    ladder_ranges = {engine: _figures(r, surf.y.shape) for engine, r in computed.items()}
+    front_ranges = {
+        engine: {"s_safe": s_safe(_column(block, 0)["bad"]), **_column(block, 0)}
+        for engine, block in ladder_ranges.items()
+    }
 
     history = frame.loc[frame.index <= asof]
     tr_index: dict[str, pd.Series | list[pd.Series]] = {}
@@ -279,6 +366,7 @@ def _build(inputs: TensorInputs, workers: int) -> dict:
             "w": front.w.tolist(),
             "s_safe": s_safe(front_range["bad"]),
             "range": front_range,
+            "ranges": front_ranges,
         },
         "ladder": {
             "y": surf.y.tolist(),
@@ -292,6 +380,7 @@ def _build(inputs: TensorInputs, workers: int) -> dict:
             "t_suggested": [level / last for level in suggested],
             "y_suggested": [float(surf.y[j, level]) for j, level in enumerate(suggested)],
             "range": ladder_range,
+            "ranges": ladder_ranges,
         },
         "grid": {
             "y": grid.y.tolist(),
@@ -305,16 +394,92 @@ def _build(inputs: TensorInputs, workers: int) -> dict:
                 for j, level in enumerate(suggested)
             ],
         },
-        "entered": _entered(inputs.allocation, included, model),
+        "entered": _entered(inputs.allocation, included, models),
         "range_method": dict(METHOD),
+        "engines": _engines_block(artifact, inputs.preset_id),
+        "range_default": DEFAULT_ENGINE,
+        "shape": None if artifact is None else _shape_block(artifact),
         "enb_ref": surf.enb_ref,
         "stress": stress_returns(tr_index, inputs.xnys_sessions),
-        "notes": [*NOTES, *([] if selection.omega is None else [EW_NOTE])],
+        "notes": _notes(models, weighted=selection.omega is not None),
     }
     tensor["built_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     tensor["build_seconds"] = round(time.perf_counter() - started, 3)
     validate_tensor(tensor)
-    return tensor
+    artifacts = {} if artifact is None else {"garch": artifact}
+    return BuildResult(tensor=tensor, models=models, artifacts=artifacts)
+
+
+def _engines(asked: Sequence[str]) -> tuple[str, ...]:
+    """The engines to compute, in `ENGINES` order; the default engine is always among them."""
+    unknown = [engine for engine in asked if engine not in ENGINES]
+    if unknown:
+        raise ValueError(f"unknown engine {unknown[0]!r}: a build computes {', '.join(ENGINES)}")
+    if DEFAULT_ENGINE not in asked:
+        raise ValueError(f"every build computes {DEFAULT_ENGINE}, the default engine")
+    return tuple(engine for engine in ENGINES if engine in asked)
+
+
+def _engines_block(artifact: GarchArtifact | None, preset_id: str | None) -> dict:
+    """`engines`: every engine the page offers, with its status, its reason and its method.
+
+    The volatility model has no artifact exactly when the build was not asked for it.
+    """
+    if artifact is None:
+        reason = NOT_COMPUTED_CUSTOM if preset_id is None else NOT_COMPUTED
+        garch: dict = {"status": "unavailable", "reason": reason, "method": None}
+    elif artifact.pool is None:
+        garch = {"status": "unavailable", "reason": artifact.unavailable_reason, "method": None}
+    else:
+        garch = {"status": "ready", "reason": None, "method": garch_method(artifact)}
+    replay = {"status": "ready", "reason": None, "method": dict(METHOD)}
+    return {"replay": replay, "garch": garch, "copula": dict(COPULA)}
+
+
+def _shape_block(artifact: GarchArtifact) -> dict:
+    """`shape`: the fitted volatility model as the tensor reports it (simulation engines spec 7)."""
+
+    def number(value: float) -> float | None:
+        return None if np.isnan(value) else float(value)
+
+    funds = [
+        {
+            "id": fund,
+            "status": artifact.status[n],
+            "rows": artifact.n_obs[n],
+            "mu": float(artifact.mu[n]),
+            "omega": float(artifact.omega[n]),
+            "alpha": float(artifact.alpha[n]),
+            "beta": float(artifact.beta[n]),
+            "nu": number(artifact.nu[n]),
+            "long_run_sigma_annual": float(artifact.long_run_sigma_annual[n]),
+            "margin": None,
+        }
+        for n, fund in enumerate(artifact.funds)
+    ]
+    return {
+        "rows": artifact.rows,
+        "start": artifact.start,
+        "end": artifact.end,
+        "sample_sha256": artifact.sample_sha256,
+        "pool_rows": artifact.pool_rows,
+        "funds": funds,
+        "outliers": [dict(entry) for entry in artifact.outliers],
+        "lower_tail_5pct": None,
+        "tree_loglik_share": None,
+    }
+
+
+def _notes(models: Mapping[str, object], *, weighted: bool) -> list[str]:
+    carried = [ENGINE_NOTES[engine] for engine in models if engine in ENGINE_NOTES]
+    if not weighted:
+        return [*NOTES, *carried]
+    return [
+        *NOTES,
+        *carried,
+        EW_NOTE,
+        *(EW_ENGINE_NOTES[e] for e in models if e in EW_ENGINE_NOTES),
+    ]
 
 
 def _post_check(program: EnbProgram, front: Frontier, surf: Surface, grid: Raster) -> None:
@@ -344,18 +509,39 @@ def _post_check(program: EnbProgram, front: Frontier, surf: Surface, grid: Raste
                 check_floor(mix, mu=mu, floor=grid.y[k])
 
 
+def _check_ranges(engine: str, ranges: Mapping, where: str, shape: tuple[int, ...]) -> None:
+    """Every carried mix's bad year is below its typical year, and that below its good year.
+
+    A riskless mix (one whose simulated days do not vary) has one year on every path: its three
+    figures may then agree to rounding, and nothing else may. A NaN fails.
+    """
+    bad, typical, good = (np.asarray(ranges[name], dtype=float) for name in FIGURES)
+    ordered = (bad < typical) & (typical < good)
+    width = ROUNDING_NOISE * np.maximum(1.0, np.abs(good))
+    point = (bad <= typical) & (typical <= good) & (good - bad <= width)
+    broken = np.flatnonzero(~(ordered | point))
+    if broken.size:
+        i = int(broken[0])
+        at = ", ".join(str(int(k)) for k in np.unravel_index(i, shape))
+        detail = f"bad {bad[i]!r}, typical {typical[i]!r}, good {good[i]!r} are out of order"
+        raise InvariantError("range", f"{engine} {where} mix ({at}): {detail}")
+
+
 def _range_block(ranges: Mapping, shape: tuple[int, ...]) -> dict:
     """The tensor form of `one_year_ranges`: nested lists of `shape`, plain floats for `()`."""
-
-    def laid_out(values) -> object:
-        return np.asarray(values, dtype=float).reshape(shape).tolist()
-
     return {
-        "bad": laid_out(ranges["bad"]),
-        "typical": laid_out(ranges["typical"]),
-        "good": laid_out(ranges["good"]),
-        "normal": {name: laid_out(values) for name, values in ranges["normal"].items()},
+        **_figures(ranges, shape),
+        "normal": {name: _laid_out(values, shape) for name, values in ranges["normal"].items()},
     }
+
+
+def _figures(ranges: Mapping, shape: tuple[int, ...]) -> dict:
+    """An engine's own figures (`ranges.<engine>`): bad, typical and good, laid out as `shape`."""
+    return {name: _laid_out(ranges[name], shape) for name in FIGURES}
+
+
+def _laid_out(values, shape: tuple[int, ...]) -> object:
+    return np.asarray(values, dtype=float).reshape(shape).tolist()
 
 
 def _column(block: Mapping, level: int) -> dict:
@@ -364,28 +550,32 @@ def _column(block: Mapping, level: int) -> dict:
     def pick(rows) -> list:
         return [row[level] for row in rows]
 
-    return {
-        "bad": pick(block["bad"]),
-        "typical": pick(block["typical"]),
-        "good": pick(block["good"]),
-        "normal": {name: pick(rows) for name, rows in block["normal"].items()},
-    }
+    picked: dict = {name: pick(block[name]) for name in FIGURES}
+    if "normal" in block:
+        picked["normal"] = {name: pick(rows) for name, rows in block["normal"].items()}
+    return picked
 
 
 def _entered(
-    allocation: Mapping[str, float] | None, included: Sequence[str], model: RangeModel
+    allocation: Mapping[str, float] | None,
+    included: Sequence[str],
+    models: Mapping[str, RangeModel | GarchRangeModel],
 ) -> dict | None:
-    """The entered mix over the included funds, with its one-year range; `None` without one."""
+    """The entered mix over the included funds, with its one-year ranges; `None` without one."""
     if allocation is None:
         return None
     weights, set_aside = renormalize_allocation(allocation, included)
     if weights is None:
         return None
     mix = np.array([weights.get(fund, 0.0) for fund in included])
+    computed = {engine: one_year_ranges(model, mix) for engine, model in models.items()}
+    for engine, ranges in computed.items():
+        _check_ranges(engine, ranges, "entered", (1,))
     return {
         "w": mix.tolist(),
         "set_aside": float(set_aside),
-        "range": _range_block(one_year_ranges(model, mix), ()),
+        "range": _range_block(computed[DEFAULT_ENGINE], ()),
+        "ranges": {engine: _figures(ranges, ()) for engine, ranges in computed.items()},
     }
 
 
