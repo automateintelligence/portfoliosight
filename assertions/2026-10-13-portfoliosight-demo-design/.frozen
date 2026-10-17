@@ -159,7 +159,7 @@
     "A-PS-27": {
       "entry": "5c9be781812384daff2ae12e8eb9b21079a39e28deb107b4eaf2efefe0b10066",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_27_custom_build_queue.py": "4c3cbdbea20c7fdcc435b508fee01e512410801f3a3ea94e7ef96023ff356449"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_27_custom_build_queue.py": "a729666267e4eb30b04292ae4c149f55e15dab8c3b72f67b59f2264b5749e264"
       }
     },
     "A-PS-28": {
@@ -177,7 +177,7 @@
     "A-PS-30": {
       "entry": "96f9b4ee0e919f13506026972291afcfb7f2b729906369344986e70b16402802",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_30_generation_publish_atomic.py": "dd476039e0719db4a1cae0e5b5480419ac109d22b8148e024ce854f2c758d46b"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_30_generation_publish_atomic.py": "037f9987bc0090f9332cc1c752ec772a947645cdc8baf9f61dd0363903934f9a"
       }
     },
     "A-PS-31": {
@@ -297,7 +297,7 @@
     "A-PS-50": {
       "entry": "bcf2ca1c28f3d9abedfb3fbac1700b93ce3c8c93c44d74fc43b7b3905fcb6710",
       "files": {
-        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_50_stress_cards_coverage.py": "79a8b3f74a3398405327d82a836c96c4b02abb33e3740da0aec3763c8057183f"
+        "assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_50_stress_cards_coverage.py": "f1805b4f5aa9fe239e2afd15f1949de90eb3ce7548afbdf25e5a276f05bcea9f"
       }
     },
     "A-PS-51": {

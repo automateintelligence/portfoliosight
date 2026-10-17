@@ -117,8 +117,9 @@ the docstring is authoritative for that test.
   `caps.greedy_fill`, `caps.CapsError`, `stress.stress_returns`; `scripts/make_fixtures.py --out`;
   `portfoliosight/engine/tensor.schema.json` (schema 3) and `tensor.schema.v2.json` (schema 2),
   loaded by `tensor.load_schema(version)` for 2 or 3 (any other version: `ValueError`; A-PS-56
-  validates each tensor against the contract its own `schema` names). Engine modules counted by
-  A-PS-25: at least six of
+  validates each tensor against the contract its own `schema` names; A-PS-27 and A-PS-30 require
+  a freshly built tensor to declare schema 3 and validate against `load_schema(3)`). Engine
+  modules counted by A-PS-25: at least six of
   `stats, torsion, optimize, surface, suggest, stress, caps, builder`.
 - API and nightly: `portfoliosight.api.queue.build_job` (the default `build_fn`; it writes the
   tensor key itself and never over an existing key), `portfoliosight.api.hashing.universe_hash`,

@@ -27,6 +27,9 @@ Pinned interface (the product must provide exactly this):
   `PS_PROVIDER_*` variables, so with the large limits set here it never sleeps. Scratch files go
   under `PS_CACHE_DIR`. `meta/status.json` carries an `errors` entry (spec §5.3).
 - Store, manifest, canonical record, `meta/current.json`, `meta/{G}/generation.json`: shared pins.
+- A real preset tensor declares `schema` 3 and validates against the contract of schema 3,
+  `portfoliosight/engine/tensor.schema.json`, loaded by
+  `portfoliosight.engine.tensor.load_schema(3)`.
 
 Which leg uses which builder:
 - interrupt, resume, skip, prune, first run, TSP failure: a fast fake `build_fn` (placeholder
@@ -89,6 +92,26 @@ def _need(module: str):
         return importlib.import_module(module)
     except Exception as exc:  # ImportError, or an import-time crash in the product
         pytest.fail(f"A-PS-30 red: cannot import {module}: {type(exc).__name__}: {exc}")
+
+
+TENSOR_SCHEMA = 3  # what the engine writes: `schema` of portfoliosight/engine/tensor.schema.json
+
+
+def _assert_written_contract(tensor: dict, what: str) -> None:
+    """A freshly built tensor declares schema 3 and validates against that shipped contract."""
+    jsonschema = _need("jsonschema")
+    contract = _need("portfoliosight.engine.tensor").load_schema(TENSOR_SCHEMA)
+    assert (contract.get("properties") or {}).get("schema") == {"const": TENSOR_SCHEMA}, (
+        f"the contract loaded for schema {TENSOR_SCHEMA} is not that schema's"
+    )
+    assert tensor.get("schema") == TENSOR_SCHEMA, (
+        f"{what} declares schema {tensor.get('schema')!r}, not {TENSOR_SCHEMA}"
+    )
+    validator = jsonschema.Draft202012Validator(contract)
+    errors = sorted(validator.iter_errors(tensor), key=lambda e: list(e.absolute_path))
+    assert not errors, f"{what} fails the schema {TENSOR_SCHEMA} contract: " + "; ".join(
+        f"{'/'.join(map(str, e.absolute_path))}: {e.message[:120]}" for e in errors[:5]
+    )
 
 
 # ---- shared fixture code (copied into every api-group gate file; keep in step) ----------------
@@ -690,7 +713,8 @@ else:
                 tensors_b[(h, lb)] = t
                 assert t["asof"] == D_G.isoformat(), f"{preset}/{lb}: asof {t['asof']} != D_G"
                 assert t["asof"] != next_day.date().isoformat()
-                assert t["generation"] == g and t["schema"] == 2
+                assert t["generation"] == g
+                _assert_written_contract(t, f"{preset}/{lb}")
                 assert t["universe"]["hash"] == h and t["lookback"]["id"] == lb
                 assert t["lookback"]["end"] <= D_G.isoformat(), (
                     f"{preset}/{lb}: window ends after D_G"
