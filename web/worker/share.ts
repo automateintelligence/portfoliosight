@@ -11,7 +11,7 @@
 // only and nothing is imported from `cloudflare:*`.
 
 import { secretEquals } from "./preview";
-import { decode, encode } from "../src/state/url";
+import { decode, ENGINES, encode } from "../src/state/url";
 
 export interface ShareEnv {
   SHARE_FROM?: string;
@@ -106,6 +106,8 @@ type Shape = (value: string) => boolean;
 const matching = (pattern: RegExp): Shape => (value) => pattern.test(value);
 // a theme is one the page's own codec keeps, so the mailed themes cannot drift from the page's
 const pageTheme: Shape = (value) => decode(new URLSearchParams([["t", value]]).toString()).theme === value;
+// a simulation is one of the page's own, ^(?:replay|garch|copula)$, for the same reason
+const pageEngine: Shape = matching(new RegExp(`^(?:${ENGINES.join("|")})$`));
 
 // The spec §8.1 keys in the order the page writes them, each with the only value shape it may
 // take. A value is mailed only if it matches, so a link cannot carry free text. A menu holds at
@@ -121,6 +123,7 @@ const urlKeys = (maxFunds: number): ReadonlyArray<readonly [string, Shape]> => [
   ["d", matching(/^(?:auto|0(?:\.\d{1,12})?|1(?:\.0{1,12})?)$/)],
   ["t", pageTheme],
   ["x", matching(/^1$/)],
+  ["e", pageEngine],
 ];
 // Written by the page even at their defaults; `unit=pct` is the default the page leaves out.
 

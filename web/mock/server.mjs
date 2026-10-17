@@ -9,7 +9,10 @@
 //   POST /api/share              (always 202; nothing is sent)
 //   POST /api/range              409 range_unavailable (the page keeps its own figure), or the
 //                                stand-in one-year range of the posted weights (below) while the
-//                                "ranges" switch is on
+//                                "ranges" switch is on. The body may name "engine" (replay, garch,
+//                                copula; 422 for another id, 409 range_unavailable when the tensor
+//                                does not carry it); the answer echoes "engine" (the tensor's
+//                                default when none was named) and carries "loss_sources": null
 //   GET  /__mock/posts           recorded POST /api/tensors bodies
 //   GET  /__mock/ranges          recorded POST /api/range bodies
 //   POST /__mock/config          {"stale": 3, "unavailable": "10y", "challenge": 1, "build409": 2, "ranges": true,
@@ -226,6 +229,34 @@ function twoFundTensor(lookback) {
 const CURVE_STRETCH = { "1y": [1.08, 1.22], "2y": [1.04, 1.12], "3y": [0.97, 0.9], "10y": [1.12, 0.84], ew: [1.005, 1.03] };
 
 function tensorFor(hash, lookback) {
+  return served(plainTensorFor(hash, lookback));
+}
+
+// The engines' switches: what the served tensors say about the volatility model and the fit.
+function served(tensor) {
+  const t = tensor;
+  if (config.fallback.length > 0 && t.shape) {
+    t.shape.funds = t.shape.funds.map((f) => (config.fallback.includes(f.id) ? { ...f, status: "near_constant" } : f));
+  }
+  if (config.noGarch && t.engines) {
+    t.engines.garch = { status: "unavailable", reason: "not enough shared history for the volatility model", method: null };
+    delete t.frontier.ranges.garch;
+    delete t.ladder.ranges.garch;
+    if (t.entered) delete t.entered.ranges.garch;
+  }
+  if (config.schema2) {
+    // as engine 0.2.0 wrote it: the kept fields only
+    t.schema = 2;
+    t.engine_version = "0.2.0";
+    for (const key of ["engines", "range_default", "shape"]) delete t[key];
+    delete t.frontier.ranges;
+    delete t.ladder.ranges;
+    if (t.entered) delete t.entered.ranges;
+  }
+  return t;
+}
+
+function plainTensorFor(hash, lookback) {
   if (hash === H3) return twoFundTensor(lookback);
   const copy = structuredClone(fixture);
   copy.lookback = { ...copy.lookback, id: lookback };
@@ -241,7 +272,7 @@ function tensorFor(hash, lookback) {
   return copy;
 }
 
-const DEFAULTS = { stale: 0, unavailable: null, challenge: 0, build409: 0, ranges: false, noGeneration: false, tier: "public", manySymbols: false, stocks: false };
+const DEFAULTS = { stale: 0, unavailable: null, challenge: 0, build409: 0, ranges: false, noGeneration: false, tier: "public", manySymbols: false, stocks: false, noGarch: false, schema2: false, fallback: [] };
 const MANY = Array.from({ length: 120 }, (_, i) => {
   const id = `MOCKF${String(i + 1).padStart(3, "0")}`;
   return { id, name: `Mock stand-in fund ${id}`, kind: "etf", tier: 3, first_date: "2010-01-04" };
@@ -271,7 +302,7 @@ let rangePosts = [];
 // The service resamples the menu's daily history; the mock has none, so its stand-in for the
 // one-year range of a mix is mu -+ 1.96 sigma around mu, from the tensor's own moments. It is
 // enough for the page to tell the service's figure from its own blend of the node ranges.
-function standInRange(tensor, weights) {
+function standInRange(tensor, weights, engine) {
   const n = tensor.mu_s.length;
   let mu = 0;
   let variance = 0;
@@ -281,8 +312,23 @@ function standInRange(tensor, weights) {
   }
   const spread = 1.96 * Math.sqrt(variance);
   const normal = { low: mu - spread, mid: mu, high: mu + spread };
-  return { bad: normal.low, typical: mu, good: normal.high, normal };
+  const gap = engineGap(tensor, engine);
+  return { bad: normal.low + gap.bad, typical: mu + gap.typical, good: normal.high + gap.good, normal };
 }
+
+// Another engine's stand-in is the same blend moved by the mean gap between that engine's node
+// figures and the default engine's, over every ladder node of the fixture: per-engine, from the
+// fixture's own per-engine ranges, and zero for the default engine.
+function engineGap(tensor, engine) {
+  const own = tensor.ladder.ranges?.[engine];
+  if (!own || engine === (tensor.range_default ?? "replay")) return { bad: 0, typical: 0, good: 0 };
+  const mean = (rows) => rows.flat().reduce((a, b) => a + b, 0) / rows.flat().length;
+  const gap = (key) => mean(own[key]) - mean(tensor.ladder.range[key]);
+  return { bad: gap("bad"), typical: gap("typical"), good: gap("good") };
+}
+
+const ENGINES = ["replay", "garch", "copula"];
+const carries = (tensor, id) => (tensor.engines ? tensor.engines[id]?.status === "ready" : id === "replay");
 
 const send = (res, status, body, headers = {}) => {
   const text = typeof body === "string" ? body : JSON.stringify(body);
@@ -381,8 +427,16 @@ const server = http.createServer(async (req, res) => {
     if (weights.length !== tensor.mu_s.length || weights.some((w) => !Number.isFinite(w))) {
       return send(res, 422, { error: { code: "invalid_request", message: "one weight per fund", details: null } });
     }
+    // the engine: optional, the tensor's default when left out; another id is a 422, an engine the tensor does not carry a 409
+    if (body.engine !== undefined && !ENGINES.includes(body.engine)) {
+      return send(res, 422, { error: { code: "invalid_request", message: "unknown engine", details: null } });
+    }
+    const engine = body.engine ?? tensor.range_default ?? "replay";
+    if (!carries(tensor, engine)) {
+      return send(res, 409, { error: { code: "range_unavailable", message: "this tensor does not carry that engine", details: null } });
+    }
     if (!config.ranges) return send(res, 409, { error: { code: "range_unavailable", message: "the price history behind this tensor changed after it was built", details: null } });
-    return send(res, 200, standInRange(tensor, weights));
+    return send(res, 200, { engine, ...standInRange(tensor, weights, engine), loss_sources: null });
   }
   return send(res, 404, { error: { code: hit ? "unknown_tensor" : "not_found", message: "not found", details: null } });
 });

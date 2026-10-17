@@ -177,6 +177,11 @@ describe("share by email", () => {
       ["?g=1y,10y&x=1&d=0.5&lb=ew&c=VTI::10,BND:5:&unit=shares&f=VTI:60,BND:40,VNQ", "?f=VTI:60,BND:40,VNQ&unit=shares&c=VTI::10,BND:5:&lb=ew&g=1y,10y&d=0.5&x=1"],
       ["?f=VTI%3A60%2CBND%3A40.5&unit=usd", "?f=VTI:60,BND:40.5&unit=usd&lb=5y&d=auto"],
       ["?f=BRK.B:10,BF-B&t=ks-dark&d=1", "?f=BRK.B:10,BF-B&lb=5y&d=1&t=ks-dark"],
+      // the simulation (engines spec 6): written last, after x, and not at all for replay
+      ["?e=garch&x=1&t=hud&u=guide2017", "?u=guide2017&lb=5y&d=auto&t=hud&x=1&e=garch"],
+      ["?u=tsp&e=garch", "?u=tsp&lb=5y&d=auto&e=garch"],
+      ["?u=tsp&e=copula&r=3", "?u=tsp&lb=5y&r=3&d=auto&e=copula"],
+      ["?u=tsp&e=replay", "?u=tsp&lb=5y&d=auto"],
     ];
     for (const [submitted, canonical] of cases) {
       expect(S.reencodeShareUrl(`${SITE}/${submitted}`), submitted).toBe(`${SITE}/${canonical}`);
@@ -209,6 +214,29 @@ describe("share by email", () => {
     }
     sent = [];
     const refused = await S.handleShare(post({ ...good, url: `${SITE}/?u=tsp&t=neon` }), baseEnv(), allow);
+    expect(refused.status).toBe(400);
+    expect(await errorCode(refused)).toBe("invalid_url");
+    expect(sent).toEqual([]);
+  });
+
+  it("mails the simulation a view was sent in, and only the page's three", async () => {
+    for (const engine of ["replay", "garch", "copula"]) {
+      // the page's codec keeps the same three, so the link is the address bar's own
+      expect(decode(`?e=${engine}`).engine, engine).toBe(engine);
+      expect(S.reencodeShareUrl(`${SITE}/?u=tsp&e=${engine}`), engine).toBe(`${SITE}/${encode(decode(`?u=tsp&e=${engine}`))}`);
+    }
+    for (const engine of ["foo", "GARCH", "Garch", "vine", "garch,copula", "garch%20", "%20garch", "", "1", "replay&e=garch"]) {
+      expect(S.reencodeShareUrl(`${SITE}/?u=tsp&e=${engine}`), `e=${engine}`).toBeNull();
+    }
+    // a repeated e is refused like any repeated key
+    expect(S.reencodeShareUrl(`${SITE}/?u=tsp&e=garch&e=garch`)).toBeNull();
+    // end to end: the mail carries the engine, a bad one is refused with nothing sent
+    sent = [];
+    const res = await S.handleShare(post({ ...good, url: `${SITE}/?u=tsp&x=1&e=garch` }), baseEnv(), allow);
+    expect(res.status).toBe(202);
+    expect(part(sent[0].json, "text/plain")).toContain(`${SITE}/?u=tsp&lb=5y&d=auto&x=1&e=garch`);
+    sent = [];
+    const refused = await S.handleShare(post({ ...good, url: `${SITE}/?u=tsp&e=foo` }), baseEnv(), allow);
     expect(refused.status).toBe(400);
     expect(await errorCode(refused)).toBe("invalid_url");
     expect(sent).toEqual([]);
