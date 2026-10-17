@@ -353,6 +353,7 @@ def test_step_two_pins_every_mix_to_the_chart_s_return_and_risk(garch_model):
         else:  # cash alone has no simulated spread: every day is its expected return
             assert (days == m_w).all() and np.ptp(years[:, i]) <= 1e-15
         assert np.abs(years[:, i] - np.expm1(np.log1p(days).sum(axis=1))).max() <= 1e-12
+        assert np.abs(years[:, i] - (np.prod(1.0 + days, axis=1) - 1.0)).max() <= 1e-12
 
 
 def test_chunked_compounding_equals_compounding_at_once(garch_model, monkeypatch):

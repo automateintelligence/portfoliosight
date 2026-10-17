@@ -44,9 +44,11 @@ day of `R`:
    (`y' = m_w` when `sd(y) = 0`).
 
 Both steps are affine, so a mix's day is `v'R + b` with `v = k_w (w a)` and one constant `b` per
-mix: `R'` is never formed. Mixes are compounded `MIX_BLOCK` at a time over chunks of paths, each
-chunk's days in one buffer of at most `WORK_BYTES`, as `expm1(sum log1p(y'))`. A day at or below
--100% raises, as for History replay.
+mix: `R'` is never formed. Up to `MIX_BLOCK` mixes are compounded together over chunks of paths,
+each chunk's days in one buffer of at most `WORK_BYTES`: the gross days `1 + y'` of every mix
+from one matrix product (a few paths against many mixes, the shape BLAS does well), then their
+product over each path, `Y = prod(1 + y') - 1`. A day at or below -100% raises, as for History
+replay.
 """
 
 from __future__ import annotations
@@ -69,7 +71,7 @@ SEED = 20261013
 ENGINES = ("replay", "garch")  # the engines a build can compute, in the order they are reported
 DEFAULT_ENGINE = "replay"
 WORK_BYTES = 64 * 2**20  # the largest temporary array the volatility model's ranges allocate
-MIX_BLOCK = 16  # mixes compounded together over each chunk of paths
+MIX_BLOCK = 1024  # at most this many mixes compounded together over each chunk of paths
 METHOD = {
     "name": "stationary block bootstrap",
     "horizon_days": HORIZON_DAYS,
@@ -273,6 +275,11 @@ def _path_chunks(paths: int, bytes_per_path: int) -> list[slice]:
     return [slice(start, min(start + step, paths)) for start in range(0, paths, step)]
 
 
+def _work_buffer(chunks: list[slice], days: int, width: int) -> np.ndarray:
+    """One buffer for every chunk's days: allocated once, so the pages are touched once."""
+    return np.empty((max(part.stop - part.start for part in chunks) * days, width))
+
+
 def _pooled_moments(panel: np.ndarray) -> tuple[np.ndarray, ...]:
     """Each fund's mean, the pooled (ddof 0) covariance, and each fund's lowest and highest return.
 
@@ -291,8 +298,10 @@ def _pooled_moments(panel: np.ndarray) -> tuple[np.ndarray, ...]:
         low, high = np.minimum(low, rows.min(axis=0)), np.maximum(high, rows.max(axis=0))
     mean = total / (paths * days)
     scatter = np.zeros((funds, funds))
+    buffer = _work_buffer(chunks, days, funds)
     for part in chunks:
-        centred = panel[part].reshape(-1, funds) - mean
+        rows = panel[part].reshape(-1, funds)
+        centred = np.subtract(rows, mean, out=buffer[: len(rows)])
         scatter += centred.T @ centred
     scatter /= paths * days
     return mean, (scatter + scatter.T) / 2.0, low, high
@@ -320,11 +329,14 @@ def _garch_years(model: GarchRangeModel, mixes: np.ndarray) -> np.ndarray:
         block = slice(start, start + MIX_BLOCK)
         v = np.ascontiguousarray(weights[block].T)  # N x B
         width = v.shape[1]
-        for part in _path_chunks(paths, days * width * 8):
-            daily = model.panel[part].reshape(-1, funds) @ v  # the work buffer
-            daily += shift[block]
-            if not daily.min() > -1.0:
+        chunks = _path_chunks(paths, days * width * 8)
+        buffer = _work_buffer(chunks, days, width)
+        for part in chunks:
+            rows = model.panel[part].reshape(-1, funds)
+            gross = np.matmul(rows, v, out=buffer[: len(rows)])
+            gross += 1.0 + shift[block]
+            if not gross.min() > 0.0:
                 raise ValueError("a day that loses everything cannot be compounded")
-            np.log1p(daily, out=daily)
-            years[part, block] = daily.reshape(-1, days, width).sum(axis=1)
-    return np.expm1(years, out=years)
+            years[part, block] = gross.reshape(-1, days, width).prod(axis=1)
+    years -= 1.0
+    return years
