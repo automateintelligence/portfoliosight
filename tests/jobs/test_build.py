@@ -668,7 +668,7 @@ def test_model_files_are_read_through_the_scratch_cache_within_its_cap(
     for name in ("garch.json", "pool.npy"):
         assert (cache / "models" / generation / shape16 / name).is_file()
     reads = _Writes(store)
-    loaded = load_artifact(reads, generation, shape16, cache_dir=cache)
+    loaded = load_artifact(cast(store_mod.Store, reads), generation, shape16, cache_dir=cache)
     assert loaded is not None and loaded.sample_sha256 == first["shape"]["sample_sha256"]
     assert [key for key in reads.gets if key.startswith("models/")] == []  # a cache hit
     assert load_artifact(store, generation, "f" * 16, cache_dir=cache) is None
