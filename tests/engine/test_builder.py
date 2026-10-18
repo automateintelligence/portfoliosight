@@ -1238,6 +1238,40 @@ def test_a_riskless_mix_has_one_year_on_every_path(fixture_frame):
         assert abs(front["typical"][0] - np.expm1(252 * np.log1p(daily))) <= 1e-5
 
 
+def test_an_exact_constant_mix_has_equal_ranges_at_its_compounded_chart_mean(fixture_frame):
+    vti = next(fund for fund in fixture_inputs().funds if fund.id == "VTI")
+    menu = [vti, *(dataclasses.replace(vti, id=fund, name=fund) for fund in ("CASH_A", "CASH_B"))]
+    frame = fixture_frame[["VTI"]].assign(CASH_A=0.00015, CASH_B=0.00007)
+    result = build_tensor_full(
+        fixture_inputs(
+            "5y",
+            funds=menu,
+            returns=frame,
+            allocation={"CASH_A": 250.0, "CASH_B": 750.0},
+            preset_id=None,
+            garch_artifact=None,
+            **SMALL_BOTH,
+        ),
+        workers=1,
+    )
+    tensor = result.tensor
+    validate_tensor(tensor)
+    entered = tensor["entered"]
+    assert entered["w"] == [0.0, 0.25, 0.75]
+    assert [fund["status"] for fund in tensor["shape"]["funds"]][1:] == ["near_constant"] * 2
+    garch = result.models["garch"]
+    assert isinstance(garch, GarchRangeModel)
+    np.testing.assert_array_equal(garch.sd[1:], [0.0, 0.0])
+    daily = np.array(tensor["mu_s"]) @ np.array(entered["w"]) / 252.0
+    expected = np.expm1(252 * np.log1p(daily))
+    for engine in ENGINES:
+        figures = entered["ranges"][engine]
+        assert figures["bad"] == figures["typical"] == figures["good"]
+        assert figures["typical"] == pytest.approx(expected, abs=1e-12, rel=0)
+    assert entered["range"]["typical"] == entered["ranges"]["replay"]["typical"]
+    assert tensor["engines"]["garch"]["ruin_paths"] == 0
+
+
 def test_ruin_paths_is_the_most_paths_any_carried_mix_lost(monkeypatch):
     """`engines.garch.ruin_paths`: over the ladder's mixes and the entered one, the largest
     number of paths the volatility model absorbed (a day at or below -100%); 0 for the fixture."""

@@ -347,6 +347,48 @@ def test_a_fund_that_never_varies_is_constant_whatever_its_pooled_mean():
         assert abs(cash[name][0] - expected) <= 1e-12  # its expected return, every day
 
 
+def test_a_mix_of_constant_funds_compounds_its_chart_mean_without_spread():
+    panel = np.empty((PATHS, HORIZON_DAYS, 3))
+    panel[..., 0] = np.random.default_rng(4421).normal(0.0003, 0.01, (PATHS, HORIZON_DAYS))
+    panel[..., 1:] = [0.00015, -0.00007]
+    mu = np.array([0.08, 0.03, 0.06])
+    cov = np.diag(np.array([0.16, 1e-4, 1e-4]) ** 2)
+    weights = np.array([[0.0, 0.25, 0.75], [0.0, 0.6, 0.4]])
+    model = garch_range_model(panel, mu, cov)
+    assert model.sd[0] > 0 and np.array_equal(model.sd[1:], [0.0, 0.0])
+    assert not model.level_cov[1:].any()
+    years = simulated_years(model, weights)
+    expected = np.expm1(HORIZON_DAYS * np.log1p(weights @ mu / 252.0))
+    np.testing.assert_array_equal(np.ptp(years, axis=0), [0.0, 0.0])
+    np.testing.assert_allclose(years, np.broadcast_to(expected, years.shape), atol=1e-12, rtol=0)
+    out = one_year_ranges(model, weights)
+    np.testing.assert_array_equal(out["bad"], out["typical"])
+    np.testing.assert_array_equal(out["typical"], out["good"])
+    np.testing.assert_allclose(out["typical"], expected, atol=1e-12, rtol=0)
+    assert out["ruined"].tolist() == [0, 0]
+
+
+def test_a_zero_risk_mix_of_varying_funds_compounds_its_chart_mean_without_spread():
+    raw = np.random.default_rng(4422).normal(0.0003, 0.01, (PATHS, HORIZON_DAYS))
+    panel = np.stack((raw, -raw), axis=-1)
+    mu = np.array([0.04, 0.04])
+    cov = np.array([[0.04, -0.04], [-0.04, 0.04]])
+    weights = np.array([0.5, 0.5])
+    assert (np.linalg.eigvalsh(cov) >= 0).all() and weights @ cov @ weights == 0.0
+    model = garch_range_model(panel, mu, cov)
+    assert (model.sd > 0).all()  # neither fund takes the constant-fund branch
+    assert weights @ model.level_cov @ weights > 0.0
+    assert np.ptp(_levelled(model) @ weights) > 0.0  # exponentiation prevents cancellation
+    expected = np.expm1(HORIZON_DAYS * np.log1p(weights @ mu / 252.0))
+    years = simulated_years(model, weights)
+    assert np.ptp(years) == 0.0
+    np.testing.assert_allclose(years, expected, atol=1e-12, rtol=0)
+    out = one_year_ranges(model, weights)
+    assert out["bad"][0] == out["typical"][0] == out["good"][0]
+    assert out["typical"][0] == pytest.approx(expected, abs=1e-12, rel=0)
+    assert out["ruined"].tolist() == [0]
+
+
 def test_step_one_gives_every_fund_the_chart_s_level_in_log_space(garch_model):
     """`l' = m~ + (l - mean) s~ / sd` with `(m~, s~)` the lognormal equivalents of the chart's
     daily `(m, s)`: a lognormal day `exp(l') - 1` has exactly the chart's mean and volatility."""
@@ -543,6 +585,57 @@ def test_a_simulated_day_that_loses_everything_is_absorbed_and_counted():
     assert (out["bad"] < out["typical"]).all() and (out["typical"] < out["good"]).all()
     calm = one_year_ranges(model, mixes[1])  # the other fund alone never loses everything
     assert calm["ruined"].tolist() == [0] and np.isfinite(calm["bad"]).all()
+
+
+def test_simulated_ruin_boundaries_count_paths_once_and_never_recover(monkeypatch):
+    """Isolate compounding after level scaling; the real scaling pipeline is checked above."""
+    daily = np.full((PATHS, HORIZON_DAYS, 2), 0.0003)
+    daily[1, 10, 0] = -1.0
+    daily[2, 20, 0] = -1.25
+    daily[3, [0, 2], 0] = [-1.25, -1.5]
+    daily[4, 5, 0] = -1.0
+    daily[4, 6:, 0] = 0.25
+    saved = daily.copy()
+    model = garch_range_model(np.zeros_like(daily), np.array([0.03, 0.05]), np.eye(2) * 0.04)
+
+    def levelled(rows, step, out):
+        assert len(rows) == PATHS * HORIZON_DAYS
+        np.copyto(out, daily.reshape(-1, 2))
+        return out
+
+    monkeypatch.setattr(ranges, "_levelled", levelled)
+    monkeypatch.setattr(
+        ranges, "_garch_terms", lambda model, weights: (weights, np.zeros(len(weights)))
+    )
+    weights = np.eye(2)
+    lost = (daily <= -1.0).any(axis=1)
+    expected = np.prod(1.0 + daily, axis=1) - 1.0
+    expected[lost] = -1.0
+    years = simulated_years(model, weights)
+    np.testing.assert_array_equal(years, expected)
+    np.testing.assert_array_equal(years[[1, 2, 3, 4], 0], [-1.0] * 4)
+    assert np.isfinite(years).all() and (years >= -1.0).all()
+    out = one_year_ranges(model, weights)
+    assert out["ruined"].tolist() == [4, 0]  # five ruined days belong to four paths
+    for name, percentile in zip(("bad", "typical", "good"), (2.5, 50.0, 97.5), strict=True):
+        np.testing.assert_array_equal(out[name], np.percentile(expected, percentile, axis=0))
+    np.testing.assert_array_equal(daily, saved)
+
+
+@pytest.mark.parametrize("losses", [(-1.0,), (-1.25,), (-1.25, -1.5)])
+def test_replay_rejects_ruin_boundaries_even_with_later_gains(losses):
+    sample = np.zeros((300, 2))
+    sample[80 : 80 + len(losses), 0] = losses
+    sample[90, 0] = -sum(losses)  # mean zero: recentering preserves the exact loss boundary
+    model = range_model(sample, np.array([0.0, 0.03]), np.eye(2) * 0.04)
+    for compute in (simulated_years, one_year_ranges):
+        with pytest.raises(ValueError, match="cannot be compounded"):
+            compute(model, [1.0, 0.0])
+    calm = one_year_ranges(model, [0.0, 1.0])
+    expected = np.expm1(HORIZON_DAYS * np.log1p(0.03 / 252.0))
+    assert calm["ruined"].tolist() == [0]
+    for name in ("bad", "typical", "good"):
+        assert calm[name][0] == pytest.approx(expected, abs=1e-12, rel=0)
 
 
 def test_garch_model_and_mix_are_checked(garch_model):
