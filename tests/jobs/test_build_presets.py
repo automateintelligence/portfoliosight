@@ -19,6 +19,8 @@ from portfoliosight.api.presets import model_key, preset_definitions, preset_fun
 from portfoliosight.data import manifest as manifest_mod
 from portfoliosight.data import store as store_mod
 from portfoliosight.engine import ENGINE_VERSION
+from portfoliosight.engine.ranges import garch_range_model
+from portfoliosight.engine.stats import TRADING_DAYS
 from portfoliosight.engine.tensor import validate_tensor
 from tests.engine.helpers import load_script
 
@@ -74,7 +76,9 @@ def test_builds_every_asked_tensor_and_never_writes_into_the_store(store, d_g, t
     assert all(row["build_seconds"] > 0 for row in rows)
     worst = first["worst_day"]
     assert set(worst) == {"raw", "level"} and worst["raw"]["id"] in first["funds"]
-    assert -1.0 < worst["level"]["value"] < 0.0 and first["ruin_paths"] is None
+    assert -1.0 < worst["level"]["value"] < 0.0
+    assert worst["raw"]["returns"] == "log" and worst["level"]["returns"] == "simple"
+    assert all(type(row["ruin_paths"]) is int and row["ruin_paths"] == 0 for row in rows)
     for name in ("s_safe", "mid", "s_max"):
         point = first["optimized"][name]
         assert set(point) == {"column", "level", "replay", "garch"}
@@ -84,7 +88,7 @@ def test_builds_every_asked_tensor_and_never_writes_into_the_store(store, d_g, t
     columns = [first["optimized"][name]["column"] for name in ("s_safe", "mid", "s_max")]
     assert columns == sorted(columns) and columns[-1] == 11  # the small grid's last column
     assert total == {**total, "tensors": 2, "fits": 1}
-    files = sorted(path.relative_to(out).as_posix() for path in out.rglob("*") if path.is_file())
+    files = store_mod.LocalStore(out).list()  # excludes the store's internal conditional-write lock
     expected = [tensor_key(generation, _tsp_hash(), lookback) for lookback in ("1y", "5y")]
     expected += [model_key(generation, first["shape16"], n) for n in ("garch.json", "pool.npy")]
     assert files == sorted(expected)
@@ -93,11 +97,61 @@ def test_builds_every_asked_tensor_and_never_writes_into_the_store(store, d_g, t
         validate_tensor(tensor)
         assert tensor["shape"]["sample_sha256"][:16] == first["shape16"]
         assert tensor["build_seconds"] in {row["build_seconds"] for row in rows}
+        row = next(row for row in rows if row["lookback"] == tensor["lookback"]["id"])
+        assert tensor["engines"]["garch"]["ruin_paths"] == row["ruin_paths"]
 
 
 @pytest.fixture(scope="module")
 def script():
     return load_script("build_presets")
+
+
+def test_worst_day_levels_log_returns_and_names_each_return_space(script):
+    # The raw minimum belongs to the constant fund; the levelled minimum belongs to the
+    # varying fund. Its target log variance is .02, mean -.01 and scale sqrt(.02/2) = .1.
+    panel = np.array([[[-2.0, -4.0], [0.0, -4.0]], [[0.0, -4.0], [2.0, -4.0]]])
+    mu = np.array([0.0, 0.001]) * TRADING_DAYS
+    cov = np.diag([np.expm1(0.02), 0.0]) * TRADING_DAYS
+    model = garch_range_model(panel, mu, cov)
+    worst = script.worst_day(model, ["varying", "constant"])
+    assert worst["level"]["value"] == pytest.approx(np.expm1(-0.21), abs=1e-15)
+    assert worst["raw"] == {"id": "constant", "value": -4.0, "returns": "log"}
+    assert worst["level"] == {
+        "id": "varying",
+        "value": pytest.approx(np.expm1(-0.21), abs=1e-15),
+        "returns": "simple",
+    }
+    # A constant panel receives its daily target exactly, regardless of its raw log return.
+    constant = garch_range_model(panel[:, :, 1:], mu[1:], cov[1:, 1:])
+    assert script.worst_day(constant, ["constant"])["level"]["value"] == 0.001
+
+
+def test_an_artifact_conflict_is_printed_as_a_refusal_without_a_tensor(
+    script, store, d_g, tmp_path, monkeypatch, capsys
+):
+    for name, value in SMALL_GRID.items():
+        monkeypatch.setenv(name, value)
+    before = _digest(store.root)
+    out = tmp_path / "out"
+    real_build = script.build_with_artifacts
+    occupied = []
+
+    def another_writer_occupies_the_artifact(output, generation, inputs, **kwargs):
+        shape16 = script.builder.shape_panel_for(inputs).sample_sha256[:16]
+        key = model_key(generation, shape16, "pool.npy")
+        output.put(key, b"another fit's immutable pool")
+        occupied.append(key)
+        return real_build(output, generation, inputs, **kwargs)
+
+    monkeypatch.setattr(script, "build_with_artifacts", another_writer_occupies_the_artifact)
+    argv = ["--store-dir", str(store.root), "--asof", d_g.isoformat(), "--out", str(out)]
+    assert script.main([*argv, "--presets", "tsp", "--lookbacks", "1y"]) == 2
+    captured = capsys.readouterr()
+    assert "tsp 1y: refused" in captured.err and "artifact" in captured.err
+    assert len(captured.out.splitlines()) == 1  # run header only; no success row or total
+    assert _digest(store.root) == before
+    files = sorted(path.relative_to(out).as_posix() for path in out.rglob("*") if path.is_file())
+    assert files == occupied and (out / occupied[0]).read_bytes() == b"another fit's immutable pool"
 
 
 def _seeded_with_a_fall(store, fund: str, day: str) -> None:

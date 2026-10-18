@@ -21,9 +21,10 @@ Prints JSON lines: the run (store, generation, engines, CPUs, load average); the
 when a fit stored for the same fund set was reused, null when the model was not asked for),
 `reused`, the model's status, `shape16`, `pool_rows`, each fund's fit status, the funds that
 fell back to constant volatility, the outliers, the worst simulated day (`worst_day`: the fund
-and its daily simple return in the raw panel and after the level step of engines spec 4.5, step
-1), the paths the model counts as ruined (`ruin_paths`, when the tensor carries it), the
-Optimized point's bad, typical and good year under each engine at the slider's three reference
+and its daily log return in the raw panel, and simple return after engines spec 4.5, step 1;
+each value names its return space), the paths the model counts as ruined (`ruin_paths`, when the
+tensor carries it), the Optimized point's bad, typical and good year under each engine at the
+slider's three reference
 columns (`s_safe`, the domain midpoint, `s_max`), the load average; last the totals.
 
 Exit status 0 when every tensor was built; 2 with one line on stderr naming the preset and
@@ -65,11 +66,11 @@ from portfoliosight.cpus import build_workers  # noqa: E402
 from portfoliosight.data.store import LocalStore, ReadOnlyStore  # noqa: E402
 from portfoliosight.engine import ENGINE_VERSION, builder, parallel  # noqa: E402
 from portfoliosight.engine.caps import CapsError  # noqa: E402
-from portfoliosight.engine.ranges import GarchRangeModel  # noqa: E402
+from portfoliosight.engine.ranges import GarchRangeModel, _levelled, _step_one  # noqa: E402
 from portfoliosight.engine.shape import ShapeError  # noqa: E402
-from portfoliosight.engine.stats import TRADING_DAYS  # noqa: E402
 from portfoliosight.engine.tensor import BuildResult, WindowUnavailable  # noqa: E402
 from portfoliosight.jobs.build import (  # noqa: E402
+    BuildRefused,
     build_with_artifacts,
     inputs_from_store,
     put_tensor,
@@ -141,23 +142,21 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
 
 
 def worst_day(model: GarchRangeModel, funds: list[str]) -> dict:
-    """The lowest simulated daily simple return, raw and after the per-fund level step.
+    """The lowest simulated daily log return, and simple return after the per-fund level step.
 
-    The level step (engines spec 4.5, step 1) gives fund n the chart's daily mean and deviation:
-    `m_n + a_n (R_n - mean_n)` with `a_n = s_n / sd_n`, 0 for a fund that never varies. `a_n` is
-    never negative, so each fund's lowest day stays its lowest.
+    Step 1 is the engine's lognormal moment match, then `expm1`. Its scale is nonnegative,
+    so each fund's lowest log return is also its lowest levelled simple return. A constant
+    fund receives its daily target exactly, as it does in the engine.
     """
     low = model.panel.min(axis=(0, 1))
-    daily_mean = model.mu_s / TRADING_DAYS
-    daily_sd = np.sqrt(np.diag(model.cov) / TRADING_DAYS)
-    scale = np.divide(daily_sd, model.sd, out=np.zeros_like(daily_sd), where=model.sd > 0)
-    level = daily_mean + scale * (low - model.mean)
+    step = _step_one(model.mu_s, model.cov, model.mean, model.sd)
+    level = _levelled(low[None, :], step, np.empty((1, len(low))))[0]
 
-    def lowest(values: np.ndarray) -> dict:
+    def lowest(values: np.ndarray, returns: str) -> dict:
         n = int(np.argmin(values))
-        return {"id": funds[n], "value": float(values[n])}
+        return {"id": funds[n], "value": float(values[n]), "returns": returns}
 
-    return {"raw": lowest(low), "level": lowest(level)}
+    return {"raw": lowest(low, "log"), "level": lowest(level, "simple")}
 
 
 def optimized_points(tensor: Mapping) -> dict:
@@ -273,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
                         where = f" ({exc.fund} on {exc.date})" if exc.fund else ""
                         print(f"{preset_id} {lookback}: refused{where}: {exc}", file=sys.stderr)
                         return 2
-                    except (WindowUnavailable, CapsError) as exc:
+                    except (WindowUnavailable, CapsError, BuildRefused) as exc:
                         print(f"{preset_id} {lookback}: refused: {exc}", file=sys.stderr)
                         return 2
                     put_tensor(output, tensor_key(generation, uhash, lookback), result.tensor)
