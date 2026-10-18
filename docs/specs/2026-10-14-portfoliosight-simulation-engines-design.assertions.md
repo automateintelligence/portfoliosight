@@ -148,6 +148,12 @@ a default switch, including a report that meets the proposed numerical rule.
 7. **One-fund splice comparison.** The splice rule needs other included funds' residuals;
    the median of an empty comparison set is unspecified. A-SE-06 uses a nonempty peer set
    and does not invent acceptance or rejection for a one-fund menu.
+8. **Entered allocations in validation.** The inherited preset/tensor contract makes an
+   entered mix optional, and the presets carry no allocation. A-SE-14 checks an entered
+   portfolio when an allocation is explicitly supplied; otherwise the report must identify
+   that case as unavailable because no allocation was supplied, not fabricate holdings or
+   claim to have tested an entered portfolio. The owner can supply allocations for a fuller
+   comparison; these assertions do not choose them.
 
 These are limitations of the currently determined boundary, not passing exceptions in a
 downstream test. Keep them visible in the plan and final phase verification.
@@ -421,6 +427,8 @@ Phase 1 · validation/unit · S8, F8, M3; §10.1/2/5/8, §11
   contains the live-menu/stress comparisons and invariant results, and states the §10.8 rule
   without changing thresholds to match a result. It acknowledges overlap, weak evidence and
   short stress-window interpretation. No assertion requires GARCH to win or changes defaults.
+  Entered-mix rows follow explicitly supplied allocations; when no allocation exists, record
+  that case as unavailable with its reason rather than inventing weights or silently omitting it.
 - **Kind.** contract.
 
 ### A-SE-15 — Bad-year estimates meet the prescribed seed-stability check
