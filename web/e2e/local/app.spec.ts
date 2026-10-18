@@ -820,6 +820,19 @@ test("in dollars the bar's ends hold still as both sliders move, and its marks s
   expect(((await (await page.request.get("/__mock/ranges")).json()) as unknown[]).length, "exact ranges were asked").toBeGreaterThan(0);
 });
 
+// @desktop-only: the bar is hidden on a phone and there is no sidebar.
+test("in dollars beside the open sidebar the bar keeps its room @desktop-only", async ({ page }) => {
+  for (const width of [1280, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    await open(page, "f=VTI:60000,BND:38900&unit=usd");
+    if ((await page.getByTestId("funds-toggle").getAttribute("aria-expanded")) !== "true") await page.getByTestId("funds-toggle").click();
+    await expect(page.getByTestId("strip-sub")).toHaveText(/^over one year on your \$[\d,]+$/);
+    // the label on its own row must not leave the bar in its narrow column at the 60px minimum
+    const bar = (await page.getByTestId("range-bar").boundingBox())!;
+    expect(bar.width, `${width}: the bar's width`).toBeGreaterThan(150);
+  }
+});
+
 test("the axis title and its details line sit inside the chart frame, under the tick labels, in every look", async ({ page }, testInfo) => {
   const looks = isPhone(testInfo.project.name) ? ["ks-dark", "grid"] : ["ks-dark", "light", "hud", "grid"];
   for (const look of looks) {

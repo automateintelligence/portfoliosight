@@ -24,6 +24,7 @@ from portfoliosight.engine.shape import (
     artifact_to_json,
     fit_shape,
     garch_method,
+    guarded_splice_dates,
     pool_bytes,
     pool_from_bytes,
     qse_commit,
@@ -36,7 +37,7 @@ from qse.distributions.garch_recursion import (
     simulate_garch11,
     standardized_t_shocks,
 )
-from qse.distributions.joint import draw_row_indices
+from qse.distributions.joint import draw_row_indices, fit_garch_t_panel
 from tests.engine.helpers import FIXTURE_ASOF, ROOT
 
 MU = np.array([3e-4, 5e-4])
@@ -61,9 +62,10 @@ def _garch_pair(rows: int, seed: int) -> np.ndarray:
 
 
 def _igarch(rows: int) -> np.ndarray:
-    """A series whose volatility never reverts: its fit has alpha + beta at 1."""
-    shocks = standardized_t_shocks(np.random.default_rng(5), 8.0, (1, rows))
-    return simulate_garch11(shocks, mu=0.0, omega=1e-7, alpha=0.12, beta=0.88, sigma2_init=1e-4)[0]
+    """Simple returns whose IGARCH log-space fit converges above the stationarity cutoff."""
+    shocks = standardized_t_shocks(np.random.default_rng(4), 8.0, (1, rows))
+    logs = simulate_garch11(shocks, mu=0.0, omega=1e-7, alpha=0.12, beta=0.88, sigma2_init=1e-4)
+    return np.expm1(logs[0])
 
 
 @pytest.fixture(scope="module")
@@ -213,7 +215,7 @@ def test_fit_names_every_fund_s_status_and_keeps_the_fallbacks_constant(mixed, a
     assert np.all(a.nu[garch] > 2.0) and np.isnan(a.nu[~garch]).all()
     assert np.all(a.alpha[~garch] == 0.0) and np.all(a.beta[~garch] == 0.0)
     assert np.all(a.alpha[garch] + a.beta[garch] < 1.0 - 1e-4)
-    values = mixed.frame.to_numpy()
+    values = np.log1p(mixed.frame.to_numpy())  # the fit is on log returns
     for n in np.flatnonzero(~garch):
         own = values[~np.isnan(values[:, n]), n]
         assert a.mu[n] == pytest.approx(own.mean(), rel=1e-12)
@@ -229,6 +231,33 @@ def test_fit_names_every_fund_s_status_and_keeps_the_fallbacks_constant(mixed, a
     for field in ("mu", "omega", "alpha", "beta", "nu", "long_run_sigma_annual"):
         with pytest.raises(ValueError, match="read-only"):
             getattr(a, field)[0] = 1.0
+
+
+def test_the_fit_is_qse_s_on_the_panel_s_log_returns(mixed, artifact):
+    """QSE fits `log1p` of the panel (a missing return stays missing); the panel itself, and so
+    its digest, stays the simple daily returns."""
+    fit = fit_garch_t_panel(np.log1p(mixed.frame))
+    for field in ("mu", "omega", "alpha", "beta", "nu"):
+        assert getattr(artifact, field).tobytes() == np.asarray(getattr(fit, field)).tobytes()
+    assert artifact.status == tuple(fit.status) and artifact.n_obs == tuple(fit.n_obs)
+    assert artifact.pool_rows == fit.n_common_rows
+    simple = fit_garch_t_panel(mixed.frame)
+    assert not np.array_equal(artifact.omega, simple.omega)  # not the simple returns' fit
+    days = [stamp.date().isoformat() for stamp in mixed.frame.index]
+    simple_values = mixed.frame.to_numpy(copy=True)
+    simple_values[np.isnan(simple_values)] = shape.CANONICAL_NAN
+    assert artifact.sample_sha256 == sample_digest(list(mixed.frame.columns), days, simple_values)
+
+
+def test_a_day_that_loses_everything_has_no_log_return_and_fails_the_fit():
+    frame = _trio()
+    frame.iloc[250, 1] = -1.0
+    day = _day(frame, 250)
+    with pytest.raises(ShapeError, match="at or below -100%") as caught:
+        fit_shape(shape_panel(frame, ["A", "B", "C"], frame.index[-1]))
+    assert caught.value.fund == "B" and caught.value.date == day and day in str(caught.value)
+    frame.iloc[250, 1] = -0.999  # a loss short of everything has a log return
+    assert fit_shape(shape_panel(frame, ["A", "B", "C"], frame.index[-1])).pool is not None
 
 
 def test_pool_is_the_common_rows_restandardised(artifact):
@@ -287,11 +316,13 @@ def test_artifact_round_trips_through_json_and_npy_to_the_same_bytes(artifact):
     assert back.funds == artifact.funds and back.status == artifact.status
     assert back.messages == artifact.messages and back.n_obs == artifact.n_obs
     assert back.outliers == artifact.outliers and back.qse == artifact.qse
+    assert back.splice_dates == artifact.splice_dates == () and doc["splice_dates"] == {}
     for field in ("mu", "omega", "alpha", "beta", "nu", "long_run_sigma_annual"):
         assert getattr(back, field).tobytes() == getattr(artifact, field).tobytes(), field
     sim = simulate_panel(artifact)
     assert simulate_panel(back).tobytes() == sim.tobytes()
     assert doc["nu"][2] is None and doc["pool_rows"] == 200 and doc["name"] == "garch_t_fhs"
+    assert artifact.returns == back.returns == doc["returns"] == "log"  # the fit's own space
     # what does not belong together is refused, never repaired
     pool = pool_from_bytes(data)
     tampered = np.array(pool)
@@ -306,6 +337,9 @@ def test_artifact_round_trips_through_json_and_npy_to_the_same_bytes(artifact):
         artifact_from_json({**doc, "mu": doc["mu"][:-1]}, pool)
     with pytest.raises(ValueError, match="not a volatility model"):
         artifact_from_json({**doc, "name": "copula"}, pool)
+    for stale in ({k: v for k, v in doc.items() if k != "returns"}, {**doc, "returns": "simple"}):
+        with pytest.raises(ValueError, match="returns"):  # a fit in another space is not this one
+            artifact_from_json(stale, pool)
     objects = io.BytesIO()
     np.save(objects, np.array([{"a": 1}], dtype=object), allow_pickle=True)
     with pytest.raises(ValueError):
@@ -380,6 +414,29 @@ def test_the_same_drop_on_another_day_is_an_outlier_and_fails_nothing():
         fit_shape(panel, {"A": "2026/01/02"})
 
 
+def test_the_splice_dates_a_fit_was_guarded_with_are_part_of_the_artifact():
+    """What the guard checked travels with the fit: the panel's funds only, sorted, ISO days."""
+    frame = _trio()
+    panel = shape_panel(frame, ["A", "B", "C"], frame.index[-1])
+    day_a, day_c = _day(frame, 300), _day(frame, 120)
+    given = {"C": day_c.replace("-", ""), "ZZZ": _day(frame, 5), "A": day_a}
+    fitted = fit_shape(panel, given)
+    assert fitted.splice_dates == (("A", day_a), ("C", day_c))
+    assert guarded_splice_dates(["C", "B", "A"], given) == fitted.splice_dates
+    assert guarded_splice_dates(["A"], None) == () == fit_shape(panel).splice_dates
+    with pytest.raises(ValueError, match="2026/01/02"):  # checked even for a fund not in the panel
+        guarded_splice_dates(["A"], {"ZZZ": "2026/01/02"})
+    doc = json.loads(json.dumps(artifact_to_json(fitted), allow_nan=False))
+    assert doc["splice_dates"] == {"A": day_a, "C": day_c}
+    back = artifact_from_json(doc, fitted.pool)
+    assert back.splice_dates == fitted.splice_dates
+    assert artifact_to_json(back) == artifact_to_json(fitted)
+    # a stored listing not in that form was not written by `artifact_to_json`: refused
+    for wrong in ({"A": day_a, "ZZZ": day_c}, {"A": day_a.replace("-", "")}):
+        with pytest.raises(ValueError, match="splice dates"):
+            artifact_from_json({**doc, "splice_dates": wrong}, fitted.pool)
+
+
 def test_a_drop_of_the_whole_menu_on_the_splice_date_is_an_outlier_not_a_failure():
     """A crash: every fund falls together. Under a year of history each fund is standardized the
     same way (constant volatility), so the three residuals that day agree."""
@@ -394,13 +451,16 @@ def test_a_drop_of_the_whole_menu_on_the_splice_date_is_an_outlier_not_a_failure
     ]
 
 
-def test_a_splice_day_no_other_fund_traded_cannot_be_called_a_crash():
+def test_a_splice_day_no_other_fund_traded_is_an_outlier_not_a_failure():
+    """The build fails only when the move also sits more than 6 from the rest of the menu's
+    median; with no other fund's residual that day that cannot be shown, so it is recorded."""
     frame = _trio()
     frame.iloc[400, 0] = -0.30
     frame.iloc[400, 1:] = np.nan  # the rest of the menu has no return that day
-    with pytest.raises(ShapeError) as caught:
-        fit_shape(shape_panel(frame, ["A", "B", "C"], frame.index[-1]), {"A": _day(frame, 400)})
-    assert caught.value.fund == "A" and "no other fund" in str(caught.value)
+    day = _day(frame, 400)
+    fitted = fit_shape(shape_panel(frame, ["A", "B", "C"], frame.index[-1]), {"A": day})
+    assert [(o["id"], o["date"]) for o in fitted.outliers] == [("A", day)]
+    assert fitted.outliers[0]["z"] < -OUTLIER_Z and fitted.splice_dates == (("A", day),)
 
 
 def test_method_block_names_the_pinned_code(artifact):
@@ -413,6 +473,9 @@ def test_method_block_names_the_pinned_code(artifact):
         "seed": 20261013,
         "start": "long_run",
         "shape_rows": 2520,
+        "returns": "log",
+        "scale": "sd",
+        "ruin": "absorb",
         "qse": lock["commit"],
         "arch": "8.0.0",
     }

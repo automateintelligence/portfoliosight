@@ -246,6 +246,8 @@ describe("parseTensor", () => {
       [["stress", "covid2020", "label"], ""],
       [["engines", "garch", "status"], "maybe"],
       [["engines", "garch", "method", "qse"], "CA8C0445"],
+      [["engines", "garch", "method", "returns"], "simple"],
+      [["engines", "garch", "ruin_paths"], -1],
       [["engines", "copula", "reason"], ""],
       [["range_default"], "other"],
       [["frontier", "ranges", "garch", "bad", 3], null],

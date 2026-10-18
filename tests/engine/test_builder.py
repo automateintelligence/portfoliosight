@@ -57,6 +57,7 @@ from tests.engine.helpers import (
     CONVERTED,
     CONVERTED_REASON,
     FIXTURE_ASOF,
+    ROOT,
     converted_menu_inputs,
     fixture_artifact,
     fixture_inputs,
@@ -145,6 +146,25 @@ def test_two_builds_are_identical_apart_from_telemetry(fixture_tensor):
     assert again["build_seconds"] <= 90.0
 
 
+def test_the_contract_is_chosen_by_the_schema_a_document_declares():
+    """Schema 3 is what this engine writes; schema 2 is what engine 0.2.0 wrote and a rollback
+    serves. Each document is checked against the contract its own `schema` names."""
+    old = json.loads((ROOT / "web" / "tests" / "tensor-schema2.json").read_text(encoding="utf-8"))
+    new = json.loads((ROOT / "web" / "fixtures" / "guide2017_5y.json").read_text(encoding="utf-8"))
+    assert (old["schema"], old["engine_version"], new["schema"]) == (2, "0.2.0", 3)
+    v2, v3 = load_schema(2), load_schema(3)
+    assert load_schema() is v3 and load_schema(builder.SCHEMA_VERSION) is v3
+    assert v2["properties"]["schema"] == {"const": 2} and v3["properties"]["schema"] == {"const": 3}
+    for contract, accepted, refused in ((v2, old, new), (v3, new, old)):
+        jsonschema.Draft202012Validator.check_schema(contract)
+        jsonschema.Draft202012Validator(contract).validate(accepted)
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.Draft202012Validator(contract).validate(refused)
+    for version in (1, 4, "3", 3.0, True, None):
+        with pytest.raises(ValueError, match="no tensor contract for schema"):
+            load_schema(version)  # type: ignore[arg-type]
+
+
 def test_schema_accepts_the_build_and_is_not_permissive(fixture_tensor):
     schema = load_schema()
     jsonschema.Draft202012Validator.check_schema(schema)
@@ -209,6 +229,18 @@ def test_schema_accepts_the_build_and_is_not_permissive(fixture_tensor):
         "unavailable with a method": lambda d: d["engines"]["copula"].update(method={"name": "x"}),
         "short qse commit": lambda d: d["engines"]["garch"]["method"].update(qse="ca8c"),
         "another start": lambda d: d["engines"]["garch"]["method"].update(start="last"),
+        "simple returns": lambda d: d["engines"]["garch"]["method"].update(returns="simple"),
+        "another scale": lambda d: d["engines"]["garch"]["method"].update(scale="iqr"),
+        "another ruin rule": lambda d: d["engines"]["garch"]["method"].update(ruin="raise"),
+        "no ruin rule": lambda d: d["engines"]["garch"]["method"].pop("ruin"),
+        "no ruin_paths": lambda d: d["engines"]["garch"].pop("ruin_paths"),
+        "negative ruin_paths": lambda d: d["engines"]["garch"].update(ruin_paths=-1),
+        "fractional ruin_paths": lambda d: d["engines"]["garch"].update(ruin_paths=0.5),
+        "ready without a ruin count": lambda d: d["engines"]["garch"].update(ruin_paths=None),
+        "unavailable with a ruin count": lambda d: d["engines"].update(
+            garch={"status": "unavailable", "reason": "r", "method": None, "ruin_paths": 0}
+        ),
+        "ruin_paths on the copula": lambda d: d["engines"]["copula"].update(ruin_paths=None),
         "unknown default engine": lambda d: d.update(range_default="other"),
         "unknown fund status": lambda d: d["shape"]["funds"][0].update(status="fine"),
         "negative omega": lambda d: d["shape"]["funds"][0].update(omega=-1e-9),
@@ -230,8 +262,9 @@ def test_schema_accepts_the_build_and_is_not_permissive(fixture_tensor):
         lambda d: d.update(shape=None),
         lambda d: d["shape"]["funds"][0].update(nu=None, margin="empirical"),
         lambda d: d["engines"].update(
-            garch={"status": "unavailable", "reason": "r", "method": None}
+            garch={"status": "unavailable", "reason": "r", "method": None, "ruin_paths": None}
         ),
+        lambda d: d["engines"]["garch"].update(ruin_paths=12),
         lambda d: [d[k]["ranges"].pop("garch") for k in ("frontier", "ladder", "entered")],
         lambda d: d["engines"].update(
             copula={"status": "ready", "reason": None, "method": {"name": "vine_copula_fhs"}}
@@ -966,8 +999,14 @@ def test_engines_block_names_every_engine_with_its_status_and_method(fixture_ten
     assert engines["replay"] == {"status": "ready", "reason": None, "method": builder.METHOD}
     assert engines["replay"]["method"] == fixture_tensor["range_method"]  # the kept field
     method = garch_method(fixture_artifact())
-    assert engines["garch"] == {"status": "ready", "reason": None, "method": method}
+    assert engines["garch"] == {
+        "status": "ready",
+        "reason": None,
+        "method": method,
+        "ruin_paths": 0,
+    }
     assert method["qse"] == "ca8c0445a56712c92dc028e68845b94963fdd590" and method["arch"] == "8.0.0"
+    assert (method["returns"], method["scale"], method["ruin"]) == ("log", "sd", "absorb")
     assert engines["copula"] == {
         "status": "unavailable",
         "reason": "not computed for this menu",
@@ -1061,6 +1100,48 @@ def test_a_fit_is_reused_only_for_its_own_panel(monkeypatch):
     other = build_tensor(_tsp_like_inputs(garch_artifact=fixture_artifact(), **SMALL_BOTH))
     assert len(calls) == 2 and list(calls[1][0].frame.columns) == TSP_LIKE  # not this menu's
     assert [fund["id"] for fund in other["shape"]["funds"]] == TSP_LIKE
+    stale = dataclasses.replace(fixture_artifact(), returns="simple")  # fitted in simple returns
+    refit = build_tensor_full(fixture_inputs("5y", garch_artifact=stale, **SMALL_BOTH))
+    assert len(calls) == 3 and refit.artifacts["garch"] is not stale
+    assert refit.artifacts["garch"].returns == "log"
+    assert _without_telemetry(refit.tensor) == _without_telemetry(reused)
+
+
+def test_a_fit_is_reused_only_under_the_splice_dates_it_was_guarded_with(
+    fixture_frame, monkeypatch
+):
+    """The guard's inputs are part of a fit's identity: a fit guarded without a fund's splice
+    date is never accepted for a build that names one, so the guard always runs on it."""
+    day = "2023-03-13"
+    dropped = fixture_frame[TSP_LIKE].copy()
+    dropped.loc[day, "VTI"] = -0.30  # an ex-date the record never adjusted for
+    unguarded = build_tensor_full(
+        _tsp_like_inputs(returns=dropped, garch_artifact=None, **SMALL_BOTH)
+    ).artifacts["garch"]
+    assert unguarded.splice_dates == ()
+    with pytest.raises(ShapeError) as caught:
+        build_tensor(
+            _tsp_like_inputs(
+                returns=dropped, splice_dates={"VTI": day}, garch_artifact=unguarded, **SMALL_BOTH
+            )
+        )
+    assert caught.value.fund == "VTI" and caught.value.date == day
+    calls = []
+    real = builder.fit_shape
+    monkeypatch.setattr(builder, "fit_shape", lambda *args: calls.append(args) or real(*args))
+    elsewhere = {"VTI": "2024-01-02", "FIENX": "2024-10-30"}  # FIENX is not in the panel
+    guarded = build_tensor_full(
+        _tsp_like_inputs(
+            returns=dropped, splice_dates=elsewhere, garch_artifact=unguarded, **SMALL_BOTH
+        )
+    ).artifacts["garch"]
+    assert len(calls) == 1 and guarded.splice_dates == (("VTI", "2024-01-02"),)
+    again = build_tensor_full(  # the same guard, written another way: the fit is reused
+        _tsp_like_inputs(
+            returns=dropped, splice_dates={"VTI": "20240102"}, garch_artifact=guarded, **SMALL_BOTH
+        )
+    )
+    assert len(calls) == 1 and again.artifacts["garch"] is guarded
 
 
 def test_the_shape_panel_of_inputs_is_the_one_the_build_fits(fixture_tensor, fixture_frame):
@@ -1083,6 +1164,7 @@ def test_engines_not_asked_for_are_unavailable_with_their_reason():
         "status": "unavailable",
         "reason": "not computed for this menu",
         "method": None,
+        "ruin_paths": None,
     }
     assert preset["shape"] is None and preset["range_default"] == "replay"
     for key in ("frontier", "ladder", "entered"):
@@ -1121,6 +1203,7 @@ def test_an_unavailable_volatility_model_is_reported_and_not_simulated():
         "status": "unavailable",
         "reason": "not enough shared history for the volatility model",
         "method": None,
+        "ruin_paths": None,
     }
     assert t["shape"]["pool_rows"] == 100 and len(t["shape"]["funds"]) == 23
     for key in ("frontier", "ladder", "entered"):
@@ -1168,6 +1251,66 @@ def test_a_riskless_mix_has_one_year_on_every_path(fixture_frame):
         assert front["bad"][0] <= front["typical"][0] <= front["good"][0]
         assert front["good"][0] - front["bad"][0] <= 5e-4  # at most the chart's floor of risk
         assert abs(front["typical"][0] - np.expm1(252 * np.log1p(daily))) <= 1e-5
+
+
+def test_an_exact_constant_mix_has_equal_ranges_at_its_compounded_chart_mean(fixture_frame):
+    vti = next(fund for fund in fixture_inputs().funds if fund.id == "VTI")
+    menu = [vti, *(dataclasses.replace(vti, id=fund, name=fund) for fund in ("CASH_A", "CASH_B"))]
+    frame = fixture_frame[["VTI"]].assign(CASH_A=0.00015, CASH_B=0.00007)
+    result = build_tensor_full(
+        fixture_inputs(
+            "5y",
+            funds=menu,
+            returns=frame,
+            allocation={"CASH_A": 250.0, "CASH_B": 750.0},
+            preset_id=None,
+            garch_artifact=None,
+            **SMALL_BOTH,
+        ),
+        workers=1,
+    )
+    tensor = result.tensor
+    validate_tensor(tensor)
+    entered = tensor["entered"]
+    assert entered["w"] == [0.0, 0.25, 0.75]
+    assert [fund["status"] for fund in tensor["shape"]["funds"]][1:] == ["near_constant"] * 2
+    garch = result.models["garch"]
+    assert isinstance(garch, GarchRangeModel)
+    np.testing.assert_array_equal(garch.sd[1:], [0.0, 0.0])
+    daily = np.array(tensor["mu_s"]) @ np.array(entered["w"]) / 252.0
+    expected = np.expm1(252 * np.log1p(daily))
+    for engine in ENGINES:
+        figures = entered["ranges"][engine]
+        assert figures["bad"] == figures["typical"] == figures["good"]
+        assert figures["typical"] == pytest.approx(expected, abs=1e-12, rel=0)
+    assert entered["range"]["typical"] == entered["ranges"]["replay"]["typical"]
+    assert tensor["engines"]["garch"]["ruin_paths"] == 0
+
+
+def test_ruin_paths_is_the_most_paths_any_carried_mix_lost(monkeypatch):
+    """`engines.garch.ruin_paths`: over the ladder's mixes and the entered one, the largest
+    number of paths the volatility model absorbed (a day at or below -100%); 0 for the fixture."""
+    real = builder.one_year_ranges
+    lost = {"ladder": 4, "entered": 0}
+
+    def counted(model, weights):
+        out = real(model, weights)
+        if model.engine == "garch" and np.ndim(weights) == 1:  # the entered mix
+            out["ruined"] = np.array([lost["entered"]])
+        elif model.engine == "garch":  # the ladder's mixes: one of them loses the most
+            out["ruined"] = np.minimum(np.arange(len(out["bad"])), lost["ladder"])
+        return out
+
+    monkeypatch.setattr(builder, "one_year_ranges", counted)
+    tensor = build_tensor(fixture_inputs("5y", **SMALL_BOTH))
+    validate_tensor(tensor)
+    assert tensor["engines"]["garch"]["ruin_paths"] == 4  # the ladder's worst mix
+    lost.update(entered=9)
+    assert build_tensor(fixture_inputs("5y", **SMALL_BOTH))["engines"]["garch"]["ruin_paths"] == 9
+    alone = build_tensor(fixture_inputs("5y", allocation=None, **SMALL_BOTH))
+    assert alone["entered"] is None and alone["engines"]["garch"]["ruin_paths"] == 4
+    monkeypatch.setattr(builder, "one_year_ranges", real)
+    assert build_tensor(fixture_inputs("5y", **SMALL_BOTH))["engines"]["garch"]["ruin_paths"] == 0
 
 
 def test_post_check_refuses_ranges_out_of_order(monkeypatch):

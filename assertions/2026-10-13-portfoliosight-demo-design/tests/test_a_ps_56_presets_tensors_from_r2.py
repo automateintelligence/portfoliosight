@@ -2,12 +2,13 @@
 
 Claim: `GET /api/presets` carries `x-ps-source: r2`, a `generation`, and both presets with all six
 lookbacks `ready` and `/api/...` URLs; the `guide2017` 5y URL returns a tensor that validates
-against `portfoliosight/engine/tensor.schema.json` with `Cache-Control: public, max-age=86400,
-immutable`, an `ETag` and `x-ps-source: r2`; a `POST /api/tensors` with the default preset's funds
-and all-`null` caps returns 200 with a `url` whose body is byte-identical to that tensor. The
-default tensor uses all 23 Step 2 funds and sets none aside; a POST for those 23 funds plus FIENX
-(the catalog's converted fund, not served) resolves to a tensor that sets exactly FIENX aside with
-the catalog's reason.
+against the shipped contract its own `schema` field names
+(`portfoliosight/engine/tensor.schema.json` for schema 3, `tensor.schema.v2.json` for schema 2)
+with `Cache-Control: public, max-age=86400, immutable`, an `ETag` and `x-ps-source: r2`; a
+`POST /api/tensors` with the default preset's funds and all-`null` caps returns 200 with a `url`
+whose body is byte-identical to that tensor. The default tensor uses all 23 Step 2 funds and sets
+none aside; a POST for those 23 funds plus FIENX (the catalog's converted fund, not served)
+resolves to a tensor that sets exactly FIENX aside with the catalog's reason.
 
 Owner decision 2026-10-13: EFA holds FIENX's place in the default menu. FIENX's exclusion with its
 reason, which this test used to read from the default tensor, is read from the tensor of the menu
@@ -23,7 +24,11 @@ Pinned interface (the product must provide exactly this):
   `{"status": "ready", "url": "/api/tensors/{G}/{hash}/{lookback}"}` (spec §6).
 - `GET https://portfoliosight.ai/api/tensors/{G}/{hash}/5y` -> 200, `Cache-Control: public,
   max-age=86400, immutable`, an `ETag`, `x-ps-source: r2`, a spec §7 tensor.
-- `portfoliosight/engine/tensor.schema.json` (JSON Schema, the contract of spec §7).
+- `portfoliosight/engine/tensor.schema.json` (JSON Schema, the contract of spec §7, schema 3) and
+  `portfoliosight/engine/tensor.schema.v2.json` (schema 2, which production serves until the first
+  0.3.0 generation and after a rollback), loaded by
+  `portfoliosight.engine.tensor.load_schema(version)` for `version` 2 or 3 (any other version:
+  `ValueError`). Each tensor is validated against the contract its own `schema` field names.
 - `data/holdings/holdings_guide2017_step2.csv` column `Symbol`: the 23 funds of the default preset,
   all of them in the default tensor's `universe.funds`, none in `universe.excluded`; FIENX is not
   one of them.
@@ -90,7 +95,6 @@ def _need(module: str):
 
 
 SITE = "https://portfoliosight.ai"
-SCHEMA = ROOT / "portfoliosight" / "engine" / "tensor.schema.json"
 HOLDINGS = ROOT / "data" / "holdings" / "holdings_guide2017_step2.csv"
 LOOKBACKS = {"1y", "2y", "3y", "5y", "10y", "ew"}
 GENERATION_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[0-9.]+$")
@@ -186,18 +190,28 @@ def _guide_tensor() -> tuple[_Resp, dict, dict]:
 
 
 def _assert_schema_valid(tensor, what: str) -> None:
-    """The same schema check as the default-tensor test, for the tensor of the menu with FIENX."""
+    """`tensor` validates against the shipped contract its own `schema` field names (2 or 3)."""
     jsonschema = _need("jsonschema")
-    if not SCHEMA.is_file():
-        pytest.fail(f"A-PS-56 red: {SCHEMA.relative_to(ROOT)} is missing")
-    schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    engine = _need("portfoliosight.engine.tensor")
+    declared = tensor.get("schema") if isinstance(tensor, dict) else None
+    try:
+        schema = engine.load_schema(declared)
+    except ValueError as exc:
+        pytest.fail(
+            f"A-PS-56 red: {what} declares schema {declared!r}, which has no contract: {exc}"
+        )
+    except OSError as exc:
+        pytest.fail(f"A-PS-56 red: the contract of schema {declared!r} is missing: {exc}")
     validator_cls = jsonschema.validators.validator_for(schema)
     validator_cls.check_schema(schema)
     assert schema.get("required") or schema.get("properties"), (
-        "tensor.schema.json constrains nothing (no required keys, no properties)"
+        f"the schema {declared} contract constrains nothing (no required keys, no properties)"
+    )
+    assert (schema.get("properties") or {}).get("schema") == {"const": declared}, (
+        f"the contract loaded for schema {declared} is not that schema's"
     )
     errors = sorted(validator_cls(schema).iter_errors(tensor), key=lambda e: list(e.absolute_path))
-    assert not errors, f"{what} fails tensor.schema.json: " + "; ".join(
+    assert not errors, f"{what} fails the schema {declared} contract: " + "; ".join(
         f"{'/'.join(map(str, e.absolute_path))}: {e.message[:120]}" for e in errors[:5]
     )
 
@@ -281,7 +295,6 @@ else:
         assert len(urls) == 12, f"expected 12 distinct preset tensor URLs, found {len(urls)}"
 
     def test_guide2017_5y_tensor_is_schema_valid_immutable_and_from_r2():
-        jsonschema = _need("jsonschema")
         resp, body, preset = _guide_tensor()
         source = resp.header("x-ps-source")
         assert source != "origin", "the preset tensor was served by the origin, not from R2"
@@ -290,21 +303,8 @@ else:
         assert cache_control == TENSOR_CACHE_CONTROL, f"tensor Cache-Control is {cache_control!r}"
         assert resp.header("etag"), "the tensor response has no ETag"
 
-        if not SCHEMA.is_file():
-            pytest.fail(f"A-PS-56 red: {SCHEMA.relative_to(ROOT)} is missing")
-        schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
-        validator_cls = jsonschema.validators.validator_for(schema)
-        validator_cls.check_schema(schema)
-        assert schema.get("required") or schema.get("properties"), (
-            "tensor.schema.json constrains nothing (no required keys, no properties)"
-        )
         tensor = resp.json("the guide2017 5y tensor")
-        errors = sorted(
-            validator_cls(schema).iter_errors(tensor), key=lambda e: list(e.absolute_path)
-        )
-        assert not errors, "tensor fails tensor.schema.json: " + "; ".join(
-            f"{'/'.join(map(str, e.absolute_path))}: {e.message[:120]}" for e in errors[:5]
-        )
+        _assert_schema_valid(tensor, "the guide2017 5y tensor")
 
         assert tensor.get("generation") == body.get("generation"), "tensor generation != presets'"
         assert tensor.get("asof") == body.get("asof"), "tensor asof != presets' asof"

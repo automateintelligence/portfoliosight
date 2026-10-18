@@ -46,6 +46,9 @@ const garchMethod = z.strictObject({
   seed: z.int(),
   start: z.literal("long_run"),
   shape_rows: z.int().min(1),
+  returns: z.literal("log"),
+  scale: z.literal("sd"),
+  ruin: z.literal("absorb"),
   qse: z.string().regex(/^[0-9a-f]{7,40}$/),
   arch: text,
 });
@@ -54,9 +57,15 @@ const status = z.enum(["ready", "unavailable"]);
 const statusRule = (e: { status: string; reason: string | null; method: unknown }) =>
   e.status === "ready" ? e.reason === null && e.method !== null : e.reason !== null && e.method === null;
 const statusMessage = { message: "a ready engine has a method and no reason; an unavailable one a reason and no method" };
+// A ready volatility model counts the paths of its worst mix that lost everything; an unavailable one counts none.
+const ruinRule = (e: { status: string; ruin_paths: number | null }) => (e.status === "ready") === (e.ruin_paths !== null);
+const ruinMessage = { message: "a ready volatility model counts its lost paths; an unavailable one has no count" };
 const engines = z.strictObject({
   replay: z.strictObject({ status: z.literal("ready"), reason: z.null(), method: replayMethod }),
-  garch: z.strictObject({ status, reason: text.nullable(), method: garchMethod.nullable() }).refine(statusRule, statusMessage),
+  garch: z
+    .strictObject({ status, reason: text.nullable(), method: garchMethod.nullable(), ruin_paths: z.int().min(0).nullable() })
+    .refine(statusRule, statusMessage)
+    .refine(ruinRule, ruinMessage),
   // the copula's method fields arrive with the engine
   copula: z.strictObject({ status, reason: text.nullable(), method: z.strictObject({ name: text }).nullable() }).refine(statusRule, statusMessage),
 });

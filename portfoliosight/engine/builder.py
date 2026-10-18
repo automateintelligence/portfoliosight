@@ -10,7 +10,8 @@ Every build computes History replay, the default engine, whose figures fill the 
 readers know (`frontier.range`, `ladder.range`, `entered.range`, `range_method`). The engines
 the inputs ask for (`replay` and `garch` unless told otherwise) each add their own figures under
 `ranges`; `engines` says, for every engine the page offers, whether the tensor carries it and if
-not why.
+not why, and for the volatility model how many paths of the worst carried mix lost everything
+(`ruin_paths`, 0 normally: such a path is absorbed, its year -100%).
 """
 
 from __future__ import annotations
@@ -48,10 +49,12 @@ from .ranges import (
     range_model,
 )
 from .shape import (
+    RETURNS,
     GarchArtifact,
     ShapePanel,
     fit_shape,
     garch_method,
+    guarded_splice_dates,
     shape_panel,
     simulate_panel,
 )
@@ -69,6 +72,7 @@ from .torsion import torsion_basis
 from .windows import WindowSelection, renormalize_allocation, select_window
 
 SCHEMA_VERSION = 3
+CONTRACTS = {2: "tensor.schema.v2.json", SCHEMA_VERSION: "tensor.schema.json"}  # by `schema`
 HASH_SCHEMA = 2  # the universe hash's own version: a menu keeps its key across tensor schemas
 TELEMETRY_FIELDS = ("built_at", "build_seconds")
 NOTES = (
@@ -146,7 +150,7 @@ class TensorInputs:
     levels: int = LEVELS
     engines: tuple[str, ...] = ENGINES  # what to compute; History replay always
     splice_dates: Mapping[str, str] | None = None  # ISO day each seeded fund's tail starts
-    garch_artifact: GarchArtifact | None = None  # a fit to reuse when it is this panel's
+    garch_artifact: GarchArtifact | None = None  # reused for its own panel and splice dates
 
 
 @dataclass(frozen=True)
@@ -186,15 +190,25 @@ def canonical_json(tensor: Mapping) -> str:
     return json.dumps(tensor, separators=(",", ":"), sort_keys=True, allow_nan=False)
 
 
-@lru_cache(maxsize=1)
-def load_schema() -> dict:
-    """The tensor's JSON Schema, shipped next to this module."""
-    schema = resources.files("portfoliosight.engine").joinpath("tensor.schema.json")
-    return json.loads(schema.read_text(encoding="utf-8"))
+def load_schema(version: int = SCHEMA_VERSION) -> dict:
+    """The JSON Schema of tensor `schema` `version`, shipped next to this module.
+
+    3 is the contract this engine writes; 2 is the one engine 0.2.0 wrote, still served until the
+    first 0.3.0 generation and again after a rollback. A reader checks a document against the
+    contract its own `schema` names; any other version is refused with `ValueError`.
+    """
+    if type(version) is not int or version not in CONTRACTS:
+        raise ValueError(f"no tensor contract for schema {version!r}")
+    return _contract(CONTRACTS[version])
+
+
+@lru_cache(maxsize=len(CONTRACTS))
+def _contract(name: str) -> dict:
+    return json.loads(resources.files("portfoliosight.engine").joinpath(name).read_text("utf-8"))
 
 
 def validate_tensor(tensor: Mapping) -> None:
-    """Raise `jsonschema.ValidationError` unless `tensor` matches the schema."""
+    """Raise `jsonschema.ValidationError` unless `tensor` matches the schema this engine writes."""
     jsonschema.Draft202012Validator(load_schema()).validate(tensor)
 
 
@@ -204,7 +218,8 @@ def build_tensor(inputs: TensorInputs, *, workers: int | None = None) -> dict:
     Raises `WindowUnavailable` when the window has too little shared history, `CapsError` when
     the requested caps cannot be met by the funds included in the window, `ShapeError` when the
     volatility model cannot use the menu's history (a fund's splice date shows a move the rest of
-    the menu did not make, or the shared days say nothing about a fund that varies),
+    the menu did not make, a day lost everything, or the shared days say nothing about a fund
+    that varies),
     `TorsionError` when the funds' correlation matrix is singular (every varying fund switching
     between two values in lockstep leaves Ledoit-Wolf nothing to shrink; nothing is
     regularized), `ValueError` for an engine it cannot compute, and an error from the post-check
@@ -301,7 +316,12 @@ def _build(inputs: TensorInputs, workers: int) -> BuildResult:
     if "garch" in engines:  # fitted before the ladders: a history it cannot use fails at once
         panel = shape_panel(frame, included, asof)
         given = inputs.garch_artifact
-        reuse = given is not None and given.sample_sha256 == panel.sample_sha256
+        reuse = (  # the same panel, guarded with the same splice dates, fitted in the same space
+            given is not None
+            and given.sample_sha256 == panel.sample_sha256
+            and given.splice_dates == guarded_splice_dates(included, inputs.splice_dates)
+            and given.returns == RETURNS
+        )
         artifact = given if reuse else fit_shape(panel, inputs.splice_dates)
     basis = torsion_basis(moments.cov)
     programs = MenuPrograms(mu_s, moments.cov, lo, hi)
@@ -328,6 +348,11 @@ def _build(inputs: TensorInputs, workers: int) -> BuildResult:
     computed = {engine: one_year_ranges(model, mixes) for engine, model in models.items()}
     for engine, ranges in computed.items():
         _check_ranges(engine, ranges, "ladder", surf.y.shape)
+    entered, entered_ruined = _entered(inputs.allocation, included, models)
+    ruin_paths = {
+        engine: max(int(ranges["ruined"].max()), entered_ruined.get(engine, 0))
+        for engine, ranges in computed.items()
+    }
     ladder_range = _range_block(computed[DEFAULT_ENGINE], surf.y.shape)
     front_range = _column(ladder_range, 0)
     ladder_ranges = {engine: _figures(r, surf.y.shape) for engine, r in computed.items()}
@@ -435,9 +460,9 @@ def _build(inputs: TensorInputs, workers: int) -> BuildResult:
                 for j, level in enumerate(suggested)
             ],
         },
-        "entered": _entered(inputs.allocation, included, models),
+        "entered": entered,
         "range_method": dict(METHOD),
-        "engines": _engines_block(artifact, inputs.preset_id),
+        "engines": _engines_block(artifact, inputs.preset_id, ruin_paths.get("garch")),
         "range_default": DEFAULT_ENGINE,
         "shape": None if artifact is None else _shape_block(artifact),
         "enb_ref": surf.enb_ref,
@@ -461,10 +486,13 @@ def _engines(asked: Sequence[str]) -> tuple[str, ...]:
     return tuple(engine for engine in ENGINES if engine in asked)
 
 
-def _engines_block(artifact: GarchArtifact | None, preset_id: str | None) -> dict:
+def _engines_block(
+    artifact: GarchArtifact | None, preset_id: str | None, ruin_paths: int | None
+) -> dict:
     """`engines`: every engine the page offers, with its status, its reason and its method.
 
-    The volatility model has no artifact exactly when the build was not asked for it.
+    The volatility model has no artifact exactly when the build was not asked for it; when it is
+    ready, `ruin_paths` is the most paths any carried mix lost everything on (absorbed).
     """
     if artifact is None:
         reason = NOT_COMPUTED_CUSTOM if preset_id is None else NOT_COMPUTED
@@ -473,6 +501,7 @@ def _engines_block(artifact: GarchArtifact | None, preset_id: str | None) -> dic
         garch = {"status": "unavailable", "reason": artifact.unavailable_reason, "method": None}
     else:
         garch = {"status": "ready", "reason": None, "method": garch_method(artifact)}
+    garch["ruin_paths"] = ruin_paths if garch["status"] == "ready" else None
     replay = {"status": "ready", "reason": None, "method": dict(METHOD)}
     return {"replay": replay, "garch": garch, "copula": dict(COPULA)}
 
@@ -601,23 +630,25 @@ def _entered(
     allocation: Mapping[str, float] | None,
     included: Sequence[str],
     models: Mapping[str, RangeModel | GarchRangeModel],
-) -> dict | None:
-    """The entered mix over the included funds, with its one-year ranges; `None` without one."""
+) -> tuple[dict | None, dict[str, int]]:
+    """The entered mix over the included funds with its one-year ranges (`None` without one), and
+    by engine how many of its paths lost everything."""
     if allocation is None:
-        return None
+        return None, {}
     weights, set_aside = renormalize_allocation(allocation, included)
     if weights is None:
-        return None
+        return None, {}
     mix = np.array([weights.get(fund, 0.0) for fund in included])
     computed = {engine: one_year_ranges(model, mix) for engine, model in models.items()}
     for engine, ranges in computed.items():
         _check_ranges(engine, ranges, "entered", (1,))
-    return {
+    block = {
         "w": mix.tolist(),
         "set_aside": float(set_aside),
         "range": _range_block(computed[DEFAULT_ENGINE], ()),
         "ranges": {engine: _figures(ranges, ()) for engine, ranges in computed.items()},
     }
+    return block, {engine: int(ranges["ruined"][0]) for engine, ranges in computed.items()}
 
 
 def _number_or_none(value: float | None) -> float | None:

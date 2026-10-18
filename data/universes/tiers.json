@@ -13,8 +13,8 @@
     },
     {
       "tier": 3,
-      "name": "QSE core stocks",
-      "file": "data/universes/qse_core.txt",
+      "name": "QSE stocks: core, then PortfolioSight",
+      "files": ["data/universes/qse_core.txt", "data/universes/qse_portfoliosight.txt"],
       "starter_slice": 130
     }
   ],

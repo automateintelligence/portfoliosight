@@ -52,10 +52,12 @@ export function ResultStrip({ low, typical, high, normal, scale, value, word, de
   const spoken = rangeBarLabel(signedPct(scale.lo), signedPct(scale.hi), both(low), both(typical), both(high));
   // Each figure's column is as wide as the widest figure the scale can hold, so the bar beside them
   // keeps its place on screen while the figures change (their font is monospaced). A figure past
-  // an end of the scale (rare) can be one character wider. In dollars the group's label speaks
-  // both values, so the visible text is hidden from readers to avoid a double read.
+  // an end of the scale (rare) can be one character wider. The extra pixel covers layout rounding:
+  // a figure of exactly `widest` characters can measure a fraction of a pixel wider than `widest`ch.
+  // In dollars the group's label speaks both values, so the visible text is hidden from readers to
+  // avoid a double read.
   const widest = Math.max(...[scale.lo, scale.hi].map((r) => (total === null ? signedPct(r) : (money(r) as string)).length));
-  const width = { minWidth: `${widest}ch` };
+  const width = { minWidth: `calc(${widest}ch + 1px)` };
   const figure = (id: string, r: number) =>
     total === null ? (
       <span className="fig-val num" data-testid={id} style={width}>

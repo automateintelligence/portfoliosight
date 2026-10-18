@@ -83,6 +83,14 @@ describe("tensor schemas", () => {
       (t) => (t.engines.replay.status = "unavailable"),
       (t) => (t.engines.garch.method.qse = "ca8c"),
       (t) => (t.engines.garch.method.start = "last"),
+      (t) => (t.engines.garch.method.returns = "simple"),
+      (t) => (t.engines.garch.method.scale = "iqr"),
+      (t) => (t.engines.garch.method.ruin = "raise"),
+      (t) => delete t.engines.garch.method.ruin,
+      (t) => delete t.engines.garch.ruin_paths,
+      (t) => (t.engines.garch.ruin_paths = null), // ready without a count
+      (t) => (t.engines.garch.ruin_paths = -1),
+      (t) => (t.engines.garch.ruin_paths = 0.5),
       (t) => (t.engines.garch.status = "maybe"),
       (t) => (t.range_default = "copula"), // not a ready engine
       (t) => (t.range_default = "other"),
@@ -91,11 +99,17 @@ describe("tensor schemas", () => {
     ];
     for (const change of bad) expect(() => parseTensor(changed(change)), change.toString()).toThrow();
     const unavailable = (t: Doc) => {
-      t.engines.garch = { status: "unavailable", reason: "not enough shared history for the volatility model", method: null };
+      t.engines.garch = { status: "unavailable", reason: "not enough shared history for the volatility model", method: null, ruin_paths: null };
       for (const key of ["frontier", "ladder", "entered"]) delete t[key].ranges.garch;
     };
     expect(() => parseTensor(changed(unavailable))).not.toThrow();
-    expect(() => parseTensor(changed((t) => (t.engines.garch = { status: "unavailable", reason: "r", method: null })))).toThrow(/ready engines/);
+    expect(() => parseTensor(changed((t) => (t.engines.garch = { status: "unavailable", reason: "r", method: null, ruin_paths: null })))).toThrow(/ready engines/);
+    const counted = (t: Doc) => {
+      unavailable(t);
+      t.engines.garch.ruin_paths = 0; // an unavailable model counts nothing
+    };
+    expect(() => parseTensor(changed(counted))).toThrow(/counts its lost paths/);
+    expect(() => parseTensor(changed((t) => (t.engines.garch.ruin_paths = 3)))).not.toThrow();
   });
 
   it("refuses per-engine blocks whose sizes disagree with n, nx and the levels", () => {

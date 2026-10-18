@@ -31,24 +31,27 @@ is `exp(sum ln(1 + r))`, and the sum over a path is the path's day counts times 
 returns, so all paths of all mixes come from one matrix product. The normal range
 `mu -+ 1.96 sigma` is returned beside the bootstrap one, for the details view.
 
-The volatility model starts from a simulated panel `R` of the funds' daily returns (`shape.py`:
+The volatility model starts from a simulated panel `l` of the funds' daily log returns (`shape.py`:
 2,000 paths of 252 days, one shared draw of real shock rows) and puts the chart's level on it in
-two affine steps (simulation engines spec 4.5), with `m`, `s` the chart's daily mean and
-volatility and `R_bar`, `sd` each fund's pooled mean and population deviation over every path and
-day of `R`:
+two steps (simulation engines spec 4.5), with `m`, `s` the chart's daily mean and volatility:
 
-1. per fund, `R' = m + (R - R_bar) * s / sd` (a fund whose simulated returns do not vary is its
-   daily expected return);
-2. per mix, `y = w'R'` has mean `m_w`; `y' = m_w + k_w (y - m_w)` with `k_w = s_w / sd(y)`, and
-   `sd(y)^2 = (w a)' Sigma_R (w a)` from the pooled covariance `Sigma_R` of `R`, `a = s / sd`
-   (`y' = m_w` when `sd(y) = 0`).
+1. per fund, in log space: `l' = m~ + (l - l_bar) * s~ / sd`, with `l_bar`, `sd` the fund's pooled
+   mean and population deviation over every path and day of `l`, and `(m~, s~)` the lognormal
+   equivalents of `(m, s)`: `s~^2 = ln(1 + s^2 / (1 + m)^2)`, `m~ = ln(1 + m) - s~^2 / 2`. Then
+   `R' = expm1(l') > -1`. A fund whose simulated returns do not vary is its daily expected
+   return, `R' = m` exactly;
+2. per mix, in simple space: `y = w'R'`, `y' = m_w + k_w (y - w'R_bar)` with `k_w = s_w / sd(y)`,
+   `sd(y)^2 = w' Sigma_R w` from the pooled mean `R_bar` and (ddof 0) covariance `Sigma_R` of `R'`
+   (`y' = m_w` when `sd(y) = 0`). Every mix's days then have the chart's mean `m_w` and volatility
+   `s_w` exactly, and `y'` is the sum over funds of `w_n [m_n + k_w (R'_n - R_bar_n)]`.
 
-Both steps are affine, so a mix's day is `v'R + b` with `v = k_w (w a)` and one constant `b` per
-mix: `R'` is never formed. Up to `MIX_BLOCK` mixes are compounded together over chunks of paths,
-each chunk's days in one buffer of at most `WORK_BYTES`: the gross days `1 + y'` of every mix
-from one matrix product (a few paths against many mixes, the shape BLAS does well), then their
-product over each path, `Y = prod(1 + y') - 1`. A day at or below -100% raises, as for History
-replay.
+`R'` is a function of `l` fund by fund, so it is never stored: it is computed for a chunk of paths
+at a time, twice for its moments (the mean, then the centred cross-products) and once for the
+years. Each chunk's levelled days and the gross days `1 + y' = R' v + 1 + b` (`v = k_w w`, one
+constant `b` per mix) of up to `MIX_BLOCK` mixes share at most `WORK_BYTES`; a matrix product
+gives the gross days, their product over each path the year, `Y = prod(1 + y') - 1`. A path with
+a day at or below -100% (`1 + y' <= 0`) is absorbed (`RUIN`): its year is exactly -100% and
+`one_year_ranges` counts it. History replay raises on such a day instead.
 """
 
 from __future__ import annotations
@@ -70,8 +73,10 @@ PERCENTILES = (2.5, 50.0, 97.5)
 SEED = 20261013
 ENGINES = ("replay", "garch")  # the engines a build can compute, in the order they are reported
 DEFAULT_ENGINE = "replay"
-WORK_BYTES = 64 * 2**20  # the largest temporary array the volatility model's ranges allocate
+WORK_BYTES = 64 * 2**20  # the volatility model's work buffers for a chunk of paths, at most
 MIX_BLOCK = 1024  # at most this many mixes compounded together over each chunk of paths
+SCALE = "sd"  # step 1 scales each fund's log returns by their pooled population deviation
+RUIN = "absorb"  # a volatility-model path with a day at or below -100% is a total loss
 METHOD = {
     "name": "stationary block bootstrap",
     "horizon_days": HORIZON_DAYS,
@@ -100,13 +105,24 @@ class GarchRangeModel:
     """The volatility model for one (menu, lookback): a simulated panel and its pooled moments."""
 
     engine: ClassVar[str] = "garch"
-    panel: np.ndarray  # P x H x N simulated daily returns of the funds, read-only
-    mean: np.ndarray  # each fund's mean over every path and day
-    sd: np.ndarray  # each fund's population deviation; 0 for one whose returns never vary
-    cov_sim: np.ndarray  # the funds' pooled (ddof 0) covariance over every path and day
+    panel: np.ndarray  # P x H x N simulated daily log returns of the funds, read-only
+    mean: np.ndarray  # each fund's mean log return over every path and day
+    sd: np.ndarray  # their population deviation; 0 for a fund whose returns never vary
+    level_mean: np.ndarray  # each fund's pooled mean of R', its levelled simple returns
+    level_cov: np.ndarray  # the pooled (ddof 0) covariance of R' over every path and day
     mu_s: np.ndarray  # annual expected returns, the chart's
     cov: np.ndarray  # annual covariance, the chart's
     seed: int = SEED  # of the shock-row draw behind `panel`
+
+
+@dataclass(frozen=True)
+class _StepOne:
+    """Step 1 of a model as arrays per fund: `R' = expm1(c + a l)`, and `R' = m` where `still`."""
+
+    a: np.ndarray
+    c: np.ndarray
+    m: np.ndarray
+    still: np.ndarray
 
 
 @lru_cache(maxsize=8)
@@ -192,49 +208,61 @@ def range_model(sample, mu_s, cov, seed: int = SEED) -> RangeModel:
 def garch_range_model(panel, mu_s, cov, seed: int = SEED) -> GarchRangeModel:
     """The volatility model for one (menu, lookback) from a simulated panel and the chart's moments.
 
-    `panel` is `shape.simulate_panel`'s P x H x N array (drawn with `seed`); it is kept, not
-    copied. Its pooled mean and covariance are taken here once, in chunks of paths.
+    `panel` is `shape.simulate_panel`'s P x H x N array of daily log returns (drawn with `seed`);
+    it is kept, not copied. Its pooled moments, and those of its levelled simple returns `R'`,
+    are taken here once, in chunks of paths. Raises `ValueError` when a levelled return overflows
+    (a chart volatility far beyond any fund's).
     """
     panel = np.asarray(panel, dtype=np.float64)
     if panel.ndim != 3 or panel.shape[0] * panel.shape[1] < 2 or panel.shape[2] < 1:
         raise ValueError("the simulated panel must be a P x H x N array with P x H >= 2")
     mu_s, cov = _chart_moments(mu_s, cov, panel.shape[2])
-    mean, cov_sim, low, high = _pooled_moments(panel)
-    # A fund varies when its simulated returns do: their exact spread says so, where a deviation
+    if not (np.isfinite(mu_s).all() and np.isfinite(cov).all()):
+        raise ValueError("the chart's moments must be finite")
+    mean, spread, low, high = _pooled_spread(panel)
+    # A fund varies when its simulated returns do: their exact range says so, where a deviation
     # taken from a pooled mean (itself rounded over every path and day) would not.
     peak = np.maximum(np.abs(low), np.abs(high))
-    sd = np.where(high - low > ROUNDING_NOISE * peak, np.sqrt(np.diag(cov_sim)), 0.0)
+    sd = np.where(high - low > ROUNDING_NOISE * peak, spread, 0.0)
+    step = _step_one(mu_s, cov, mean, sd)
+    level_mean, level_cov = _levelled_moments(panel, step)
     view = panel.view()
     view.setflags(write=False)
     return GarchRangeModel(
-        panel=view, mean=mean, sd=sd, cov_sim=cov_sim, mu_s=mu_s, cov=cov, seed=seed
+        panel=view,
+        mean=mean,
+        sd=sd,
+        level_mean=level_mean,
+        level_cov=level_cov,
+        mu_s=mu_s,
+        cov=cov,
+        seed=seed,
     )
 
 
 def simulated_years(model: RangeModel | GarchRangeModel, weights) -> np.ndarray:
     """The compounded one-year returns of each mix on every path of its engine: P x M.
 
-    `weights` is M x N, or one mix as a vector of N. Raises `ValueError` for a mix that loses
-    everything on some simulated day.
+    `weights` is M x N, or one mix as a vector of N. Under History replay a mix that loses
+    everything on some sample day raises `ValueError`; under the volatility model such a path's
+    year is -100% (`RUIN`).
     """
-    mixes = _mixes(model, weights)
-    if isinstance(model, GarchRangeModel):
-        return _garch_years(model, mixes)
-    return _replay_years(model, mixes)
+    return _years(model, _mixes(model, weights))[0]
 
 
 def one_year_ranges(model: RangeModel | GarchRangeModel, weights) -> dict:
     """One-year ranges of each row of `weights` (M x N, or one mix as a vector of N).
 
-    Returns `{"bad", "typical", "good", "normal": {"low", "mid", "high"}}` as arrays of M
-    numbers: the 2.5th, 50th and 97.5th percentiles of the model's compounded one-year returns,
-    and the normal range `mu -+ 1.96 sigma` around `mu = mu_s'w`, the same for every engine.
-    Raises `ValueError` for a mix that loses everything on some simulated day.
+    Returns `{"bad", "typical", "good", "normal": {"low", "mid", "high"}, "ruined"}` as arrays of
+    M numbers: the 2.5th, 50th and 97.5th percentiles of the model's compounded one-year returns,
+    the normal range `mu -+ 1.96 sigma` around `mu = mu_s'w`, the same for every engine, and how
+    many of the mix's paths lost everything (always 0 under History replay, which raises
+    `ValueError` for a mix that loses everything on some sample day).
     """
     mixes = _mixes(model, weights)
     mu = mixes @ model.mu_s
     sigma = np.sqrt(np.einsum("ij,jk,ik->i", mixes, model.cov, mixes))
-    year = simulated_years(model, mixes)
+    year, ruined = _years(model, mixes)
     percentiles = np.percentile(year, PERCENTILES, axis=0)
     spread = RANGE_Z * sigma
     return {
@@ -242,6 +270,7 @@ def one_year_ranges(model: RangeModel | GarchRangeModel, weights) -> dict:
         "typical": percentiles[1],
         "good": percentiles[2],
         "normal": {"low": mu - spread, "mid": mu, "high": mu + spread},
+        "ruined": ruined,
     }
 
 
@@ -257,7 +286,16 @@ def _mixes(model: RangeModel | GarchRangeModel, weights) -> np.ndarray:
     mixes = np.atleast_2d(np.asarray(weights, dtype=float))
     if mixes.ndim != 2 or mixes.shape[1] != len(model.mu_s):
         raise ValueError(f"a mix of this menu has {len(model.mu_s)} weights")
+    if not np.isfinite(mixes).all():
+        raise ValueError("a mix's weights must be finite")
     return mixes
+
+
+def _years(model: RangeModel | GarchRangeModel, mixes: np.ndarray) -> tuple[np.ndarray, ...]:
+    """Each mix's years on every path (P x M) and how many of its paths were absorbed (M)."""
+    if isinstance(model, GarchRangeModel):
+        return _garch_years(model, mixes)
+    return _replay_years(model, mixes), np.zeros(len(mixes), dtype=np.int64)
 
 
 def _replay_years(model: RangeModel, mixes: np.ndarray) -> np.ndarray:
@@ -280,11 +318,11 @@ def _work_buffer(chunks: list[slice], days: int, width: int) -> np.ndarray:
     return np.empty((max(part.stop - part.start for part in chunks) * days, width))
 
 
-def _pooled_moments(panel: np.ndarray) -> tuple[np.ndarray, ...]:
-    """Each fund's mean, the pooled (ddof 0) covariance, and each fund's lowest and highest return.
+def _pooled_spread(panel: np.ndarray) -> tuple[np.ndarray, ...]:
+    """Each fund's mean, population deviation, lowest and highest return over every path and day.
 
-    Two passes over chunks of paths: the mean first, then the centred cross-products, so the
-    covariance never loses digits to a difference of large sums.
+    Two passes over chunks of paths: the mean first, then the centred squares, so the deviation
+    never loses digits to a difference of large sums.
     """
     paths, days, funds = panel.shape
     chunks = _path_chunks(paths, days * funds * 8)
@@ -297,46 +335,95 @@ def _pooled_moments(panel: np.ndarray) -> tuple[np.ndarray, ...]:
         total += rows.sum(axis=0)
         low, high = np.minimum(low, rows.min(axis=0)), np.maximum(high, rows.max(axis=0))
     mean = total / (paths * days)
-    scatter = np.zeros((funds, funds))
+    squares = np.zeros(funds)
     buffer = _work_buffer(chunks, days, funds)
     for part in chunks:
         rows = panel[part].reshape(-1, funds)
         centred = np.subtract(rows, mean, out=buffer[: len(rows)])
+        squares += np.einsum("ij,ij->j", centred, centred)
+    return mean, np.sqrt(squares / (paths * days)), low, high
+
+
+def _step_one(mu_s: np.ndarray, cov: np.ndarray, mean: np.ndarray, sd: np.ndarray) -> _StepOne:
+    """Step 1's per-fund arrays: the chart's daily targets matched to log space (lognormal)."""
+    m = mu_s / TRADING_DAYS
+    log_var = np.log1p(np.diag(cov) / TRADING_DAYS / (1.0 + m) ** 2)
+    still = ~(sd > 0)
+    a = np.divide(np.sqrt(log_var), sd, out=np.zeros_like(sd), where=~still)
+    return _StepOne(a=a, c=np.log1p(m) - log_var / 2.0 - a * mean, m=m, still=still)
+
+
+def _levelled(rows: np.ndarray, step: _StepOne, out: np.ndarray) -> np.ndarray:
+    """Step 1 on rows of log returns (days x N), written into `out`: `R' = expm1(c + a l)`."""
+    np.multiply(rows, step.a, out=out)
+    out += step.c
+    with np.errstate(over="ignore"):  # `_levelled_moments` reports an overflow as an error
+        np.expm1(out, out=out)
+    out[:, step.still] = step.m[step.still]
+    return out
+
+
+def _levelled_moments(panel: np.ndarray, step: _StepOne) -> tuple[np.ndarray, np.ndarray]:
+    """The pooled mean and (ddof 0) covariance of `R'`, two passes over chunks of paths.
+
+    A fund that never varies has `R' = m` exactly and so is given that mean exactly: its row and
+    column of the covariance are then exactly zero, never rounding a mix's spread could feel.
+    """
+    paths, days, funds = panel.shape
+    chunks = _path_chunks(paths, days * funds * 8)
+    buffer = _work_buffer(chunks, days, funds)
+    total = np.zeros(funds)
+    for part in chunks:
+        rows = panel[part].reshape(-1, funds)
+        levelled = _levelled(rows, step, buffer[: len(rows)])
+        if not np.isfinite(levelled).all():
+            raise ValueError("a levelled simulated return is not finite")
+        total += levelled.sum(axis=0)
+    mean = total / (paths * days)
+    mean[step.still] = step.m[step.still]
+    scatter = np.zeros((funds, funds))
+    for part in chunks:
+        rows = panel[part].reshape(-1, funds)
+        centred = _levelled(rows, step, buffer[: len(rows)])
+        centred -= mean
         scatter += centred.T @ centred
     scatter /= paths * days
-    return mean, (scatter + scatter.T) / 2.0, low, high
+    return mean, (scatter + scatter.T) / 2.0
 
 
 def _garch_terms(model: GarchRangeModel, mixes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Each mix's effective weights on the raw panel (M x N) and its daily constant (M)."""
-    m = model.mu_s / TRADING_DAYS
-    s = np.sqrt(np.diag(model.cov) / TRADING_DAYS)
-    a = np.divide(s, model.sd, out=np.zeros_like(s), where=model.sd > 0)
-    c = m - a * model.mean
-    m_w = mixes @ m
+    """Each mix's weights on the levelled returns (M x N) and its daily constant (M)."""
+    m_w = mixes @ (model.mu_s / TRADING_DAYS)
     s_w = np.sqrt(np.einsum("ij,jk,ik->i", mixes, model.cov, mixes) / TRADING_DAYS)
-    u = mixes * a
-    sd_y = np.sqrt(np.maximum(np.einsum("ij,jk,ik->i", u, model.cov_sim, u), 0.0))
+    sd_y = np.sqrt(np.maximum(np.einsum("ij,jk,ik->i", mixes, model.level_cov, mixes), 0.0))
     k = np.divide(s_w, sd_y, out=np.zeros_like(s_w), where=sd_y > 0)
-    return k[:, None] * u, m_w + k * (mixes @ c - m_w)
+    return k[:, None] * mixes, m_w - k * (mixes @ model.level_mean)
 
 
-def _garch_years(model: GarchRangeModel, mixes: np.ndarray) -> np.ndarray:
+def _garch_years(model: GarchRangeModel, mixes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     weights, shift = _garch_terms(model, mixes)
+    step = _step_one(model.mu_s, model.cov, model.mean, model.sd)
     paths, days, funds = model.panel.shape
+    width = min(MIX_BLOCK, len(mixes))
+    blocks = [slice(start, start + width) for start in range(0, len(mixes), width)]
+    v = [np.ascontiguousarray(weights[block].T) for block in blocks]  # N x B each
+    chunks = _path_chunks(paths, days * (funds + width) * 8)
+    levelled_buffer = _work_buffer(chunks, days, funds)
+    gross_buffer = _work_buffer(chunks, days, width).reshape(-1)  # each block's days contiguous
     years = np.empty((paths, len(mixes)))
-    for start in range(0, len(mixes), MIX_BLOCK):
-        block = slice(start, start + MIX_BLOCK)
-        v = np.ascontiguousarray(weights[block].T)  # N x B
-        width = v.shape[1]
-        chunks = _path_chunks(paths, days * width * 8)
-        buffer = _work_buffer(chunks, days, width)
-        for part in chunks:
-            rows = model.panel[part].reshape(-1, funds)
-            gross = np.matmul(rows, v, out=buffer[: len(rows)])
+    ruined = np.zeros(len(mixes), dtype=np.int64)
+    for part in chunks:
+        rows = model.panel[part].reshape(-1, funds)
+        levelled = _levelled(rows, step, levelled_buffer[: len(rows)])
+        for block, weights_t in zip(blocks, v, strict=True):
+            gross_out = gross_buffer[: len(rows) * weights_t.shape[1]]
+            gross = np.matmul(levelled, weights_t, out=gross_out.reshape(len(rows), -1))
             gross += 1.0 + shift[block]
-            if not gross.min() > 0.0:
-                raise ValueError("a day that loses everything cannot be compounded")
-            years[part, block] = gross.reshape(-1, days, width).prod(axis=1)
+            daily = gross.reshape(-1, days, weights_t.shape[1])
+            product = daily.prod(axis=1)
+            lost = daily.min(axis=1) <= 0.0  # a day that loses everything: the path is absorbed
+            product[lost] = 0.0
+            years[part, block] = product
+            ruined[block] += lost.sum(axis=0)
     years -= 1.0
-    return years
+    return years, ruined

@@ -525,7 +525,7 @@ function buildCustomTensor(fx: any, hash: string): any {
     range_method: fx.range_method,
     engines: {
       replay: { status: "ready", reason: null, method: fx.range_method },
-      garch: { status: "unavailable", reason: "not computed for custom menus", method: null },
+      garch: { status: "unavailable", reason: "not computed for custom menus", method: null, ruin_paths: null },
       copula: { status: "unavailable", reason: "not computed for this menu", method: null },
     },
     range_default: "replay",
