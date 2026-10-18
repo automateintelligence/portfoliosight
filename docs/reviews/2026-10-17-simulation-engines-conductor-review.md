@@ -58,3 +58,34 @@ verification and the parked Copula/driver boundary.
 Reviewed plan: `docs/plans/2026-10-17-simulation-engines-conductor-plan.md`.
 Reviewed SHA-256: `2d5c244b0098659a6c62471220f92727d5c26c364df00de03047e0582e4a2641`.
 Opposite-host independence remains review debt; it was not silently substituted.
+
+## Runnable gate verification in progress
+
+The first nine standalone tests collected and returned expected missing-interface
+failures from the integration tree, with no collection errors. A separate positive
+probe extracted the preserved `feature/engine-garch` checkpoint `0c82e57` into a
+throwaway directory and copied only A-SE-04/06/08/09 into it. With that branch's
+existing declared-dependency environment (including `arch==8.0.0`), all four passed
+in 113.40 seconds. No feature branch, worktree or dependency environment was changed.
+The earlier probe with the main environment passed A-SE-08 but stopped the other
+three at missing `arch`; both logs are retained under the per-run local state.
+The exact initial and corrected contexts remain distinguishable.
+
+An independent reviewer identified API precision and URL-harness defects. Their
+fixes preserve float64 build checks, use an independent float32 API oracle, correct
+`u`/`lb` URL keys, and require both presets and nonempty observation sets. The three
+changed tests still return expected missing-interface failures in the integration
+tree. A separate real-App URL probe passed both menus across 1y/5y/ew, six cases.
+These checks establish test behavior and preserved-engine evidence; they do not
+attest the complete simulation feature or target-host performance.
+
+## Future Copula gate checkpoint
+
+A-SE-01 intentionally trusts the selected ten-file Phase 1 pin. Copula is parked
+and cannot pass the initial full gate unchanged: a future owner-authorized upstream
+pin change requires a new independently reviewed byte/hash attestation, review of
+the actual upstream Copula API, a gate-change note and an explicitly approved
+re-freeze. Provisional future API names are not claims about the current upstream
+library. Do not broaden provenance checks to accept a self-reported unknown lock
+or let an automatic worker weaken the frozen trust root. The current Phases 1/2
+and later full-spec completion remain separate claims.
