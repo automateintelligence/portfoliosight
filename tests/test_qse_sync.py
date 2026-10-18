@@ -547,8 +547,9 @@ def test_check_still_works_without_the_private_qse_checkout(copy_root: Path, tmp
 
 
 @pytest.mark.parametrize("mode", ["sync", "check"])
+@pytest.mark.parametrize("lock_mode", [0o444, 0o644])
 def test_an_unrelated_destination_at_a_filesystem_boundary_is_allowed(
-    qse_repo: dict, copy_root: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+    qse_repo: dict, copy_root: Path, monkeypatch: pytest.MonkeyPatch, mode: str, lock_mode: int
 ):
     module = _load_script()
     original_git = module._git
@@ -570,6 +571,7 @@ def test_an_unrelated_destination_at_a_filesystem_boundary_is_allowed(
     monkeypatch.setattr(module, "_git", boundary_probe)
     for name in FILES:
         (copy_root / name).chmod(0o644)
+    (copy_root / "qse/qse.lock.json").chmod(lock_mode)
     source_before, destination_before = _snapshot(qse_repo["repo"]), _snapshot(copy_root)
     if mode == "sync":
         assert (
@@ -580,7 +582,7 @@ def test_an_unrelated_destination_at_a_filesystem_boundary_is_allowed(
     else:
         assert module.check(copy_root, qse_repo["repo"]) == []
         assert _snapshot(copy_root) == {
-            name: (READ_ONLY, data) if name in FILES else (file_mode, data)
+            name: (READ_ONLY, data) if name in (*FILES, "qse/qse.lock.json") else (file_mode, data)
             for name, (file_mode, data) in destination_before.items()
         }
     assert all(_mode(copy_root / name) == READ_ONLY for name in FILES)
