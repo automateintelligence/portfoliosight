@@ -579,6 +579,45 @@ set -a; . ~/.secrets/portfoliosight.env; set +a
 
 The rolled-back nightly builds engine 0.2.0 generations again, so the next night publishes a current one and the pointer moves on by itself.
 
+### Simulation engines 0.3.0: prepared store rollout
+
+The store increment is reviewed in PR #182. API, UI, final validation and owner release review
+remain prerequisites for deploying Phase 1. Replay and ENB remain the defaults. The steps here
+record the intended rollout and recovery procedure; retain the bootstrap rollback point above.
+
+- Build settings are `PS_ENGINES=replay,garch` for presets and, by default,
+  `PS_ENGINES_CUSTOM=replay,garch` for custom menus. Both settings must include `replay`;
+  unknown engine IDs are refused. Copula is not enabled by this increment.
+- A generation's preset engine policy is immutable. Resume an interrupted nightly with the
+  same normalized `PS_ENGINES` policy recorded in `meta/{G}/generation.json`. A changed policy
+  raises `engine_policy_mismatch` before refresh, further builds or pointer publication.
+- Models live at `models/{G}/{shape_sha256[:16]}/garch.json` and `pool.npy`, shared by matching
+  included fund sets across lookbacks and caps. JSON records the full shape identity and log
+  return/splice provenance. A ready model requires valid JSON and its matching pool; an
+  unavailable model stores JSON without a pool. Matching partial uploads can resume. Conflicting
+  occupied paths raise `artifact_conflict`; malformed or legacy provenance can raise
+  `artifact_invalid`, including on a warm cache. Resolve the generation conflict;
+  preserve existing artifacts rather than replacing them in place.
+- Nightly discovery and pruning include `models/` alongside `meta/` and `tensors/`.
+  Generations named in `meta/pinned.json` retain all three. Publication waits for all twelve
+  preset/lookback tensors. Before an authorized rollout, retain the pinned
+  `2026-10-14-0.2.0` bootstrap generation and record the candidate image, Worker version and
+  generation. Roll back using all three commands above; model retention is part of keeping
+  the rollback generation usable.
+- From the reviewed candidate checkout, run `scripts/build_presets.py` with its own `.venv`,
+  `--store-dir /mnt/d/portfoliosight-data`, an explicit complete `--asof` snapshot,
+  `--presets guide2017,tsp`, `--lookbacks 1y,2y,3y,5y,10y,ew`, and `--engines replay,garch`.
+  Direct `--out` to a fresh directory under `runs/dry-0.3.0/`; existing nonempty output is
+  refused. The CLI reads the mirror and writes only its isolated output. Retain exit status,
+  build JSON lines, engine/fallback/outlier findings and before/after source digests.
+
+The October 18 local preflight selected the complete October 16 snapshot because the mirror's
+current pointer named a generation with missing metadata. It left that inconsistency intact.
+All twelve builds were ready, with two fits and ten reuses; the source digest matched exactly
+before and after. Named fallbacks and outliers remain disclosed in the evidence. Receipts live
+under the store checkout's `runs/dry-0.3.0/phase122-20261018/evidence/`. These local timings do
+not establish KS-001 performance acceptance or authorize generation publication.
+
 ## Measured
 
 - Provider tier and limits: Tiingo Starter; 45 requests per hour, 900 per day, 450 unique symbols
