@@ -308,7 +308,7 @@ All of it runs on the laptop against the backup mirror (`LocalStore` over `/mnt/
 
 ## 11. Phases
 
-**Next milestone — owner confirmed, 2026-10-17:** “I’ll make deployable spec Phase 1 the next milestone.” Complete Phase 1’s engine, store, API, UI and validation work (Conductor phases 1–6; A-SE-01–16), including isolated KS-001 measurements, rollback evidence and a concrete release review packet, before starting normative Phase 2. Phase 2 is not a prerequisite for Phase 1 deployment. Deployment and generation publication remain subject to owner review; replay and ENB remain the defaults.
+**Next milestone — owner confirmed, 2026-10-17:** “I’ll make deployable spec Phase 1 the next milestone.” Complete Phase 1’s engine, store, API, UI and validation work (Conductor phases 1–6; A-SE-01–16), including isolated KS-001 measurements, rollback evidence and a concrete release review packet, before starting normative Phase 2. Phase 2 is not a prerequisite for Phase 1 deployment. **Owner notification, 2026-10-17:** notify the owner before starting normative Phase 2 (diversification; Conductor phase 7 / #146). Deployment and generation publication remain subject to owner review; replay and ENB remain the defaults.
 
 Each phase: its own branch and pull request, TDD, the gates for what it touches (`ruff`, `pyright`, `pytest --cov`; `npm run lint && npm run typecheck && npm test` when `web/` changes), docs straight to `main`. The done-gate tests under `assertions/` are ordinary tests in this pre-production period: a phase updates or re-freezes those its change makes false and says so in its PR (owner direction 2026-10-13).
 

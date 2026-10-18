@@ -7,7 +7,7 @@
 
 **Goal:** Complete normative spec Phases 1 and 2, retaining the replay engine and ENB ladder defaults, with verifiable simulation, diversification, page and validation behavior.
 
-**Next milestone — owner confirmed, 2026-10-17:** Make normative spec Phase 1 ready to deploy before starting normative Phase 2. Complete Conductor phases 1–6, verify A-SE-01–16, and provide the validation report, isolated KS-001 measurements, rollback evidence and a concrete release review packet. Phase 2 is not a deployment prerequisite. Present that Phase 1 checkpoint before claiming Conductor phase 7; retain phases 7–9 as the subsequent authorized implementation scope. Deployment and generation publication remain subject to the release review described below.
+**Next milestone — owner confirmed, 2026-10-17:** Make normative spec Phase 1 ready to deploy before starting normative Phase 2. Complete Conductor phases 1–6, verify A-SE-01–16, and provide the validation report, isolated KS-001 measurements, rollback evidence and a concrete release review packet. Phase 2 is not a deployment prerequisite. Present that Phase 1 checkpoint and notify the owner before claiming Conductor phase 7 / #146 or starting any normative Phase 2 diversification implementation (owner direction, 2026-10-17); retain phases 7–9 as the subsequent authorized implementation scope. Deployment and generation publication remain subject to the release review described below.
 
 **Architecture:** Keep the existing pure engine, store-backed build/range paths and tensor-driven React page. Share the upstream QSE draw across mixes, add the DR² solver beside the existing ENB solver, and calculate ENLC from the same engine paths used for ranges. Select one ladder per tensor; build both ladder variants for comparison. No general plugin layer or new optimization library is needed.
 
@@ -269,6 +269,8 @@ Measure an isolated real KS-001 four-vCPU workload with frozen inputs, actual re
 **Acceptance:** genuine numerical/provider-boundary evidence, the complete report and target-host measurements satisfy assigned assertions. Completion establishes normative Phase 1 only. Update `ROADMAP.md` with actual delivery/report status under the docs rule.
 
 ## Phase 7 — Build DR² ladders and covariance-measure fields (A-SE-17, A-SE-18)
+
+**Owner notification:** notify the owner before claiming this phase or starting normative spec Phase 2.
 
 **Spec:** §2 Correlated-menu finding; §5.1/2/5 ENB and DR²; §6 Measure-switch geometry; §6.2 Menu sizes; §7 Fields/versions; §10.3 Bounds; §11 Phase 2; §13.1/15 Defaults and words.
 **ADRs:** none
