@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 
@@ -285,3 +286,46 @@ def test_default_build_job_keeps_a_tensor_another_builder_wrote_first(
     monkeypatch.setattr(queue_mod, "build_from_store", build_while_another_writes)
     build_job(store, generation, uhash, "1y", funds)
     assert store.get(key) == b'{"first":true}'
+
+
+def test_custom_menus_get_ps_engines_custom_and_presets_ps_engines(
+    store, generation, api_env, monkeypatch
+):
+    """Engines spec 7: an engine a custom build does not compute is unavailable, with why."""
+    monkeypatch.delenv("PS_ENGINES", raising=False)
+    monkeypatch.setenv("PS_ENGINES_CUSTOM", "replay")
+    funds = [{"id": fund, "min": None, "max": None} for fund in ("VTI", "BND", "VNQ")]
+    uhash = universe_hash(funds)
+    build_job(store, generation, uhash, "1y", funds)
+    custom = json.loads(store.get(tensor_key(generation, uhash, "1y")))
+    assert custom["engines"]["garch"] == {
+        "status": "unavailable",
+        "reason": "not computed for custom menus",
+        "method": None,
+        "ruin_paths": None,
+    }
+    assert custom["shape"] is None and list(custom["ladder"]["ranges"]) == ["replay"]
+    assert custom["range_default"] == "replay"
+    assert custom["engines"]["copula"]["status"] == "unavailable"
+    assert store.list("models/") == []
+    tsp = [{"id": fund, "min": None, "max": None} for fund in ("TSP-G", "TSP-C", "TSP-F")]
+    build_job(
+        store, generation, universe_hash(tsp), "1y", tsp, universe_name="TSP", preset_id="tsp"
+    )
+    preset = json.loads(store.get(tensor_key(generation, universe_hash(tsp), "1y")))
+    assert preset["engines"]["garch"]["status"] == "ready" and preset["shape"] is not None
+    assert preset["range_default"] == "replay"
+    assert len(store.list(f"models/{generation}/")) == 2
+    monkeypatch.setenv("PS_ENGINES", "replay")
+    build_job(
+        store, generation, universe_hash(tsp), "5y", tsp, universe_name="TSP", preset_id="tsp"
+    )
+    replay = json.loads(store.get(tensor_key(generation, universe_hash(tsp), "5y")))
+    assert replay["engines"]["garch"] == {
+        "status": "unavailable",
+        "reason": "not computed for this menu",
+        "method": None,
+        "ruin_paths": None,
+    }
+    assert replay["shape"] is None and list(replay["ladder"]["ranges"]) == ["replay"]
+    assert replay["range_default"] == "replay"

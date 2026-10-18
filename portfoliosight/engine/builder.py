@@ -51,6 +51,7 @@ from .ranges import (
 from .shape import (
     RETURNS,
     GarchArtifact,
+    ShapePanel,
     fit_shape,
     garch_method,
     guarded_splice_dates,
@@ -240,20 +241,40 @@ def build_tensor_full(inputs: TensorInputs, *, workers: int | None = None) -> Bu
         return _build(inputs, count)
 
 
-def _build(inputs: TensorInputs, workers: int) -> BuildResult:
-    started = time.perf_counter()
-    engines = _engines(inputs.engines)
-    funds = list(inputs.funds)
-    ids = [fund.id for fund in funds]
+def shape_panel_for(inputs: TensorInputs) -> ShapePanel:
+    """The shape panel a build of `inputs` fits the volatility model to.
+
+    Its digest names the fit (the included funds and their last ten years), so a caller that
+    stores fits can look one up before the build and offer it as `garch_artifact`. Raises
+    `WindowUnavailable` when the build would, and `ValueError` for a fund listed twice.
+    """
+    ids = _menu_ids(inputs)
+    asof = _asof(inputs)
+    frame, selection, _ = _window(inputs, ids, asof)
+    return shape_panel(frame, selection.funds, asof)
+
+
+def _menu_ids(inputs: TensorInputs) -> list[str]:
+    ids = [fund.id for fund in inputs.funds]
     if len(set(ids)) != len(ids):
         raise ValueError("a fund is listed more than once in the menu")
-    by_id = {fund.id: fund for fund in funds}
-    requested = requested_caps(ids, inputs.requested_bounds)
+    return ids
+
+
+def _asof(inputs: TensorInputs) -> pd.Timestamp:
     asof = pd.Timestamp(inputs.asof)
     if not isinstance(asof, pd.Timestamp):
         raise ValueError("asof must be a date")
-    asof_iso = asof.date().isoformat()
+    return asof
 
+
+def _window(
+    inputs: TensorInputs, ids: list[str], asof: pd.Timestamp
+) -> tuple[pd.DataFrame, WindowSelection, pd.DataFrame]:
+    """The menu's returns, its window and the window's sample.
+
+    Raises `WindowUnavailable` when the window has no sample.
+    """
     frame = inputs.returns.reindex(columns=ids)
     catalog = {
         fund.id: {
@@ -261,13 +282,27 @@ def _build(inputs: TensorInputs, workers: int) -> BuildResult:
             "reason": fund.catalog_reason,
             "adjusted_through": fund.adjusted_through,
         }
-        for fund in funds
+        for fund in inputs.funds
     }
     selection = select_window(frame, inputs.lookback, asof, catalog)
     if selection.sample is None:
         raise WindowUnavailable(selection)
+    return frame, selection, selection.sample
+
+
+def _build(inputs: TensorInputs, workers: int) -> BuildResult:
+    started = time.perf_counter()
+    engines = _engines(inputs.engines)
+    funds = list(inputs.funds)
+    ids = _menu_ids(inputs)
+    by_id = {fund.id: fund for fund in funds}
+    requested = requested_caps(ids, inputs.requested_bounds)
+    asof = _asof(inputs)
+    asof_iso = asof.date().isoformat()
+
+    frame, selection, sample_frame = _window(inputs, ids, asof)
     included = selection.funds
-    sample = selection.sample.to_numpy()
+    sample = sample_frame.to_numpy()
     lo, hi = resolve_bounds(
         included, [{"id": fund, **requested[fund]} for fund in included if fund in requested]
     )
@@ -375,7 +410,7 @@ def _build(inputs: TensorInputs, workers: int) -> BuildResult:
             "rows": selection.rows,
             "t_eff": float(moments.t_eff),
             "ew_halflife_days": None if selection.omega is None else EW_HALFLIFE_DAYS,
-            "sample_sha256": frame_digest(selection.sample),
+            "sample_sha256": frame_digest(sample_frame),
         },
         "rf": rf,
         "mu_s": mu_s.tolist(),

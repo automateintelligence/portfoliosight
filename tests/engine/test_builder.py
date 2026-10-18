@@ -48,6 +48,7 @@ from portfoliosight.engine.tensor import (
     check_risk_line,
     check_weights,
     load_schema,
+    shape_panel_for,
     universe_hash,
     validate_tensor,
 )
@@ -1141,6 +1142,20 @@ def test_a_fit_is_reused_only_under_the_splice_dates_it_was_guarded_with(
         )
     )
     assert len(calls) == 1 and again.artifacts["garch"] is guarded
+
+
+def test_the_shape_panel_of_inputs_is_the_one_the_build_fits(fixture_tensor, fixture_frame):
+    """A caller that stores fits finds a build's fit by this panel's digest, before building."""
+    panel = shape_panel_for(fixture_inputs("5y"))
+    assert panel.sample_sha256 == fixture_tensor["shape"]["sample_sha256"]
+    assert panel.sample_sha256 == fixture_artifact().sample_sha256
+    assert shape_panel_for(fixture_inputs("1y")).sample_sha256 == panel.sample_sha256
+    assert list(shape_panel_for(_tsp_like_inputs()).frame.columns) == TSP_LIKE
+    with pytest.raises(WindowUnavailable):
+        shape_panel_for(fixture_inputs("5y", returns=fixture_frame.iloc[-100:]))
+    twice = fixture_inputs("5y")
+    with pytest.raises(ValueError, match="more than once"):
+        shape_panel_for(dataclasses.replace(twice, funds=[*twice.funds, twice.funds[0]]))
 
 
 def test_engines_not_asked_for_are_unavailable_with_their_reason():

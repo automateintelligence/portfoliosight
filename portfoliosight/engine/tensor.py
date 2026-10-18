@@ -9,6 +9,7 @@ from .builder import (
     build_tensor_full,
     canonical_json,
     load_schema,
+    shape_panel_for,
     universe_hash,
     validate_tensor,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "load_schema",
     "renormalize_allocation",
     "select_window",
+    "shape_panel_for",
     "universe_hash",
     "validate_tensor",
 ]

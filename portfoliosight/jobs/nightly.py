@@ -9,7 +9,8 @@ missing, and only when all twelve exist write ``meta/{G}/presets.json`` and swit
 symbols at the deadline, by default 30 minutes before the next scheduled start
 (``PS_NIGHTLY_DEADLINE_MINUTES_BEFORE_NEXT``), so that start is never skipped; ``status.json``
 records ``deadline`` and ``stopped``, and the walk resumes on the next run. (5) Delete every
-generation older than the previous one, except those ``meta/pinned.json`` names. (6) Write
+generation older than the previous one (its metadata, tensors and models), except those
+``meta/pinned.json`` names. (6) Write
 ``meta/status.json``. (7) Evict the scratch cache. A rerun after an interruption resumes at the
 first missing tensor; nothing under ``meta/{G}/`` is ever rewritten.
 
@@ -38,6 +39,7 @@ from portfoliosight.api.presets import (
     tensor_key,
 )
 from portfoliosight.api.queue import BUILD_FAILED, build_job
+from portfoliosight.api.settings import EngineSettings, SettingsError
 from portfoliosight.data import cache as cache_mod
 from portfoliosight.data import download
 from portfoliosight.data import store as store_mod
@@ -63,6 +65,8 @@ DEADLINE_MINUTES_ENV = "PS_NIGHTLY_DEADLINE_MINUTES_BEFORE_NEXT"
 DEFAULT_DEADLINE_MINUTES = 30
 MAX_STATUS_ERRORS = 200
 _GENERATION_RE = re.compile(r"(\d{4}-\d{2}-\d{2})-([0-9.]+)")
+# Where a generation keeps its keys: metadata, tensors, and the volatility model's files.
+GENERATION_PREFIXES = ("meta/", "tensors/", "models/")
 
 BuildFn = Callable[..., object]
 
@@ -86,9 +90,9 @@ def _order(generation: str) -> tuple[str, tuple[int, ...]]:
 
 
 def stored_generations(store: store_mod.Store) -> list[str]:
-    """Every generation with a key under ``meta/`` or ``tensors/``, oldest first."""
+    """Every generation with a key under ``meta/``, ``tensors/`` or ``models/``, oldest first."""
     found: set[str] = set()
-    for prefix in ("meta/", "tensors/"):
+    for prefix in GENERATION_PREFIXES:
         for key in store.list(prefix):
             parts = key.split("/")
             if len(parts) >= 3 and _GENERATION_RE.fullmatch(parts[1]):
@@ -148,16 +152,19 @@ def prune_generations(store: store_mod.Store, current: str) -> list[str]:
         and generation not in pinned
     ]
     for generation in doomed:
-        for key in store.list(f"meta/{generation}/") + store.list(f"tensors/{generation}/"):
-            store.delete(key)
+        for prefix in GENERATION_PREFIXES:
+            for key in store.list(f"{prefix}{generation}/"):
+                store.delete(key)
     return doomed
 
 
 def _generation_meta(generation: str, d_g: date, created_at: datetime) -> dict[str, Any]:
+    """``meta/{G}/generation.json``; ``engines`` are those the presets compute (``PS_ENGINES``)."""
     return {
         "generation": generation,
         "asof": d_g.isoformat(),
         "engine_version": ENGINE_VERSION,
+        "engines": list(EngineSettings.from_env().engines),
         "bounds_rule": RULE,
         "lookbacks": {
             lookback: {
@@ -299,6 +306,15 @@ def run(
 
     try:
         if not status["published"]:
+            if store.exists(generation_key(generation)):
+                meta = store_mod.get_json(store, generation_key(generation))
+                engines = list(EngineSettings.from_env().engines)
+                if meta.get("engines") != engines:
+                    raise BuildRefused(
+                        "engine_policy_mismatch",
+                        f"generation {generation} records preset engines {meta.get('engines')!r}; "
+                        f"PS_ENGINES requests {engines!r}; resume with the original policy",
+                    )
             refresh((1,))
             if not store.exists(generation_key(generation)):
                 store_mod.put_json(
@@ -386,7 +402,14 @@ def main() -> int:
         providers = _providers_from_env()
         now = _now_from_env()
         minutes = _deadline_minutes_from_env()
-    except (store_mod.StoreConfigError, download.ProviderError, ValueError, OSError) as exc:
+        EngineSettings.from_env()  # every build of the run reads it: refused before the first
+    except (
+        store_mod.StoreConfigError,
+        download.ProviderError,
+        SettingsError,
+        ValueError,
+        OSError,
+    ) as exc:
         print(f"nightly not run: {exc}", file=sys.stderr)
         return 2
     try:
