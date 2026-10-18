@@ -182,6 +182,9 @@ def test_readme_names_the_rule_the_pin_and_the_three_layers():
 
 
 def test_agent_settings_deny_edit_and_write_under_qse():
+    assert _git(ROOT, "ls-files", "--error-unmatch", ".claude/settings.json") == (
+        ".claude/settings.json"
+    )
     settings = json.loads((ROOT / ".claude" / "settings.json").read_text(encoding="utf-8"))
     deny = settings["permissions"]["deny"]
     assert "Edit(/qse/**)" in deny and "Write(/qse/**)" in deny
@@ -218,17 +221,20 @@ def test_check_passes_on_a_faithful_copy_and_makes_every_listed_file_read_only(c
         assert _mode(copy_root / name) == READ_ONLY, name
 
 
-def test_check_fails_after_one_byte_changes_and_names_the_file(copy_root: Path):
+def test_check_fails_after_one_byte_changes_and_names_the_file(copy_root: Path, tmp_path: Path):
+    absent_source = tmp_path / "unavailable-qse"
+    assert not absent_source.exists()
     target = copy_root / "qse/distributions/garch_recursion.py"
     data = bytearray(target.read_bytes())
     data[0] ^= 0x01
     _edit(target, bytes(data))
-    done = _run_script("--check", "--root", copy_root)
+    done = _run_script("--check", "--qse-dir", absent_source, "--root", copy_root)
     assert done.returncode == 1
     assert "qse/distributions/garch_recursion.py" in done.stdout + done.stderr
     others = [name for name in FILES if name != "qse/distributions/garch_recursion.py"]
     assert not any(name in done.stdout + done.stderr for name in others)
     assert _mode(target) == READ_ONLY  # the drift is reported and the file is closed again
+    assert not absent_source.exists()
 
 
 def test_check_reports_a_missing_file(copy_root: Path):
@@ -237,15 +243,18 @@ def test_check_reports_a_missing_file(copy_root: Path):
     assert done.returncode == 1 and "qse/exceptions.py" in done.stdout + done.stderr
 
 
-def test_check_reports_a_python_file_the_lock_does_not_name(copy_root: Path):
+def test_check_reports_a_python_file_the_lock_does_not_name(copy_root: Path, tmp_path: Path):
+    absent_source = tmp_path / "unavailable-qse"
+    assert not absent_source.exists()
     (copy_root / "qse/distributions/extra.py").write_text("x = 1\n")
     (copy_root / "qse/distributions/fitters").mkdir(exist_ok=True)
     (copy_root / "qse/distributions/fitters/__init__.py").write_text("")
-    done = _run_script("--check", "--root", copy_root)
+    done = _run_script("--check", "--qse-dir", absent_source, "--root", copy_root)
     out = done.stdout + done.stderr
     assert done.returncode == 1
     assert "qse/distributions/extra.py" in out
     assert "qse/distributions/fitters/__init__.py" in out
+    assert not absent_source.exists()
 
 
 def test_check_reports_every_drift_not_only_the_first(copy_root: Path):
@@ -439,6 +448,192 @@ def test_a_qse_checkout_inside_the_root_is_refused(qse_repo: dict, tmp_path: Pat
     assert done.returncode == 2 and "QSE checkout" in done.stderr
     assert not (tmp_path / "qse").exists()
     assert _snapshot(repo) == before
+
+
+@pytest.mark.parametrize(
+    "linked_name", ["linked checkout", 'linked\t"checkout"\n', os.fsdecode(b"linked-\xff")]
+)
+@pytest.mark.parametrize("where", ["the checkout", "inside the checkout"])
+@pytest.mark.parametrize("source_is_linked", [False, True])
+def test_roots_overlapping_any_qse_worktree_are_refused_before_mutation(
+    qse_repo: dict, tmp_path: Path, linked_name: str, where: str, source_is_linked: bool
+):
+    repo = qse_repo["repo"]
+    parent = tmp_path / "worktrees"
+    linked = parent / linked_name
+    _git(repo, "worktree", "add", "--detach", str(linked), qse_repo["second"])
+    source, destination = (linked, repo) if source_is_linked else (repo, linked)
+    if where == "the checkout":
+        root = destination
+    else:
+        root = destination / "scratch"
+        root.mkdir()
+    # --check would close this file if it missed the other checkout; sync would replace it.
+    lock = {
+        "source": SOURCE,
+        "commit": qse_repo["second"],
+        "files": {name: _sha256(destination / name) for name in FILES},
+    }
+    (destination / "qse/qse.lock.json").write_text(json.dumps(lock))
+    before = _snapshot(tmp_path)
+    statuses = {tree: _git(tree, "status", "--porcelain") for tree in (repo, linked)}
+    for mode in (("--commit", qse_repo["first"]), ("--check",)):
+        done = _run_script(*mode, "--qse-dir", source, "--root", root)
+        assert done.returncode == 2, done.stdout + done.stderr
+        assert "QSE checkout" in done.stderr and "Traceback" not in done.stderr
+        assert _snapshot(tmp_path) == before
+        assert {tree: _git(tree, "status", "--porcelain") for tree in statuses} == statuses
+
+
+def test_an_unrelated_root_can_sync_from_a_linked_worktree(qse_repo: dict, tmp_path: Path):
+    repo = qse_repo["repo"]
+    linked = tmp_path / 'linked\t"checkout"\n'
+    _git(repo, "worktree", "add", "--detach", str(linked), qse_repo["second"])
+    before = {tree: _snapshot(tree) for tree in (repo, linked)}
+    root = tmp_path / "ps"
+    done = _run_script("--commit", qse_repo["first"], "--qse-dir", linked, "--root", root)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert _run_script("--check", "--qse-dir", linked, "--root", root).returncode == 0
+    for name in FILES:
+        assert (root / name).read_bytes() == _blob(name, 1)
+        assert _mode(root / name) == READ_ONLY
+    assert {tree: _snapshot(tree) for tree in before} == before
+
+
+@pytest.mark.parametrize(
+    "inside", ["qse", "qse/distributions/joint", "qse/exceptions.py", "qse/qse.lock.json"]
+)
+def test_a_mutable_directory_cannot_be_a_linked_qse_worktree(
+    qse_repo: dict, tmp_path: Path, inside: str
+):
+    root = tmp_path / "ps"
+    linked = root / inside
+    _git(qse_repo["repo"], "worktree", "add", "--detach", str(linked), qse_repo["second"])
+    before = _snapshot(tmp_path)
+    for mode in (("--commit", qse_repo["first"]), ("--check",)):
+        done = _run_script(*mode, "--qse-dir", qse_repo["repo"], "--root", root)
+        assert done.returncode == 2, done.stdout + done.stderr
+        assert "QSE checkout" in done.stderr
+        assert _snapshot(tmp_path) == before
+
+
+def test_a_nested_unrelated_repository_cannot_mask_a_linked_qse_worktree(
+    qse_repo: dict, tmp_path: Path
+):
+    linked = tmp_path / "linked"
+    _git(qse_repo["repo"], "worktree", "add", "--detach", str(linked), qse_repo["second"])
+    root = linked / "nested"
+    root.mkdir()
+    _git(root, "init", "-q")
+    before = _snapshot(tmp_path)
+    for mode in (("--commit", qse_repo["first"]), ("--check",)):
+        done = _run_script(*mode, "--qse-dir", qse_repo["repo"], "--root", root)
+        assert done.returncode == 2, done.stdout + done.stderr
+        assert "QSE checkout" in done.stderr
+        assert _snapshot(tmp_path) == before
+
+
+def test_check_still_works_without_the_private_qse_checkout(copy_root: Path, tmp_path: Path):
+    absent_source = tmp_path / "unavailable-qse"
+    assert not absent_source.exists()
+    for name in FILES:
+        (copy_root / name).chmod(0o644)
+    before = {name: (copy_root / name).read_bytes() for name in FILES}
+    done = _run_script("--check", "--qse-dir", absent_source, "--root", copy_root)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert {name: (copy_root / name).read_bytes() for name in FILES} == before
+    assert all(_mode(copy_root / name) == READ_ONLY for name in FILES)
+    assert not absent_source.exists()
+
+
+@pytest.mark.parametrize("mode", ["sync", "check"])
+@pytest.mark.parametrize("lock_mode", [0o444, 0o644])
+def test_an_unrelated_destination_at_a_filesystem_boundary_is_allowed(
+    qse_repo: dict, copy_root: Path, monkeypatch: pytest.MonkeyPatch, mode: str, lock_mode: int
+):
+    module = _load_script()
+    original_git = module._git
+
+    def boundary_probe(cwd: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+        if cwd == copy_root and "--git-common-dir" in args:
+            return subprocess.CompletedProcess(
+                args,
+                128,
+                stdout=b"",
+                stderr=(
+                    b"fatal: not a git repository (or any parent up to mount point /dev)\n"
+                    b"Stopping at filesystem boundary "
+                    b"(GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n"
+                ),
+            )
+        return original_git(cwd, *args)
+
+    monkeypatch.setattr(module, "_git", boundary_probe)
+    for name in FILES:
+        (copy_root / name).chmod(0o644)
+    (copy_root / "qse/qse.lock.json").chmod(lock_mode)
+    source_before, destination_before = _snapshot(qse_repo["repo"]), _snapshot(copy_root)
+    if mode == "sync":
+        assert (
+            module.sync(qse_repo["first"], qse_repo["repo"], copy_root)["commit"]
+            == qse_repo["first"]
+        )
+        assert all((copy_root / name).read_bytes() == _blob(name, 1) for name in FILES)
+    else:
+        assert module.check(copy_root, qse_repo["repo"]) == []
+        assert _snapshot(copy_root) == {
+            name: (READ_ONLY, data) if name in (*FILES, "qse/qse.lock.json") else (file_mode, data)
+            for name, (file_mode, data) in destination_before.items()
+        }
+    assert all(_mode(copy_root / name) == READ_ONLY for name in FILES)
+    assert _snapshot(qse_repo["repo"]) == source_before
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["exit", "empty", "malformed", "oserror", "timeout", "permission", "dubious", "near-boundary"],
+)
+@pytest.mark.parametrize("mode", ["sync", "check"])
+def test_an_available_sources_repository_identity_probe_fails_closed(
+    qse_repo: dict, copy_root: Path, monkeypatch: pytest.MonkeyPatch, failure: str, mode: str
+):
+    module = _load_script()
+    original_git = module._git
+
+    def failing_identity_probe(cwd: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+        if cwd == copy_root and "--git-common-dir" in args:
+            if failure == "oserror":
+                raise OSError("cannot run git")
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired("git", 10)
+            diagnostics = {
+                "permission": b"fatal: cannot open '.git': Permission denied\n",
+                "dubious": b"fatal: detected dubious ownership in repository at '/checkout'\n",
+                "near-boundary": (
+                    b"fatal: not a git repository (or any parent up to mount point /dev)\n"
+                    b"Stopping at filesystem boundary "
+                    b"(GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n"
+                    b"unexpected error\n"
+                ),
+            }
+            return subprocess.CompletedProcess(
+                args,
+                128 if failure in diagnostics else 1 if failure == "exit" else 0,
+                stdout=b"relative/path\n" if failure == "malformed" else b"",
+                stderr=diagnostics.get(failure, b"probe failed"),
+            )
+        return original_git(cwd, *args)
+
+    monkeypatch.setattr(module, "_git", failing_identity_probe)
+    for name in FILES:
+        (copy_root / name).chmod(0o644)
+    before = _snapshot(copy_root), _snapshot(qse_repo["repo"])
+    with pytest.raises(module.SyncError, match="repository identity"):
+        if mode == "sync":
+            module.sync(qse_repo["first"], qse_repo["repo"], copy_root)
+        else:
+            module.check(copy_root, qse_repo["repo"])
+    assert (_snapshot(copy_root), _snapshot(qse_repo["repo"])) == before
 
 
 def test_a_qse_dir_below_the_checkout_root_counts_as_the_whole_checkout(qse_repo: dict):

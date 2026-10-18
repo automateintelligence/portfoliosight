@@ -1,0 +1,177 @@
+{
+  "ids": {
+    "A-SE-01": {
+      "entry": "976a7d7ad1ab1ecfbee91d8bc4263d7c9a3727943025fc47b1549f2198327015",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_01_qse_provenance.py": "bf5d9f7a9d5360b58777780c0dd06b3b3b896b76cea6e50163765068e5bfb49f"
+      }
+    },
+    "A-SE-02": {
+      "entry": "e21e842e1eed36207816a0354c21871a47cb286cd50bc3414cd7a3d5f3b22922",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_02_dependency_isolation.py": "443af4a4000d518ef2dc7e28e587870013dfe7409b7a082809cf2cb2a2f35feb"
+      }
+    },
+    "A-SE-03": {
+      "entry": "a2045c81a36e852d893b426da2b4eebcd896ea334e89d00851812a034c01065d",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_03_replay_defaults.py": "6d616488f43aa4d65237ea3b60a56779cf26685302399cb5a9739e2058c00bda"
+      }
+    },
+    "A-SE-04": {
+      "entry": "fc8ab5d2eaf2625c970ffa8ca91f0539875195c4cef8db4ddc7996e268a772d4",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_04_shape_history.py": "6a6237a6581977fecbc589f43829e32cadeb41652786e12bc528edcdecc3fc0a"
+      }
+    },
+    "A-SE-05": {
+      "entry": "29119ce4c137bc5bdb1d0c14c34c03d043c3437c2a2bc6135bfa5da18bd12d91",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_05_named_fallbacks.py": "354f6df0b42cd08e13509d5c513aa5a508e8e1d4bc07e1efe8c63a11754af674"
+      }
+    },
+    "A-SE-06": {
+      "entry": "30c057efe2942b12d8ef0057f5f5dbe54f02dd1b0699a0d99d527b0c809946c2",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_06_splice_guard.py": "e294a40e6dd31dedb7c0389a2f6043d52362a88f67d417473c5a5ba33eec6781"
+      }
+    },
+    "A-SE-07": {
+      "entry": "99695ddf22af0d61e0c8ba404a2adfe98b0d3070dc169d92c6ea18b7dc45d441",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_07_shared_draws.py": "dd5632b95810f916dd76ea58162ddc39c25c2b852bb328689ceeefeff3e8fd5b"
+      }
+    },
+    "A-SE-08": {
+      "entry": "e8e979915707079055d6465f949046d494d8c8af0bceb36477636061f0b66cd2",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_08_two_space_scaling.py": "77432aa2726972cac26dc5fb6bda66fb31607c04e374646728a31c305e18a50e"
+      }
+    },
+    "A-SE-09": {
+      "entry": "f981c076be8a3975e54114e323d4b73cfbc69d91d761cfd545891bbb0fb031bc",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_09_absorbed_ruin.py": "b9e99bbe5eef32b63849d461b335c4e543dd2563fea53ae60c2df3e04d81c36c"
+      }
+    },
+    "A-SE-10": {
+      "entry": "38df34b4ba9531a73b8a0f2d041b53b756b70a35cbf58e4824d3554e839c9cac",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_10_tensor_contract.py": "3365f1b4b55ae946b4a8e7859d615bdf392cc2787224a630cf1930f2101cff5a"
+      }
+    },
+    "A-SE-11": {
+      "entry": "88ced0d01cd34b43b13f17086ff15f5941461aa5d16cb9df43d79814f52442a4",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_11_api_artifact_contract.py": "46685a63a314e16395f4ee44806d65846eb3c07a4ff8fb99ff5ced59b869bea9"
+      }
+    },
+    "A-SE-12": {
+      "entry": "39325fc27173762ef10e8fa168c481eb58aaa1185f0cc2dca697f962552d4b6e",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_12_atomic_engine_ui.py": "58ee7a2cfdbe123c48db83a5e6500f2f8ee5f987a31fd9983274891d067f9fc6"
+      }
+    },
+    "A-SE-13": {
+      "entry": "94b7a9d409413d48a3bb71008cea7ade2f06b7447828e403c6a52cd88b3fde85",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_13_engine_share_roundtrip.py": "d1f16f1f2d0e7ba2ac5a7deff97874078927afd3d86a0e04578de53c6051ac7d"
+      }
+    },
+    "A-SE-14": {
+      "entry": "1a1001fba89cbfe55906eded1e60130b3581ec1e43e1520c5d39740917dc6b08",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_14_validation_evidence.py": "bd2fa0230e67ff81778e9965468c74a4be3a09738d8c78c7e4ab97c6f0ee8a75"
+      }
+    },
+    "A-SE-15": {
+      "entry": "2583c5cfaafa1cd7e76ad85a6a7ef6a828b2d2318006f085eecd23fbd30d83c3",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_15_bad_seed_stability.py": "4d70281410c2a1dd52b4aaa6c8d96312520f3072f9fc576172489a9f9e6e6bd0"
+      }
+    },
+    "A-SE-16": {
+      "entry": "2930f26175fcae7b587026bf48ea20dae293b8b7ba50c4ea6cd77ce968d2e968",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_16_measured_budgets.py": "328480e3c2d385d057b9dd27e2f3a67f7c049c4dfce92aed6e540b63db24e8f0"
+      }
+    },
+    "A-SE-17": {
+      "entry": "1116ed1d7becaff4699d36c86a330b8ecc97b6f08ebba62162fc08212b8dc651",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_17_dr2_identities.py": "f3771413cb626e0903efce38743cbe3bc0503bc80406364e7d5700fb8228e463"
+      }
+    },
+    "A-SE-18": {
+      "entry": "c59a1ff00a99b658795384b80ed61e0eeb6affd46b345f93d4e5f320b0c9a881",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_18_dr2_ladders.py": "44401f3342d60fc3f6cdff84a0b7861f9d4b1b418693370e78c8e0f8d6531fc2"
+      }
+    },
+    "A-SE-19": {
+      "entry": "c5c2aefab0db4c57773701c300f6f82df882671951b8948ef55dda6a4f720c79",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_19_enlc_attribution.py": "430d1071e409b0d32bc0826e73dfe4f3c85877275906c4a353af33814985be5f"
+      }
+    },
+    "A-SE-20": {
+      "entry": "b3cc1714d82703f8f63f3d1ee39cf499d6524822fd5eaf6407b95912ea222789",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_20_measure_shared_state.py": "dde5f5c7aed62c8fb2d09bdcc6d24214d4a057e93ff2bed48d7c42412028f3e3"
+      }
+    },
+    "A-SE-21": {
+      "entry": "67ce0f0080b4eec2edee46eaea16dada82e28ad8783978b5f190b1531a7a0d17",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_21_served_copy_boundaries.py": "2cbf0c13ae3c946e83f8f686ebdea91e3134266c2a706075980dc2b90761200a"
+      }
+    },
+    "A-SE-22": {
+      "entry": "e6cbca1c67fadac3669e2bb8a2ddcf6e9d18a9633825449f9190e46e7d197800",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_22_measures_evidence.py": "062b2f4ed137497593be3614f9c179b60036b509e021895f47ce4f5380d2d0a9"
+      }
+    },
+    "A-SE-23": {
+      "entry": "9bb47cd548f9117ee30c8c4c7f0b6ceb8a92ec21bc072bb5d59e1132c4f58d0e",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_23_enlc_seed_stability.py": "a84ff66b7a819497bd3c770181592e77f7e31279336848c58e172e6a04d12650"
+      }
+    },
+    "A-SE-24": {
+      "entry": "041fa4c00ad8a63e5c7c86ee1b8a819b3afb4554c5fb7947e1ab61b664402c0c",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_24_upstream_copula.py": "daeaa8f2dbb480762006630abd233292c050474e9f3d67666a9b2d7ee59383f3"
+      }
+    },
+    "A-SE-25": {
+      "entry": "2281f31d015aa9d3b6057bf2cdbcf2341f95682cdd51a6433aa261c16f205a64",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_25_copula_artifacts.py": "794b2fb723683b4ee04698bf0088b4db40ce7e3b556f893f9000cf89f354c972"
+      }
+    },
+    "A-SE-26": {
+      "entry": "5742ed0cd88c9da02226f893de07bf8b00849e5baba702f9a716bd903f578bff",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_26_copula_page.py": "a88e4bf3ba112db642ee7715da7c21f801a8a08cbf94d6444424b35f332a7828"
+      }
+    },
+    "A-SE-27": {
+      "entry": "0391470ac04b3f77550f09766bae1f28fc33518a26ffc04b1f07260416ccfaf9",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_27_copula_validation.py": "6cfebe3a27280012199f1d034efe05264354ff21c646d15168ed0fc78286f70e"
+      }
+    },
+    "A-SE-28": {
+      "entry": "1529a8a9be52b97dcb267b03043a8b9273adf2dfda0223a0438bfe4e654d6375",
+      "files": {
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_28_copula_budgets.py": "fc4b010074977dbb14792c3641325ab2f61bd1e5f461a06cd19cb81bbe8b1f6f"
+      }
+    }
+  },
+  "sources": {
+    "docs/specs/2026-10-14-portfoliosight-simulation-engines-design.assertions.md": "38d369e8ee4a2c65237f6414d2f165b4a4361ad8b6ed096b7a2e2586bd9a1ef4"
+  },
+  "sources_via": "gate",
+  "version": 1
+}

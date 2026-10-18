@@ -7,7 +7,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TIERS_FILE = REPO_ROOT / "data" / "universes" / "tiers.json"
@@ -50,13 +50,13 @@ class SymbolInfo:
 class Tiers:
     tier1: tuple[str, ...]  # the 23 Step 2 funds, then the 16 TSP funds
     tier2: tuple[str, ...]  # file order
-    tier3: tuple[str, ...]  # file order, tier 2 symbols included as the file has them
+    tier3: tuple[str, ...]  # file order across its files, repeats dropped, tier 2 symbols kept
     income: frozenset[str]
     starter_slice: int
     notes: Mapping[str, str] = field(default_factory=dict)
 
     def tier3_only(self) -> tuple[str, ...]:
-        """Tier 3 lines that are not already in tier 2, in file order."""
+        """Tier 3 symbols that are not already in tier 2, in file order."""
         tier2 = set(self.tier2)
         return tuple(s for s in self.tier3 if s not in tier2)
 
@@ -122,6 +122,16 @@ def _unique(symbols: list[str], source: Path) -> tuple[str, ...]:
     return tuple(symbols)
 
 
+def _universe_files(item: Mapping[str, Any], tier: int, tiers_file: Path) -> list[str]:
+    """The files of a tier 2 or 3 entry: one ``file``, or a ``files`` list read in order."""
+    single, several = item.get("file"), item.get("files")
+    if single is not None and several is None:
+        return [str(single)]
+    if single is None and isinstance(several, list) and several:
+        return [str(name) for name in several]
+    raise ValueError(f"{tiers_file.name}: tier {tier} needs either 'file' or a 'files' list")
+
+
 def load_tiers(tiers_file: Path = TIERS_FILE) -> Tiers:
     root = tiers_file.resolve().parents[2]
     config = json.loads(tiers_file.read_text(encoding="utf-8"))
@@ -136,10 +146,13 @@ def load_tiers(tiers_file: Path = TIERS_FILE) -> Tiers:
     income: set[str] = set()
     files: dict[int, tuple[str, ...]] = {}
     for tier in (2, 3):
-        path = root / by_tier[tier]["file"]
-        lines = parse_universe_lines(path.read_text(encoding="utf-8"))
-        files[tier] = _unique([symbol for symbol, _ in lines], path)
-        income.update(symbol for symbol, tagged in lines if tagged)
+        joined: dict[str, None] = {}  # the files' symbols in order; a repeat keeps its first place
+        for name in _universe_files(by_tier[tier], tier, tiers_file):
+            path = root / name
+            lines = parse_universe_lines(path.read_text(encoding="utf-8"))
+            joined.update(dict.fromkeys(_unique([symbol for symbol, _ in lines], path)))
+            income.update(symbol for symbol, tagged in lines if tagged)
+        files[tier] = tuple(joined)
     return Tiers(
         tier1=_unique(tier1, holdings),
         tier2=files[2],
