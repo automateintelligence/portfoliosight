@@ -182,6 +182,9 @@ def test_readme_names_the_rule_the_pin_and_the_three_layers():
 
 
 def test_agent_settings_deny_edit_and_write_under_qse():
+    assert _git(ROOT, "ls-files", "--error-unmatch", ".claude/settings.json") == (
+        ".claude/settings.json"
+    )
     settings = json.loads((ROOT / ".claude" / "settings.json").read_text(encoding="utf-8"))
     deny = settings["permissions"]["deny"]
     assert "Edit(/qse/**)" in deny and "Write(/qse/**)" in deny
@@ -218,17 +221,20 @@ def test_check_passes_on_a_faithful_copy_and_makes_every_listed_file_read_only(c
         assert _mode(copy_root / name) == READ_ONLY, name
 
 
-def test_check_fails_after_one_byte_changes_and_names_the_file(copy_root: Path):
+def test_check_fails_after_one_byte_changes_and_names_the_file(copy_root: Path, tmp_path: Path):
+    absent_source = tmp_path / "unavailable-qse"
+    assert not absent_source.exists()
     target = copy_root / "qse/distributions/garch_recursion.py"
     data = bytearray(target.read_bytes())
     data[0] ^= 0x01
     _edit(target, bytes(data))
-    done = _run_script("--check", "--root", copy_root)
+    done = _run_script("--check", "--qse-dir", absent_source, "--root", copy_root)
     assert done.returncode == 1
     assert "qse/distributions/garch_recursion.py" in done.stdout + done.stderr
     others = [name for name in FILES if name != "qse/distributions/garch_recursion.py"]
     assert not any(name in done.stdout + done.stderr for name in others)
     assert _mode(target) == READ_ONLY  # the drift is reported and the file is closed again
+    assert not absent_source.exists()
 
 
 def test_check_reports_a_missing_file(copy_root: Path):
@@ -237,15 +243,18 @@ def test_check_reports_a_missing_file(copy_root: Path):
     assert done.returncode == 1 and "qse/exceptions.py" in done.stdout + done.stderr
 
 
-def test_check_reports_a_python_file_the_lock_does_not_name(copy_root: Path):
+def test_check_reports_a_python_file_the_lock_does_not_name(copy_root: Path, tmp_path: Path):
+    absent_source = tmp_path / "unavailable-qse"
+    assert not absent_source.exists()
     (copy_root / "qse/distributions/extra.py").write_text("x = 1\n")
     (copy_root / "qse/distributions/fitters").mkdir(exist_ok=True)
     (copy_root / "qse/distributions/fitters/__init__.py").write_text("")
-    done = _run_script("--check", "--root", copy_root)
+    done = _run_script("--check", "--qse-dir", absent_source, "--root", copy_root)
     out = done.stdout + done.stderr
     assert done.returncode == 1
     assert "qse/distributions/extra.py" in out
     assert "qse/distributions/fitters/__init__.py" in out
+    assert not absent_source.exists()
 
 
 def test_check_reports_every_drift_not_only_the_first(copy_root: Path):
