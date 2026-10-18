@@ -2,7 +2,7 @@
 
 Usage, from the repo root:
     python scripts/build_tensor.py --returns <parquet> --lookback <id> --asof YYYY-MM-DD
-        --out <json> [--caps <json file>] [--nx N --ny N --levels N]
+        --out <json> [--caps <json file>] [--nx N --ny N --levels N] [--engines replay,garch]
 
 The returns parquet has a DatetimeIndex named `date` and one float column per fund id of daily
 simple returns, NaN where the fund has no return. Its schema metadata may carry, under the key
@@ -17,10 +17,13 @@ and the window ends where the shared history does, or is unavailable.
 
 `--caps` is a JSON list of {"id", "min", "max"} with null for the default rule. `--nx` is the
 number of risk columns (48), `--levels` the ladder levels between each column's frontier mix and
-its peak (12) and `--ny` the rows of the heatmap raster (32).
+its peak (12) and `--ny` the rows of the heatmap raster (32). `--engines` names the simulation
+engines to compute, comma-separated: `replay` (History replay, always) and `garch` (the
+volatility model); both by default. The file carries no splice dates, so the volatility model's
+splice guard has nothing to check.
 
 Exit status 0 with a canonical-JSON tensor at --out; 2 with one line on stderr and no file when
-the window is unavailable or the caps are invalid.
+the window is unavailable, the caps are invalid or the volatility model cannot use the history.
 """
 
 from __future__ import annotations
@@ -38,10 +41,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # this checkout's 
 from portfoliosight.engine.caps import CapsError  # noqa: E402
 from portfoliosight.engine.ladder import LEVELS  # noqa: E402
 from portfoliosight.engine.optimize import NX  # noqa: E402
+from portfoliosight.engine.ranges import DEFAULT_ENGINE, ENGINES  # noqa: E402
 from portfoliosight.engine.stats import RISK_FREE_SOURCES  # noqa: E402
 from portfoliosight.engine.surface import NY  # noqa: E402
 from portfoliosight.engine.tensor import (  # noqa: E402
     FundInput,
+    ShapeError,
     TensorInputs,
     WindowUnavailable,
     build_tensor,
@@ -53,6 +58,18 @@ LOOKBACKS = ("1y", "2y", "3y", "5y", "10y", "ew")
 DEFAULT_UNIVERSE = {"name": "Custom menu", "preset_id": None}
 
 
+def engine_list(text: str) -> tuple[str, ...]:
+    """`--engines`: comma-separated engine ids, History replay among them."""
+    names = tuple(name.strip() for name in text.split(",") if name.strip())
+    unknown = [name for name in names if name not in ENGINES]
+    if unknown:
+        choices = ", ".join(ENGINES)
+        raise argparse.ArgumentTypeError(f"unknown engine {unknown[0]!r}; choose from {choices}")
+    if DEFAULT_ENGINE not in names:
+        raise argparse.ArgumentTypeError(f"{DEFAULT_ENGINE} is always built")
+    return names
+
+
 def read_inputs(
     returns: Path,
     lookback: str,
@@ -61,6 +78,7 @@ def read_inputs(
     nx: int,
     ny: int,
     levels: int = LEVELS,
+    engines: tuple[str, ...] = ENGINES,
 ) -> TensorInputs:
     """Everything a build needs, from the parquet and its metadata alone."""
     frame = pd.read_parquet(returns)
@@ -106,6 +124,7 @@ def read_inputs(
         nx=nx,
         ny=ny,
         levels=levels,
+        engines=engines,
     )
 
 
@@ -119,9 +138,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--nx", type=int, default=NX, help="risk columns")
     parser.add_argument("--ny", type=int, default=NY, help="rows of the heatmap raster")
     parser.add_argument("--levels", type=int, default=LEVELS, help="ladder levels per column")
+    parser.add_argument(
+        "--engines", type=engine_list, default=ENGINES, help="comma-separated: replay,garch"
+    )
     args = parser.parse_args(argv)
     inputs = read_inputs(
-        args.returns, args.lookback, args.asof, args.caps, args.nx, args.ny, args.levels
+        args.returns,
+        args.lookback,
+        args.asof,
+        args.caps,
+        args.nx,
+        args.ny,
+        args.levels,
+        args.engines,
     )
     try:
         tensor = build_tensor(inputs)
@@ -130,6 +159,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except CapsError as exc:
         print(f"invalid caps: {exc}", file=sys.stderr)
+        return 2
+    except ShapeError as exc:
+        print(f"volatility model: {exc}", file=sys.stderr)
         return 2
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(canonical_json(tensor) + "\n", encoding="utf-8")

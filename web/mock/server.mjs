@@ -158,6 +158,9 @@ function twoFundTensor(lookback) {
   };
   const bad = aFront.map((a) => rangeAt(a).bad);
   const sSafe = bad.lastIndexOf(Math.max(...bad));
+  // Schema 3: History replay's own figures (the same numbers) under `ranges`; a custom menu
+  // carries no other engine.
+  const figures = ({ bad, typical, good }) => ({ bad, typical, good });
   const fund = (id, name, lastClose) => ({ id, name, kind: "etf", source: "tiingo", adjusted_through: fixture.asof, fetched_at: fixture.built_at, last_close: lastClose });
   const win = (id, r) => ({ label: fixture.stress[id].label, start: fixture.stress[id].start, end: fixture.stress[id].end, r });
   return {
@@ -186,7 +189,7 @@ function twoFundTensor(lookback) {
     torsion_lambda: [v0, v1],
     bounds: { requested: [{ min: null, max: null }, { min: null, max: null }], min: [0, 0], max: [1, 1], rule: "max(0.25, 3/N)" },
     frontier_uncapped: { sigma: aFront.map(sigmaOf), mu: [...yFront] },
-    frontier: { x, y: yFront, w: aFront.map(wOf), s_safe: sSafe, range: block(aFront) },
+    frontier: { x, y: yFront, w: aFront.map(wOf), s_safe: sSafe, range: block(aFront), ranges: { replay: { s_safe: sSafe, ...figures(block(aFront)) } } },
     ladder: {
       y: levels.map((pair) => pair.map(muOf)),
       z: levels.map((pair) => pair.map(enbAt)),
@@ -199,10 +202,18 @@ function twoFundTensor(lookback) {
       t_suggested: levels.map(() => 0),
       y_suggested: [...yFront],
       range: block(levels),
+      ranges: { replay: figures(block(levels)) },
     },
     grid: { y: gridY, z, w: gw, k_div: kDiv, y_div: yDiv, w_div: wDiv, y_sug: [...yFront] },
     entered: null,
     range_method: fixture.range_method,
+    engines: {
+      replay: { status: "ready", reason: null, method: fixture.range_method },
+      garch: { status: "unavailable", reason: "not computed for custom menus", method: null, ruin_paths: null },
+      copula: { status: "unavailable", reason: "not computed for this menu", method: null },
+    },
+    range_default: "replay",
+    shape: null,
     enb_ref: enbRef,
     stress: { gfc2008: win("gfc2008", [null, null]), covid2020: win("covid2020", [0.004, -0.021]), rates2022: win("rates2022", [0.009, -0.034]) },
     notes: fixture.notes ?? [],

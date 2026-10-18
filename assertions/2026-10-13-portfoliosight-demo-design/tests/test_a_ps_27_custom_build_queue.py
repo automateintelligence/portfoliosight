@@ -26,6 +26,9 @@ Pinned interface (the product must provide exactly this):
   on GET; a POST for a failed key with attempts < 3 re-enqueues it (202, or 409 with the old
   state); with attempts = 3 it answers 409 `retry: false` and enqueues nothing.
 - Non-200 answers of the tensor routes carry `Cache-Control: no-store`.
+- The built tensor declares `schema` 3 and validates against the contract of schema 3,
+  `portfoliosight/engine/tensor.schema.json`, loaded by
+  `portfoliosight.engine.tensor.load_schema(3)`.
 """
 
 from __future__ import annotations
@@ -81,6 +84,26 @@ def _need(module: str):
         return importlib.import_module(module)
     except Exception as exc:  # ImportError, or an import-time crash in the product
         pytest.fail(f"A-PS-27 red: cannot import {module}: {type(exc).__name__}: {exc}")
+
+
+TENSOR_SCHEMA = 3  # what the engine writes: `schema` of portfoliosight/engine/tensor.schema.json
+
+
+def _assert_written_contract(tensor: dict, what: str) -> None:
+    """A freshly built tensor declares schema 3 and validates against that shipped contract."""
+    jsonschema = _need("jsonschema")
+    contract = _need("portfoliosight.engine.tensor").load_schema(TENSOR_SCHEMA)
+    assert (contract.get("properties") or {}).get("schema") == {"const": TENSOR_SCHEMA}, (
+        f"the contract loaded for schema {TENSOR_SCHEMA} is not that schema's"
+    )
+    assert tensor.get("schema") == TENSOR_SCHEMA, (
+        f"{what} declares schema {tensor.get('schema')!r}, not {TENSOR_SCHEMA}"
+    )
+    validator = jsonschema.Draft202012Validator(contract)
+    errors = sorted(validator.iter_errors(tensor), key=lambda e: list(e.absolute_path))
+    assert not errors, f"{what} fails the schema {TENSOR_SCHEMA} contract: " + "; ".join(
+        f"{'/'.join(map(str, e.absolute_path))}: {e.message[:120]}" for e in errors[:5]
+    )
 
 
 # ---- shared fixture code (copied into every api-group gate file; keep in step) ----------------
@@ -484,7 +507,8 @@ else:
                 assert set(seen) <= {202, 200} and seen[-1] == 200
                 first_bytes = ready.content
                 tensor = ready.json()
-                assert tensor["schema"] == 2 and tensor["generation"] == g
+                _assert_written_contract(tensor, "the custom tensor")
+                assert tensor["generation"] == g
                 assert tensor["asof"] == D_G.isoformat() and tensor["lookback"]["id"] == "1y"
                 assert tensor["universe"]["hash"] == h
                 assert {f["id"] for f in tensor["universe"]["funds"]} == set(SYMBOLS)

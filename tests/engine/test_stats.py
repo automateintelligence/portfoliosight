@@ -28,7 +28,7 @@ def _own_scatter(r: np.ndarray, omega: np.ndarray) -> tuple[np.ndarray, np.ndarr
 
 
 def test_engine_version_is_the_spec_version():
-    assert ENGINE_VERSION == "0.2.0"
+    assert ENGINE_VERSION == "0.3.0"
 
 
 def test_fixed_window_is_ledoit_wolf_on_correlations():

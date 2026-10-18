@@ -483,6 +483,9 @@ function buildCustomTensor(fx: any, hash: string): any {
   };
   const badYear = aFront.map((a) => rangeAt(a).bad);
   const sSafe = badYear.lastIndexOf(Math.max(...badYear));
+  // Tensor schema 3 (simulation engines spec 7): History replay's own figures again under
+  // `ranges`, and a custom menu that carries no other engine.
+  const figures = (b: ReturnType<typeof block>) => ({ bad: b.bad, typical: b.typical, good: b.good });
   const fund = (id: string, name: string, lastClose: number) => ({
     id, name, kind: "etf", source: "tiingo", adjusted_through: fx.asof, fetched_at: fx.built_at, last_close: lastClose,
   });
@@ -502,7 +505,7 @@ function buildCustomTensor(fx: any, hash: string): any {
     torsion: [[1, 0], [0, 1]], torsion_inv_t: [[1, 0], [0, 1]], torsion_lambda: [v0, v1],
     bounds: { requested: [{ min: null, max: null }, { min: null, max: null }], min: [0, 0], max: [1, 1], rule: "max(0.25, 3/N)" },
     frontier_uncapped: { sigma: aFront.map(sigmaOf), mu: [...yFront] },
-    frontier: { x, y: yFront, w: aFront.map(wOf), s_safe: sSafe, range: block(aFront) },
+    frontier: { x, y: yFront, w: aFront.map(wOf), s_safe: sSafe, range: block(aFront), ranges: { replay: { s_safe: sSafe, ...figures(block(aFront)) } } },
     ladder: {
       y: levels.map((pair) => pair.map(muOf)),
       z: levels.map((pair) => pair.map(enbAt)),
@@ -515,10 +518,18 @@ function buildCustomTensor(fx: any, hash: string): any {
       t_suggested: levels.map(() => 0),
       y_suggested: [...yFront],
       range: block(levels),
+      ranges: { replay: figures(block(levels)) },
     },
     grid: { y: gridY, z, w: gw, k_div: kDiv, y_div: yDiv, w_div: wDiv, y_sug: [...yFront] },
     entered: null,
     range_method: fx.range_method,
+    engines: {
+      replay: { status: "ready", reason: null, method: fx.range_method },
+      garch: { status: "unavailable", reason: "not computed for custom menus", method: null, ruin_paths: null },
+      copula: { status: "unavailable", reason: "not computed for this menu", method: null },
+    },
+    range_default: "replay",
+    shape: null,
     enb_ref: enbRef,
     stress: { gfc2008: window("gfc2008", [null, null]), covid2020: window("covid2020", [0.004, -0.021]), rates2022: window("rates2022", [0.009, -0.034]) },
     notes: Array.isArray(fx.notes) ? fx.notes : [],

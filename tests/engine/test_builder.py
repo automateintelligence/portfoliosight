@@ -17,14 +17,33 @@ import pytest
 from portfoliosight.engine import ENGINE_VERSION, builder
 from portfoliosight.engine.caps import CapsError
 from portfoliosight.engine.optimize import MenuPrograms
-from portfoliosight.engine.ranges import bootstrap_index, frame_digest
+from portfoliosight.engine.ranges import (
+    GarchRangeModel,
+    RangeModel,
+    bootstrap_index,
+    frame_digest,
+    one_year_ranges,
+)
+from portfoliosight.engine.shape import (
+    UNAVAILABLE_REASON,
+    ShapeError,
+    artifact_from_json,
+    artifact_to_json,
+    garch_method,
+    pool_bytes,
+    pool_from_bytes,
+    shape_panel,
+    simulate_panel,
+)
 from portfoliosight.engine.stats import ew_weights
 from portfoliosight.engine.surface import interpolate
 from portfoliosight.engine.tensor import (
+    BuildResult,
     InvariantError,
     TensorInputs,
     WindowUnavailable,
     build_tensor,
+    build_tensor_full,
     canonical_json,
     check_risk_line,
     check_weights,
@@ -36,7 +55,10 @@ from portfoliosight.engine.torsion import TorsionError
 from tests.engine.helpers import (
     CONVERTED,
     CONVERTED_REASON,
+    FIXTURE_ASOF,
+    ROOT,
     converted_menu_inputs,
+    fixture_artifact,
     fixture_inputs,
     fixture_metadata,
 )
@@ -45,8 +67,12 @@ TOL = 1e-6
 NX, NY, LEVELS = 48, 32, 14
 TELEMETRY = ("built_at", "build_seconds")
 GFC_NULLS = ["SCHF", "SCHO", "VTIP", "VWOB", "LTPZ", "DBJP"]
-SMALL = {"nx": 6, "ny": 5, "levels": 3}
+# A quick build for a test about something else: a small grid, History replay only. The tests of
+# the volatility model ask for it with SMALL_BOTH, or build the full fixture.
+SMALL = {"nx": 6, "ny": 5, "levels": 3, "engines": ("replay",)}
+SMALL_BOTH = {"nx": 6, "ny": 5, "levels": 3}
 TSP_LIKE = ["SCHO", "BND", "VTI", "VB", "VEA"]  # near-cash, bonds and three stock funds
+ENGINES = ("replay", "garch")
 
 
 class Arrays:
@@ -119,6 +145,25 @@ def test_two_builds_are_identical_apart_from_telemetry(fixture_tensor):
     assert again["build_seconds"] <= 90.0
 
 
+def test_the_contract_is_chosen_by_the_schema_a_document_declares():
+    """Schema 3 is what this engine writes; schema 2 is what engine 0.2.0 wrote and a rollback
+    serves. Each document is checked against the contract its own `schema` names."""
+    old = json.loads((ROOT / "web" / "tests" / "tensor-schema2.json").read_text(encoding="utf-8"))
+    new = json.loads((ROOT / "web" / "fixtures" / "guide2017_5y.json").read_text(encoding="utf-8"))
+    assert (old["schema"], old["engine_version"], new["schema"]) == (2, "0.2.0", 3)
+    v2, v3 = load_schema(2), load_schema(3)
+    assert load_schema() is v3 and load_schema(builder.SCHEMA_VERSION) is v3
+    assert v2["properties"]["schema"] == {"const": 2} and v3["properties"]["schema"] == {"const": 3}
+    for contract, accepted, refused in ((v2, old, new), (v3, new, old)):
+        jsonschema.Draft202012Validator.check_schema(contract)
+        jsonschema.Draft202012Validator(contract).validate(accepted)
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.Draft202012Validator(contract).validate(refused)
+    for version in (1, 4, "3", 3.0, True, None):
+        with pytest.raises(ValueError, match="no tensor contract for schema"):
+            load_schema(version)  # type: ignore[arg-type]
+
+
 def test_schema_accepts_the_build_and_is_not_permissive(fixture_tensor):
     schema = load_schema()
     jsonschema.Draft202012Validator.check_schema(schema)
@@ -160,7 +205,48 @@ def test_schema_accepts_the_build_and_is_not_permissive(fixture_tensor):
         "fund without last_close": lambda d: d["universe"]["funds"][0].pop("last_close"),
         "unknown kind": lambda d: d["universe"]["funds"][0].update(kind="crypto"),
         "schema 1": lambda d: d.update(schema=1),
+        "schema 2": lambda d: d.update(schema=2),
         "another rule": lambda d: d["bounds"].update(rule="max(0.3, 3/N)"),
+        "no engines": lambda d: d.pop("engines"),
+        "no range default": lambda d: d.pop("range_default"),
+        "no shape": lambda d: d.pop("shape"),
+        "no frontier.ranges": lambda d: d["frontier"].pop("ranges"),
+        "no ladder.ranges": lambda d: d["ladder"].pop("ranges"),
+        "no entered.ranges": lambda d: d["entered"].pop("ranges"),
+        "ranges without replay": lambda d: d["ladder"]["ranges"].pop("replay"),
+        "an engine nobody offers": lambda d: d["frontier"]["ranges"].update(other={}),
+        "engine ranges with a normal range": lambda d: d["ladder"]["ranges"]["garch"].update(
+            normal=d["ladder"]["range"]["normal"]
+        ),
+        "engine without s_safe": lambda d: d["frontier"]["ranges"]["garch"].pop("s_safe"),
+        "no copula entry": lambda d: d["engines"].pop("copula"),
+        "replay unavailable": lambda d: d["engines"]["replay"].update(status="unavailable"),
+        "unknown status": lambda d: d["engines"]["garch"].update(status="maybe"),
+        "ready without a method": lambda d: d["engines"]["garch"].update(method=None),
+        "ready with a reason": lambda d: d["engines"]["garch"].update(reason="why"),
+        "unavailable without a reason": lambda d: d["engines"]["copula"].update(reason=None),
+        "unavailable with a method": lambda d: d["engines"]["copula"].update(method={"name": "x"}),
+        "short qse commit": lambda d: d["engines"]["garch"]["method"].update(qse="ca8c"),
+        "another start": lambda d: d["engines"]["garch"]["method"].update(start="last"),
+        "simple returns": lambda d: d["engines"]["garch"]["method"].update(returns="simple"),
+        "another scale": lambda d: d["engines"]["garch"]["method"].update(scale="iqr"),
+        "another ruin rule": lambda d: d["engines"]["garch"]["method"].update(ruin="raise"),
+        "no ruin rule": lambda d: d["engines"]["garch"]["method"].pop("ruin"),
+        "no ruin_paths": lambda d: d["engines"]["garch"].pop("ruin_paths"),
+        "negative ruin_paths": lambda d: d["engines"]["garch"].update(ruin_paths=-1),
+        "fractional ruin_paths": lambda d: d["engines"]["garch"].update(ruin_paths=0.5),
+        "ready without a ruin count": lambda d: d["engines"]["garch"].update(ruin_paths=None),
+        "unavailable with a ruin count": lambda d: d["engines"].update(
+            garch={"status": "unavailable", "reason": "r", "method": None, "ruin_paths": 0}
+        ),
+        "ruin_paths on the copula": lambda d: d["engines"]["copula"].update(ruin_paths=None),
+        "unknown default engine": lambda d: d.update(range_default="other"),
+        "unknown fund status": lambda d: d["shape"]["funds"][0].update(status="fine"),
+        "negative omega": lambda d: d["shape"]["funds"][0].update(omega=-1e-9),
+        "extra shape key": lambda d: d["shape"].update(extra=1),
+        "outlier without z": lambda d: d["shape"]["outliers"].append(
+            {"id": "VTI", "date": "2020-03-16"}
+        ),
     }
     for label, change in cases.items():
         with pytest.raises(jsonschema.ValidationError):
@@ -172,6 +258,16 @@ def test_schema_accepts_the_build_and_is_not_permissive(fixture_tensor):
         lambda d: d["universe"].update(preset_id=None),
         lambda d: d["stress"]["rates2022"]["r"].__setitem__(0, None),
         lambda d: d.update(entered=None),
+        lambda d: d.update(shape=None),
+        lambda d: d["shape"]["funds"][0].update(nu=None, margin="empirical"),
+        lambda d: d["engines"].update(
+            garch={"status": "unavailable", "reason": "r", "method": None, "ruin_paths": None}
+        ),
+        lambda d: d["engines"]["garch"].update(ruin_paths=12),
+        lambda d: [d[k]["ranges"].pop("garch") for k in ("frontier", "ladder", "entered")],
+        lambda d: d["engines"].update(
+            copula={"status": "ready", "reason": None, "method": {"name": "vine_copula_fhs"}}
+        ),
     ):
         validate_tensor(broken(change))
 
@@ -210,8 +306,8 @@ def test_floats_are_written_at_full_precision(fixture_tensor):
 
 def test_identity_block(fixture_tensor, fixture_frame):
     t = fixture_tensor
-    assert t["schema"] == 2 and t["engine_version"] == ENGINE_VERSION == "0.2.0"
-    assert t["asof"] == "2026-10-12" and t["generation"] == "2026-10-12-0.2.0"
+    assert t["schema"] == 3 and t["engine_version"] == ENGINE_VERSION == "0.3.0"
+    assert t["asof"] == "2026-10-12" and t["generation"] == "2026-10-12-0.3.0"
     universe = t["universe"]
     assert universe["name"] == "Example Portfolio" and universe["preset_id"] == "guide2017"
     ids = [fund["id"] for fund in universe["funds"]]
@@ -228,19 +324,25 @@ def test_identity_block(fixture_tensor, fixture_frame):
             "last_close",
         }
         assert fund["adjusted_through"] == "2026-10-12" and fund["last_close"] > 0
-    # the hash covers the requested policy of the whole menu, excluded funds included
+    # the hash covers the requested policy of the whole menu, excluded funds included; it keeps
+    # its own schema number, so a menu's key did not move with the tensor's schema 3
     rows = sorted(({"id": c, "min": None, "max": None} for c in fixture_frame.columns), key=str)
     rows.sort(key=lambda row: row["id"])
     canon = json.dumps({"schema": 2, "funds": rows}, sort_keys=True, separators=(",", ":"))
     assert universe["hash"] == hashlib.sha256(canon.encode()).hexdigest()[:16]
     assert re.fullmatch(r"[0-9a-f]{16}", universe["hash"])
-    assert t["notes"] == list(builder.NOTES) and len(t["notes"]) == 4
+    assert builder.HASH_SCHEMA == 2 and builder.SCHEMA_VERSION == 3
+    assert t["notes"] == [*builder.NOTES, builder.ENGINE_NOTES["garch"]] and len(t["notes"]) == 5
     assert "50/50 blend of the sample mean and a menu-beta heuristic" in t["notes"][0]
     assert "exactly its column's risk" in t["notes"][1] and "not a proof" in t["notes"][1]
     assert "diversification stops rising faster than return falls" in t["notes"][2]
     assert "2,000 one-year paths" in t["notes"][3] and "runs averaging 21 days" in t["notes"][3]
+    assert "volatility model" in t["notes"][4] and "up to ten years" in t["notes"][4]
+    assert all(note.startswith("One-year ranges") for note in t["notes"][3:])  # the Method line's
     text = json.dumps(t["notes"]).lower()
     assert "six" not in text and "6-month" not in text and "standard error" not in text
+    for word in ("garch", "vine", "residual", "expected shortfall", "entropy", "copula"):
+        assert word not in text  # simulation engines spec 6: never in default copy
     assert t["rf"] == 0.04  # no SGOV or TSP G Fund series was supplied
 
 
@@ -377,6 +479,7 @@ def test_ladder_block(fixture_tensor, arrays):
         "t_suggested",
         "y_suggested",
         "range",
+        "ranges",
     }
     assert np.array_equal(arrays.lw[:, 0], arrays.wf) and np.array_equal(arrays.ly[:, 0], arrays.yf)
     assert (np.diff(arrays.lz, axis=1) >= 0).all() and (np.diff(arrays.ly, axis=1) <= 1e-8).all()
@@ -881,3 +984,350 @@ def test_funds_in_exact_lockstep_fail_the_build_and_identical_funds_do_not(
     assert 0.9 < np.array(twins["cov"])[0, 1] / (sigma[0] * sigma[1]) < 0.99
     assert sigma[0] == sigma[1] and 1.0 <= twins["enb_ref"] <= 3.0
     assert len(made) == 4  # two builds, each with its capped and its uncapped frontier
+
+
+# ---- the simulation engines (simulation engines spec 4, 7, 10 item 5) ----------------------
+
+
+def test_engines_block_names_every_engine_with_its_status_and_method(fixture_tensor):
+    engines = fixture_tensor["engines"]
+    assert (
+        set(engines) == {"replay", "garch", "copula"}
+        and fixture_tensor["range_default"] == "replay"
+    )
+    assert engines["replay"] == {"status": "ready", "reason": None, "method": builder.METHOD}
+    assert engines["replay"]["method"] == fixture_tensor["range_method"]  # the kept field
+    method = garch_method(fixture_artifact())
+    assert engines["garch"] == {
+        "status": "ready",
+        "reason": None,
+        "method": method,
+        "ruin_paths": 0,
+    }
+    assert method["qse"] == "ca8c0445a56712c92dc028e68845b94963fdd590" and method["arch"] == "8.0.0"
+    assert (method["returns"], method["scale"], method["ruin"]) == ("log", "sd", "absorb")
+    assert engines["copula"] == {
+        "status": "unavailable",
+        "reason": "not computed for this menu",
+        "method": None,
+    }
+
+
+def test_shape_block_reports_the_fit_behind_the_volatility_model(fixture_tensor, fixture_frame):
+    shape = fixture_tensor["shape"]
+    panel = shape_panel(fixture_frame, list(fixture_frame.columns), FIXTURE_ASOF)
+    assert (shape["rows"], shape["start"], shape["end"]) == (2520, panel.start, FIXTURE_ASOF)
+    assert shape["sample_sha256"] == panel.sample_sha256
+    assert shape["pool_rows"] == 2520  # every fund has ten years: every day is shared
+    artifact = fixture_artifact()
+    assert [fund["id"] for fund in shape["funds"]] == [
+        f["id"] for f in fixture_tensor["universe"]["funds"]
+    ]
+    for n, fund in enumerate(shape["funds"]):
+        assert fund["status"] == artifact.status[n] and fund["rows"] == 2520
+        for key in ("mu", "omega", "alpha", "beta", "long_run_sigma_annual"):
+            assert fund[key] == float(getattr(artifact, key)[n]), key
+        assert fund["nu"] == (None if np.isnan(artifact.nu[n]) else float(artifact.nu[n]))
+        assert fund["margin"] is None
+    assert shape["outliers"] == list(artifact.outliers)
+    assert shape["lower_tail_5pct"] is None and shape["tree_loglik_share"] is None
+    own = fixture_frame.iloc[-2520:].std().to_numpy() * np.sqrt(252.0)
+    lifelong = np.array([fund["long_run_sigma_annual"] for fund in shape["funds"]])
+    assert np.allclose(lifelong, own, rtol=0.25)  # each fund's own volatility over ten years
+
+
+def test_every_engine_s_ranges_keep_the_invariants(fixture_tensor, arrays):
+    t = fixture_tensor
+    sigma = np.sqrt(np.einsum("jli,ik,jlk->jl", arrays.lw, arrays.cov, arrays.lw))
+    centre = np.expm1(arrays.ly - sigma**2 / 2.0)
+    mix = np.array(t["entered"]["w"])
+    mix_mu, mix_sigma = float(arrays.mu @ mix), arrays.sigma(mix)
+    for key in ("frontier", "ladder", "entered"):
+        assert set(t[key]["ranges"]) == set(ENGINES), key
+    for engine in ENGINES:
+        ladder = {k: np.array(t["ladder"]["ranges"][engine][k]) for k in builder.FIGURES}
+        front = t["frontier"]["ranges"][engine]
+        assert set(t["ladder"]["ranges"][engine]) == set(builder.FIGURES)
+        for key, values in ladder.items():
+            assert values.shape == (NX, LEVELS) and np.isfinite(values).all()
+            assert front[key] == values[:, 0].tolist()  # level 0's range is the node's
+        assert (ladder["bad"] < ladder["typical"]).all(), engine
+        assert (ladder["typical"] < ladder["good"]).all(), engine
+        assert (np.abs(ladder["typical"] - centre) <= 0.25 * sigma).all(), engine
+        bad = np.array(front["bad"])
+        assert front["s_safe"] == float(np.flatnonzero(bad == bad.max())[-1])  # per engine
+        entered = t["entered"]["ranges"][engine]
+        assert entered["bad"] < entered["typical"] < entered["good"]
+        assert abs(entered["typical"] - np.expm1(mix_mu - mix_sigma**2 / 2.0)) <= 0.25 * mix_sigma
+    for key in builder.FIGURES:  # History replay's own figures are the kept fields, to the bit
+        assert t["ladder"]["ranges"]["replay"][key] == t["ladder"]["range"][key]
+        assert t["frontier"]["ranges"]["replay"][key] == t["frontier"]["range"][key]
+        assert t["entered"]["ranges"]["replay"][key] == t["entered"]["range"][key]
+    assert t["frontier"]["ranges"]["replay"]["s_safe"] == t["frontier"]["s_safe"]
+    garch = np.array(t["ladder"]["ranges"]["garch"]["bad"])
+    assert not np.isclose(garch, np.array(t["ladder"]["range"]["bad"]), rtol=0, atol=1e-6).any()
+
+
+def test_the_volatility_model_s_figures_are_its_artifact_s_simulation():
+    result = build_tensor_full(fixture_inputs("5y", **SMALL_BOTH))
+    assert isinstance(result, BuildResult) and set(result.models) == set(ENGINES)
+    replay, garch = result.models["replay"], result.models["garch"]
+    assert isinstance(replay, RangeModel) and isinstance(garch, GarchRangeModel)
+    artifact = result.artifacts["garch"]
+    assert set(result.artifacts) == {"garch"} and artifact is fixture_artifact()  # reused
+    doc = json.loads(json.dumps(artifact_to_json(artifact), allow_nan=False))
+    stored = artifact_from_json(doc, pool_from_bytes(pool_bytes(artifact)))
+    assert simulate_panel(stored).tobytes() == garch.panel.tobytes()  # what a range request sees
+    t = result.tensor
+    mixes = np.array(t["ladder"]["w"]).reshape(-1, len(t["mu_s"]))
+    again = one_year_ranges(garch, mixes)
+    assert np.array(t["ladder"]["ranges"]["garch"]["bad"]).ravel().tolist() == again["bad"].tolist()
+    assert _without_telemetry(
+        build_tensor(fixture_inputs("5y", **SMALL_BOTH))
+    ) == _without_telemetry(t)
+
+
+def test_a_fit_is_reused_only_for_its_own_panel(monkeypatch):
+    calls = []
+    real = builder.fit_shape
+    monkeypatch.setattr(builder, "fit_shape", lambda *args: calls.append(args) or real(*args))
+    reused = build_tensor(fixture_inputs("5y", **SMALL_BOTH))
+    assert calls == []
+    fresh = build_tensor(fixture_inputs("5y", garch_artifact=None, **SMALL_BOTH))
+    assert len(calls) == 1 and calls[0][1] is None  # the fixture names no splice dates
+    assert _without_telemetry(fresh) == _without_telemetry(reused)  # the reused fit is the fit
+    other = build_tensor(_tsp_like_inputs(garch_artifact=fixture_artifact(), **SMALL_BOTH))
+    assert len(calls) == 2 and list(calls[1][0].frame.columns) == TSP_LIKE  # not this menu's
+    assert [fund["id"] for fund in other["shape"]["funds"]] == TSP_LIKE
+    stale = dataclasses.replace(fixture_artifact(), returns="simple")  # fitted in simple returns
+    refit = build_tensor_full(fixture_inputs("5y", garch_artifact=stale, **SMALL_BOTH))
+    assert len(calls) == 3 and refit.artifacts["garch"] is not stale
+    assert refit.artifacts["garch"].returns == "log"
+    assert _without_telemetry(refit.tensor) == _without_telemetry(reused)
+
+
+def test_a_fit_is_reused_only_under_the_splice_dates_it_was_guarded_with(
+    fixture_frame, monkeypatch
+):
+    """The guard's inputs are part of a fit's identity: a fit guarded without a fund's splice
+    date is never accepted for a build that names one, so the guard always runs on it."""
+    day = "2023-03-13"
+    dropped = fixture_frame[TSP_LIKE].copy()
+    dropped.loc[day, "VTI"] = -0.30  # an ex-date the record never adjusted for
+    unguarded = build_tensor_full(
+        _tsp_like_inputs(returns=dropped, garch_artifact=None, **SMALL_BOTH)
+    ).artifacts["garch"]
+    assert unguarded.splice_dates == ()
+    with pytest.raises(ShapeError) as caught:
+        build_tensor(
+            _tsp_like_inputs(
+                returns=dropped, splice_dates={"VTI": day}, garch_artifact=unguarded, **SMALL_BOTH
+            )
+        )
+    assert caught.value.fund == "VTI" and caught.value.date == day
+    calls = []
+    real = builder.fit_shape
+    monkeypatch.setattr(builder, "fit_shape", lambda *args: calls.append(args) or real(*args))
+    elsewhere = {"VTI": "2024-01-02", "FIENX": "2024-10-30"}  # FIENX is not in the panel
+    guarded = build_tensor_full(
+        _tsp_like_inputs(
+            returns=dropped, splice_dates=elsewhere, garch_artifact=unguarded, **SMALL_BOTH
+        )
+    ).artifacts["garch"]
+    assert len(calls) == 1 and guarded.splice_dates == (("VTI", "2024-01-02"),)
+    again = build_tensor_full(  # the same guard, written another way: the fit is reused
+        _tsp_like_inputs(
+            returns=dropped, splice_dates={"VTI": "20240102"}, garch_artifact=guarded, **SMALL_BOTH
+        )
+    )
+    assert len(calls) == 1 and again.artifacts["garch"] is guarded
+
+
+def test_engines_not_asked_for_are_unavailable_with_their_reason():
+    preset = build_tensor(fixture_inputs("5y", **SMALL))
+    assert preset["engines"]["garch"] == {
+        "status": "unavailable",
+        "reason": "not computed for this menu",
+        "method": None,
+        "ruin_paths": None,
+    }
+    assert preset["shape"] is None and preset["range_default"] == "replay"
+    for key in ("frontier", "ladder", "entered"):
+        assert list(preset[key]["ranges"]) == ["replay"]
+    assert preset["notes"] == list(builder.NOTES)
+    custom = build_tensor(converted_menu_inputs("5y", **SMALL))
+    assert custom["engines"]["garch"]["reason"] == "not computed for custom menus"
+    both = build_tensor(fixture_inputs("5y", **SMALL_BOTH))
+    for key in ("frontier", "ladder", "entered"):  # F1: the default figures do not move
+        assert preset[key]["range"] == both[key]["range"]
+        assert preset[key]["ranges"]["replay"] == both[key]["ranges"]["replay"]
+    assert preset["frontier"]["s_safe"] == both["frontier"]["s_safe"]
+    for engines, message in (
+        (("garch",), "every build computes replay"),
+        (("replay", "copula"), "unknown engine 'copula'"),
+        ("replay", "unknown engine 'r'"),  # a name, not a tuple of names
+    ):
+        with pytest.raises(ValueError, match=message):
+            build_tensor(fixture_inputs("5y", **{**SMALL, "engines": engines}))
+    either = build_tensor(fixture_inputs("5y", **{**SMALL, "engines": ("garch", "replay")}))
+    assert _without_telemetry(either) == _without_telemetry(both)
+
+
+def test_an_unavailable_volatility_model_is_reported_and_not_simulated():
+    short = dataclasses.replace(
+        fixture_artifact(),
+        pool=None,
+        pool_rows=100,
+        pool_sha256=None,
+        unavailable_reason=UNAVAILABLE_REASON,
+    )
+    result = build_tensor_full(fixture_inputs("5y", garch_artifact=short, **SMALL_BOTH))
+    t = result.tensor
+    validate_tensor(t)
+    assert t["engines"]["garch"] == {
+        "status": "unavailable",
+        "reason": "not enough shared history for the volatility model",
+        "method": None,
+        "ruin_paths": None,
+    }
+    assert t["shape"]["pool_rows"] == 100 and len(t["shape"]["funds"]) == 23
+    for key in ("frontier", "ladder", "entered"):
+        assert list(t[key]["ranges"]) == ["replay"]
+    assert set(result.models) == {"replay"} and result.artifacts == {"garch": short}
+    assert t["notes"] == list(builder.NOTES)
+
+
+def test_a_drop_on_a_seeded_fund_s_splice_date_fails_the_build(fixture_frame):
+    day = "2023-03-13"
+    dropped = fixture_frame[TSP_LIKE].copy()
+    dropped.loc[day, "VTI"] = -0.30  # an ex-date the record never adjusted for
+    with pytest.raises(ShapeError) as caught:
+        build_tensor(_tsp_like_inputs(returns=dropped, splice_dates={"VTI": day}, **SMALL_BOTH))
+    assert caught.value.fund == "VTI" and caught.value.date == day
+    assert "VTI" in str(caught.value) and day in str(caught.value)
+    elsewhere = build_tensor(
+        _tsp_like_inputs(returns=dropped, splice_dates={"VTI": "2024-01-02"}, **SMALL_BOTH)
+    )
+    assert elsewhere["engines"]["garch"]["status"] == "ready"
+    assert ("VTI", day) in [(o["id"], o["date"]) for o in elsewhere["shape"]["outliers"]]
+
+
+def test_a_riskless_mix_has_one_year_on_every_path(fixture_frame):
+    """A stock fund and cash that never varies, no caps: the safest node is all but all cash.
+
+    A mix whose days do not vary has the same year on every path, under every engine; the
+    post-check lets its three figures agree to rounding and nothing more.
+    """
+    vti = next(fund for fund in fixture_inputs().funds if fund.id == "VTI")
+    menu = [vti, dataclasses.replace(vti, id="CASH", name="Cash")]
+    frame = fixture_frame[["VTI"]].assign(CASH=0.00015)
+    tensor = build_tensor(
+        fixture_inputs(
+            "5y", funds=menu, returns=frame, allocation=None, preset_id=None, **SMALL_BOTH
+        )
+    )
+    validate_tensor(tensor)
+    assert [f["status"] for f in tensor["shape"]["funds"]][1] == "near_constant"
+    safest = np.array(tensor["frontier"]["w"][0])
+    assert safest[1] >= 1.0 - 1e-6
+    daily = float(np.array(tensor["mu_s"]) @ safest) / 252.0  # the chart's level, not history's
+    for engine in ENGINES:
+        front = tensor["frontier"]["ranges"][engine]
+        assert front["bad"][0] <= front["typical"][0] <= front["good"][0]
+        assert front["good"][0] - front["bad"][0] <= 5e-4  # at most the chart's floor of risk
+        assert abs(front["typical"][0] - np.expm1(252 * np.log1p(daily))) <= 1e-5
+
+
+def test_an_exact_constant_mix_has_equal_ranges_at_its_compounded_chart_mean(fixture_frame):
+    vti = next(fund for fund in fixture_inputs().funds if fund.id == "VTI")
+    menu = [vti, *(dataclasses.replace(vti, id=fund, name=fund) for fund in ("CASH_A", "CASH_B"))]
+    frame = fixture_frame[["VTI"]].assign(CASH_A=0.00015, CASH_B=0.00007)
+    result = build_tensor_full(
+        fixture_inputs(
+            "5y",
+            funds=menu,
+            returns=frame,
+            allocation={"CASH_A": 250.0, "CASH_B": 750.0},
+            preset_id=None,
+            garch_artifact=None,
+            **SMALL_BOTH,
+        ),
+        workers=1,
+    )
+    tensor = result.tensor
+    validate_tensor(tensor)
+    entered = tensor["entered"]
+    assert entered["w"] == [0.0, 0.25, 0.75]
+    assert [fund["status"] for fund in tensor["shape"]["funds"]][1:] == ["near_constant"] * 2
+    garch = result.models["garch"]
+    assert isinstance(garch, GarchRangeModel)
+    np.testing.assert_array_equal(garch.sd[1:], [0.0, 0.0])
+    daily = np.array(tensor["mu_s"]) @ np.array(entered["w"]) / 252.0
+    expected = np.expm1(252 * np.log1p(daily))
+    for engine in ENGINES:
+        figures = entered["ranges"][engine]
+        assert figures["bad"] == figures["typical"] == figures["good"]
+        assert figures["typical"] == pytest.approx(expected, abs=1e-12, rel=0)
+    assert entered["range"]["typical"] == entered["ranges"]["replay"]["typical"]
+    assert tensor["engines"]["garch"]["ruin_paths"] == 0
+
+
+def test_ruin_paths_is_the_most_paths_any_carried_mix_lost(monkeypatch):
+    """`engines.garch.ruin_paths`: over the ladder's mixes and the entered one, the largest
+    number of paths the volatility model absorbed (a day at or below -100%); 0 for the fixture."""
+    real = builder.one_year_ranges
+    lost = {"ladder": 4, "entered": 0}
+
+    def counted(model, weights):
+        out = real(model, weights)
+        if model.engine == "garch" and np.ndim(weights) == 1:  # the entered mix
+            out["ruined"] = np.array([lost["entered"]])
+        elif model.engine == "garch":  # the ladder's mixes: one of them loses the most
+            out["ruined"] = np.minimum(np.arange(len(out["bad"])), lost["ladder"])
+        return out
+
+    monkeypatch.setattr(builder, "one_year_ranges", counted)
+    tensor = build_tensor(fixture_inputs("5y", **SMALL_BOTH))
+    validate_tensor(tensor)
+    assert tensor["engines"]["garch"]["ruin_paths"] == 4  # the ladder's worst mix
+    lost.update(entered=9)
+    assert build_tensor(fixture_inputs("5y", **SMALL_BOTH))["engines"]["garch"]["ruin_paths"] == 9
+    alone = build_tensor(fixture_inputs("5y", allocation=None, **SMALL_BOTH))
+    assert alone["entered"] is None and alone["engines"]["garch"]["ruin_paths"] == 4
+    monkeypatch.setattr(builder, "one_year_ranges", real)
+    assert build_tensor(fixture_inputs("5y", **SMALL_BOTH))["engines"]["garch"]["ruin_paths"] == 0
+
+
+def test_post_check_refuses_ranges_out_of_order(monkeypatch):
+    real = builder.one_year_ranges
+
+    def swapped(single: bool):
+        def ranges(model, weights):
+            out = real(model, weights)
+            if model.engine == "garch" and (np.ndim(weights) == 1) == single:
+                out["typical"], out["good"] = out["good"], out["typical"]
+            return out
+
+        return ranges
+
+    for single, where in ((False, r"ladder mix \(0, 0\)"), (True, r"entered mix \(0\)")):
+        monkeypatch.setattr(builder, "one_year_ranges", swapped(single))
+        with pytest.raises(InvariantError, match=rf"^range: garch {where}: bad .* out of order$"):
+            build_tensor(fixture_inputs("5y", **SMALL_BOTH))
+
+
+def test_the_recent_weighted_view_has_its_own_level_and_the_shared_shape(fixture_frame):
+    weighted = build_tensor(fixture_inputs("ew", **SMALL_BOTH))
+    fixed = build_tensor(fixture_inputs("5y", **SMALL_BOTH))
+    assert weighted["shape"] == fixed["shape"]  # one fit serves every view of these funds
+    assert weighted["notes"] == [
+        *builder.NOTES,
+        builder.ENGINE_NOTES["garch"],
+        builder.EW_NOTE,
+        builder.EW_ENGINE_NOTES["garch"],
+    ]
+    a = Arrays(weighted)
+    typical = np.array(weighted["ladder"]["ranges"]["garch"]["typical"])
+    sigma = np.sqrt(np.einsum("jli,ik,jlk->jl", a.lw, a.cov, a.lw))
+    assert (np.abs(typical - np.expm1(a.ly - sigma**2 / 2.0)) <= 0.25 * sigma).all()
+    assert weighted["ladder"]["ranges"]["garch"] != fixed["ladder"]["ranges"]["garch"]

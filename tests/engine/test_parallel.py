@@ -213,7 +213,9 @@ def test_the_worker_environment_holds_blas_and_jemalloc_to_one_thread(monkeypatc
     assert "background_thread:false" in environment["JE_ARROW_MALLOC_CONF"]
 
 
-@pytest.mark.parametrize("workers", [1, 2, 3])
+@pytest.mark.parametrize("workers", [1, 2, 3, 4])
 def test_the_fixture_tensor_is_the_same_on_any_number_of_workers(workers, fixture_tensor):
+    """Every engine's figures too: the volatility model is fitted and simulated in the build's
+    own process, once, whatever the number of workers."""
     built = build_tensor(fixture_inputs("5y"), workers=workers)
     assert _core(built) == _core(fixture_tensor)

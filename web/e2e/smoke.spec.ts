@@ -1100,12 +1100,16 @@ test("DoD-21 presets and tensors come from R2, and a build request for the defau
   expect(tensor.generation).toBe(presets.generation);
   expect(guide.hash, "the preset's key is the hash of its 23 funds with default limits").toBe(universeHash(guide.funds.map((fund) => ({ id: fund.id }))));
 
-  // The contract of spec 7, checked with the schema the engine writes against.
+  // The contract of spec 7, checked with the shipped contract the tensor's own `schema` names
+  // (3: tensor.schema.json, 2: tensor.schema.v2.json, which production serves until the first
+  // 0.3.0 generation and after a rollback); `load_schema` refuses any other version.
+  const declared = (JSON.parse(body) as { schema?: unknown }).schema;
+  expect([2, 3], `the tensor declares a schema with a shipped contract: ${JSON.stringify(declared)}`).toContain(declared);
   const dir = mkTemp("ps-smoke-21-");
   try {
     fs.writeFileSync(path.join(dir, "tensor.json"), body);
-    const check = python(["-c", "import json, sys, jsonschema; jsonschema.validate(json.load(open(sys.argv[1])), json.load(open('portfoliosight/engine/tensor.schema.json')))", path.join(dir, "tensor.json")]);
-    expect(check.status, `the tensor validates against tensor.schema.json: ${check.stderr.slice(-600)}`).toBe(0);
+    const check = python(["-c", "import json, sys, jsonschema; from portfoliosight.engine.tensor import load_schema; doc = json.load(open(sys.argv[1])); jsonschema.validate(doc, load_schema(doc.get('schema')))", path.join(dir, "tensor.json")]);
+    expect(check.status, `the tensor validates against the schema ${String(declared)} contract: ${check.stderr.slice(-600)}`).toBe(0);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
