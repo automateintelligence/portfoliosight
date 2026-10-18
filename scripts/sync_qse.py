@@ -113,8 +113,17 @@ def _common_dir(directory: Path, *, allow_non_repository: bool = False) -> Path 
     if (
         allow_non_repository
         and done.returncode == 128
-        and done.stderr.strip()
-        == b"fatal: not a git repository (or any of the parent directories): .git"
+        and not done.stdout
+        and (
+            done.stderr.strip()
+            == b"fatal: not a git repository (or any of the parent directories): .git"
+            or re.fullmatch(
+                rb"fatal: not a git repository \(or any parent up to mount point /[^\n\0]*\)\n"
+                rb"Stopping at filesystem boundary \(GIT_DISCOVERY_ACROSS_FILESYSTEM not set\)\.",
+                done.stderr.strip(),
+            )
+            is not None
+        )
     ):
         return None
     path = Path(os.fsdecode(done.stdout.removesuffix(b"\n")))

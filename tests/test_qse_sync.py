@@ -546,7 +546,51 @@ def test_check_still_works_without_the_private_qse_checkout(copy_root: Path, tmp
     assert not absent_source.exists()
 
 
-@pytest.mark.parametrize("failure", ["exit", "empty", "malformed", "oserror", "timeout"])
+@pytest.mark.parametrize("mode", ["sync", "check"])
+def test_an_unrelated_destination_at_a_filesystem_boundary_is_allowed(
+    qse_repo: dict, copy_root: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+):
+    module = _load_script()
+    original_git = module._git
+
+    def boundary_probe(cwd: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+        if cwd == copy_root and "--git-common-dir" in args:
+            return subprocess.CompletedProcess(
+                args,
+                128,
+                stdout=b"",
+                stderr=(
+                    b"fatal: not a git repository (or any parent up to mount point /dev)\n"
+                    b"Stopping at filesystem boundary "
+                    b"(GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n"
+                ),
+            )
+        return original_git(cwd, *args)
+
+    monkeypatch.setattr(module, "_git", boundary_probe)
+    for name in FILES:
+        (copy_root / name).chmod(0o644)
+    source_before, destination_before = _snapshot(qse_repo["repo"]), _snapshot(copy_root)
+    if mode == "sync":
+        assert (
+            module.sync(qse_repo["first"], qse_repo["repo"], copy_root)["commit"]
+            == qse_repo["first"]
+        )
+        assert all((copy_root / name).read_bytes() == _blob(name, 1) for name in FILES)
+    else:
+        assert module.check(copy_root, qse_repo["repo"]) == []
+        assert _snapshot(copy_root) == {
+            name: (READ_ONLY, data) if name in FILES else (file_mode, data)
+            for name, (file_mode, data) in destination_before.items()
+        }
+    assert all(_mode(copy_root / name) == READ_ONLY for name in FILES)
+    assert _snapshot(qse_repo["repo"]) == source_before
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["exit", "empty", "malformed", "oserror", "timeout", "permission", "dubious", "near-boundary"],
+)
 @pytest.mark.parametrize("mode", ["sync", "check"])
 def test_an_available_sources_repository_identity_probe_fails_closed(
     qse_repo: dict, copy_root: Path, monkeypatch: pytest.MonkeyPatch, failure: str, mode: str
@@ -560,11 +604,21 @@ def test_an_available_sources_repository_identity_probe_fails_closed(
                 raise OSError("cannot run git")
             if failure == "timeout":
                 raise subprocess.TimeoutExpired("git", 10)
+            diagnostics = {
+                "permission": b"fatal: cannot open '.git': Permission denied\n",
+                "dubious": b"fatal: detected dubious ownership in repository at '/checkout'\n",
+                "near-boundary": (
+                    b"fatal: not a git repository (or any parent up to mount point /dev)\n"
+                    b"Stopping at filesystem boundary "
+                    b"(GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n"
+                    b"unexpected error\n"
+                ),
+            }
             return subprocess.CompletedProcess(
                 args,
-                1 if failure == "exit" else 0,
+                128 if failure in diagnostics else 1 if failure == "exit" else 0,
                 stdout=b"relative/path\n" if failure == "malformed" else b"",
-                stderr=b"probe failed",
+                stderr=diagnostics.get(failure, b"probe failed"),
             )
         return original_git(cwd, *args)
 
