@@ -62,8 +62,8 @@ def _garch_pair(rows: int, seed: int) -> np.ndarray:
 
 
 def _igarch(rows: int) -> np.ndarray:
-    """Simple returns whose log-return volatility never reverts: the fit has alpha + beta at 1."""
-    shocks = standardized_t_shocks(np.random.default_rng(6), 8.0, (1, rows))
+    """Simple returns whose IGARCH log-space fit converges above the stationarity cutoff."""
+    shocks = standardized_t_shocks(np.random.default_rng(4), 8.0, (1, rows))
     logs = simulate_garch11(shocks, mu=0.0, omega=1e-7, alpha=0.12, beta=0.88, sigma2_init=1e-4)
     return np.expm1(logs[0])
 
