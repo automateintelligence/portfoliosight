@@ -17,6 +17,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import date, datetime, time
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any, cast
 
@@ -38,8 +39,10 @@ from portfoliosight.engine.shape import (
     GarchArtifact,
     artifact_from_json,
     artifact_to_json,
+    guarded_splice_dates,
     pool_bytes,
     pool_from_bytes,
+    qse_commit,
 )
 from portfoliosight.engine.stats import RISK_FREE_SOURCES
 from portfoliosight.engine.surface import NY
@@ -72,6 +75,17 @@ class GenerationGone(BuildRefused):
 
     def __init__(self, generation: str):
         super().__init__("generation_gone", f"generation {generation} is no longer stored")
+
+
+class ArtifactConflict(BuildRefused):
+    """An immutable model path already belongs to a different artifact."""
+
+    def __init__(self, key: str):
+        super().__init__(
+            "artifact_conflict",
+            f"stored model artifact conflicts with this build: {key}",
+            {"key": key},
+        )
 
 
 class KeyExists(Exception):
@@ -292,18 +306,35 @@ def put_artifact(store: store_mod.Store, generation: str, artifact: GarchArtifac
     """Store a fitted volatility model under its generation and shape digest.
 
     The pool goes first and the JSON that describes it last, so a reader that finds the JSON
-    finds its pool. Each file is written only when absent: a stored model is never overwritten,
-    and two builders racing to store one fit write the same bytes.
+    finds its pool. Existing files must hold the same bytes, even on a cache hit. Check both
+    before completing a partial write, then use the store's conditional insert when available:
+    another builder's matching write is harmless, a conflicting one refuses this build.
     """
     shape16 = artifact.sample_sha256[:16]
     files = []
     if artifact.pool is not None:
         files.append((POOL_FILE, pool_bytes(artifact)))
     files.append((GARCH_FILE, canonical_json(artifact_to_json(artifact)).encode("utf-8")))
+    missing = []
     for name, data in files:
         key = model_key(generation, shape16, name)
-        if not store.exists(key):
+        try:
+            existing = store.get(key)
+        except KeyError:
+            missing.append((key, data))
+        else:
+            if existing != data:
+                raise ArtifactConflict(key)
+    put_if = getattr(store, "put_if", None)
+    for key, data in missing:
+        if put_if is not None:
+            if put_if(key, data, None):
+                continue
+        elif not store.exists(key):  # the five-method Store interface, for serial callers
             store.put(key, data)
+            continue
+        if store.get(key) != data:
+            raise ArtifactConflict(key)
 
 
 def build_with_artifacts(
@@ -317,10 +348,10 @@ def build_with_artifacts(
     """``build_tensor_full`` with the volatility model taken from, and kept in, ``store``.
 
     When the inputs ask for the volatility model, the fit stored for their shape panel (if any)
-    is offered to the build, which uses it when it is that panel's; a fit the build makes is
-    stored before this returns, so a tensor is always written after the model behind it.
-    Returns the result and whether a stored fit was used. Raises what ``build_tensor_full``
-    raises.
+    is checked against the full panel identity and fit provenance before reuse. Its files are
+    stored or checked before this returns, so a tensor is always written after the model behind
+    it. Returns the result and whether a stored fit was used. Invalid or conflicting immutable
+    files refuse the build; missing files may be completed by the same deterministic fit.
     """
     offered = None
     if "garch" in inputs.engines:
@@ -329,14 +360,30 @@ def build_with_artifacts(
         except WindowUnavailable:
             panel = None  # the build refuses the window itself, after what it checks first
         if panel is not None:
-            offered = load_artifact(
-                store, generation, panel.sample_sha256[:16], cache_dir=cache_dir
-            )
+            key = model_key(generation, panel.sample_sha256[:16], GARCH_FILE)
+            try:
+                offered = load_artifact(
+                    store, generation, panel.sample_sha256[:16], cache_dir=cache_dir
+                )
+            except (ValueError, TypeError, KeyError, AttributeError, EOFError) as exc:
+                raise BuildRefused(
+                    "artifact_invalid", f"invalid stored model artifact: {key}", {"key": key}
+                ) from exc
+            if offered is not None and (
+                offered.sample_sha256 != panel.sample_sha256
+                or offered.funds != tuple(panel.frame.columns)
+                or (offered.rows, offered.start, offered.end)
+                != (panel.rows, panel.start, panel.end)
+                or offered.splice_dates != guarded_splice_dates(offered.funds, inputs.splice_dates)
+                or offered.qse != qse_commit()
+                or offered.arch != version("arch")
+            ):
+                raise ArtifactConflict(key)
             inputs = replace(inputs, garch_artifact=offered)
     result = build_tensor_full(inputs, workers=workers)
     fitted = result.artifacts.get("garch")
     reused = fitted is not None and fitted is offered
-    if fitted is not None and not reused:
+    if fitted is not None:
         put_artifact(store, generation, fitted)
     return result, reused
 

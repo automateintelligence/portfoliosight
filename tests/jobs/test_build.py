@@ -19,7 +19,13 @@ from portfoliosight.data import store as store_mod
 from portfoliosight.data.providers import tiingo
 from portfoliosight.engine import ENGINE_VERSION, builder
 from portfoliosight.engine.ranges import one_year_ranges
-from portfoliosight.engine.shape import ShapeError, artifact_from_json, pool_from_bytes
+from portfoliosight.engine.shape import (
+    ShapeError,
+    artifact_from_json,
+    artifact_to_json,
+    pool_bytes,
+    pool_from_bytes,
+)
 from portfoliosight.engine.tensor import build_tensor, canonical_json, validate_tensor
 from portfoliosight.jobs.build import (
     BuildRefused,
@@ -29,6 +35,7 @@ from portfoliosight.jobs.build import (
     build_from_store,
     inputs_from_store,
     load_artifact,
+    put_artifact,
     put_tensor,
     range_model_from_store,
 )
@@ -574,6 +581,12 @@ class _Writes:
         self.gets.append(key)
         return self._inner.get(key)
 
+    def put_if(self, key, data, tag):
+        written = self._inner.put_if(key, data, tag)
+        if written:
+            self.puts.append(key)
+        return written
+
     def __getattr__(self, name):
         return getattr(self._inner, name)
 
@@ -593,7 +606,7 @@ def fits(monkeypatch):
 
 
 def _job(store, generation, lookback, ids=("VTI", "BND", "VNQ"), **names):
-    funds = _funds(ids)
+    funds = names.pop("funds", _funds(ids))
     uhash = universe_hash(funds)
     build_job(store, generation, uhash, lookback, funds, **names)
     return json.loads(store.get(tensor_key(generation, uhash, lookback)))
@@ -610,6 +623,7 @@ def test_a_build_stores_its_fit_before_its_tensor_and_other_lookbacks_reuse_it(
     assert writes.puts == [*files, tensor]  # the pool, its description, then the tensor
     assert len(fits) == 1 and first["engines"]["garch"]["status"] == "ready"
     doc = json.loads(store.get(files[1]))
+    assert doc["returns"] == "log" and doc["splice_dates"] == {}
     stored = artifact_from_json(doc, pool_from_bytes(store.get(files[0])))
     assert stored.sample_sha256 == first["shape"]["sample_sha256"]
     assert stored.funds == ("VTI", "BND", "VNQ") and stored.pool_rows == first["shape"]["pool_rows"]
@@ -644,17 +658,211 @@ def test_a_stored_model_is_never_overwritten(store, generation, job_env, fits, t
     shape16 = first["shape"]["sample_sha256"][:16]
     key = model_key(generation, shape16, "garch.json")
     # A model stored under this folder that is not this panel's (another digest with the same
-    # first 16 digits): the build fits its own and leaves the stored files as they are.
+    # first 16 digits): no tensor may claim an artifact this immutable path cannot store.
     doc = json.loads(store.get(key))
     doc["sample_sha256"] = shape16 + "0" * 48
     foreign = canonical_json(doc).encode()
     store.put(key, foreign)
     pool = store.get(model_key(generation, shape16, "pool.npy"))
     assert not (tmp_path / "cache" / "models").exists()  # so the next build reads the store's
-    again = _job(store, generation, "5y")
-    assert len(fits) == 2 and again["shape"] == first["shape"]
+    with pytest.raises(BuildRefused, match="artifact"):
+        _job(store, generation, "5y")
+    assert len(fits) == 1
+    assert not store.exists(tensor_key(generation, first["universe"]["hash"], "5y"))
     assert store.get(key) == foreign
     assert store.get(model_key(generation, shape16, "pool.npy")) == pool
+
+
+@pytest.fixture
+def artifact(store, d_g, tmp_path):
+    inputs = _inputs(store, d_g, tmp_path, ids=MENU[:3])
+    return builder.fit_shape(builder.shape_panel_for(inputs), inputs.splice_dates)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("funds", ["BND", "VTI", "VNQ"]),
+        ("rows", 2519),
+        ("start", "1990-01-01"),
+        ("end", "2020-01-01"),
+        ("splice_dates", {"VTI": "2024-03-01"}),
+        ("returns", "simple"),
+        ("returns", None),
+        ("splice_dates", None),
+        ("qse", "0" * 40),
+        ("arch", "0.0.0"),
+    ],
+)
+def test_incompatible_stored_provenance_cannot_publish_a_tensor(
+    store, generation, job_env, artifact, field, value
+):
+    shape16 = artifact.sample_sha256[:16]
+    key = model_key(generation, shape16, "garch.json")
+    doc = artifact_to_json(artifact)
+    if value is None:
+        del doc[field]  # older artifacts did not declare the return space or splice guard
+    else:
+        doc[field] = value
+    store.put(key, canonical_json(doc).encode())
+    store.put(model_key(generation, shape16, "pool.npy"), pool_bytes(artifact))
+    before = {key: store.get(key) for key in store.list("models/")}
+    writes = _Writes(store)
+    with pytest.raises(BuildRefused, match="artifact"):
+        _job(writes, generation, "1y")
+    assert writes.puts == [] and store.list("tensors/") == []
+    assert {key: store.get(key) for key in before} == before
+
+
+@pytest.mark.parametrize("occupied", ["pool.npy", "garch.json"])
+def test_an_incompatible_partial_write_is_preserved_without_publishing(
+    store, generation, job_env, artifact, occupied
+):
+    key = model_key(generation, artifact.sample_sha256[:16], occupied)
+    if occupied == "pool.npy":
+        data = b"a pool left by another fit"
+    else:
+        doc = artifact_to_json(artifact)
+        doc["sample_sha256"] = artifact.sample_sha256[:16] + "0" * 48
+        data = canonical_json(doc).encode()
+    store.put(key, data)
+    writes = _Writes(store)
+    with pytest.raises(BuildRefused, match="artifact"):
+        _job(writes, generation, "1y")
+    assert writes.puts == [] and store.list("models/") == [key]
+    assert store.get(key) == data and store.list("tensors/") == []
+
+
+@pytest.mark.parametrize("occupied", ["pool.npy", "garch.json"])
+@pytest.mark.parametrize("same", [False, True])
+def test_an_artifact_write_losing_a_race_never_overwrites_the_winner(
+    store, generation, artifact, monkeypatch, occupied, same
+):
+    key = model_key(generation, artifact.sample_sha256[:16], occupied)
+    real_put_if = store.put_if
+    winner = None
+
+    def another_builder_writes_first(key_, data, tag):
+        nonlocal winner
+        if key_ == key:
+            winner = data if same else b"another builder's immutable bytes"
+            store.put(key, winner)
+        return real_put_if(key_, data, tag)
+
+    monkeypatch.setattr(store, "put_if", another_builder_writes_first)
+    if same:
+        put_artifact(store, generation, artifact)
+    else:
+        with pytest.raises(BuildRefused, match="artifact"):
+            put_artifact(store, generation, artifact)
+    assert winner is not None and store.get(key) == winner
+    if occupied == "pool.npy" and not same:
+        assert store.list("models/") == [key]  # a conflicting pool never gets a JSON pointer
+
+
+def test_a_warm_cache_cannot_hide_conflicting_immutable_bytes(store, generation, job_env, tmp_path):
+    first = _job(store, generation, "1y")
+    shape16 = first["shape"]["sample_sha256"][:16]
+    load_artifact(store, generation, shape16, cache_dir=tmp_path / "cache")
+    key = model_key(generation, shape16, "pool.npy")
+    store.put(key, b"occupied by another fit")
+    writes = _Writes(store)
+    with pytest.raises(BuildRefused, match="artifact"):
+        _job(writes, generation, "5y")
+    assert writes.puts == [] and store.get(key) == b"occupied by another fit"
+    assert not store.exists(tensor_key(generation, first["universe"]["hash"], "5y"))
+
+
+@pytest.mark.parametrize("present", [("pool.npy",), ("garch.json",), ("pool.npy", "garch.json")])
+def test_matching_immutable_files_are_reused_or_completed_before_publication(
+    store, generation, job_env, artifact, fits, tmp_path, present
+):
+    shape16 = artifact.sample_sha256[:16]
+    files = {
+        "pool.npy": pool_bytes(artifact),
+        "garch.json": canonical_json(artifact_to_json(artifact)).encode(),
+    }
+    for name in present:
+        store.put(model_key(generation, shape16, name), files[name])
+    writes = _Writes(store)
+    count = len(fits)
+    first = _job(writes, generation, "1y")
+    assert len(fits) == count + (len(present) < 2)
+    missing = [model_key(generation, shape16, name) for name in files if name not in present]
+    assert writes.puts == [*missing, tensor_key(generation, first["universe"]["hash"], "1y")]
+    for name, data in files.items():
+        assert store.get(model_key(generation, shape16, name)) == data
+    loaded = load_artifact(store, generation, shape16, cache_dir=tmp_path / "fresh-cache")
+    assert loaded is not None
+    assert artifact_to_json(loaded) == artifact_to_json(artifact)
+
+
+def test_menus_with_the_same_included_set_share_a_fit_across_cap_policies(
+    store, generation, job_env, fits
+):
+    writes = _Writes(store)
+    first = _job(writes, generation, "1y", ids=MENU)  # FIENX is excluded
+    saved = {key: store.get(key) for key in store.list("models/")}
+    writes.puts.clear()
+    capped = _job(writes, generation, "1y", funds=_funds(MENU[:3], VTI=(0.1, 0.6)))
+    assert len(fits) == 1 and capped["shape"] == first["shape"]
+    assert capped["universe"]["hash"] != first["universe"]["hash"]
+    assert writes.puts == [tensor_key(generation, capped["universe"]["hash"], "1y")]
+    assert {key: store.get(key) for key in saved} == saved
+
+
+@pytest.mark.parametrize("changed", ["history", "generation", "fund_order"])
+def test_a_new_shape_or_generation_fits_its_own_immutable_model(
+    store, generation, d_g, job_env, fits, changed
+):
+    first = _job(store, generation, "1y")
+    saved = {key: store.get(key) for key in store.list("models/")}
+    next_generation = generation
+    ids = MENU[:3]
+    if changed == "history":
+        _corrected(store, "VTI", "2024-03-01", 0.001)
+    elif changed == "generation":
+        asof = d_g + timedelta(days=1)
+        next_generation = f"{asof.isoformat()}-{ENGINE_VERSION}"
+        store_mod.put_json(
+            store,
+            f"meta/{next_generation}/generation.json",
+            {
+                "generation": next_generation,
+                "asof": asof.isoformat(),
+                "engine_version": ENGINE_VERSION,
+            },
+        )
+    else:
+        ids = list(reversed(ids))
+    second = _job(store, next_generation, "5y", ids=ids)
+    assert len(fits) == 2 and len(store.list("models/")) == 4
+    assert (second["shape"]["sample_sha256"] == first["shape"]["sample_sha256"]) == (
+        changed == "generation"
+    )
+    assert {key: store.get(key) for key in saved} == saved
+
+
+def test_cold_and_reloaded_fallback_models_produce_identical_canonical_tensors(
+    store, generation, tmp_path, fits
+):
+    # A missing historical row stays missing; TSP G's fallback nu is NaN in memory, null in JSON.
+    record = store_mod.get_record(store, "BND")
+    store_mod.put_record(store, "BND", record.drop(record.index[-700]))
+    ids = ["VTI", "BND", "TSP-G"]
+    writes = _Writes(store)
+    first = _build(writes, generation, tmp_path / "cold", ids=ids)
+    writes.puts.clear()
+    again = _build(writes, generation, tmp_path / "reload", ids=ids)
+    assert len(fits) == 1 and writes.puts == []
+    assert first["range_default"] == again["range_default"] == "replay"
+    assert first["shape"]["pool_rows"] < first["shape"]["rows"]
+    g = next(fund for fund in first["shape"]["funds"] if fund["id"] == "TSP-G")
+    assert g["status"] == "near_constant" and g["nu"] is None
+    for tensor in (first, again):
+        tensor.pop("built_at")
+        tensor.pop("build_seconds")
+    assert canonical_json(first) == canonical_json(again)
 
 
 def test_model_files_are_read_through_the_scratch_cache_within_its_cap(
@@ -664,16 +872,21 @@ def test_model_files_are_read_through_the_scratch_cache_within_its_cap(
     shape16 = first["shape"]["sample_sha256"][:16]
     cache = tmp_path / "cache"
     assert not (cache / "models").exists()  # written to the store, not to the cache
-    _job(store, generation, "5y")
+    reads = _Writes(store)
+    _job(reads, generation, "5y")
     for name in ("garch.json", "pool.npy"):
         assert (cache / "models" / generation / shape16 / name).is_file()
-    reads = _Writes(store)
+        # One cache fill and one authoritative comparison before the tensor is published.
+        assert reads.gets.count(model_key(generation, shape16, name)) == 2
+    reads.gets.clear()
     loaded = load_artifact(cast(store_mod.Store, reads), generation, shape16, cache_dir=cache)
     assert loaded is not None and loaded.sample_sha256 == first["shape"]["sample_sha256"]
     assert [key for key in reads.gets if key.startswith("models/")] == []  # a cache hit
     assert load_artifact(store, generation, "f" * 16, cache_dir=cache) is None
     job_env.setenv("PS_CACHE_MAX_MB", "0.05")
-    _job(store, generation, "ew")
+    _job(reads, generation, "ew")
+    for name in ("garch.json", "pool.npy"):
+        assert reads.gets.count(model_key(generation, shape16, name)) == 1
     cached = [path for path in cache.rglob("*") if path.is_file()]
     assert sum(path.stat().st_size for path in cached) <= 50_000
 
