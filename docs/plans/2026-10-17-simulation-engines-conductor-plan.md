@@ -7,6 +7,8 @@
 
 **Goal:** Complete normative spec Phases 1 and 2, retaining the replay engine and ENB ladder defaults, with verifiable simulation, diversification, page and validation behavior.
 
+**Next milestone — owner confirmed, 2026-10-17:** Make normative spec Phase 1 ready to deploy before starting normative Phase 2. Complete Conductor phases 1–6, verify A-SE-01–16, and provide the validation report, isolated KS-001 measurements, rollback evidence and a concrete release review packet. Phase 2 is not a deployment prerequisite. Present that Phase 1 checkpoint before claiming Conductor phase 7; retain phases 7–9 as the subsequent authorized implementation scope. Deployment and generation publication remain subject to the release review described below.
+
 **Architecture:** Keep the existing pure engine, store-backed build/range paths and tensor-driven React page. Share the upstream QSE draw across mixes, add the DR² solver beside the existing ENB solver, and calculate ENLC from the same engine paths used for ranges. Select one ladder per tensor; build both ladder variants for comparison. No general plugin layer or new optimization library is needed.
 
 **Tech stack:** Existing NumPy/Pandas/SciPy, cvxpy/Clarabel, FastAPI/Pydantic, React/TypeScript/Zod, Vitest and Playwright. The already-authorized QSE selected pull and exact `arch==8.0.0` pin are the Phase 1 dependency additions. `pyvinecopulib` belongs only to the parked Copula work.
