@@ -416,6 +416,80 @@ def test_chunked_compounding_equals_compounding_at_once(garch_model, monkeypatch
         assert np.abs(chunked[:, i] - one_shot).max() <= 1e-12
 
 
+@pytest.mark.parametrize("chunked", [False, True], ids=["default-buffers", "small-chunks"])
+def test_asymmetric_full_paths_follow_log_fund_simple_mix_oracle(chunked, monkeypatch):
+    """An independent daily oracle for amended spec 4.5, including uneven path/mix chunks."""
+    rng = np.random.default_rng(4420)
+    common = rng.exponential(size=(2000, 252, 1))
+    own = rng.exponential(size=(2000, 252, 3))
+    panel = np.array([0.012, -0.003, 0.0008]) + (0.7 * common + 0.3 * own) * np.array(
+        [0.05, -0.02, 0.09]
+    )
+    mu = np.array([0.08, -0.01, 0.03])
+    sigma = np.array([0.5, 0.2, 0.35])
+    corr = np.array([[1.0, 0.2, 0.1], [0.2, 1.0, 0.4], [0.1, 0.4, 1.0]])
+    cov = np.outer(sigma, sigma) * corr
+    weights = np.array(
+        [[0.2, 0.7, 0.1], [0.61, 0.29, 0.1], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    )
+    inputs = (panel, mu, cov, weights)
+    saved = tuple(value.copy() for value in inputs)
+
+    # Derive all expected values from the inputs, without the model or the test helpers.
+    raw = panel.reshape(-1, 3)
+    raw_mean, raw_sd = raw.mean(axis=0), raw.std(axis=0, ddof=0)
+    m, sd = mu / 252, np.sqrt(np.diag(cov) / 252)
+    log_variance = np.log1p(sd**2 / (1 + m) ** 2)
+    log_mean = np.log1p(m) - log_variance / 2
+    fund = np.expm1(log_mean + (raw - raw_mean) * np.sqrt(log_variance) / raw_sd)
+    fund_mean, fund_cov = fund.mean(axis=0), np.cov(fund, rowvar=False, ddof=0)
+    expected_days = np.empty((2000, 252, len(weights)))
+    scales = []
+    for i, w in enumerate(weights):
+        mix = fund @ w
+        k = np.sqrt(w @ cov @ w / 252) / mix.std(ddof=0)
+        scales.append(k)
+        expected_days[..., i] = (m @ w + (mix - mix.mean()) * k).reshape(2000, 252)
+
+    # Both corrections must matter: symmetric/normal fixtures can hide obsolete centering.
+    assert np.min(np.abs(fund_mean - m)) > 5e-7
+    assert np.min(np.abs(np.array(scales[:2]) - 1)) > 0.1
+    wrong_center = m @ weights[0] + (fund @ weights[0] - m @ weights[0]) * scales[0]
+    assert np.max(np.abs(wrong_center - expected_days[..., 0].ravel())) > 4e-6
+    raw_mix = raw @ weights[0]
+    obsolete = m @ weights[0] + (raw_mix - raw_mix.mean()) * (
+        np.sqrt(weights[0] @ cov @ weights[0] / 252) / raw_mix.std(ddof=0)
+    )
+    assert np.max(np.abs(obsolete - expected_days[..., 0].ravel())) > 0.04
+
+    if chunked:
+        monkeypatch.setattr(ranges, "MIX_BLOCK", 2)  # five mixes leave a final one-mix block
+        monkeypatch.setattr(ranges, "WORK_BYTES", 17 * 252 * (3 + 2) * 8)
+    model = garch_range_model(panel, mu, cov)
+    assert np.shares_memory(model.panel, panel) and not model.panel.flags.writeable
+    np.testing.assert_allclose(model.mean, raw_mean, atol=1e-12, rtol=1e-10)
+    np.testing.assert_allclose(model.sd, raw_sd, atol=1e-12, rtol=1e-10)
+    np.testing.assert_allclose(model.level_mean, fund_mean, atol=1e-12, rtol=1e-10)
+    np.testing.assert_allclose(model.level_cov, fund_cov, atol=1e-12, rtol=1e-10)
+
+    step = ranges._step_one(model.mu_s, model.cov, model.mean, model.sd)
+    actual_fund = ranges._levelled(raw, step, np.empty_like(raw))
+    np.testing.assert_allclose(actual_fund, fund, atol=1e-12, rtol=1e-10)
+    coefficients, intercept = ranges._garch_terms(model, weights)
+    actual_days = (actual_fund @ coefficients.T + intercept).reshape(expected_days.shape)
+    np.testing.assert_allclose(actual_days, expected_days, atol=1e-11, rtol=1e-10)
+    np.testing.assert_allclose(actual_days.mean(axis=(0, 1)), weights @ m, atol=1e-12, rtol=0)
+    target_sd = np.sqrt(np.einsum("ij,jk,ik->i", weights, cov, weights) / 252)
+    np.testing.assert_allclose(actual_days.std(axis=(0, 1)), target_sd, atol=1e-12, rtol=0)
+    assert (1 + expected_days > 0).all()
+    expected_years = np.prod(1 + expected_days, axis=1) - 1
+    np.testing.assert_allclose(
+        simulated_years(model, weights), expected_years, atol=1e-10, rtol=1e-10
+    )
+    for value, before in zip(inputs, saved, strict=True):
+        np.testing.assert_array_equal(value, before)
+
+
 def test_garch_ranges_are_the_percentiles_of_the_simulated_years(garch_model):
     mixes = _mixes()[:6]
     out = one_year_ranges(garch_model, mixes)
