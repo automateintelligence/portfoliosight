@@ -120,10 +120,10 @@ Reconcile `tests/test_dependencies.py`, `tests/deploy/test_compose.py` and `test
 **Branch:** retain `feature/engine-garch`; depends on phase 1; engine-math model/effort applies.
 **Recipe:** fresh subagent → focused TDD → `$code-review` and task commits → run-base PR (`Closes #<phase-issue>`) → `claude` review ×2/configured quota fallback → `conductor merge-gate` → `conductor merge` → `$document-release` → `conductor ledger phase-done`.
 
-- [ ] 2.1 Reconcile shape history, fitting and splice boundaries
+- [x] 2.1 Reconcile shape history, fitting and splice boundaries
 
 Merge the run into the retained branch. Read `portfoliosight/engine/shape.py` and preserved `tests/engine/test_shape.py`; retain the simple-return shape digest with canonical NaNs and fit `log1p(panel)` only on available rows through `D_G`, at most 2,520 union-calendar rows. Reject history at/below −1 with fund/date. Verify residual common rows, 126-row floor, log-space fallback thresholds/statuses and splice/outlier boundary fixtures. Run `.venv/bin/python -m pytest tests/engine/test_shape.py -q`; apply C4's recorded owner resolution in its degenerate-case tests.
-- [ ] 2.2 Verify amended log/simple-space level scaling
+- [x] 2.2 Verify amended log/simple-space level scaling
 
 Verify `portfoliosight/engine/ranges.py` implements the amended two-space calculation in bounded path/mix chunks. Preserve one raw log panel; use lognormal targets for each fund, `expm1`, then pooled simple means/covariance and the mix correction. The old plan's affine transform on the raw panel is superseded. Add an asymmetric independent oracle in `tests/engine/test_ranges.py` where transformed simple mean differs from its target and `k != 1`; compare daily paths, not merely percentiles.
 
@@ -144,13 +144,13 @@ assert abs(expected_daily.mean() - target_mean) < 1e-12
 assert abs(expected_daily.std(ddof=0) - target_sd) < 1e-12
 ```
 
-- [ ] 2.3 Verify constants, absorption and ruin disclosure
+- [x] 2.3 Verify constants, absorption and ruin disclosure
 
 Test constant-fund/mix branches separately from that nonzero-spread oracle. In `tests/engine/test_ranges.py`, cover exactly −1, below −1, repeated ruin days and later gains: valid simulated paths absorb once to year −1, replay invalid days raise, nonruined paths keep exact compounding. Verify `method.returns=log`, `scale=sd`, `ruin=absorb` and maximum `ruin_paths` across all carried mixes in `tests/engine/test_builder.py`. Do not cap variance or resample/extirpate an offending simulated path.
-- [ ] 2.4 Reconcile tensor version, provenance and browser compatibility
+- [x] 2.4 Reconcile tensor version, provenance and browser compatibility
 
 Reconcile `portfoliosight/engine/builder.py`, `portfoliosight/engine/tensor.schema.json`, `portfoliosight/engine/__init__.py`, `scripts/build_tensor.py`, `web/src/api/tensor.ts` and `web/fixtures/guide2017_5y.json`. Keep engine version 0.3.0/schema 3, unchanged universe-hash schema, default range aliases, per-engine ranges/safe endpoints and traceable shape/method metadata. Keep schema-2 rollback reader compatibility. Regenerate the fixture only through the exact existing pinned CLI test invocation; never edit generated numbers manually.
-- [ ] 2.5 Verify deterministic engine output and memory bounds
+- [x] 2.5 Verify deterministic engine output and memory bounds
 
 Run focused `tests/engine/test_ranges.py`, `tests/engine/test_builder.py`, `tests/engine/test_build_cli.py`, `tests/engine/test_schema_sources.py` and `web/tests/tensor-sources.test.ts`. Compare deterministic builds across supported worker counts, nondegenerate quantiles and constant compounding without jitter, and record the 30-fund memory check. Preserve replay baselines for phase 5's end-to-end default assertion.
 
