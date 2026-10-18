@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, date, datetime, time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +16,7 @@ from portfoliosight.data import manifest as manifest_mod
 from portfoliosight.data import store as store_mod
 from portfoliosight.data.calendar import session_back
 from portfoliosight.data.store import LocalStore, R2Store
+from portfoliosight.data.universe import Tiers, parse_universe_lines
 from tests.data.test_download import RECORD_START, Clock, FakeProvider, _put_record
 
 D = date(2026, 3, 9)  # a Monday: D-3 sessions is Wednesday 2026-03-04
@@ -403,3 +405,53 @@ def test_lake_names_without_a_symbol_list_use_the_fundamentals_only(tmp_path):
     names = lake_mod.LakeNames(lake)
     assert names.listing == {}
     assert names.name("C") == "Citigroup Inc." and names.name("AAPL") is None
+
+
+def test_the_default_walk_spends_nothing_on_the_added_stocks_the_lake_keeps(tmp_path, monkeypatch):
+    """The QSE PortfolioSight list is in tier 3, so the nightly's own universe walk reaches it;
+    a stock the lake keeps costs no request there, and one it does not keep is fetched."""
+    behind = date(2026, 2, 20)
+    path = Path(__file__).resolve().parents[2] / "data" / "universes" / "qse_portfoliosight.txt"
+    added = [s for s, _ in parse_universe_lines(path.read_text(encoding="utf-8"))]
+    kept, unvouched = added[:2], added[2]
+    store = LocalStore(tmp_path / "store")
+    entries = {}
+    for symbol in (*kept, unvouched):
+        _put_record(store, symbol, behind, behind)
+        entries[symbol] = {
+            "name": f"{symbol} Corp",
+            "kind": "stock",
+            "tier": 3,
+            "income": False,
+            "source": "seed",
+            "first_date": RECORD_START.isoformat(),
+            "last_date": behind.isoformat(),
+            "adjusted_through": behind.isoformat(),
+            "status": "pending",
+            "reason": None,
+            "fetched_at": None,
+        }
+    store_mod.put_json(store, manifest_mod.MANIFEST_KEY, {"symbols": entries})
+    overlay = lake_mod.LakeOverlay(
+        symbols={symbol: _lake_entry(symbol, date(2026, 2, 26)) for symbol in kept}
+    )
+    store_mod.put_json(store, lake_mod.LAKE_KEY, overlay.to_json())
+    only_added = Tiers(
+        tier1=(), tier2=(), tier3=tuple(added[:3]), income=frozenset(), starter_slice=130
+    )
+    monkeypatch.setattr(download, "load_tiers", lambda: only_added)
+
+    provider = FakeProvider(default_available=FEB27)
+    clock = Clock(FEB27, 13)
+    code = download.run(
+        "refresh",
+        store=store,
+        providers={"tiingo": provider},
+        clock=clock,
+        sleep=clock.sleep,
+        tiers=(3,),
+    )
+    assert code == 0
+    assert [call[1] for call in provider.calls] == [unvouched]
+    now = store_mod.get_json(store, manifest_mod.MANIFEST_KEY)["symbols"]
+    assert {s: now[s]["source"] for s in kept} == dict.fromkeys(kept, "lake")
