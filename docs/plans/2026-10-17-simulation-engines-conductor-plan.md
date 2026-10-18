@@ -101,13 +101,13 @@ The installed generated unattended driver currently omits the explicit run key i
 **Branch:** retain `feature/qse-sync`; depends on verified normative Phase 0 and setup gate.
 **Recipe:** fresh subagent → focused TDD → `$code-review` and commit per task → one run-base PR (`Closes #<phase-issue>`) → `claude` opposite-host review ×2 or the configured quota fallback → `conductor merge-gate` → `conductor merge` → `$document-release` → `conductor ledger phase-done`, exactly as above.
 
-- [ ] 1.1 Reconcile pinned QSE source and packaging
+- [x] 1.1 Reconcile pinned QSE source and packaging
 
 Reconcile `scripts/sync_qse.py`, `qse/qse.lock.json`, `qse/README.md`, `.claude/settings.json`, `pyproject.toml`, `.dockerignore` and `deploy/Dockerfile` against `a73f7d4`. Verify pin `ca8c0445a56712c92dc028e68845b94963fdd590` and exact `arch==8.0.0`. Preserve the ten-file upstream closure and package discovery/data inclusion. Do not reformat vendored files or introduce a pip-installed QSE package.
-- [ ] 1.2 Verify offline source attestation and sync mutation guards
+- [x] 1.2 Verify offline source attestation and sync mutation guards
 
 Extend `tests/test_qse_sync.py` only for missing A-SE-01 observations: attest trusted source hashes once against upstream git objects and anchor them in the frozen assertion, then make ordinary gate runs compare those hashes without the private QSE checkout or GitHub. Exercise the real sync with a tiny synthetic git repository; mutate a byte and add an unlisted source file in disposable copies, verify both fail with the private checkout unavailable, re-sync from the synthetic repository and prove its working tree unchanged. Check read-only modes and tracked agent deny rules. Run `.venv/bin/python -m pytest tests/test_qse_sync.py -q`; expected: faithful sync passes and both negative mutations are rejected.
-- [ ] 1.3 Verify dependency closure, container packaging and upstream tests
+- [x] 1.3 Verify dependency closure, container packaging and upstream tests
 
 Reconcile `tests/test_dependencies.py`, `tests/deploy/test_compose.py` and `tests/deploy/test_dockerignore.py`; run those focused files and the pinned QSE joint/recursion tests against the copied package in a temporary directory. Record counts and package provenance, then remove temporary copied tests. These are partial dependency-boundary evidence; A-SE-02 closes only when the actual API and validation flow exist in phase 6.
 
