@@ -8,9 +8,9 @@ The files are read from the local QSE checkout with `git cat-file blob <commit>:
 QSE working tree is never read or touched. Each file is written, then closed with `chmod a-w`.
 `qse/` is edited only in QSE: merge there, then re-run this script at the new commit.
 
-Before anything is written or closed, both modes refuse (exit 2) a root that is the QSE checkout,
-lies inside it or contains it, and any destination (a listed file, the lock, or a directory between
-them and the root) that is a link or resolves outside `<root>/qse`.
+Before anything is written or closed, both modes refuse (exit 2) a root that overlaps the supplied
+QSE checkout, destinations in any of its linked worktrees, and any destination (a listed file,
+the lock, or a directory between them and the root) that is a link or resolves outside `<root>/qse`.
 
 Exit codes: 0 done or clean, 1 drift found by --check, 2 bad arguments or an unsafe root or
 destination, 3 the QSE checkout or commit is not there, 4 a listed path is not in the commit.
@@ -65,7 +65,12 @@ def default_qse_dir() -> Path:
 
 
 def _git(qse_dir: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(["git", "-C", str(qse_dir), *args], capture_output=True)
+    return subprocess.run(
+        ["git", "-C", str(qse_dir), *args],
+        capture_output=True,
+        env={**os.environ, "LC_ALL": "C"},
+        timeout=10,
+    )
 
 
 def read_blobs(qse_dir: Path, commit: str) -> dict[str, bytes]:
@@ -88,10 +93,34 @@ def read_blobs(qse_dir: Path, commit: str) -> dict[str, bytes]:
 def qse_checkout(qse_dir: Path) -> Path:
     """The resolved top level of the QSE working tree `qse_dir` is in (git accepts a
     subdirectory), else `qse_dir` itself resolved, when it is no repository or does not exist."""
-    done = _git(qse_dir, "rev-parse", "--show-toplevel")
-    if done.returncode == 0 and done.stdout.strip():
-        return Path(done.stdout.decode().strip()).resolve()
+    if not qse_dir.exists():
+        return qse_dir.resolve()
+    try:
+        done = _git(qse_dir, "rev-parse", "--show-toplevel")
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SyncError(f"cannot inspect QSE repository identity at {qse_dir}", 3) from exc
+    if done.returncode == 0 and done.stdout:
+        return Path(os.fsdecode(done.stdout.removesuffix(b"\n"))).resolve()
     return qse_dir.resolve()
+
+
+def _common_dir(directory: Path, *, allow_non_repository: bool = False) -> Path | None:
+    """Git's shared identity for main and linked worktrees; other probe errors are unsafe."""
+    try:
+        done = _git(directory, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SyncError(f"cannot inspect QSE repository identity at {directory}", 3) from exc
+    if (
+        allow_non_repository
+        and done.returncode == 128
+        and done.stderr.strip()
+        == b"fatal: not a git repository (or any of the parent directories): .git"
+    ):
+        return None
+    path = Path(os.fsdecode(done.stdout.removesuffix(b"\n")))
+    if done.returncode != 0 or not path.is_absolute() or b"\0" in done.stdout:
+        raise SyncError(f"cannot inspect QSE repository identity at {directory}", 3)
+    return path.resolve()
 
 
 def _inside(path: Path, base: Path) -> bool:
@@ -112,6 +141,21 @@ def guard(root: Path, qse_dir: Path) -> Path:
             "--root must name the PortfolioSight checkout",
             2,
         )
+    # An unavailable private checkout must not prevent offline --check. When it is present,
+    # compare Git identities at every existing destination ancestor: nested repositories can
+    # otherwise hide an enclosing QSE worktree. No working-tree listing or path quoting needed.
+    if qse_dir.exists():
+        source = _common_dir(qse_dir)
+        directories = set()
+        for target in (real_root, *(real_root / name for name in (*FILES, LOCK_NAME))):
+            directories.update(path for path in (target, *target.parents) if path.is_dir())
+        for directory in sorted(directories):
+            if _common_dir(directory, allow_non_repository=True) == source:
+                raise SyncError(
+                    f"refusing: {directory} belongs to a QSE checkout; "
+                    "--root must name the PortfolioSight checkout",
+                    2,
+                )
     base = real_root / "qse"
     for name in (*FILES, LOCK_NAME):
         path = real_root

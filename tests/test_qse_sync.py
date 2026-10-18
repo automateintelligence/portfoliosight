@@ -441,6 +441,136 @@ def test_a_qse_checkout_inside_the_root_is_refused(qse_repo: dict, tmp_path: Pat
     assert _snapshot(repo) == before
 
 
+@pytest.mark.parametrize(
+    "linked_name", ["linked checkout", 'linked\t"checkout"\n', os.fsdecode(b"linked-\xff")]
+)
+@pytest.mark.parametrize("where", ["the checkout", "inside the checkout"])
+@pytest.mark.parametrize("source_is_linked", [False, True])
+def test_roots_overlapping_any_qse_worktree_are_refused_before_mutation(
+    qse_repo: dict, tmp_path: Path, linked_name: str, where: str, source_is_linked: bool
+):
+    repo = qse_repo["repo"]
+    parent = tmp_path / "worktrees"
+    linked = parent / linked_name
+    _git(repo, "worktree", "add", "--detach", str(linked), qse_repo["second"])
+    source, destination = (linked, repo) if source_is_linked else (repo, linked)
+    if where == "the checkout":
+        root = destination
+    else:
+        root = destination / "scratch"
+        root.mkdir()
+    # --check would close this file if it missed the other checkout; sync would replace it.
+    lock = {
+        "source": SOURCE,
+        "commit": qse_repo["second"],
+        "files": {name: _sha256(destination / name) for name in FILES},
+    }
+    (destination / "qse/qse.lock.json").write_text(json.dumps(lock))
+    before = _snapshot(tmp_path)
+    statuses = {tree: _git(tree, "status", "--porcelain") for tree in (repo, linked)}
+    for mode in (("--commit", qse_repo["first"]), ("--check",)):
+        done = _run_script(*mode, "--qse-dir", source, "--root", root)
+        assert done.returncode == 2, done.stdout + done.stderr
+        assert "QSE checkout" in done.stderr and "Traceback" not in done.stderr
+        assert _snapshot(tmp_path) == before
+        assert {tree: _git(tree, "status", "--porcelain") for tree in statuses} == statuses
+
+
+def test_an_unrelated_root_can_sync_from_a_linked_worktree(qse_repo: dict, tmp_path: Path):
+    repo = qse_repo["repo"]
+    linked = tmp_path / 'linked\t"checkout"\n'
+    _git(repo, "worktree", "add", "--detach", str(linked), qse_repo["second"])
+    before = {tree: _snapshot(tree) for tree in (repo, linked)}
+    root = tmp_path / "ps"
+    done = _run_script("--commit", qse_repo["first"], "--qse-dir", linked, "--root", root)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert _run_script("--check", "--qse-dir", linked, "--root", root).returncode == 0
+    for name in FILES:
+        assert (root / name).read_bytes() == _blob(name, 1)
+        assert _mode(root / name) == READ_ONLY
+    assert {tree: _snapshot(tree) for tree in before} == before
+
+
+@pytest.mark.parametrize(
+    "inside", ["qse", "qse/distributions/joint", "qse/exceptions.py", "qse/qse.lock.json"]
+)
+def test_a_mutable_directory_cannot_be_a_linked_qse_worktree(
+    qse_repo: dict, tmp_path: Path, inside: str
+):
+    root = tmp_path / "ps"
+    linked = root / inside
+    _git(qse_repo["repo"], "worktree", "add", "--detach", str(linked), qse_repo["second"])
+    before = _snapshot(tmp_path)
+    for mode in (("--commit", qse_repo["first"]), ("--check",)):
+        done = _run_script(*mode, "--qse-dir", qse_repo["repo"], "--root", root)
+        assert done.returncode == 2, done.stdout + done.stderr
+        assert "QSE checkout" in done.stderr
+        assert _snapshot(tmp_path) == before
+
+
+def test_a_nested_unrelated_repository_cannot_mask_a_linked_qse_worktree(
+    qse_repo: dict, tmp_path: Path
+):
+    linked = tmp_path / "linked"
+    _git(qse_repo["repo"], "worktree", "add", "--detach", str(linked), qse_repo["second"])
+    root = linked / "nested"
+    root.mkdir()
+    _git(root, "init", "-q")
+    before = _snapshot(tmp_path)
+    for mode in (("--commit", qse_repo["first"]), ("--check",)):
+        done = _run_script(*mode, "--qse-dir", qse_repo["repo"], "--root", root)
+        assert done.returncode == 2, done.stdout + done.stderr
+        assert "QSE checkout" in done.stderr
+        assert _snapshot(tmp_path) == before
+
+
+def test_check_still_works_without_the_private_qse_checkout(copy_root: Path, tmp_path: Path):
+    absent_source = tmp_path / "unavailable-qse"
+    assert not absent_source.exists()
+    for name in FILES:
+        (copy_root / name).chmod(0o644)
+    before = {name: (copy_root / name).read_bytes() for name in FILES}
+    done = _run_script("--check", "--qse-dir", absent_source, "--root", copy_root)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert {name: (copy_root / name).read_bytes() for name in FILES} == before
+    assert all(_mode(copy_root / name) == READ_ONLY for name in FILES)
+    assert not absent_source.exists()
+
+
+@pytest.mark.parametrize("failure", ["exit", "empty", "malformed", "oserror", "timeout"])
+@pytest.mark.parametrize("mode", ["sync", "check"])
+def test_an_available_sources_repository_identity_probe_fails_closed(
+    qse_repo: dict, copy_root: Path, monkeypatch: pytest.MonkeyPatch, failure: str, mode: str
+):
+    module = _load_script()
+    original_git = module._git
+
+    def failing_identity_probe(cwd: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+        if cwd == copy_root and "--git-common-dir" in args:
+            if failure == "oserror":
+                raise OSError("cannot run git")
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired("git", 10)
+            return subprocess.CompletedProcess(
+                args,
+                1 if failure == "exit" else 0,
+                stdout=b"relative/path\n" if failure == "malformed" else b"",
+                stderr=b"probe failed",
+            )
+        return original_git(cwd, *args)
+
+    monkeypatch.setattr(module, "_git", failing_identity_probe)
+    for name in FILES:
+        (copy_root / name).chmod(0o644)
+    before = _snapshot(copy_root), _snapshot(qse_repo["repo"])
+    with pytest.raises(module.SyncError, match="repository identity"):
+        if mode == "sync":
+            module.sync(qse_repo["first"], qse_repo["repo"], copy_root)
+        else:
+            module.check(copy_root, qse_repo["repo"])
+    assert (_snapshot(copy_root), _snapshot(qse_repo["repo"])) == before
+
+
 def test_a_qse_dir_below_the_checkout_root_counts_as_the_whole_checkout(qse_repo: dict):
     # Git accepts a subdirectory as -C; the overlap test must use the worktree's top level, or a
     # root beside that subdirectory but inside the checkout would pass.
