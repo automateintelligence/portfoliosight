@@ -200,6 +200,48 @@ def test_interrupted_run_publishes_nothing_and_the_rerun_resumes(unpublished, ge
     assert store.list(f"meta/{previous}/")
 
 
+@pytest.mark.parametrize(
+    ("original", "resumed"),
+    [("replay,garch", "replay"), ("replay", "replay,garch")],
+)
+def test_an_interrupted_generation_refuses_a_changed_engine_policy(
+    unpublished, generation, monkeypatch, original, resumed
+):
+    """An immutable generation cannot mix tensors from two preset engine policies."""
+    store = unpublished
+    monkeypatch.setenv("PS_ENGINES", original)
+
+    def build_then_interrupt(*args, **kwargs):
+        nightly.build_job(*args, **kwargs)
+        raise _Interrupt()
+
+    with pytest.raises(_Interrupt):
+        nightly.run(store=store, now=NOW, providers=_providers(), build_fn=build_then_interrupt)
+    meta_key = f"meta/{generation}/generation.json"
+    original_meta = store.get(meta_key)
+    tensor_keys = store.list(f"tensors/{generation}/")
+    assert len(tensor_keys) == 1
+    first_tensor = store.get(tensor_keys[0])
+    tensor = json.loads(first_tensor)
+    validate_tensor(tensor)
+    assert tensor["engines"]["garch"]["status"] == (
+        "ready" if "garch" in original else "unavailable"
+    )
+    models = {key: store.get(key) for key in store.list(f"models/{generation}/")}
+    monkeypatch.setenv("PS_ENGINES", resumed)
+    providers = _providers()
+    build = _FastBuild()
+    with pytest.raises(BuildRefused) as caught:
+        nightly.run(store=store, now=NOW, providers=providers, build_fn=build)
+    assert caught.value.code == "engine_policy_mismatch"
+    assert build.calls == [] and all(not provider.calls for provider in providers.values())
+    assert store.get(meta_key) == original_meta and store.get(tensor_keys[0]) == first_tensor
+    assert store.list(f"tensors/{generation}/") == tensor_keys
+    assert {key: store.get(key) for key in store.list(f"models/{generation}/")} == models
+    assert not store.exists("meta/current.json")
+    assert not store.exists(f"meta/{generation}/presets.json")
+
+
 def test_published_run_still_refreshes_the_lower_tiers(unpublished):
     providers = _providers()
     nightly.run(store=unpublished, now=NOW, providers=providers, build_fn=_FastBuild())

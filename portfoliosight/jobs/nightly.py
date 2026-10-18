@@ -306,6 +306,15 @@ def run(
 
     try:
         if not status["published"]:
+            if store.exists(generation_key(generation)):
+                meta = store_mod.get_json(store, generation_key(generation))
+                engines = list(EngineSettings.from_env().engines)
+                if meta.get("engines") != engines:
+                    raise BuildRefused(
+                        "engine_policy_mismatch",
+                        f"generation {generation} records preset engines {meta.get('engines')!r}; "
+                        f"PS_ENGINES requests {engines!r}; resume with the original policy",
+                    )
             refresh((1,))
             if not store.exists(generation_key(generation)):
                 store_mod.put_json(
