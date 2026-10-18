@@ -75,14 +75,14 @@ Gate changes follow the spec's explicit pre-production rule: correct a supersede
 
 ## Decision checkpoints and operational limits
 
-The assertion artifact §2 is authoritative about unresolved observations. Capture the following decisions in a reviewable spec correction or owner decision before implementing the dependent behavior; independent tasks continue meanwhile.
+The assertion artifact §2 records the unresolved observations at gate authoring. Owner resolutions below supersede the corresponding open questions in that frozen source; existing frozen checks stay unchanged. Capture remaining decisions in a reviewable spec correction or owner decision before implementing the dependent behavior; independent tasks continue meanwhile.
 
 | Checkpoint | Decision required | Blocks |
 |---|---|---|
 | C1 | How to select exactly `ceil(alpha P)` tail paths when too many are tied at absorbed −100%, and whether additive attribution continues after ruin | Comprehensive ruined-tail ENLC in phase 8; do not silently choose stable sorting or truncate contributions |
 | C2 | ENLC word normalization: §5.5's shifted formula versus §6's `ENLC/ref`; presentation when `ref = 1`; zero-risk DR² behavior | Final measure-word/ref degeneracy behavior in phases 7–8 |
 | C3 | Whether an uncached arbitrary mix may call `/v1/range` during an engine switch despite §11's universal “no request” phrase | Universal no-request claim; precomputed-mix zero-request checks can proceed |
-| C4 | Splice guard behavior with no other included residuals; strict percentile ordering versus explicitly constant paths | Those degenerate cases in phase 2; no fabricated median, jitter or rejection of cash |
+| C4 — RESOLVED | Owner, 2026-10-17: retain and disclose a splice outlier when no peer residual is available; exactly constant portfolios have Bad = Typical = Good at their compounded return | Apply in phase 2's degenerate-case tests; no fabricated median, jitter or rejection of cash |
 | C5 | §10.7 weight-distance norm, aggregation across columns/origins and the exact realized-bad-days concentration convention | The measures comparison verdict in phase 9; raw paired measurements can proceed |
 | C6 | Copula technical copy contradicts empirical margins; zero-margin concordance convention | Parked phase 10 only |
 
@@ -120,7 +120,7 @@ Reconcile `tests/test_dependencies.py`, `tests/deploy/test_compose.py` and `test
 
 - [ ] 2.1 Reconcile shape history, fitting and splice boundaries
 
-Merge the run into the retained branch. Read `portfoliosight/engine/shape.py` and preserved `tests/engine/test_shape.py`; retain the simple-return shape digest with canonical NaNs and fit `log1p(panel)` only on available rows through `D_G`, at most 2,520 union-calendar rows. Reject history at/below −1 with fund/date. Verify residual common rows, 126-row floor, log-space fallback thresholds/statuses and splice/outlier boundary fixtures. Run `.venv/bin/python -m pytest tests/engine/test_shape.py -q`; resolve C4 before claiming its degenerate cases.
+Merge the run into the retained branch. Read `portfoliosight/engine/shape.py` and preserved `tests/engine/test_shape.py`; retain the simple-return shape digest with canonical NaNs and fit `log1p(panel)` only on available rows through `D_G`, at most 2,520 union-calendar rows. Reject history at/below −1 with fund/date. Verify residual common rows, 126-row floor, log-space fallback thresholds/statuses and splice/outlier boundary fixtures. Run `.venv/bin/python -m pytest tests/engine/test_shape.py -q`; apply C4's recorded owner resolution in its degenerate-case tests.
 - [ ] 2.2 Verify amended log/simple-space level scaling
 
 Verify `portfoliosight/engine/ranges.py` implements the amended two-space calculation in bounded path/mix chunks. Preserve one raw log panel; use lognormal targets for each fund, `expm1`, then pooled simple means/covariance and the mix correction. The old plan's affine transform on the raw panel is superseded. Add an asymmetric independent oracle in `tests/engine/test_ranges.py` where transformed simple mean differs from its target and `k != 1`; compare daily paths, not merely percentiles.
