@@ -23,8 +23,10 @@ optimizer seed of the profile is one cell. That list is the denominator, frozen 
 and written to the manifest; an origin whose minimum variance cannot be solved, or a sensitivity
 lookback without a training window there, yields its cells as failed (`min_variance_unsolved`,
 `training_ineligible`) rather than dropping them. A paired cell fails when the search names a
-computational error or any required arm fails; the failure rate is failed cells over the whole
-denominator, and above 1% it blocks success. Cells a stopped run never finished are
+computational error or any required arm fails. `training_ineligible` is not a failure: it leaves
+both sides of the failure rate, which is failed cells over the denominator's other cells (the
+report counts it the same way). Any unresolved failure prevents a valid completed verdict
+(ruling R25); the rate and its 1% line are recorded. Cells a stopped run never finished are
 `unattempted` or `interrupted`, never successes.
 
 Order and timing (protocol 7, timing contract). Within each (profile, menu) cells are sorted by
@@ -157,7 +159,7 @@ SENSITIVITY_ORIGINS = 6
 SENSITIVITY_LOOKBACK = "1y"  # 252 union-calendar rows
 SENSITIVITY_COEFFICIENTS = ((0.70, 0.20, 0.10), (0.50, 0.35, 0.15))
 SENSITIVITIES = ("coefficients", "lookback", "budget")
-FAILED = frozenset({FAILED_ARM, COMPUTATIONAL_ERROR, TRAINING_INELIGIBLE})
+FAILED = frozenset({FAILED_ARM, COMPUTATIONAL_ERROR})  # training_ineligible is excluded
 INCOMPLETE = frozenset({UNATTEMPTED, INTERRUPTED, RESOURCE_BREACH})
 DEPENDENCIES = (
     "numpy", "scipy", "pandas", "pyarrow", "cvxpy", "clarabel", "scikit-learn",
@@ -888,12 +890,16 @@ def _denominator_outcome(
         else:
             statuses[UNATTEMPTED] += 1
     total = len(schedule.cells)
+    ineligible = statuses[TRAINING_INELIGIBLE]
+    base = total - ineligible
     failed = sum(n for status, n in statuses.items() if status in FAILED)
     incomplete = sum(n for status, n in statuses.items() if status in INCOMPLETE)
-    rate = failed / total if total else 0.0
+    rate = failed / base if base else 0.0
     return {
         "cells": total,
         "completed": statuses[OK_CELL],
+        "training_ineligible_excluded": ineligible,
+        "failure_denominator": base,
         "failed": failed,
         "incomplete": incomplete,
         "by_status": dict(sorted(statuses.items())),

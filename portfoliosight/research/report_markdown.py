@@ -6,7 +6,9 @@ panel, R against the three return-agnostic references before R+D against R, the 
 candidates, realized outcomes, the forecast-error diagnostic, calibration, stability, the native
 selections, the sensitivities side by side, cost, every threshold result, the protocol readings
 and per-origin appendices. It computes nothing new: every figure is a summary entry, differences
-in basis points with their block-24 interval and the 12/36 sensitivity intervals.
+in basis points with their block-24 interval and the 12/36 sensitivity intervals. When the summary
+says its statistics are descriptive only (`validity.descriptive_only`: a Stage 1 cell failed, did
+not finish or is missing), that label stands next to every table computed from the outcomes.
 """
 
 from __future__ import annotations
@@ -162,7 +164,8 @@ def render(summary: Mapping[str, Any]) -> str:
         lines += _readings_lines(summary)
         return "\n".join(lines) + "\n"
     lines += _panel_lines(summary, menus)
-    lines += [
+    note = summary["validity"].get("descriptive_only")
+    statistics = [
         "## R against the return-agnostic references (before R+D versus R)",
         "",
         "No predeclared threshold applies; R is validated descriptively against each "
@@ -170,29 +173,44 @@ def render(summary: Mapping[str, Any]) -> str:
         "",
     ]
     for ref in _references(summary):
-        lines += _contrast_block(f"R vs {ref}", summary["references"][ref], menus)
+        statistics += _contrast_block(f"R vs {ref}", summary["references"][ref], menus)
     share = summary["references"]["equal_weight_within_ceiling_share"]
-    lines += [f"Equal weight within the cell's ceiling (share of cells): {share}", ""]
-    lines += [
+    statistics += [f"Equal weight within the cell's ceiling (share of cells): {share}", ""]
+    statistics += [
         "## White-line candidates: max-U w_R and the max-mu_s frontier",
         "",
         "Per origin and ceiling the two candidates, with risk, B/T/G, U, ES_2.5 and DR² on "
         "the training and independent banks, are in Appendix A; C8 decides.",
         "",
     ]
-    lines += _contrast_block("w_R vs frontier", summary["white_line"]["w_r_minus_frontier"], menus)
-    lines += _primary_lines(summary, menus)
-    lines += _realized_lines(summary, menus)
-    lines += _forecast_lines(summary, menus)
-    lines += _calibration_lines(summary, menus)
-    lines += _stability_lines(summary, menus)
-    lines += _native_lines(summary, menus)
-    lines += _sensitivity_lines(summary, menus)
+    statistics += _contrast_block(
+        "w_R vs frontier", summary["white_line"]["w_r_minus_frontier"], menus
+    )
+    statistics += _primary_lines(summary, menus)
+    statistics += _realized_lines(summary, menus)
+    statistics += _forecast_lines(summary, menus)
+    statistics += _calibration_lines(summary, menus)
+    statistics += _stability_lines(summary, menus)
+    statistics += _native_lines(summary, menus)
+    statistics += _sensitivity_lines(summary, menus)
+    lines += _labelled(statistics, note)
     lines += _cost_lines(summary, menus)
-    lines += _criteria_lines(summary)
+    lines += _labelled(_criteria_lines(summary), note)
     lines += _readings_lines(summary)
-    lines += _appendix_lines(summary)
+    lines += _labelled(_appendix_lines(summary), note)
     return "\n".join(lines) + "\n"
+
+
+def _labelled(lines: list[str], note: str | None) -> list[str]:
+    """``note`` (italic) and a blank line before every table of ``lines``; unchanged if None."""
+    if note is None:
+        return lines
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        if line.startswith("| ") and (i == 0 or not lines[i - 1].startswith("|")):
+            out += [f"_{note}_", ""]
+        out.append(line)
+    return out
 
 
 def _verdict_lines(summary: Mapping[str, Any], menus: Sequence[str]) -> list[str]:
@@ -266,13 +284,18 @@ def _compliance_lines(summary: Mapping[str, Any]) -> list[str]:
     lines += [f"Artifacts re-hashed against the manifest: {', '.join(sorted(verified))}.", ""]
     d = summary["denominator"]
     lines += [
-        f"Denominator (Stage 1 cells): {d['cells']}; statuses {d['by_status']}; "
-        f"training-ineligible excluded {d['training_ineligible_excluded']}; failure rate "
-        f"{d['failure_rate']:.4f} (limit {d['failure_rate_limit']}).",
+        f"Denominator (Stage 1 cells, frozen before any search): {d['cells']}; statuses "
+        f"{d['by_status']}; missing {d['missing']}; training-ineligible excluded "
+        f"{d['training_ineligible_excluded']}; failed {d['failed']} of "
+        f"{d['failure_denominator']} = {d['failure_rate']:.4f} (the {d['failure_rate_limit']} "
+        "line is information: any unresolved failure prevents a valid completed verdict, R25).",
         "",
     ]
     if d["failed_cells"]:
-        lines.append("Failed or incomplete cells (masked out of every paired statistic below):")
+        lines.append(
+            "Failed, incomplete or missing cells (kept in the denominator; every statistic "
+            "below is descriptive over the remaining cells):"
+        )
         lines.append("")
         lines += _table(
             ["cell", "status", "error", "detail"],
@@ -568,6 +591,11 @@ def _sensitivity_lines(summary: Mapping[str, Any], menus: Sequence[str]) -> list
         )
         for name, entry in m["settings"].items():
             r, d = entry["replay"], entry["disclosure"] or {}
+            said = list(d.get("reasons", []))
+            if not entry["available"]:
+                said += entry["unavailable"]
+            if entry["descriptive_only"]:
+                said.append("figures descriptive only: computed over the available cells")
             rows.append(
                 [
                     menu,
@@ -578,8 +606,12 @@ def _sensitivity_lines(summary: Mapping[str, Any], menus: Sequence[str]) -> list
                     _bp(r and r["good"]),
                     _bp(r and r["es"]),
                     d.get("banks_positive_u"),
-                    "blocks" if d.get("blocking") else "does not block",
-                    "; ".join(d.get("reasons", [])),
+                    "blocks"
+                    if d.get("blocking")
+                    else "not assessed: no qualifying branch"
+                    if d.get("branch") is None
+                    else "does not block",
+                    "; ".join(said),
                 ]
             )
         stability = m["cross_seed_stability"]

@@ -12,16 +12,24 @@ incomplete when its Stage 1 manifest or any sensitivity manifest is missing or n
 an incomplete run is refused (`IncompleteRun`) unless ``allow_incomplete``, and then the
 experiment is labeled inconclusive/invalid.
 
-Validity (protocol 5 and 7, ruling 4): the run and its sensitivities are complete; no Stage 1
-cell is unattempted, interrupted or stopped at a resource ceiling; the paired-cell failure rate
-(failed arms and named computational errors over every scheduled cell, `training_ineligible`
-excluded by definition) is at most 1%; the protocol 4 evidence gate holds on the scheduled panel
-(at least 60 mature origins, at least 95% complete outcomes in each menu, no unexplained missing
-outcome, at least five disjoint intervals in each menu, at most 120 scheduled origins); the TSP
-investigation digest was reproduced; equal weights in a cell have bit-identical outcomes
-(invariance); every completed cell has R and R+D at every allowance; and the run's settings are
-the protocol's. Failed cells (at most 1%) stay in the denominator, are listed with their reasons,
-and are masked out of the paired statistics.
+Validity (protocol 5 and 7, ruling R25): the run and its sensitivities are complete; every cell
+of the frozen denominator (the manifest's `denominator.listing`) has its search.parquet row; no
+Stage 1 cell is unattempted, interrupted or stopped at a resource ceiling; no Stage 1 cell failed
+(a failed arm or a named computational error; `training_ineligible` is not a failure and leaves
+both sides of the failure rate, which is recorded with its 1% line as information); the report's
+count agrees with the denominator outcome the runner wrote to the manifest; the protocol 4
+evidence gate holds on the scheduled panel (at least 60 mature origins, at least 95% complete
+outcomes in each menu, no unexplained missing outcome, at least five disjoint intervals in each
+menu, at most 120 scheduled origins); the TSP investigation digest was reproduced; equal weights
+in a cell have bit-identical outcomes (invariance); every completed cell has R and R+D at every
+allowance; and the run's settings are the protocol's. Each sensitivity profile is validated the
+same way against its own frozen schedule (failed, incomplete and missing cells, paired
+completeness, invariance); a profile that fails is unavailable, so its setting blocks Stage 2,
+and the experiment is invalid. Any unresolved failure prevents a valid completed verdict: the
+failed cells stay in the denominator, are listed with their reasons, and every statistic computed
+over the remaining cells is labeled descriptive next to its table (`validity.descriptive_only`);
+no protocol 7 label or Stage 2 run derives from it. A failed cell is resolved only by a rerun
+under a recorded amendment.
 
 The statistics and decisions are `research.evidence`; this module gathers the artifacts into its
 inputs, writes the summary and renders the markdown (see `SUMMARY_SECTIONS` for the schema).
@@ -135,10 +143,13 @@ PROTOCOL_READINGS = (
     "The stability branch is evaluated only when the primary pooled mean paired ΔU is under 5 bp "
     "(ruling 3); its bank rule counts banks meeting every floor, not banks with a gain.",
     "training_ineligible is not a failure (recorded, excluded from numerator and denominator); "
-    "failed arms and named computational errors count toward the paired-cell failure rate; a rate "
-    "above 1% blocks success; at or below 1% the failed cells stay in the denominator, are listed "
-    "with their reasons and are masked out of paired statistics; an unattempted, interrupted or "
-    "resource-breach cell makes the run incomplete (ruling 4).",
+    "failed arms and named computational errors are failures, and a valid completed verdict "
+    "requires zero unresolved failures in Stage 1 and in each sensitivity profile (ruling R25, "
+    "superseding R24-4): the failed cells stay in the denominator and are listed with their "
+    "reasons, statistics over the remaining cells are descriptive and labeled as such, and no "
+    "protocol 7 label or Stage 2 run derives from them; the failure rate and its 1% line are "
+    "recorded as information. An unattempted, interrupted, resource-breach or missing cell makes "
+    "the run incomplete. A sensitivity profile with any such cell is unavailable and blocks.",
     "General stability is assessed on R+D at the 2.5 bp cap per risk cell: the across-seed SD "
     "uses ddof 1; 'primary portfolio chart volatility' is the model risk sqrt(w'Σw) of the "
     "primary-seed R+D selection at that origin and ceiling; median and 90th-percentile pairwise "
@@ -417,17 +428,51 @@ def build_panel(run: RunFiles, menus: Sequence[str]) -> Panel:
 # ------------------------------------------------------------------------------- denominator
 
 
-def denominator(run: RunFiles, profile: str = STAGE_1) -> dict[str, Any]:
-    """Statuses of the profile's scheduled cells, the failure rate (ruling 4) and failed cells."""
-    cells = [cell for cell in run.cells if cell["profile"] == profile]
+def denominator(run: RunFiles, profile: str | None = STAGE_1) -> dict[str, Any]:
+    """A profile's cells (every profile with None) against the run's frozen denominator.
+
+    Statuses come from the search.parquet cell rows; the failure rate is failed arms and named
+    computational errors over the scheduled cells other than `training_ineligible` (ruling R25:
+    information, since any failure prevents a valid verdict). A frozen cell without a row is
+    `missing`, a row outside the frozen listing `unscheduled`; without a listing in the manifest
+    the rows are the cells.
+    """
+    cells = [cell for cell in run.cells if profile is None or cell["profile"] == profile]
+    listing = (run.manifest.get("denominator") or {}).get("listing")
+    found = {(cell["profile"], cell["cell_key"]) for cell in cells}
+    missing: list[str] = []
+    unscheduled: list[str] = []
+    total = len(cells)
+    if listing is not None:
+        frozen = [
+            (entry["profile"], entry["key"])
+            for entry in listing
+            if profile is None or entry["profile"] == profile
+        ]
+        missing = [key for name, key in frozen if (name, key) not in found]
+        unscheduled = sorted(key for _, key in found - set(frozen))
+        total = len(frozen)
     statuses = Counter(cell["cell_status"] for cell in cells)
     ineligible = statuses.get(TRAINING_INELIGIBLE, 0)
     failed = [cell for cell in cells if cell["cell_status"] in FAILED_STATUSES]
     incomplete = [cell for cell in cells if cell["cell_status"] in INCOMPLETE_STATUSES]
-    base = len(cells) - ineligible
+    base = total - ineligible
     rate = len(failed) / base if base else 0.0
+    listed = [
+        {key: cell[key] for key in ("cell_key", "cell_status", "error", "error_detail")}
+        for cell in failed + incomplete
+    ]
+    listed += [
+        {
+            "cell_key": key,
+            "cell_status": "missing",
+            "error": None,
+            "error_detail": "a frozen cell without a search.parquet row",
+        }
+        for key in missing
+    ]
     return {
-        "cells": len(cells),
+        "cells": total,
         "by_status": dict(sorted(statuses.items())),
         "training_ineligible_excluded": ineligible,
         "failure_denominator": base,
@@ -436,15 +481,26 @@ def denominator(run: RunFiles, profile: str = STAGE_1) -> dict[str, Any]:
         "failure_rate_limit": FAILURE_RATE_LIMIT,
         "failure_rate_above_limit": rate > FAILURE_RATE_LIMIT,
         "incomplete": len(incomplete),
-        "failed_cells": [
-            {key: cell[key] for key in ("cell_key", "cell_status", "error", "error_detail")}
-            for cell in failed + incomplete
-        ],
+        "missing": len(missing),
+        "missing_cells": missing,
+        "unscheduled_cells": unscheduled,
+        "failed_cells": listed,
         "manifest_outcome": (run.manifest.get("status") or {}).get("denominator"),
     }
 
 
-def invariance_breaks(outcomes: pa.Table) -> list[str]:
+_AGREEING = (
+    "cells",
+    "training_ineligible_excluded",
+    "failure_denominator",
+    "failed",
+    "incomplete",
+    "failure_rate",
+    "by_status",
+)
+
+
+def invariance_breaks(outcomes: pa.Table, profile: str | None = None) -> list[str]:
     """Equal weights in one cell must have bit-identical outcomes, whatever their role."""
     figures = [
         name
@@ -457,6 +513,8 @@ def invariance_breaks(outcomes: pa.Table) -> list[str]:
     seen: dict[tuple, tuple[str, str]] = {}
     broken = []
     for row in table:
+        if profile is not None and row["profile"] != profile:
+            continue
         cell = tuple(row[k] for k in keys)
         weights = tuple(float(w).hex() for w in row["weights"])
         found = json.dumps([row[name] for name in figures], default=repr, allow_nan=True)
@@ -485,6 +543,44 @@ def _paired_complete(run: RunFiles, profile: str = STAGE_1) -> list[str]:
     return missing
 
 
+def profile_problems(run: RunFiles, profile: str) -> list[str]:
+    """Why a profile's cells are not a complete paired record (empty when they are)."""
+    counted = denominator(run, profile)
+    problems = []
+    for name, text in (
+        ("failed", "failed"),
+        ("incomplete", "unattempted, interrupted or resource-breach"),
+        ("missing", "missing from search.parquet"),
+    ):
+        if counted[name]:
+            problems.append(f"{profile}: {counted[name]} {text}")
+    if counted["unscheduled_cells"]:
+        outside = len(counted["unscheduled_cells"])
+        problems.append(f"{profile}: {outside} cells outside the schedule")
+    if run.outcomes is None:
+        problems.append(f"{profile}: no outcomes.parquet")
+        return problems
+    unpaired = _paired_complete(run, profile)
+    if unpaired:
+        problems.append(f"{profile}: {len(unpaired)} completed cells lack a paired arm")
+    broken = invariance_breaks(run.outcomes, profile)
+    if broken:
+        problems.append(f"{profile}: {len(broken)} cells break exact-weight invariance")
+    return problems
+
+
+def sensitivity_problems(sensitivities: Mapping[str, RunFiles | None]) -> dict[str, list[str]]:
+    """Per sensitivity profile, why its cells cannot stand for the setting (empty: they can)."""
+    out: dict[str, list[str]] = {}
+    for name, profiles in SENSITIVITY_RUNS.items():
+        run = sensitivities.get(name)
+        for profile in profiles:
+            out[profile] = (
+                [f"{profile}: not run"] if run is None else profile_problems(run, profile)
+            )
+    return out
+
+
 def _provenance(run: RunFiles, part: str) -> Any:
     manifest = run.manifest
     if part == "run id":
@@ -499,28 +595,66 @@ def validity(
     sensitivities: Mapping[str, RunFiles | None],
     panel: Panel | None,
     counted: Mapping[str, Any],
+    problems: Mapping[str, Sequence[str]],
 ) -> tuple[Validity, list[dict[str, Any]]]:
-    """Every validity check (module docstring) and the reasons the experiment is invalid."""
+    """Every validity check (module docstring) and the reasons the experiment is invalid.
+
+    ``counted`` is `denominator(stage1)`, ``problems`` `sensitivity_problems(sensitivities)`.
+    """
     checks: list[dict[str, Any]] = []
 
     def check(name: str, met: bool, detail: str) -> None:
         checks.append({"check": name, "met": bool(met), "detail": detail})
 
     check("stage_1_complete", stage1.state == "complete", f"Stage 1 state {stage1.state}")
-    for name in SENSITIVITY_RUNS:
+    for name, profiles in SENSITIVITY_RUNS.items():
         run = sensitivities.get(name)
         state = "missing" if run is None else run.state
         check(f"sensitivity_{name}_complete", state == "complete", f"state {state}")
+        found = [
+            text for profile in profiles for text in problems.get(profile, [f"{profile}: not run"])
+        ]
+        check(
+            f"sensitivity_{name}_cells",
+            not found,
+            "; ".join(found)
+            if found
+            else "every frozen cell completed with its paired arms and exact-weight invariance",
+        )
+    missing = counted["missing_cells"] + counted["unscheduled_cells"]
+    check(
+        "frozen_schedule",
+        not missing,
+        f"{counted['missing']} frozen cells without a row, {len(counted['unscheduled_cells'])} "
+        "rows outside the frozen schedule" + (f": {missing[:5]}" if missing else ""),
+    )
     check(
         "no_incomplete_cells",
         counted["incomplete"] == 0,
         f"{counted['incomplete']} unattempted, interrupted or resource-breach cells",
     )
     check(
-        "failure_rate",
-        not counted["failure_rate_above_limit"],
-        f"{counted['failed']} failed of {counted['failure_denominator']} = "
-        f"{counted['failure_rate']:.4f} (limit {FAILURE_RATE_LIMIT})",
+        "no_failed_cells",
+        counted["failed"] == 0,
+        f"{counted['failed']} failed of {counted['failure_denominator']} "
+        f"(training-ineligible excluded: {counted['training_ineligible_excluded']}); rate "
+        f"{counted['failure_rate']:.4f}, 1% line recorded as information; any unresolved "
+        "failure prevents a valid completed verdict (R25)",
+    )
+    whole = denominator(stage1, None)
+    recorded = counted["manifest_outcome"]
+    differs = (
+        list(_AGREEING)
+        if not isinstance(recorded, Mapping)
+        else [key for key in _AGREEING if recorded.get(key) != whole[key]]
+    )
+    check(
+        "denominator_agrees_with_manifest",
+        not differs,
+        "the report's count differs from the manifest's denominator outcome in "
+        + ", ".join(differs)
+        if differs
+        else "the report counts the cells as the runner recorded them",
     )
     if panel is None:
         check("coverage_gate", False, "origins.parquet unavailable")
@@ -555,15 +689,15 @@ def validity(
     if stage1.outcomes is None:
         check("outcomes_present", False, "outcomes.parquet unavailable")
     else:
-        broken = invariance_breaks(stage1.outcomes)
+        broken = invariance_breaks(stage1.outcomes, STAGE_1)
         check(
             "invariance",
             not broken,
             f"{len(broken)} cells break exact-weight invariance"
             + (f": {broken[:5]}" if broken else ""),
         )
-        missing = _paired_complete(stage1)
-        check("paired_arms", not missing, f"{len(missing)} completed cells lack a paired arm")
+        unpaired = _paired_complete(stage1)
+        check("paired_arms", not unpaired, f"{len(unpaired)} completed cells lack a paired arm")
     deviations = list(stage1.manifest.get("deviations_from_protocol") or [])
     check(
         "protocol_settings",
@@ -574,6 +708,34 @@ def validity(
     )
     reasons = tuple(f"{c['check']}: {c['detail']}" for c in checks if not c["met"])
     return Validity(valid=not reasons, reasons=reasons), checks
+
+
+def descriptive_note(stage1: RunFiles, counted: Mapping[str, Any]) -> str | None:
+    """The label of every statistic computed over a partial Stage 1 (None when it is whole)."""
+    parts = [
+        f"{counted[name]} {text}"
+        for name, text in (
+            ("failed", "failed"),
+            ("incomplete", "unattempted, interrupted or resource-breach"),
+            ("missing", "missing"),
+        )
+        if counted[name]
+    ]
+    if not parts and stage1.state == "complete":
+        return None
+    said = []
+    if parts:
+        said.append(
+            " and ".join(parts) + " Stage 1 cells stay in the denominator and are listed under "
+            "Protocol compliance"
+        )
+    if stage1.state != "complete":
+        said.append(f"the Stage 1 run is {stage1.state}")
+    return (
+        "Descriptive only: computed over the available cells; "
+        + "; ".join(said)
+        + ". No protocol 7 label or Stage 2 decision derives from this table (R25)."
+    )
 
 
 # ---------------------------------------------------------------------------------- the report
@@ -647,7 +809,8 @@ def build_summary(
     coefficients = tuple(manifest["preference"]["coefficients"])
     counted = denominator(stage1)
     panel = build_panel(stage1, menus) if stage1.origins is not None else None
-    valid, checks = validity(stage1, sensitivities, panel, counted)
+    problems = sensitivity_problems(sensitivities)
+    valid, checks = validity(stage1, sensitivities, panel, counted, problems)
     summary: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "run": {
@@ -675,7 +838,12 @@ def build_summary(
         "protocol_readings": list(PROTOCOL_READINGS),
         "panel": None if panel is None else _panel_record(panel),
         "denominator": counted,
-        "validity": {"valid": valid.valid, "reasons": list(valid.reasons), "checks": checks},
+        "validity": {
+            "valid": valid.valid,
+            "reasons": list(valid.reasons),
+            "checks": checks,
+            "descriptive_only": descriptive_note(stage1, counted),
+        },
     }
     if stage1.outcomes is None or panel is None:
         stage_2 = {
@@ -756,7 +924,7 @@ def build_summary(
         for figure in REPLAY_FIGURES
     }
     six = tuple(manifest["ledger"]["sensitivity_origins"])
-    settings, primary_six = _sensitivity_replays(stage1, sensitivities, menus, six, primary)
+    replays = _sensitivity_replays(stage1, sensitivities, menus, six, primary, problems)
     menu_evidence = {}
     for menu in menus:
         dr2, changed = evidence.score_change(grid, menu, PRIMARY_ARM, BASE_ARM, primary)
@@ -777,8 +945,8 @@ def build_summary(
                 disjoint=panel.facts[menu]["disjoint_panel"],
             ),
         )
-    verdict = evidence.decide(valid, menu_evidence, settings)
-    summary["sensitivities"] = _sensitivity_section(settings, primary_six, six, verdict)
+    verdict = evidence.decide(valid, menu_evidence, replays.settings)
+    summary["sensitivities"] = _sensitivity_section(replays, six, verdict)
     summary["cost"] = _cost_section(stage1, sensitivities, menus)
     summary["cost"]["evidence"] = {
         menu: vars(e.cost) | {"line_seconds": evidence.COST_R_P95[menu]}
@@ -1193,17 +1361,37 @@ def _stability_record(s: evidence.Stability) -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class SensitivityReplays:
+    """The decision inputs (None: unavailable), Stage 1 on the six origins, and per menu and
+    setting the descriptive contrast and the reasons of an unavailable setting."""
+
+    settings: dict[str, dict[str, Replay | None]]
+    primary_six: dict[str, Replay | None]
+    partial: dict[str, dict[str, Replay | None]]
+    reasons: dict[str, dict[str, list[str]]]
+
+
 def _sensitivity_replays(
     stage1: RunFiles,
     sensitivities: Mapping[str, RunFiles | None],
     menus: Sequence[str],
     six: Sequence[str],
     seed: int,
-) -> tuple[dict[str, dict[str, Replay | None]], dict[str, Replay | None]]:
-    """Each setting's six-origin paired replay contrast per menu (None: unavailable)."""
+    problems: Mapping[str, Sequence[str]],
+) -> SensitivityReplays:
+    """Each setting's six-origin paired replay contrast per menu and Stage 1's on those origins.
+
+    A sensitivity profile whose run is missing or not complete, or that has a problem
+    (`profile_problems`), is unavailable: the decision gets None, and its contrast over the
+    available cells, if any, is kept apart as descriptive.
+    """
     assert stage1.outcomes is not None
     settings: dict[str, dict[str, Replay | None]] = {menu: {} for menu in menus}
+    partial: dict[str, dict[str, Replay | None]] = {menu: {} for menu in menus}
+    reasons: dict[str, dict[str, list[str]]] = {menu: {} for menu in menus}
     stage_grid = Grid(stage1.outcomes, six, profile=STAGE_1)
+    absent = "no paired outcome on the six origins"
 
     def contrast(grid: Grid, menu: str, arm: Arm) -> Replay | None:
         if not (grid.has(menu, arm, seed) and grid.has(menu, BASE_ARM, seed)):
@@ -1214,46 +1402,55 @@ def _sensitivity_replays(
     for menu in menus:
         for name, allowance in SWEEP.items():
             settings[menu][name] = contrast(stage_grid, menu, ("R+D", allowance))
+            reasons[menu][name] = [] if settings[menu][name] is not None else [absent]
     for run_name, profiles in SENSITIVITY_RUNS.items():
         run = sensitivities.get(run_name)
-        usable = run is not None and run.state == "complete" and run.outcomes is not None
         for profile in profiles:
+            why = list(problems.get(profile, []))
+            if run is None:
+                why = why or [f"{profile}: not run"]
+            elif run.state != "complete":
+                why.insert(0, f"{profile}: the run is {run.state}")
             for menu in menus:
-                if not usable:
-                    settings[menu][profile] = None
-                    continue
-                assert run is not None and run.outcomes is not None
-                grid = Grid(run.outcomes, six, profile=profile)
-                settings[menu][profile] = contrast(grid, menu, PRIMARY_ARM)
-    return settings, primary_six
+                found = None
+                if run is not None and run.outcomes is not None:
+                    found = contrast(Grid(run.outcomes, six, profile=profile), menu, PRIMARY_ARM)
+                settings[menu][profile] = None if why else found
+                if why and found is not None:
+                    partial[menu][profile] = found
+                reasons[menu][profile] = why or ([] if found is not None else [absent])
+    return SensitivityReplays(settings, primary_six, partial, reasons)
 
 
 def _sensitivity_section(
-    settings: Mapping[str, Mapping[str, Replay | None]],
-    primary_six: Mapping[str, Replay | None],
-    six: Sequence[str],
-    verdict: Verdict,
+    replays: SensitivityReplays, six: Sequence[str], verdict: Verdict
 ) -> dict[str, Any]:
     disclosed = {(d.menu, d.setting): d.record() for d in verdict.disclosures}
+
+    def entry(menu: str, name: str, replay: Replay | None) -> dict[str, Any]:
+        descriptive = name in replays.partial[menu]
+        shown = replay if replay is not None else replays.partial[menu].get(name)
+        return {
+            "available": replay is not None,
+            "unavailable": replays.reasons[menu][name],
+            "descriptive_only": descriptive,
+            "replay": _replay_record(shown),
+            "pooled_gain_at_least_5bp": None
+            if replay is None or replay.u is None
+            else replay.u >= evidence.REPLAY_GAIN,
+            "disclosure": disclosed.get((menu, name)),
+        }
+
     return {
         "origins": list(six),
         "seed": "primary only; cross-seed stability is unavailable for every setting",
         "menus": {
             menu: {
-                "stage_1_six_origins": _replay_record(primary_six.get(menu)),
-                "settings": {
-                    name: {
-                        "replay": _replay_record(replay),
-                        "pooled_gain_at_least_5bp": None
-                        if replay is None or replay.u is None
-                        else replay.u >= evidence.REPLAY_GAIN,
-                        "disclosure": disclosed.get((menu, name)),
-                    }
-                    for name, replay in found.items()
-                },
+                "stage_1_six_origins": _replay_record(replays.primary_six.get(menu)),
+                "settings": {name: entry(menu, name, replay) for name, replay in found.items()},
                 "cross_seed_stability": disclosed.get((menu, "cross-seed stability")),
             }
-            for menu, found in settings.items()
+            for menu, found in replays.settings.items()
         },
     }
 

@@ -43,13 +43,15 @@ Decisions (protocol 7, applied mechanically by `decide`): per menu the replay-re
 stability branch (evaluated only when the pooled ΔU is under 5 bp, ruling 3), meaningful score
 change, general stability and cost give positive conditional-model evidence (PCME); realized
 guardrails and realized benefit support give realized policy support; any breached realized
-guardrail or independent-replay floor is material harm at its location. Stage 2 runs iff the
-experiment is valid, both menus have PCME and no sensitivity disclosure blocks progression
-(ruling 1): a sign reversal, a failed floor or bank check, or an unavailable setting or
-stability sensitivity. A menu that qualifies only through the stability branch therefore cannot
-authorize Stage 2. The 0 bp cap is inert by construction and never blocks (ruling 2). Confirmed
-worthwhile benefit (realized support in both menus and no material harm) is reported and never
-gates Stage 2.
+guardrail or independent-replay floor is material harm at its location. An invalid experiment
+(ruling R25: any unresolved failure, among others) gets no protocol 7 verdict label: every menu
+label is inconclusive/invalid and no branch qualifies. Stage 2 runs iff the experiment is valid,
+both menus have PCME and no sensitivity disclosure blocks progression (ruling 1): a sign
+reversal, a failed floor or bank check, or an unavailable setting or stability sensitivity. A menu
+that qualifies only through the stability branch therefore cannot authorize Stage 2. The 0 bp cap
+is inert by construction and never blocks (ruling 2). Confirmed worthwhile benefit (positive
+conditional-model evidence and realized support in both menus, no material harm, a valid
+experiment) is reported and never gates Stage 2.
 """
 
 from __future__ import annotations
@@ -833,11 +835,13 @@ class Disclosure:
     inert: bool
     blocking: bool
     reasons: tuple[str, ...]
+    branch: str | None = None  # the menu's qualifying branch it is judged against
 
     def record(self) -> dict[str, Any]:
         return {
             "menu": self.menu,
             "setting": self.setting,
+            "branch": self.branch,
             "available": self.available,
             "u": self.u,
             "sign_reversal": self.sign_reversal,
@@ -1219,7 +1223,9 @@ _PCME_DIMENSIONS = {
     "General stability",
     "Cost",
 }
-_UNAVAILABLE = "unavailable: the setting was not run or produced no paired outcome"
+_UNAVAILABLE = (
+    "unavailable: the setting was not run, failed its validity checks or produced no paired outcome"
+)
 _NO_STABILITY = "stability sensitivity unavailable: the sensitivities run the primary seed only"
 
 
@@ -1241,6 +1247,7 @@ def _disclose(
             inert,
             not inert and branch is not None,
             (_UNAVAILABLE,),
+            branch,
         )
     reversal = bool(
         found.u is not None
@@ -1278,6 +1285,7 @@ def _disclose(
         inert,
         blocking,
         tuple(reasons),
+        branch,
     )
 
 
@@ -1339,12 +1347,14 @@ def decide(
         )
         support = _realized_rules(rules, e.realized) and validity.valid
         pcme = validity.valid and branch is not None and score and general and cost_ok
+        # an invalid experiment has no qualifying branch: no label derives from its statistics
+        assessed = branch if validity.valid else None
         settings = sensitivities.get(name, {})
         found = [
-            _disclose(name, branch, e.replay, setting, settings.get(setting))
+            _disclose(name, assessed, e.replay, setting, settings.get(setting))
             for setting in SENSITIVITY_SETTINGS
         ]
-        if branch == STABILITY_BRANCH:
+        if assessed == STABILITY_BRANCH:
             found.append(
                 Disclosure(
                     name,
@@ -1358,6 +1368,7 @@ def decide(
                     False,
                     True,
                     (_NO_STABILITY,),
+                    assessed,
                 )
             )
         disclosures += found
@@ -1371,16 +1382,23 @@ def decide(
         elif pcme:
             failing += [f"{name}: sensitivity {d.setting}: {'; '.join(d.reasons)}" for d in blocked]
         disjoint = e.realized.disjoint
+        valid = validity.valid
         verdicts[name] = MenuVerdict(
-            conditional=INVALID if not validity.valid else PCME if pcme else NOT_MET,
-            branch=branch,
+            conditional=INVALID if not valid else PCME if pcme else NOT_MET,
+            branch=assessed,
             pcme=pcme,
-            score_change=ACTIVE if score else INACTIVE,
-            realized=INVALID if not validity.valid else SUPPORT if support else INCONCLUSIVE,
+            score_change=INVALID if not valid else ACTIVE if score else INACTIVE,
+            realized=INVALID if not valid else SUPPORT if support else INCONCLUSIVE,
             support=support,
             tail_power=UNDERPOWERED if disjoint < TAIL_DISJOINT else TAIL_ADEQUATE,
             intervals=EXPLORATORY if disjoint < SUPPORT_DISJOINT else NOT_EXPLORATORY,
-            sensitivity=NO_BRANCH if branch is None else SENSITIVE if blocked else ROBUST,
+            sensitivity=INVALID
+            if not valid
+            else NO_BRANCH
+            if branch is None
+            else SENSITIVE
+            if blocked
+            else ROBUST,
         )
         criteria += rules.items
     harm = tuple(
@@ -1416,7 +1434,7 @@ def decide(
         menus=verdicts,
         disclosures=tuple(disclosures),
         material_harm=harm,
-        confirmed_worthwhile_benefit=bool(verdicts)
+        confirmed_worthwhile_benefit=pcme_all
         and all(v.support for v in verdicts.values())
         and not harm
         and validity.valid,

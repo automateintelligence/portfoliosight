@@ -22,11 +22,12 @@ from types import ModuleType
 from typing import Any
 
 import numpy as np
+import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from portfoliosight.research import evidence, experiment, outcomes, report
+from portfoliosight.research import evidence, experiment, outcomes, report, search
 from portfoliosight.research.evidence import (
     BP,
     BankReplay,
@@ -740,9 +741,22 @@ def test_an_invalid_experiment_is_inconclusive_and_never_a_winner() -> None:
     for label in verdict.menus.values():
         assert label.conditional == "inconclusive/invalid" and not label.pcme
         assert label.realized == "inconclusive/invalid"
+        # no protocol 7 label derives from statistics of an invalid experiment (R25)
+        assert label.branch is None and label.sensitivity == "inconclusive/invalid"
+        assert label.score_change == "inconclusive/invalid"
+    assert not any(d.blocking for d in verdict.disclosures)
     assert verdict.stage_2["run"] is False
     assert verdict.stage_2["failing_criteria"][0].startswith("validity:")
     assert verdict.confirmed_worthwhile_benefit is False
+
+
+def test_confirmed_benefit_needs_conditional_model_evidence_in_both_menus() -> None:
+    """Codex P2-6: realized support passes in both menus, Example's screening fails."""
+    verdict = _decide(example=_menu("example", dr2_gain=0.0999))
+    assert all(label.support for label in verdict.menus.values())
+    assert verdict.menus["example"].pcme is False and verdict.material_harm == ()
+    assert verdict.confirmed_worthwhile_benefit is False
+    assert _decide().confirmed_worthwhile_benefit is True
 
 
 def test_stage_2_needs_both_menus_and_confirmed_benefit_does_not_gate_it() -> None:
@@ -977,8 +991,6 @@ def test_summary_statistics_match_hand_aggregation_of_the_outcomes(
     aggregate = summary["primary"]["replay"]["utility"]["aggregate"]["value"]
     assert aggregate == pytest.approx((tsp + example) / 2, abs=1e-15)
     # the forecast-error correlation agrees with the runner's point diagnostic
-    import pandas as pd
-
     point = outcomes.forecast_error_diagnostic(pd.DataFrame(rows))
     defined = 0
     for record in point.to_dict("records"):
@@ -1202,7 +1214,10 @@ def test_expected_shortfall_averages_the_worst_ceil_2_5_percent_of_origins() -> 
     assert math.isnan(evidence.expected_shortfall(np.full(3, np.nan), np.arange(3)[None, :])[0])
 
 
-def _cells(statuses: dict[str, int]) -> report.RunFiles:
+def _cells(
+    statuses: dict[str, int], *, listing: list[str] | None = None, state: str = "complete"
+) -> report.RunFiles:
+    """search.parquet cell rows by status; ``listing`` is the manifest's frozen denominator."""
     cells = []
     for status, count in statuses.items():
         for i in range(count):
@@ -1215,13 +1230,18 @@ def _cells(statuses: dict[str, int]) -> report.RunFiles:
                     "error_detail": "named",
                 }
             )
-    return report.RunFiles(Path("."), {}, {}, None, None, tuple(cells), ())
+    manifest: dict[str, Any] = {"status": {"state": state}}
+    if listing is not None:
+        entries = [{"profile": "stage-1", "key": key} for key in listing]
+        manifest["denominator"] = {"cells": len(entries), "listing": entries}
+    return report.RunFiles(Path("."), manifest, {}, None, None, tuple(cells), ())
 
 
-def test_the_failure_rate_follows_ruling_4() -> None:
+def test_the_failure_rate_excludes_training_ineligible_cells() -> None:
     """Failed arms and named errors count; training_ineligible is excluded from both sides."""
     at_limit = report.denominator(_cells({"ok": 97, "failed_arm": 1, "training_ineligible": 2}))
     assert at_limit["failure_denominator"] == 98 and at_limit["failed"] == 1
+    assert at_limit["training_ineligible_excluded"] == 2
     assert at_limit["failure_rate"] == pytest.approx(1 / 98)
     assert at_limit["failure_rate_above_limit"] is True  # 1/98 > 1%
     within = report.denominator(_cells({"ok": 99, "named_computational_error": 1}))
@@ -1230,6 +1250,39 @@ def test_the_failure_rate_follows_ruling_4() -> None:
     stopped = report.denominator(_cells({"ok": 10, "unattempted": 1, "interrupted": 1}))
     assert stopped["incomplete"] == 2 and stopped["failed"] == 0
     assert {c["cell_status"] for c in stopped["failed_cells"]} == {"unattempted", "interrupted"}
+
+
+def _check(checks: list[dict[str, Any]], name: str) -> dict[str, Any]:
+    (found,) = [c for c in checks if c["check"] == name]
+    return found
+
+
+def test_one_failed_cell_in_a_hundred_prevents_a_valid_verdict() -> None:
+    """R25: a valid verdict needs zero unresolved required-arm failures; 1% is not a pass."""
+    run = _cells({"ok": 99, "named_computational_error": 1})
+    counted = report.denominator(run)
+    assert counted["failure_rate"] == 0.01 and counted["failure_rate_above_limit"] is False
+    valid, checks = report.validity(run, {}, None, counted, {})
+    found = _check(checks, "no_failed_cells")
+    assert found["met"] is False and "1 failed of 100" in found["detail"]
+    assert not valid.valid and any(r.startswith("no_failed_cells") for r in valid.reasons)
+    clean = _cells({"ok": 100, "training_ineligible": 3})
+    _, checks = report.validity(clean, {}, None, report.denominator(clean), {})
+    assert _check(checks, "no_failed_cells")["met"] is True
+
+
+def test_every_frozen_cell_must_have_its_search_row() -> None:
+    """The frozen denominator is the reference: a cell without a row is missing, not dropped."""
+    run = _cells({"ok": 3}, listing=["ok-0", "ok-1", "ok-2", "lost"])
+    counted = report.denominator(run)
+    assert counted["missing"] == 1 and counted["missing_cells"] == ["lost"]
+    assert counted["cells"] == 4  # the frozen count, the missing cell included
+    _, checks = report.validity(run, {}, None, counted, {})
+    found = _check(checks, "frozen_schedule")
+    assert found["met"] is False and "lost" in found["detail"]
+    whole = _cells({"ok": 3}, listing=["ok-0", "ok-1", "ok-2"])
+    _, checks = report.validity(whole, {}, None, report.denominator(whole), {})
+    assert _check(checks, "frozen_schedule")["met"] is True
 
 
 def test_a_stage_1_run_without_outcomes_is_reported_invalid_only_when_allowed(
@@ -1317,10 +1370,11 @@ def test_search_parquet_is_parsed_from_the_handle_that_was_hashed(
 
 
 def _rewrite(directory: Path, name: str, change) -> None:
-    """Rewrite one parquet artifact row by row and record its new digest in the manifest."""
+    """Rewrite one parquet artifact row by row (``change`` returns None to drop a row) and
+    record its new digest in the manifest."""
     path = directory / name
     table = pq.read_table(path)
-    rows = [change(row) for row in table.to_pylist()]
+    rows = [new for new in (change(row) for row in table.to_pylist()) if new is not None]
     pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), path)
     manifest = json.loads((directory / "manifest.json").read_text())
     manifest["artifacts"][name] = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -1368,3 +1422,178 @@ def test_a_missing_horizon_in_one_menu_masks_that_origin_in_both(
     found = summary["primary"]["realized"]["annual_return"]["by_menu"]["tsp"]
     assert found["n"] == 1 and found["value"] == pytest.approx(hand, abs=1e-15)
     assert summary["labels"]["menus"]["tsp"]["disjoint_panel"] == 1
+
+
+def _stage_1_cell(directory: Path, menu: str, ceiling: str, month: str = "2024-07") -> str:
+    """The primary-seed cell key of one menu, ceiling and month in a run's search.parquet."""
+    (key,) = {
+        row["cell_key"]
+        for row in pq.read_table(directory / "search.parquet").to_pylist()
+        if row["kind"] == "cell"
+        and (row["menu"], row["ceiling_id"], row["month"], row["seed"]) == (menu, ceiling, month, P)
+    }
+    return key
+
+
+def _fail_cell(directory: Path, key: str) -> None:
+    """Mark one cell a failed arm in search.parquet and drop its outcome rows (as a run would)."""
+
+    def search(row: dict[str, Any]) -> dict[str, Any]:
+        if row["kind"] == "cell" and row["cell_key"] == key:
+            return {
+                **row,
+                "cell_status": "failed_arm",
+                "error": "undefined_measure",
+                "error_detail": "R+D: injected",
+            }
+        return row
+
+    _rewrite(directory, "search.parquet", search)
+    _rewrite(directory, "outcomes.parquet", lambda row: None if row["cell_key"] == key else row)
+
+
+def _table_headers(lines: list[str]) -> list[int]:
+    """The line index of every markdown table's header row."""
+    return [
+        i
+        for i, line in enumerate(lines)
+        if line.startswith("| ") and (i == 0 or not lines[i - 1].startswith("|"))
+    ]
+
+
+def _between(text: str, first: str, last: str | None) -> list[str]:
+    block = text.split(first, 1)[1]
+    return (block if last is None else block.split(last, 1)[0]).split("\n")
+
+
+def test_a_failed_stage_1_cell_invalidates_and_labels_every_statistic_descriptive(
+    run_root: Path, tmp_path: Path
+) -> None:
+    """R25: the cell stays listed in the denominator; statistics over the rest are descriptive."""
+    directory = _copy(run_root, tmp_path)
+    key = _stage_1_cell(directory, "example", "x50")
+    _fail_cell(directory, key)
+    written = report.write_report(directory)
+    summary = written.summary
+    assert any(r.startswith("no_failed_cells") for r in summary["validity"]["reasons"])
+    denominator = summary["denominator"]
+    assert denominator["failed"] == 1 and denominator["cells"] == 36
+    assert denominator["failed_cells"] == [
+        {
+            "cell_key": key,
+            "cell_status": "failed_arm",
+            "error": "undefined_measure",
+            "error_detail": "R+D: injected",
+        }
+    ]
+    note = summary["validity"]["descriptive_only"]
+    assert note is not None and "1 failed" in note and "denominator" in note
+    for menu, label in summary["labels"]["menus"].items():
+        assert label["conditional"] == "inconclusive/invalid", menu
+        assert label["realized"] == "inconclusive/invalid", menu
+        assert label["sensitivity"] == "inconclusive/invalid", menu
+        assert label["score_change"] == "inconclusive/invalid", menu
+        assert label["branch"] is None and label["positive_conditional_model_evidence"] is False
+    assert summary["confirmed_worthwhile_benefit"] is False and summary["stage_2"]["run"] is False
+    # the failed cell is masked: two of the three origins remain in example's x50 cell
+    assert summary["primary"]["replay"]["utility"]["by_cell"]["example"]["x50"]["n"] == 2
+    lines = written.markdown.split("\n")
+    label = f"_{note}_"
+    text = written.markdown
+    blocks = [
+        _between(text, "## R against the return-agnostic references", "## Cost"),
+        _between(text, "## Every threshold result", "## Protocol readings"),
+        _between(text, "## Appendix A", None),
+    ]
+    for block in blocks:
+        headers = _table_headers(block)
+        assert headers
+        for i in headers:
+            assert block[i - 2] == label and block[i - 1] == "", block[i]
+    assert label not in _between(text, "## Cost", "## Every threshold result")
+    assert lines.count(label) >= 20
+
+
+def test_a_clean_run_carries_no_descriptive_label(written: report.Report) -> None:
+    assert written.summary["validity"]["descriptive_only"] is None
+    assert "Descriptive only" not in written.markdown
+    checks = {c["check"]: c for c in written.summary["validity"]["checks"]}
+    for name in ("no_failed_cells", "frozen_schedule", "denominator_agrees_with_manifest"):
+        assert checks[name]["met"] is True, name
+    for name in ("coefficients", "lookback", "budget"):
+        assert checks[f"sensitivity_{name}_cells"]["met"] is True, name
+
+
+def test_a_failed_sensitivity_cell_makes_its_setting_unavailable_and_the_run_invalid(
+    run_root: Path, tmp_path: Path
+) -> None:
+    """Each sensitivity profile is validated against its own frozen schedule (Codex P1-2)."""
+    directory = _copy(run_root, tmp_path)
+    budget = directory / "sensitivity-budget"
+    _fail_cell(budget, _stage_1_cell(budget, "tsp", "x25", "2024-08"))
+    lookback = directory / "sensitivity-lookback"
+    lost = _stage_1_cell(lookback, "example", "x100", "2024-09")
+    _rewrite(
+        lookback,
+        "search.parquet",
+        lambda row: None if row["kind"] == "cell" and row["cell_key"] == lost else row,
+    )
+    summary = report.write_report(directory).summary
+    checks = {c["check"]: c for c in summary["validity"]["checks"]}
+    assert checks["sensitivity_budget_cells"]["met"] is False
+    assert "budget-x2: 1 failed" in checks["sensitivity_budget_cells"]["detail"]
+    assert checks["sensitivity_lookback_cells"]["met"] is False
+    assert "lookback-252: 1 missing" in checks["sensitivity_lookback_cells"]["detail"]
+    assert checks["sensitivity_coefficients_cells"]["met"] is True
+    assert summary["labels"]["experiment"] == "inconclusive/invalid"
+    for menu in ("tsp", "example"):
+        settings = summary["sensitivities"]["menus"][menu]["settings"]
+        for name in ("budget-x2", "lookback-252"):
+            entry = settings[name]
+            assert entry["available"] is False, (menu, name)
+            assert entry["descriptive_only"] is True and entry["replay"] is not None
+            assert entry["disclosure"]["available"] is False
+            assert entry["unavailable"], (menu, name)
+        assert settings["coefficients-70-20-10"]["available"] is True
+        assert settings["coefficients-70-20-10"]["descriptive_only"] is False
+
+
+def test_the_manifest_and_the_report_count_failures_alike(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lookback-252 profile with training-ineligible cells and one failed cell: the runner's
+    manifest and the report give the same denominator, failed count and rate (Fable Imp 2)."""
+    drop = pd.bdate_range("2024-06-03", "2024-07-15")
+
+    def gap(series: dict[str, pd.Series]) -> dict[str, pd.Series]:
+        series["TSP-C"] = series["TSP-C"].drop(index=drop, errors="ignore")
+        return series
+
+    records = make_records(gap)
+    settings = make_settings(records, months=("2024-08", "2024-08"), seeds=(P,))
+    run_experiment(tmp_path, records, settings=settings, run_id="f8")
+    original = search.run_arm
+
+    def failing(shared: Any, label: str, **kwargs: Any) -> Any:
+        arm = original(shared, label, **kwargs)
+        if label == "R+D" and shared.fraction == 0.5 and shared.model.menu == "example":
+            return replace(arm, error=search.UNDEFINED_MEASURE, error_detail="injected")
+        return arm
+
+    monkeypatch.setattr(search, "run_arm", failing)
+    result = run_experiment(
+        tmp_path, records, settings=settings, run_id="f8", sensitivity="lookback"
+    )
+    manifest = json.loads((result.directory / "manifest.json").read_text())
+    recorded = manifest["status"]["denominator"]
+    counted = report.denominator(report.read_run(result.directory), "lookback-252")
+    hand = {
+        "cells": 6,
+        "training_ineligible_excluded": 3,  # tsp: 31 incomplete rows of 252 (< 227 complete)
+        "failure_denominator": 3,
+        "failed": 1,
+        "failure_rate": 1 / 3,
+        "by_status": {"failed_arm": 1, "ok": 2, "training_ineligible": 3},
+    }
+    for name, value in hand.items():
+        assert recorded[name] == counted[name] == value, name
