@@ -162,6 +162,81 @@ def test_funds_that_do_not_vary_take_no_part_in_the_shrinkage():
         np.linalg.cholesky(m.cov)
 
 
+def test_fixed_window_records_the_ledoit_wolf_shrinkage_it_applied():
+    r = _returns()
+    sd = r.std(axis=0, ddof=1)
+    expected = LedoitWolf().fit(r / sd).shrinkage_
+    m = stats.estimate_moments(r)
+    assert m.shrinkage is not None
+    assert 0.0 < m.shrinkage < 1.0
+    assert abs(m.shrinkage - expected) <= 1e-15
+
+
+def test_fixed_window_shrinkage_comes_from_the_live_columns_only():
+    r = _returns(degenerate=True)  # column 4 is constant: no scale, no part in the fit
+    live = [0, 1, 2, 3, 5]
+    sd = r.std(axis=0, ddof=1)
+    expected = LedoitWolf().fit(r[:, live] / sd[live]).shrinkage_
+    m = stats.estimate_moments(r)
+    assert m.shrinkage is not None
+    assert abs(m.shrinkage - expected) <= 1e-15
+    assert abs(m.shrinkage - LedoitWolf().fit(r / np.where(sd > 1e-9, sd, 1.0)).shrinkage_) > 1e-6
+
+
+def test_fixed_window_without_a_live_column_has_no_shrinkage():
+    r = np.tile([0.0001, 0.0003], (252, 1))
+    assert stats.estimate_moments(r).shrinkage is None
+
+
+def test_ew_window_records_its_fixed_shrinkage_explicitly():
+    r = _returns()
+    for omega in (stats.ew_weights(len(r)), np.full(len(r), 1.0 / len(r))):
+        m = stats.estimate_moments(r, omega=omega)
+        assert m.shrinkage == 0.2 and isinstance(m.shrinkage, float)
+    constant = np.tile([0.0001, 0.0003], (252, 1))  # no live column, still the fixed 0.2
+    assert stats.estimate_moments(constant, omega=stats.ew_weights(252)).shrinkage == 0.2
+
+
+def test_moments_built_without_a_shrinkage_keep_working():
+    m = stats.Moments(mu=np.zeros(2), sigma=np.ones(2), cov=np.eye(2), t_eff=10.0)
+    assert m.shrinkage is None
+    with pytest.raises(AttributeError):
+        m.shrinkage = 0.1  # type: ignore[misc]  # still frozen
+
+
+def test_recording_the_shrinkage_leaves_the_moments_as_they_were():
+    """Expected values are an inline reimplementation of the estimator before the field existed."""
+    r = _returns(degenerate=True)
+    rows, n = r.shape
+    sd = r.std(axis=0, ddof=1)
+    live = sd > 1e-9
+    fit = LedoitWolf().fit(r[:, live] / sd[live]).covariance_
+    corr = np.eye(n)
+    corr[np.ix_(live, live)] = fit / np.sqrt(np.outer(np.diag(fit), np.diag(fit)))
+    sigma = np.maximum(np.sqrt(252.0) * sd, 1e-4)
+    fixed = stats.estimate_moments(r)
+    assert np.abs(fixed.mu - 252.0 * r.mean(axis=0)).max() <= 1e-12
+    assert np.abs(fixed.sigma - sigma).max() <= 1e-12
+    assert np.abs(fixed.cov - np.outer(sigma, sigma) * corr).max() <= 1e-12
+    assert fixed.t_eff == float(rows)
+
+    omega = stats.ew_weights(rows)
+    mean, s = _own_scatter(r, omega)
+    ew_live = np.diag(s) > 0
+    ew_sd = np.sqrt(np.diag(s))
+    ew_corr = np.eye(n)
+    ew_corr[np.ix_(ew_live, ew_live)] = s[np.ix_(ew_live, ew_live)] / np.outer(
+        ew_sd[ew_live], ew_sd[ew_live]
+    )
+    ew_sigma = np.maximum(np.sqrt(252.0) * ew_sd, 1e-4)
+    weighted = stats.estimate_moments(r, omega=omega)
+    assert np.abs(weighted.mu - 252.0 * mean).max() <= 1e-12
+    assert np.abs(weighted.sigma - ew_sigma).max() <= 1e-12
+    expected_cov = np.outer(ew_sigma, ew_sigma) * (0.8 * ew_corr + 0.2 * np.eye(n))
+    assert np.abs(weighted.cov - expected_cov).max() <= 1e-12
+    assert abs(weighted.t_eff - 1.0 / (omega**2).sum()) <= 1e-9
+
+
 @pytest.mark.parametrize(
     ("returns", "omega", "message"),
     [

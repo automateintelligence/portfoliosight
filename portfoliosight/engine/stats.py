@@ -32,6 +32,9 @@ class Moments:
     sigma: np.ndarray  # volatility, floored at SIGMA_FLOOR
     cov: np.ndarray  # diag(sigma) R diag(sigma) with the shrunk correlation R
     t_eff: float  # rows for a fixed window, 1 / sum(omega^2) for a weighted one
+    # intensity of the covariance shrinkage applied: the fitted LedoitWolf value for a fixed window
+    # (None when no fund varies, so nothing was fitted), EW_SHRINKAGE for a weighted one
+    shrinkage: float | None = None
 
 
 def ew_weights(rows: int, halflife: int = EW_HALFLIFE_DAYS) -> np.ndarray:
@@ -60,7 +63,7 @@ def estimate_moments(returns, omega=None) -> Moments:
         mean = r.mean(axis=0)
         daily_sd = r.std(axis=0, ddof=1)
         t_eff = float(len(r))
-        corr = _shrunk_correlation(r, _live_scale(r, daily_sd))
+        corr, shrinkage = _shrunk_correlation(r, _live_scale(r, daily_sd))
     else:
         weights = _observation_weights(omega, len(r))
         concentration = float(weights @ weights)
@@ -71,9 +74,14 @@ def estimate_moments(returns, omega=None) -> Moments:
         t_eff = 1.0 / concentration
         raw = _as_correlation(scatter, _live_scale(r, daily_sd))
         corr = (1.0 - EW_SHRINKAGE) * raw + EW_SHRINKAGE * np.eye(r.shape[1])
+        shrinkage = EW_SHRINKAGE
     sigma = np.maximum(np.sqrt(TRADING_DAYS) * daily_sd, SIGMA_FLOOR)
     return Moments(
-        mu=TRADING_DAYS * mean, sigma=sigma, cov=np.outer(sigma, sigma) * corr, t_eff=t_eff
+        mu=TRADING_DAYS * mean,
+        sigma=sigma,
+        cov=np.outer(sigma, sigma) * corr,
+        t_eff=t_eff,
+        shrinkage=shrinkage,
     )
 
 
@@ -134,18 +142,22 @@ def _live_scale(r: np.ndarray, daily_sd: np.ndarray) -> np.ndarray:
     return np.where(daily_sd > ROUNDING_NOISE * np.abs(r).max(axis=0), daily_sd, 0.0)
 
 
-def _shrunk_correlation(r: np.ndarray, scale: np.ndarray) -> np.ndarray:
+def _shrunk_correlation(r: np.ndarray, scale: np.ndarray) -> tuple[np.ndarray, float | None]:
     """`LedoitWolf` on the returns standardized by `scale`, renormalized to a correlation.
 
-    A fund with a zero scale has nothing to standardize by: it takes no part in the shrinkage
-    and is uncorrelated with every other fund, another such fund included.
+    Returns the correlation matrix and the fitted shrinkage intensity, None when no fund has a
+    scale and nothing was fitted. A fund with a zero scale has nothing to standardize by: it takes
+    no part in the shrinkage and is uncorrelated with every other fund, another such fund included.
     """
     live = scale > 0
     corr = np.eye(len(scale))
+    shrinkage = None
     if live.any():
-        shrunk = LedoitWolf(store_precision=False).fit(r[:, live] / scale[live]).covariance_
+        fit = LedoitWolf(store_precision=False).fit(r[:, live] / scale[live])
+        shrunk = fit.covariance_
         corr[np.ix_(live, live)] = _as_correlation(shrunk, np.sqrt(np.diag(shrunk)))
-    return corr
+        shrinkage = float(fit.shrinkage_)
+    return corr, shrinkage
 
 
 def _as_correlation(matrix: np.ndarray, scale: np.ndarray) -> np.ndarray:
