@@ -20,6 +20,7 @@ from portfoliosight.engine.preference import (
     BAD_GUARD,
     BAD_WEIGHT,
     BINDING_TOLERANCE,
+    COEFFICIENTS,
     DOMINANCE_TOLERANCE,
     GOOD_GUARD,
     GOOD_WEIGHT,
@@ -50,9 +51,13 @@ Row = tuple[float, float, float, float | None, tuple[float, ...]]  # bad, typica
 # ---- independent oracles: protocol 2 written out, never the module ---------------------------
 
 
-def _u(bad: float, typical: float, good: float) -> float:
-    """The owner's return utility, written out here."""
-    return 0.60 * bad + 0.30 * typical + 0.10 * good
+OWNER_K = (0.60, 0.30, 0.10)  # the owner's U coefficients (Bad, Typical, Good)
+SENSITIVITY_K = ((0.70, 0.20, 0.10), (0.50, 0.35, 0.15))  # protocol 7 (b)
+
+
+def _u(bad: float, typical: float, good: float, k: Sequence[float] = OWNER_K) -> float:
+    """The return utility with coefficients ``k``, written out here (the owner's by default)."""
+    return k[0] * bad + k[1] * typical + k[2] * good
 
 
 def _cu(candidate: Candidate) -> float:
@@ -65,7 +70,7 @@ def _oracle_dominates(x: Sequence[float], y: Sequence[float]) -> bool:
     return no_lower and any(a - b > 1e-10 for a, b in zip(x, y, strict=True))
 
 
-def _oracle_fails(row: Row, ref: Row, allowance: float) -> list[str]:
+def _oracle_fails(row: Row, ref: Row, allowance: float, k: Sequence[float] = OWNER_K) -> list[str]:
     fails = []
     if not row[0] >= ref[0] - 0.0010:
         fails.append("bad")
@@ -73,15 +78,17 @@ def _oracle_fails(row: Row, ref: Row, allowance: float) -> list[str]:
         fails.append("typical")
     if not row[2] >= ref[2] - 0.0050:
         fails.append("good")
-    if not _u(*row[:3]) >= _u(*ref[:3]) - allowance:
+    if not _u(*row[:3], k) >= _u(*ref[:3], k) - allowance:
         fails.append("u")
     if row[0] < ref[0] - 1e-10 and row[1] < ref[1] - 1e-10:
         fails.append("veto")
     return fails
 
 
-def _oracle(rows: Sequence[Row], allowance: float) -> tuple[list[Row], Row, list[Row], Row]:
-    """Protocol 2 by exhaustion: (filtered pool, w_R, admissible set, Stage B pick)."""
+def _oracle(
+    rows: Sequence[Row], allowance: float, k: Sequence[float] = OWNER_K
+) -> tuple[list[Row], Row, list[Row], Row]:
+    """Protocol 2 by exhaustion under U coefficients ``k``: (filtered, w_R, admissible, pick)."""
     kept = []
     for row in rows:
         dominated = False
@@ -90,17 +97,19 @@ def _oracle(rows: Sequence[Row], allowance: float) -> tuple[list[Row], Row, list
                 dominated = True
         if not dominated:
             kept.append(row)
-    best_u = max(_u(*row[:3]) for row in kept)
-    ties = [row for row in kept if _u(*row[:3]) >= best_u - 1e-12]
+    best_u = max(_u(row[0], row[1], row[2], k) for row in kept)
+    ties = [row for row in kept if _u(row[0], row[1], row[2], k) >= best_u - 1e-12]
     ref = min(ties, key=lambda r: (-r[0], -r[1], -r[2], r[4]))
-    adm = [row for row in kept if not _oracle_fails(row, ref, allowance)]
+    adm = [row for row in kept if not _oracle_fails(row, ref, allowance, k)]
     best_m = max(_measure(row) for row in adm)
     ties_b = [row for row in adm if _measure(row) >= best_m - 1e-12]
-    pick = min(ties_b, key=lambda r: (-_u(*r[:3]), -r[0], -r[1], -r[2], r[4]))
+    pick = min(ties_b, key=lambda r: (-_u(r[0], r[1], r[2], k), -r[0], -r[1], -r[2], r[4]))
     return kept, ref, adm, pick
 
 
-def _oracle_guards(pick: Row, ref: Row, allowance: float) -> frozenset[str]:
+def _oracle_guards(
+    pick: Row, ref: Row, allowance: float, k: Sequence[float] = OWNER_K
+) -> frozenset[str]:
     """Spec 7: the guards whose constraint holds with equality within 1e-10; none at w_R itself."""
     if pick == ref:
         return frozenset()
@@ -108,7 +117,7 @@ def _oracle_guards(pick: Row, ref: Row, allowance: float) -> frozenset[str]:
         "bad": pick[0] - (ref[0] - 0.0010),
         "typical": pick[1] - (ref[1] - 0.0025),
         "good": pick[2] - (ref[2] - 0.0050),
-        "u": _u(*pick[:3]) - (_u(*ref[:3]) - allowance),
+        "u": _u(*pick[:3], k) - (_u(*ref[:3], k) - allowance),
     }
     return frozenset(name for name, gap in gaps.items() if abs(gap) <= 1e-10)
 
@@ -860,3 +869,83 @@ def test_enumerable_menu_selector_equals_the_exhaustive_oracle_at_every_allowanc
             }
             assert excluded == {"bad", "typical", "good", "veto"}
     assert len({pick[4] for pick in picks}) == 4  # every allowance selects a different mix
+
+
+# ---- U coefficients other than the owner's: the protocol 7 (b) sensitivity ---------------------
+
+
+def test_the_default_coefficients_are_the_owner_policy_bit_for_bit():
+    assert COEFFICIENTS == OWNER_K == (BAD_WEIGHT, TYPICAL_WEIGHT, GOOD_WEIGHT)
+    for figures in [(-0.05, 0.06, 0.20), (0.0123, -0.0456, 0.0789), OWNER_A, OWNER_B]:
+        assert utility(*figures, COEFFICIENTS).hex() == utility(*figures).hex()
+        assert utility(*figures).hex() == _u(*figures).hex()
+
+
+@pytest.mark.parametrize("k", SENSITIVITY_K)
+def test_utility_reads_the_coefficients_given(k):
+    assert utility(1.0, 0.0, 0.0, k) == k[0]
+    assert utility(0.0, 1.0, 0.0, k) == k[1]
+    assert utility(0.0, 0.0, 1.0, k) == k[2]
+    assert utility(-0.05, 0.06, 0.20, k).hex() == _u(-0.05, 0.06, 0.20, k).hex()
+    assert _c(-0.05, 0.06, 0.20).utility == utility(-0.05, 0.06, 0.20)  # a candidate's U: owner's
+
+
+@pytest.mark.parametrize(
+    "k", [(0.6, 0.3), (0.6, 0.3, 0.1, 0.0), (0.6, math.nan, 0.1), (0.6, 0.3, -0.1), (0, 0.3, 0.1)]
+)
+def test_coefficients_that_are_not_three_positive_numbers_are_refused(k):
+    pool = [_c(-0.01, 0.05, 0.12, 1.0, _w(1))]
+    with pytest.raises(ValueError, match="coefficients"):
+        select(pool, 0.00025, k)
+    with pytest.raises(ValueError, match="coefficients"):
+        utility(-0.01, 0.05, 0.12, k)
+
+
+def test_coefficients_change_stage_a_the_u_allowance_and_stage_b_ties():
+    # a: 8 bp more Bad, b: 20 bp more Typical. The owner's U prefers b by 1.2 bp,
+    # (.70, .20, .10) prefers a by 1.6 bp.
+    a = _c(0.0100, 0.0400, 0.1000, 1.0, _w(1))
+    b = _c(0.0092, 0.0420, 0.1000, 2.0, _w(2))
+    heavy = SENSITIVITY_K[0]
+    assert _u(0.0092, 0.0420, 0.1000) - _u(0.0100, 0.0400, 0.1000) == pytest.approx(1.2 * BP)
+    gap = _u(0.0100, 0.0400, 0.1000, heavy) - _u(0.0092, 0.0420, 0.1000, heavy)
+    assert gap == pytest.approx(1.6 * BP, abs=1e-15)
+    assert select_reference([a, b]) == b
+    assert select_reference([a, b], heavy) == a
+    owner, sensitive = select([a, b], 0.0), select([a, b], 0.0, heavy)
+    assert (owner.reference, owner.selected) == (b, b)
+    assert (sensitive.reference, sensitive.selected) == (a, a)
+    assert sensitive.coefficients == heavy and owner.coefficients == COEFFICIENTS
+    # b sits 1.6 bp of heavy U below a: inside a 2.5 bp allowance, so Stage B takes it
+    wide = select([a, b], 0.00025, heavy)
+    assert wide.selected == b and wide.sacrifice == pytest.approx(gap, abs=1e-18)
+    assert failed_guards(b, a, 0.00005, heavy) == ("u",)
+    assert failed_guards(b, a, 0.00005) == ()  # under the owner's U, b is above a
+    assert admissible(b, a, 0.00025, heavy) and not admissible(b, a, 0.00005, heavy)
+    assert admissible_set([a, b], a, 0.00005, heavy) == (a,)
+
+
+def test_stage_b_u_ties_resolve_by_the_coefficients_given():
+    heavy = SENSITIVITY_K[0]
+    a = _c(0.0100, 0.0400, 0.1000, 3.0, _w(1))
+    b = _c(0.0092, 0.0420, 0.1000, 3.0, _w(2))  # the same measure: a U tie-break decides
+    assert select_diversified([a, b]) == b
+    assert select_diversified([a, b], heavy) == a
+
+
+@pytest.mark.parametrize("k", SENSITIVITY_K)
+def test_enumerable_menu_selector_equals_the_oracle_under_sensitivity_coefficients(menu, k):
+    rows = menu["rows"]
+    pool = [Candidate(weights=w, bad=b, typical=t, good=g, measure=m) for b, t, g, m, w in rows]
+    for cap in CAPS:
+        kept, ref, adm, pick = _oracle(rows, cap, k)
+        result = select(pool, cap, k)
+        assert [_row(c) for c in result.pool] == kept
+        assert _row(result.reference) == ref
+        assert [_row(c) for c in result.admissible] == adm
+        assert _row(result.selected) == pick
+        assert result.sacrifice == pytest.approx(_u(*ref[:3], k) - _u(*pick[:3], k), abs=1e-16)
+        assert result.guards == _oracle_guards(pick, ref, cap, k)
+        assert result.coefficients == k
+    # not vacuous: these coefficients move w_R away from the owner's
+    assert _oracle(rows, 0.0, k)[1] != _oracle(rows, 0.0)[1]
