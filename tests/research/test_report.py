@@ -3,8 +3,8 @@
 Two kinds of tests. Constructed cases (small hand-built outcome tables and evidence records) give
 hand-calculated oracles for the bootstrap blocks, the aggregation order, the pinball identity,
 every protocol 7 label on both sides of its threshold, the Stage 2 decision and a menu that fails
-while the 50/50 aggregate looks favorable. A tiny synthetic run (the runner's own fixtures in
-tests/research/test_experiment.py: Stage 1 and the three sensitivities) gives real artifacts for the
+while the 50/50 aggregate looks favorable. A tiny synthetic run (the runner's shared fixtures in
+tests/research/fixtures.py: Stage 1 and the three sensitivities) gives real artifacts for the
 reading, verification, summary and CLI tests. Oracles are written here: explicit block assembly
 from NumPy's seeded generator, sorted-interpolation percentiles, hand means and medians, and the
 max-form pinball identity; the code under test never computes its own expectation.
@@ -41,8 +41,14 @@ from portfoliosight.research.evidence import (
     Stability,
     Validity,
 )
-from tests.research.test_experiment import ROOT, Limits, _load, _records, _run
-from tests.research.test_experiment import _settings as _run_settings
+from portfoliosight.research.experiment import Limits
+from tests.research.fixtures import (
+    ROOT,
+    load_module,
+    make_records,
+    make_settings,
+    run_experiment,
+)
 
 P, S = 20261013, 20261014
 CELLS = ("x25", "x50", "x100")
@@ -458,10 +464,19 @@ def _decide(tsp: MenuEvidence | None = None, example: MenuEvidence | None = None
     return evidence.decide(validity, menus, sensitivities)
 
 
-def _passed(verdict: evidence.Verdict, menu: str, key: str, location: str = "menu") -> bool:
+def _criterion(
+    verdict: evidence.Verdict, menu: str, key: str, location: str = "menu"
+) -> evidence.Criterion:
     found = [c for c in verdict.criteria if (c.menu, c.key, c.location) == (menu, key, location)]
     assert len(found) == 1, (menu, key, location, found)
-    return found[0].passed
+    return found[0]
+
+
+def _passed(verdict: evidence.Verdict, menu: str, key: str, location: str = "menu") -> bool:
+    """Whether an assessed criterion passed (a not-assessed one fails this helper)."""
+    passed = _criterion(verdict, menu, key, location).passed
+    assert passed is not None, (menu, key, location, "not assessed")
+    return passed
 
 
 def test_both_menus_with_every_criterion_met_authorize_stage_2() -> None:
@@ -538,8 +553,40 @@ def test_the_stability_branch_is_evaluated_only_below_5_bp_and_has_its_own_bank_
         "stability sensitivity unavailable" in item for item in verdict.stage_2["failing_criteria"]
     )
     above = _decide(example=_menu("example", replay=_replay(6 * BP, banks=[_bank(0.0)] * 5)))
-    assert not any(c.key.startswith("stability.") for c in above.criteria if c.menu == "example")
     assert above.menus["example"].branch is None  # >= 5 bp: no stability branch (ruling 3)
+    rows = {c.key: c for c in above.criteria if c.menu == "example" and c.key.startswith("stab")}
+    assert set(rows) == {
+        "stability.assessed",
+        "stability.l1_relative",
+        "stability.l1_absolute",
+        "stability.l1_p90",
+    }
+    assert all(c.passed is None for c in rows.values())  # recorded, not assessed
+    assert rows["stability.assessed"].reason == "not assessed: pooled ΔU >= 5 bp (R24-3)"
+    # the cross-seed L1 comparison is kept as information: R .30/.50, R+D .10/.20
+    assert rows["stability.l1_relative"].value == pytest.approx(0.2 / 0.3)
+    assert rows["stability.l1_absolute"].value == pytest.approx(0.2)
+    assert rows["stability.l1_p90"].value == pytest.approx(-0.3)
+    assert not any("Stable gain" in item for item in above.stage_2["failing_criteria"])
+
+
+def test_an_undefined_r_turnover_fails_general_stability_with_its_reason() -> None:
+    base = _stable(0.30, 0.50)
+    base = replace(base, turnover_median={"x25": None, "x50": 0.1, "x100": 0.1})
+    verdict = _decide(example=_menu("example", stability={"R": base, "R+D": _stable(0.1, 0.2)}))
+    found = _criterion(verdict, "example", "general.turnover", "x25")
+    assert found.passed is False and found.threshold is None
+    assert found.reason is not None and "undefined" in found.reason
+    assert found.record()["reason"] == found.reason
+    assert verdict.menus["example"].conditional == (
+        "did not meet observed conditional screening criteria"
+    )
+    assert _passed(verdict, "example", "general.turnover", "x50")
+
+
+def test_no_menu_is_no_confirmed_benefit() -> None:
+    verdict = evidence.decide(VALID, {}, {})
+    assert verdict.confirmed_worthwhile_benefit is False and verdict.stage_2["run"] is False
 
 
 @pytest.mark.parametrize(
@@ -779,11 +826,11 @@ def test_disjoint_intervals_are_counted_greedily_in_origin_order() -> None:
 def run_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Stage 1 (three origins, two seeds, both menus) and its three sensitivities."""
     tmp = tmp_path_factory.mktemp("report")
-    records = _records()
-    settings = _run_settings(records)
-    _run(tmp, records, settings=settings, run_id="r")
+    records = make_records()
+    settings = make_settings(records)
+    run_experiment(tmp, records, settings=settings, run_id="r")
     for name in ("coefficients", "lookback", "budget"):
-        _run(tmp, records, settings=settings, run_id="r", sensitivity=name)
+        run_experiment(tmp, records, settings=settings, run_id="r", sensitivity=name)
     return tmp
 
 
@@ -1003,12 +1050,15 @@ def test_the_markdown_puts_limits_first_and_references_before_r_plus_d(
         "understates a search targeted at those caps",
         "cannot authorize Stage 2",
         "claims no review",
-        "Δes_25",
+        "ΔES_2.5",
         "**Stage 2 (ENB): skip.**",
         "ENB unevaluated, not ineffective",
     ):
         assert phrase in text, phrase
     assert "best" not in text.split("## Sensitivities")[1].split("## Cost")[0].lower()
+    for raw in ("Δutility", "Δbad", "Δtypical", "Δgood", "Δes_25", "es_25 ", "utility "):
+        assert raw not in text, raw  # every figure is labeled ΔU/ΔB/ΔT/ΔG/ΔES_2.5 or U/B/T/G
+    assert "ΔU:" in text and "ΔES_2.5:" in text and "q(.025) (Bad) across origins" in text
 
 
 def test_writing_twice_gives_identical_bytes(written: report.Report) -> None:
@@ -1042,17 +1092,17 @@ def test_invariance_breaks_name_equal_weights_with_different_outcomes(
 def test_the_runner_reads_the_report_stage_2_decision(run_root: Path, tmp_path: Path) -> None:
     directory = _copy(run_root, tmp_path)
     report.write_report(directory)
-    records = _records()
+    records = make_records()
     amended = Limits(workers=0, cpu_hours=1.0, cpu_amended=True)
     with pytest.raises(experiment.StageNotReady, match="stage_2.run"):
-        _run(
-            tmp_path, records, settings=_run_settings(records), limits=amended, run_id="r", stage=2
+        run_experiment(
+            tmp_path, records, settings=make_settings(records), limits=amended, run_id="r", stage=2
         )
 
 
 @pytest.fixture(scope="module")
 def cli() -> ModuleType:
-    return _load("backtest_ranges_report", ROOT / "scripts" / "backtest_ranges.py")
+    return load_module("backtest_ranges_report", ROOT / "scripts" / "backtest_ranges.py")
 
 
 def test_cli_writes_the_report_and_names_refusals(
@@ -1242,3 +1292,79 @@ def test_selection_and_guard_frequencies_count_every_seed_and_origin() -> None:
             "u": 0.5,
             "veto": 0.0,
         }
+
+
+def test_search_parquet_is_parsed_from_the_handle_that_was_hashed(
+    run_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A change between hashing and parsing (here: right after the hash) refuses the report."""
+    directory = _copy(run_root, tmp_path)
+    search = directory / "search.parquet"
+    original = report._hash_handle
+
+    def hash_then_change(handle):
+        digest = original(handle)
+        with search.open("ab") as other:  # the same file, through another handle
+            other.write(b"\0")
+        return digest
+
+    monkeypatch.setattr(report, "_hash_handle", hash_then_change)
+    with pytest.raises(report.ArtifactChanged, match="changed while it was hashed"):
+        report.read_run(directory)
+    monkeypatch.undo()
+    with pytest.raises(report.ArtifactChanged, match="SHA-256"):  # the bytes now differ too
+        report.read_run(directory)
+
+
+def _rewrite(directory: Path, name: str, change) -> None:
+    """Rewrite one parquet artifact row by row and record its new digest in the manifest."""
+    path = directory / name
+    table = pq.read_table(path)
+    rows = [change(row) for row in table.to_pylist()]
+    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), path)
+    manifest = json.loads((directory / "manifest.json").read_text())
+    manifest["artifacts"][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+
+
+def test_a_missing_horizon_in_one_menu_masks_that_origin_in_both(
+    run_root: Path, tmp_path: Path
+) -> None:
+    """Example's 2024-08 horizon is made incomplete: TSP's realized statistics drop 2024-08 too."""
+    directory = _copy(run_root, tmp_path)
+    issue = '[{"code": "horizon_value_missing", "fund": "X", "date": "2025-01-02", "note": ""}]'
+
+    def origins(row: dict[str, Any]) -> dict[str, Any]:
+        if row["menu"] == "example" and row["month"] == "2024-08" and row["lookback"] == "2y":
+            row = {**row, "outcome": "mature_horizon_missing", "menu_issues": issue}
+        return row
+
+    realized = ("annual_return", "loss", "below_20", "worst_day", "max_drawdown", "volatility")
+
+    def outcome(row: dict[str, Any]) -> dict[str, Any]:
+        if row["menu"] == "example" and row["month"] == "2024-08":
+            row = {**row, **dict.fromkeys(realized), "realized_status": "mature_horizon_missing"}
+        return row
+
+    _rewrite(directory, "origins.parquet", origins)
+    _rewrite(directory, "outcomes.parquet", outcome)
+    summary = report.write_report(directory).summary
+    assert summary["panel"]["realized_mask"] == [True, False, False]
+    facts = summary["panel"]["menus"]["example"]
+    assert (facts["complete"], facts["mature_missing"], facts["unexplained_missing"]) == (1, 1, 0)
+    assert [r["month"] for r in facts["missing_reasons"]] == ["2024-08"]
+    gates = {g["gate"]: g for g in summary["panel"]["coverage_gates"]}
+    assert (
+        gates["example_completeness"]["value"] == 0.5 and not gates["example_completeness"]["met"]
+    )
+    assert gates["tsp_completeness"]["value"] == 1.0
+    july = {
+        (r["ceiling_id"], r["role"]): r["annual_return"]
+        for r in _outcome_rows(directory)
+        if (r["profile"], r["seed"], r["menu"], r["month"]) == ("stage-1", P, "tsp", "2024-07")
+        and r["allowance"] in (None, 0.00025)
+    }
+    hand = sum(july[(c, "R+D")] - july[(c, "R")] for c in CELLS) / 3  # TSP's 2024-08 is dropped
+    found = summary["primary"]["realized"]["annual_return"]["by_menu"]["tsp"]
+    assert found["n"] == 1 and found["value"] == pytest.approx(hand, abs=1e-15)
+    assert summary["labels"]["menus"]["tsp"]["disjoint_panel"] == 1

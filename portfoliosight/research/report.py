@@ -33,11 +33,12 @@ import hashlib
 import io
 import json
 import math
+import os
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 import numpy as np
 import pyarrow as pa
@@ -203,16 +204,51 @@ _CELL_COLUMNS = (
 )
 
 
-def _hash_file(path: Path) -> str:
+def _hash_handle(handle: BinaryIO) -> str:
+    """SHA-256 of an open file from its start, read in chunks."""
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 24), b""):
-            digest.update(chunk)
+    handle.seek(0)
+    for chunk in iter(lambda: handle.read(1 << 24), b""):
+        digest.update(chunk)
     return digest.hexdigest()
 
 
+def _stamp(handle: BinaryIO) -> tuple[int, int, int]:
+    found = os.fstat(handle.fileno())
+    return (found.st_size, found.st_mtime_ns, found.st_ino)
+
+
+def _search_cells(path: Path, digest: str) -> tuple[Mapping[str, Any], ...]:
+    """The `cell` rows of search.parquet, parsed through the very handle that was hashed.
+
+    The file can be 1-2 GB, so it is hashed in chunks rather than held in memory; its size,
+    modification time and inode must not change between opening, hashing and parsing.
+    """
+    with path.open("rb") as handle:
+        before = _stamp(handle)
+        found = _hash_handle(handle)
+        if found != digest:
+            raise ArtifactChanged(f"{path}: SHA-256 {found}, the manifest records {digest}")
+        if _stamp(handle) != before:
+            raise ArtifactChanged(f"{path} changed while it was hashed")
+        handle.seek(0)
+        source = pq.ParquetFile(handle)
+        kept = []
+        for group in range(source.num_row_groups):  # one row group at a time: bounded memory
+            rows = source.read_row_group(group, columns=["kind", *_CELL_COLUMNS])
+            cell = pa.array([kind == "cell" for kind in rows["kind"].to_pylist()], pa.bool_())
+            kept.append(rows.filter(cell).select(list(_CELL_COLUMNS)))
+        if _stamp(handle) != before:
+            raise ArtifactChanged(f"{path} changed while it was read")
+    return tuple(pa.concat_tables(kept).to_pylist()) if kept else ()
+
+
 def read_run(directory: str | Path) -> RunFiles:
-    """One run directory's manifest and verified artifacts (``ArtifactChanged`` otherwise)."""
+    """One run directory's manifest and verified artifacts (``ArtifactChanged`` otherwise).
+
+    Every artifact is parsed from the bytes that were hashed: the small ones are read once into
+    memory, search.parquet through the one open handle that was hashed (`_search_cells`).
+    """
     root = Path(directory)
     manifest_path = root / "manifest.json"
     if not manifest_path.exists():
@@ -226,27 +262,22 @@ def read_run(directory: str | Path) -> RunFiles:
     if lock and expected.get("locked.parquet") != lock.get("sha256"):
         raise ArtifactChanged(f"{root}: locked.parquet is listed with a digest other than the lock")
     blobs: dict[str, bytes] = {}
+    cells: tuple[Mapping[str, Any], ...] = ()
     for name, digest in sorted(expected.items()):
         path = root / name
         if not path.exists():
             raise ArtifactChanged(f"{path} is listed in the manifest but missing")
-        if name == "search.parquet":  # large: hashed in chunks, then only its cell rows are read
-            found = _hash_file(path)
-        else:
-            blobs[name] = path.read_bytes()
-            found = hashlib.sha256(blobs[name]).hexdigest()
+        if name == "search.parquet":
+            cells = _search_cells(path, digest)
+            continue
+        blobs[name] = path.read_bytes()
+        found = hashlib.sha256(blobs[name]).hexdigest()
         if found != digest:
             raise ArtifactChanged(f"{path}: SHA-256 {found}, the manifest records {digest}")
 
     def table(name: str) -> pa.Table | None:
         return pq.read_table(io.BytesIO(blobs[name])) if name in blobs else None
 
-    cells: tuple[Mapping[str, Any], ...] = ()
-    if "search.parquet" in expected:
-        rows = pq.read_table(
-            root / "search.parquet", columns=list(_CELL_COLUMNS), filters=[("kind", "=", "cell")]
-        )
-        cells = tuple(rows.to_pylist())
     resources: tuple[Mapping[str, Any], ...] = ()
     if "resources.jsonl" in blobs:
         text = blobs["resources.jsonl"].decode("utf-8")

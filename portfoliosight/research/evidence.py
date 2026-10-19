@@ -788,13 +788,15 @@ class Criterion:
     location: str  # "menu" or a risk cell
     test: str
     value: float | None
-    threshold: float
-    passed: bool
+    threshold: float | None  # None when the line itself is undefined (see `reason`)
+    passed: bool | None  # None: recorded for completeness, not assessed (see `reason`)
+    reason: str | None = None
 
     def text(self) -> str:
         where = "" if self.location == "menu" else f" in {self.location}"
         value = "undefined" if self.value is None else f"{self.value:.6g}"
-        return f"{self.menu}: {self.dimension}: {self.test}{where} (value {value})"
+        why = "" if self.reason is None else f"; {self.reason}"
+        return f"{self.menu}: {self.dimension}: {self.test}{where} (value {value}{why})"
 
     def record(self) -> dict[str, Any]:
         return {
@@ -806,6 +808,7 @@ class Criterion:
             "value": self.value,
             "threshold": self.threshold,
             "passed": self.passed,
+            "reason": self.reason,
         }
 
 
@@ -897,6 +900,24 @@ class _Rules:
             passed.append(ok)
         return all(passed)
 
+    def record(
+        self,
+        dimension: str,
+        key: str,
+        test: str,
+        value: float | None,
+        threshold: float | None,
+        reason: str,
+        *,
+        passed: bool | None = None,
+        location: str = "menu",
+    ) -> bool:
+        """A criterion that is not assessed (``passed`` None) or cannot pass, with its reason."""
+        self.items.append(
+            Criterion(self.menu, dimension, key, location, test, value, threshold, passed, reason)
+        )
+        return passed is True
+
 
 def _mean(values: Sequence[float | None]) -> float | None:
     finite = [v for v in values if v is not None and math.isfinite(v)]
@@ -967,7 +988,19 @@ def _replay_branch(rules: _Rules, r: Replay) -> bool:
     )
 
 
+_L1_TESTS = (
+    ("stability.l1_relative", "median pairwise L1 reduction >= 20% (R+D vs R)", L1_RELATIVE, "ge"),
+    ("stability.l1_absolute", "median pairwise L1 reduction >= .02", L1_ABSOLUTE, "ge"),
+    ("stability.l1_p90", "90th-percentile pairwise L1 not worse (R+D - R <= 0)", 0.0, "le"),
+)
+
+
 def _stability_branch(rules: _Rules, r: Replay, arms: Mapping[str, Stability]) -> bool:
+    """The stable-gain alternative, assessed only below a 5 bp pooled ΔU (ruling R24-3).
+
+    Above that line the branch is recorded as not assessed, with the cross-seed L1 comparison
+    kept as information, so that the threshold table lists every row of protocol 7.
+    """
     dim = "Stable gain alternative"
     base, arm = arms["R"], arms["R+D"]
     median_r, median_rd = _mean(list(base.median_l1.values())), _mean(list(arm.median_l1.values()))
@@ -978,6 +1011,22 @@ def _stability_branch(rules: _Rules, r: Replay, arms: Mapping[str, Stability]) -
         relative = absolute / median_r if median_r > 0 else None
     if p90_r is not None and p90_rd is not None:
         p90_change = p90_rd - p90_r
+    l1 = dict(zip((key for key, *_ in _L1_TESTS), (relative, absolute, p90_change), strict=True))
+    if r.u is None or r.u >= REPLAY_GAIN:
+        why = "pooled ΔU undefined" if r.u is None else "pooled ΔU >= 5 bp"
+        rules.record(
+            dim,
+            "stability.assessed",
+            "evaluated only when pooled mean paired ΔU < 5 bp",
+            r.u,
+            REPLAY_GAIN,
+            f"not assessed: {why} (R24-3)",
+        )
+        for key, test, line, _ in _L1_TESTS:
+            rules.record(
+                dim, key, test, l1[key], line, "informational: the stability branch is not assessed"
+            )
+        return False
     floors = float(_floor_banks(r))
     return all(
         [
@@ -995,27 +1044,7 @@ def _stability_branch(rules: _Rules, r: Replay, arms: Mapping[str, Stability]) -
                         BANKS_NEEDED,
                         "ge",
                     ),
-                    (
-                        "stability.l1_relative",
-                        "median pairwise L1 reduction >= 20% (R+D vs R)",
-                        relative,
-                        L1_RELATIVE,
-                        "ge",
-                    ),
-                    (
-                        "stability.l1_absolute",
-                        "median pairwise L1 reduction >= .02",
-                        absolute,
-                        L1_ABSOLUTE,
-                        "ge",
-                    ),
-                    (
-                        "stability.l1_p90",
-                        "90th-percentile pairwise L1 not worse (R+D - R <= 0)",
-                        p90_change,
-                        0.0,
-                        "le",
-                    ),
+                    *[(key, test, l1[key], line, op) for key, test, line, op in _L1_TESTS],
                 ],
             ),
         ]
@@ -1025,46 +1054,56 @@ def _stability_branch(rules: _Rules, r: Replay, arms: Mapping[str, Stability]) -
 def _general_stability(rules: _Rules, arms: Mapping[str, Stability]) -> bool:
     dim = "General stability"
     arm, base = arms["R+D"], arms["R"]
+    turnover_test = "median adjacent-origin turnover <= R's + .05"
     ok = []
     for cell in RISK_CELLS:
+        checks: list[Check] = [
+            (
+                "general.bad_sd",
+                "share of origins with seed SD of Bad <= .10 x primary volatility >= 95%",
+                arm.bad_sd_share.get(cell),
+                BAD_SD_SHARE,
+                "ge",
+            ),
+            (
+                "general.median_l1",
+                "median pairwise weight L1 <= .20",
+                arm.median_l1.get(cell),
+                MEDIAN_L1,
+                "le",
+            ),
+            (
+                "general.p90_l1",
+                "90th-percentile pairwise weight L1 <= .40",
+                arm.p90_l1.get(cell),
+                P90_L1,
+                "le",
+            ),
+        ]
         base_turnover = base.turnover_median.get(cell)
-        line = math.nan if base_turnover is None else base_turnover + TURNOVER_SLACK
-        ok.append(
-            rules.check(
-                dim,
-                [
-                    (
-                        "general.bad_sd",
-                        "share of origins with seed SD of Bad <= .10 x primary volatility >= 95%",
-                        arm.bad_sd_share.get(cell),
-                        BAD_SD_SHARE,
-                        "ge",
-                    ),
-                    (
-                        "general.median_l1",
-                        "median pairwise weight L1 <= .20",
-                        arm.median_l1.get(cell),
-                        MEDIAN_L1,
-                        "le",
-                    ),
-                    (
-                        "general.p90_l1",
-                        "90th-percentile pairwise weight L1 <= .40",
-                        arm.p90_l1.get(cell),
-                        P90_L1,
-                        "le",
-                    ),
-                    (
-                        "general.turnover",
-                        "median adjacent-origin turnover <= R's + .05",
-                        arm.turnover_median.get(cell),
-                        line,
-                        "le",
-                    ),
-                ],
-                cell,
+        if base_turnover is not None:
+            line = base_turnover + TURNOVER_SLACK
+            checks.append(
+                ("general.turnover", turnover_test, arm.turnover_median.get(cell), line, "le")
             )
-        )
+        ok.append(rules.check(dim, checks, cell))
+        if base_turnover is None:
+            reason = (
+                "R's median adjacent-origin turnover is undefined in this risk cell (no adjacent "
+                "pair of origins), so the comparison cannot pass"
+            )
+            ok.append(
+                rules.record(
+                    dim,
+                    "general.turnover",
+                    turnover_test,
+                    arm.turnover_median.get(cell),
+                    None,
+                    reason,
+                    passed=False,
+                    location=cell,
+                )
+            )
     return all(ok)
 
 
@@ -1257,8 +1296,7 @@ def decide(
             raise ValueError(f"no protocol 7 cost line for menu {name!r}")
         rules = _Rules(name)
         replay_ok = _replay_branch(rules, e.replay)
-        stability_ok = e.replay.u is not None and e.replay.u < REPLAY_GAIN  # ruling 3
-        stability_ok = stability_ok and _stability_branch(rules, e.replay, e.stability)
+        stability_ok = _stability_branch(rules, e.replay, e.stability)  # ruling 3 inside
         branch = REPLAY_BRANCH if replay_ok else STABILITY_BRANCH if stability_ok else None
         score = rules.check(
             "Meaningful score change",
@@ -1326,7 +1364,9 @@ def decide(
         blocked = [d for d in found if d.blocking]
         if validity.valid and not pcme:
             failing += [
-                c.text() for c in rules.items if c.dimension in _PCME_DIMENSIONS and not c.passed
+                c.text()
+                for c in rules.items
+                if c.dimension in _PCME_DIMENSIONS and c.passed is False
             ]
         elif pcme:
             failing += [f"{name}: sensitivity {d.setting}: {'; '.join(d.reasons)}" for d in blocked]
@@ -1344,7 +1384,9 @@ def decide(
         )
         criteria += rules.items
     harm = tuple(
-        c for c in criteria if not c.passed and (c.key in _HARM_KEYS or c.key.startswith("guard."))
+        c
+        for c in criteria
+        if c.passed is False and (c.key in _HARM_KEYS or c.key.startswith("guard."))
     )
     pcme_all = bool(verdicts) and all(v.pcme for v in verdicts.values())
     blocking = any(d.blocking for d in disclosures if verdicts[d.menu].pcme)
@@ -1374,7 +1416,8 @@ def decide(
         menus=verdicts,
         disclosures=tuple(disclosures),
         material_harm=harm,
-        confirmed_worthwhile_benefit=all(v.support for v in verdicts.values())
+        confirmed_worthwhile_benefit=bool(verdicts)
+        and all(v.support for v in verdicts.values())
         and not harm
         and validity.valid,
         stage_2={"run": run, "reason": reason, "failing_criteria": [] if run else failing},

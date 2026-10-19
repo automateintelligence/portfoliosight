@@ -1,34 +1,32 @@
 """The experiment runner and its artifacts (protocol 4-9; plan 6b.5).
 
-Fixtures are synthetic: seeded total-return indices (tests/research/helpers.py) on the installed
-XNYS sessions for a three-fund "tsp" menu (caps .60) and a five-fund "example" menu (caps .25),
-D* 2025-09-30, a 2y lookback and reduced search budgets (`Settings` makes the reductions explicit
-and the manifest lists them). Origins 2024-07 and 2024-08 are mature, 2024-09 is immature. Runs go
-to `tmp_path`; nothing reads the mirror. Expectations come from oracles written here: hashlib for
-keys and order, hand counts for the denominator, explicit day-by-day compounding of production's
-bootstrap paths for bank figures, hand formulas for DR², `mu_s'w`, turnover, L1 and the
-forecast-error correlation. Production's origin model, bootstrap index and realized horizon are
-the pinned references (tested in 6.3), not the code under test.
+Fixtures are synthetic (tests/research/fixtures.py, shared with the report tests): seeded
+total-return indices (tests/research/helpers.py) on the installed XNYS sessions for a three-fund
+"tsp" menu (caps .60) and a five-fund "example" menu (caps .25), D* 2025-09-30, a 2y lookback and
+reduced search budgets (`Settings` makes the reductions explicit and the manifest lists them).
+Origins 2024-07 and 2024-08 are mature, 2024-09 is immature. Runs go to `tmp_path`; nothing
+reads the mirror. Expectations come from oracles written here: hashlib for keys and order, hand
+counts for the denominator, explicit day-by-day compounding of production's bootstrap paths for
+bank figures, hand formulas for DR², `mu_s'w`, turnover, L1 and the forecast-error correlation.
+Production's origin model, bootstrap index and realized horizon are the pinned references
+(tested in 6.3), not the code under test.
 """
 
 from __future__ import annotations
 
-import functools
 import hashlib
-import importlib.util
 import io
 import json
 import math
 import shutil
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-import exchange_calendars as xcals
 import numpy as np
 import pandas as pd
 import pyarrow as pa
@@ -46,10 +44,8 @@ from portfoliosight.research import (
     selection,
 )
 from portfoliosight.research.experiment import (
-    Inputs,
     Investigation,
     Limits,
-    Provenance,
     Settings,
     build_schedule,
 )
@@ -62,114 +58,29 @@ from portfoliosight.research.selection import (
     SEARCH_SCHEMA,
     LockedFileChanged,
 )
+from tests.research.fixtures import (
+    D_STAR,
+    MENUS,
+    PREFIX,
+    PRIMARY,
+    PROVENANCE,
+    ROOT,
+    SECOND,
+    TINY,
+    load_module,
+    make_inputs,
+    make_records,
+    make_settings,
+    run_experiment,
+    scale_price,
+    xnys_sessions,
+)
 from tests.research.helpers import random_indices, record
 
-ROOT = Path(__file__).resolve().parents[2]
-D_STAR = date(2025, 9, 30)
-MENUS = {"tsp": ("TSP-G", "TSP-F", "TSP-C"), "example": ("X", "Y", "Z", "V", "W")}
-DRIFT_VOL = {
-    "TSP-G": (1.2e-4, 3e-5),
-    "TSP-F": (1.5e-4, 0.003),
-    "TSP-C": (4e-4, 0.011),
-    "X": (3e-4, 0.009),
-    "Y": (2e-4, 0.005),
-    "Z": (5e-4, 0.014),
-    "V": (1e-4, 0.002),
-    "W": (3.5e-4, 0.012),
-}
-TINY = Budget(points=8, starts=2, calls=8, maxiter=8)
-PRIMARY, SECOND = 20261013, 20261014
-PROTOCOL_BYTES = b"the protocol text at HEAD"
-PROVENANCE = Provenance(
-    head="a" * 40,
-    dirty=(),
-    protocol_sha256=hashlib.sha256(PROTOCOL_BYTES).hexdigest(),
-    protocol_status="Status: test",
-    worktrees=(),
-    git_dirs=(),
-    ignored=lambda path: False,
-)
-PREFIX = hashlib.sha256(PROTOCOL_BYTES).hexdigest()[:16]
 ROLES_STAGE_1 = {"R", "R+D", "R:native", "R+D:native", "frontier", "mdp", "min_variance"}
 ROLES_STAGE_1 |= {"equal_weight", "pool_max_dr2"}
 
-Records = dict[str, pd.DataFrame]
-Mutation = Callable[[dict[str, pd.Series]], dict[str, pd.Series]]
-
-
 # ------------------------------------------------------------------------------------ fixtures
-
-
-@functools.cache
-def _sessions() -> pd.DatetimeIndex:
-    return pd.DatetimeIndex(
-        xcals.get_calendar("XNYS", start="2021-01-01", end="2027-12-31").sessions
-    )
-
-
-@functools.cache
-def _indices() -> dict[str, pd.Series]:
-    sessions = _sessions()
-    days = sessions[(sessions >= pd.Timestamp("2022-01-03")) & (sessions <= pd.Timestamp(D_STAR))]
-    return random_indices(pd.DatetimeIndex(days), DRIFT_VOL, 20261019)
-
-
-def _records(*mutations: Mutation) -> Records:
-    series = dict(_indices())
-    for mutate in mutations:
-        series = mutate(dict(series))
-    return {symbol: record(values) for symbol, values in series.items()}
-
-
-def _scale(day: str, factor: float, *symbols: str) -> Mutation:
-    def mutate(series: dict[str, pd.Series]) -> dict[str, pd.Series]:
-        for symbol in symbols:
-            values = series[symbol].copy()
-            values[pd.Timestamp(day)] *= factor
-            series[symbol] = values
-        return series
-
-    return mutate
-
-
-def _inputs(records: Records, root: Path) -> Inputs:
-    data = harness.SnapshotInputs(
-        root=root / "snapshot",
-        manifest_sha256="f" * 64,
-        source_root=str(root / "mirror"),
-        d_star=D_STAR,
-        menus=dict(MENUS),
-        records=records,
-        sessions=_sessions(),
-    )
-    manifest = {
-        "files": [{"path": "prices/X.parquet", "sha256": "0" * 64}],
-        "calendar": {"name": "XNYS"},
-    }
-    return Inputs(data, manifest, "2026-10-19T00:00:00+00:00")
-
-
-def _settings(records: Records, **changes: Any) -> Settings:
-    """Reduced settings whose investigation digest is this fixture's own (a precondition)."""
-    digest = search.production_sample_digest(records, MENUS["tsp"], "1y", D_STAR)
-    base = Settings(
-        lookback="2y",
-        seeds=(PRIMARY, SECOND),
-        budget=TINY,
-        months=("2024-07", "2024-09"),
-        investigation=Investigation(menu="tsp", lookback="1y", asof=D_STAR, digest=digest),
-    )
-    return replace(base, **changes)
-
-
-def _run(tmp: Path, records: Records | None = None, **kwargs: Any) -> experiment.RunResult:
-    records = records if records is not None else _records()
-    settings = kwargs.pop("settings", None) or _settings(records)
-    limits = kwargs.pop("limits", Limits(workers=0))
-    out = kwargs.pop("out", tmp / "out")
-    return experiment.run(
-        _inputs(records, tmp), PROVENANCE, out, settings=settings, limits=limits, **kwargs
-    )
 
 
 def _rows(directory: Path, name: str) -> list[dict[str, Any]]:
@@ -202,20 +113,22 @@ def _resources(directory: Path) -> list[dict[str, Any]]:
 @pytest.fixture(scope="module")
 def stage1(tmp_path_factory: pytest.TempPathFactory) -> experiment.RunResult:
     """Stage 1 on three origins, two seeds, both menus, in this process."""
-    return _run(tmp_path_factory.mktemp("stage1"), run_id="main")
+    return run_experiment(tmp_path_factory.mktemp("stage1"), run_id="main")
 
 
 @pytest.fixture(scope="module")
 def schedule() -> experiment.Schedule:
-    records = _records()
-    run_profiles = experiment.profiles(1, None, _settings(records))
-    return build_schedule(_inputs(records, Path("/nonexistent")), _settings(records), run_profiles)
+    records = make_records()
+    run_profiles = experiment.profiles(1, None, make_settings(records))
+    return build_schedule(
+        make_inputs(records, Path("/nonexistent")), make_settings(records), run_profiles
+    )
 
 
 @pytest.fixture(scope="module")
 def models() -> dict[tuple[str, str], evaluate.OriginModel]:
-    records = _records()
-    ledger = harness.build_ledger(records, _sessions(), D_STAR, MENUS, "2y")
+    records = make_records()
+    ledger = harness.build_ledger(records, xnys_sessions(), D_STAR, MENUS, "2y")
     return {
         (month, menu): evaluate.origin_model(records, ledger, month, menu)
         for month in ("2024-07", "2024-08", "2024-09")
@@ -310,11 +223,11 @@ def test_the_frozen_denominator_counts_distinct_cells_once_with_alias_weights(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Example with four funds capped at .25: only equal weight fits, so its span collapses."""
-    records = _records()
+    records = make_records()
     menus = {"tsp": MENUS["tsp"], "example": ("X", "Y", "Z", "V")}
-    inputs = _inputs(records, Path("/nonexistent"))
+    inputs = make_inputs(records, Path("/nonexistent"))
     inputs = replace(inputs, data=replace(inputs.data, menus=menus))
-    settings = _settings(records, seeds=search.PATH_SEEDS)
+    settings = make_settings(records, seeds=search.PATH_SEEDS)
     original = search.risk_ceilings
 
     def unsolved(model, caps):  # minimum variance fails at one origin of one menu
@@ -347,8 +260,8 @@ def test_the_frozen_denominator_counts_distinct_cells_once_with_alias_weights(
 def test_a_forced_failed_cell_stays_in_the_denominator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    records = _records()
-    settings = _settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
+    records = make_records()
+    settings = make_settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
     original = search.run_arm
 
     def failing(shared, label):
@@ -358,7 +271,7 @@ def test_a_forced_failed_cell_stays_in_the_denominator(
         return arm
 
     monkeypatch.setattr(search, "run_arm", failing)
-    result = _run(tmp_path, records, settings=settings, run_id="failed")
+    result = run_experiment(tmp_path, records, settings=settings, run_id="failed")
     assert result.status == "complete" and result.cells == 6
     assert result.outcome["failed"] == 1 and result.outcome["completed"] == 5
     assert result.outcome["failure_rate"] == 1 / 6
@@ -392,7 +305,7 @@ def test_the_protocol_9_artifacts_exist_with_their_schemas(stage1: experiment.Ru
     assert columns[: len(harness.LEDGER_COLUMNS)] == list(harness.LEDGER_COLUMNS)
     origins = _rows(directory, "origins.parquet")
     months = harness.ledger_frame(
-        harness.build_ledger(_records(), _sessions(), D_STAR, MENUS, "2y")
+        harness.build_ledger(make_records(), xnys_sessions(), D_STAR, MENUS, "2y")
     )
     assert len(origins) == len(months)  # every enumerated month, both menus
     scheduled = [row for row in origins if row["scheduled"]]
@@ -547,8 +460,8 @@ def test_realized_legs_follow_the_ledger_and_hand_compounding(
     assert all(row["annual_return"] is None and row["forecast_error"] is None for row in immature)
     mature = [row for row in written if row["month"] != "2024-09"]
     assert {row["realized_status"] for row in mature} == {harness.COMPLETE}
-    records = _records()
-    ledger = harness.build_ledger(records, _sessions(), D_STAR, MENUS, "2y")
+    records = make_records()
+    ledger = harness.build_ledger(records, xnys_sessions(), D_STAR, MENUS, "2y")
     row = next(r for r in mature if r["role"] == "R")
     horizon = evaluate.realized_horizon(records, ledger, row["month"], row["menu"])
     assert horizon.returns is not None
@@ -634,8 +547,8 @@ def test_forecast_error_diagnostic_matches_hand_values() -> None:
 def test_the_lock_is_written_before_any_independent_draw_or_realized_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    records = _records()
-    settings = _settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
+    records = make_records()
+    settings = make_settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
     events: list[tuple[str, Any, bool]] = []
     directory = tmp_path / "out" / PREFIX / "lock"
     original_bank, original_horizon, original_arm = (
@@ -659,7 +572,7 @@ def test_the_lock_is_written_before_any_independent_draw_or_realized_read(
     monkeypatch.setattr(evaluate, "bank", spy_bank)
     monkeypatch.setattr(experiment, "realized_horizon", spy_horizon)
     monkeypatch.setattr(search, "run_arm", spy_arm)
-    result = _run(tmp_path, records, settings=settings, run_id="lock")
+    result = run_experiment(tmp_path, records, settings=settings, run_id="lock")
     assert result.directory == directory and result.status == "complete"
     draws = [event for event in events if event[0] in ("bank", "horizon")]
     assert draws and all(locked for _, _, locked in draws)
@@ -701,8 +614,8 @@ def test_evaluation_reads_only_the_locked_rows(
     assert list(groups) == [
         ("stage-1", menu, month) for menu in MENUS for month in ("2024-07", "2024-08", "2024-09")
     ]
-    records = _records()
-    ledger = harness.build_ledger(records, _sessions(), D_STAR, MENUS, "2y")
+    records = make_records()
+    ledger = harness.build_ledger(records, xnys_sessions(), D_STAR, MENUS, "2y")
     horizon = evaluate.realized_horizon(records, ledger, "2024-08", "tsp")
     rows = tuple(groups[("stage-1", "tsp", "2024-08")])
     model = models[("2024-08", "tsp")]
@@ -764,8 +677,8 @@ def test_selection_and_search_never_import_the_evaluation_side() -> None:
 def test_arm_order_and_cache_isolation_leave_a_cell_unchanged(
     schedule: experiment.Schedule,
 ) -> None:
-    records = _records()
-    settings = _settings(records)
+    records = make_records()
+    settings = make_settings(records)
     cell = next(c for c in schedule.cells if c.menu == "tsp" and c.ceiling_id == "x50")
     facts = schedule.origins[(cell.lookback, cell.month, cell.menu)]
     task = runner.SearchTask(
@@ -859,20 +772,20 @@ def _stopped(result: experiment.RunResult, rule: str, evaluated: bool = False) -
 def test_an_aggregate_breach_stops_the_run_and_keeps_partial_artifacts(
     tmp_path: Path, usage: Usage, rule: str
 ) -> None:
-    records = _records()
-    settings = _settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
+    records = make_records()
+    settings = make_settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
     meter = _Meter(usage, calls=1)  # the check before the first cell passes, the next breaches
-    result = _run(tmp_path, records, settings=settings, run_id=rule, meter=meter)
+    result = run_experiment(tmp_path, records, settings=settings, run_id=rule, meter=meter)
     cells = _stopped(result, rule)
     assert list(cells["cell_status"]) == ["ok"] + ["unattempted"] * 5
     assert not (result.directory / "locked.parquet").exists()  # nothing is locked or evaluated
 
 
 def test_an_arm_past_its_ceiling_stops_the_run(tmp_path: Path) -> None:
-    records = _records()
-    settings = _settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
+    records = make_records()
+    settings = make_settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
     ticks = iter(range(0, 10**9, 200))
-    result = _run(
+    result = run_experiment(
         tmp_path, records, settings=settings, run_id="arm", clock=lambda: float(next(ticks))
     )
     cells = _stopped(result, "arm_seconds")
@@ -893,10 +806,10 @@ def _breached_arm(result: experiment.RunResult, cells: pd.DataFrame, said: str) 
 
 
 def test_the_alarm_stops_an_arm_that_overruns_inside_the_solver(tmp_path: Path) -> None:
-    records = _records()
-    settings = _settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
+    records = make_records()
+    settings = make_settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
     limits = Limits(workers=0, arm_seconds=1e-4)
-    result = _run(
+    result = run_experiment(
         tmp_path, records, settings=settings, limits=limits, run_id="alarm", clock=lambda: 0.0
     )
     cells = _stopped(result, "arm_seconds")
@@ -906,12 +819,12 @@ def test_the_alarm_stops_an_arm_that_overruns_inside_the_solver(tmp_path: Path) 
 
 
 def test_a_breach_while_evaluating_keeps_the_lock_and_partial_outcomes(tmp_path: Path) -> None:
-    records = _records()
-    settings = _settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
+    records = make_records()
+    settings = make_settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
     # reads: 1 before the search and 6 after its cells pass, 1 before evaluating passes, and the
     # read after the first (profile, menu, origin) group reports 5 GiB
     meter = _Meter(Usage(1.0, 2**20, 5 * 2**30), calls=8)
-    result = _run(tmp_path, records, settings=settings, run_id="late", meter=meter)
+    result = run_experiment(tmp_path, records, settings=settings, run_id="late", meter=meter)
     cells = _stopped(result, "aggregate_peak_rss", evaluated=True)
     assert set(cells["cell_status"]) == {"ok"}
     manifest = json.loads((result.directory / "manifest.json").read_text())
@@ -941,14 +854,14 @@ def test_the_arm_alarm_interrupts_python_code() -> None:
 def test_preflight_refusals_leave_no_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    records = _records()
-    settings = _settings(records)
+    records = make_records()
+    settings = make_settings(records)
     wrong = replace(settings, investigation=replace(settings.investigation, digest="0" * 64))
     with pytest.raises(experiment.InvestigationMismatch, match="digest"):
-        _run(tmp_path, records, settings=wrong)
+        run_experiment(tmp_path, records, settings=wrong)
     with pytest.raises(experiment.DirtyRepository):
         experiment.run(
-            _inputs(records, tmp_path),
+            make_inputs(records, tmp_path),
             replace(PROVENANCE, dirty=("x.py",)),
             tmp_path / "out",
             settings=settings,
@@ -956,19 +869,19 @@ def test_preflight_refusals_leave_no_directory(
         )
     with pytest.raises(experiment.ScheduleTooLarge):
         build_schedule(
-            _inputs(records, tmp_path),
+            make_inputs(records, tmp_path),
             settings,
             experiment.profiles(1, None, settings),
             max_origins=2,
         )
     monkeypatch.setenv("OMP_NUM_THREADS", "4")
     with pytest.raises(experiment.BlasThreads, match="OMP_NUM_THREADS"):
-        _run(tmp_path, records, settings=settings)
+        run_experiment(tmp_path, records, settings=settings)
     assert not (tmp_path / "out").exists()
 
 
 def test_output_must_avoid_the_snapshot_mirror_and_tracked_repository(tmp_path: Path) -> None:
-    inputs = _inputs(_records(), tmp_path)
+    inputs = make_inputs(make_records(), tmp_path)
     repo = tmp_path / "repo"
     provenance = replace(
         PROVENANCE,
@@ -992,10 +905,10 @@ def test_output_must_avoid_the_snapshot_mirror_and_tracked_repository(tmp_path: 
 
 
 def test_one_and_two_workers_write_byte_identical_artifacts(tmp_path: Path) -> None:
-    records = _records()
-    settings = _settings(records, months=("2024-08", "2024-09"), seeds=(PRIMARY,))
+    records = make_records()
+    settings = make_settings(records, months=("2024-08", "2024-09"), seeds=(PRIMARY,))
     results = {
-        workers: _run(
+        workers: run_experiment(
             tmp_path,
             records,
             settings=settings,
@@ -1041,15 +954,17 @@ def test_one_and_two_workers_write_byte_identical_artifacts(tmp_path: Path) -> N
 def test_prices_after_the_origin_change_only_the_realized_legs(tmp_path: Path) -> None:
     """A-SE-32: the runner's selections and predictions ignore every price after the origin."""
     month = ("2024-08", "2024-08")
-    base_records = _records()
-    after = _records(
-        _scale("2024-10-15", 1.5, "X", "TSP-C"), _scale("2025-01-15", 0.8, "Y", "TSP-F")
+    base_records = make_records()
+    after = make_records(
+        scale_price("2024-10-15", 1.5, "X", "TSP-C"), scale_price("2025-01-15", 0.8, "Y", "TSP-F")
     )
-    before = _records(_scale("2024-03-15", 1.5, "X", "TSP-C"))
+    before = make_records(scale_price("2024-03-15", 1.5, "X", "TSP-C"))
     runs = {}
     for name, records in (("base", base_records), ("after", after), ("before", before)):
-        settings = _settings(records, months=month, seeds=(PRIMARY,))
-        runs[name] = _run(tmp_path / name, records, settings=settings, run_id=name).directory
+        settings = make_settings(records, months=month, seeds=(PRIMARY,))
+        runs[name] = run_experiment(
+            tmp_path / name, records, settings=settings, run_id=name
+        ).directory
     locked = {name: (runs[name] / "locked.parquet").read_bytes() for name in runs}
     assert (
         locked["after"] == locked["base"]
@@ -1094,17 +1009,17 @@ def test_prices_after_the_origin_change_only_the_realized_legs(tmp_path: Path) -
 @pytest.fixture(scope="module")
 def small(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, experiment.RunResult]:
     tmp = tmp_path_factory.mktemp("small")
-    records = _records()
-    settings = _settings(records, months=("2024-08", "2024-09"), seeds=(PRIMARY, SECOND))
-    return tmp, _run(tmp, records, settings=settings, run_id="small")
+    records = make_records()
+    settings = make_settings(records, months=("2024-08", "2024-09"), seeds=(PRIMARY, SECOND))
+    return tmp, run_experiment(tmp, records, settings=settings, run_id="small")
 
 
 def test_sensitivities_write_separate_artifacts_on_the_primary_seed(
     small: tuple[Path, experiment.RunResult],
 ) -> None:
     tmp, first = small
-    records = _records()
-    settings = _settings(records, months=("2024-08", "2024-09"), seeds=(PRIMARY, SECOND))
+    records = make_records()
+    settings = make_settings(records, months=("2024-08", "2024-09"), seeds=(PRIMARY, SECOND))
     stage_1_cpu = json.loads((first.directory / "manifest.json").read_text())["execution"][
         "cpu_seconds"
     ]
@@ -1114,7 +1029,7 @@ def test_sensitivities_write_separate_artifacts_on_the_primary_seed(
         ("lookback", {"lookback-252"}),
         ("budget", {"budget-x2"}),
     ):
-        result = _run(tmp, records, settings=settings, run_id="small", sensitivity=name)
+        result = run_experiment(tmp, records, settings=settings, run_id="small", sensitivity=name)
         assert result.directory == first.directory / f"sensitivity-{name}"
         manifest = json.loads((result.directory / "manifest.json").read_text())
         assert manifest["execution"]["cpu_before"] == pytest.approx(spent)
@@ -1138,11 +1053,11 @@ def test_sensitivities_write_separate_artifacts_on_the_primary_seed(
             cells = _frame(result.directory, "search.parquet").query("kind == 'cell'")
             assert {json.loads(b)["points"] for b in cells["budget"]} == {16}
     with pytest.raises(experiment.Refused, match="exists"):
-        _run(tmp, records, settings=settings, run_id="small", sensitivity="budget")
+        run_experiment(tmp, records, settings=settings, run_id="small", sensitivity="budget")
     with pytest.raises(experiment.StageNotReady):
-        _run(tmp, records, settings=settings, run_id="missing", sensitivity="budget")
+        run_experiment(tmp, records, settings=settings, run_id="missing", sensitivity="budget")
     with pytest.raises(experiment.StageNotReady, match="other code, data or settings"):
-        _run(
+        run_experiment(
             tmp,
             records,
             settings=replace(settings, seeds=(PRIMARY,)),
@@ -1155,16 +1070,18 @@ def test_stage_2_needs_the_report_and_an_amended_ceiling(
     small: tuple[Path, experiment.RunResult],
 ) -> None:
     tmp, first = small
-    records = _records()
-    settings = _settings(records, months=("2024-08", "2024-09"), seeds=(PRIMARY, SECOND))
+    records = make_records()
+    settings = make_settings(records, months=("2024-08", "2024-09"), seeds=(PRIMARY, SECOND))
     amended = Limits(workers=0, cpu_hours=1.0, cpu_amended=True)
     with pytest.raises(experiment.Refused, match="Stage 2 CPU ceiling"):
-        _run(tmp, records, settings=settings, run_id="small", stage=2)
+        run_experiment(tmp, records, settings=settings, run_id="small", stage=2)
     with pytest.raises(experiment.StageNotReady, match="stage_2.run"):
-        _run(tmp, records, settings=settings, limits=amended, run_id="small", stage=2)
+        run_experiment(tmp, records, settings=settings, limits=amended, run_id="small", stage=2)
     (first.directory / "summary.json").write_text(json.dumps({"stage_2": {"run": True}}))
     try:
-        result = _run(tmp, records, settings=settings, limits=amended, run_id="small", stage=2)
+        result = run_experiment(
+            tmp, records, settings=settings, limits=amended, run_id="small", stage=2
+        )
     finally:
         (first.directory / "summary.json").unlink()
     assert result.directory == first.directory / "stage-2" and result.status == "complete"
@@ -1185,11 +1102,11 @@ def test_stage_2_needs_the_report_and_an_amended_ceiling(
 
 
 def test_an_estimate_that_crosses_a_ceiling_records_it_and_refuses(tmp_path: Path) -> None:
-    records = _records()
+    records = make_records()
     with pytest.raises(experiment.Refused, match="crossed a ceiling"):
         experiment.estimate(
-            _inputs(records, tmp_path), PROVENANCE, tmp_path / "out", settings=_settings(records),
-            limits=Limits(workers=0), estimate_id="hot",
+            make_inputs(records, tmp_path), PROVENANCE, tmp_path / "out",
+            settings=make_settings(records), limits=Limits(workers=0), estimate_id="hot",
             meter=_Meter(Usage(86_401.0, 2**20, 2**20), calls=1),
         )  # fmt: skip
     directory = tmp_path / "out" / PREFIX / "estimates" / "hot"
@@ -1201,10 +1118,10 @@ def test_an_estimate_that_crosses_a_ceiling_records_it_and_refuses(tmp_path: Pat
 
 
 def test_estimate_projects_from_a_sample_and_is_not_a_run(tmp_path: Path) -> None:
-    records = _records()
-    settings = _settings(records)
+    records = make_records()
+    settings = make_settings(records)
     projection = experiment.estimate(
-        _inputs(records, tmp_path), PROVENANCE, tmp_path / "out", settings=settings,
+        make_inputs(records, tmp_path), PROVENANCE, tmp_path / "out", settings=settings,
         limits=Limits(workers=0), estimate_id="e1",
     )  # fmt: skip
     assert projection.directory == tmp_path / "out" / PREFIX / "estimates" / "e1"
@@ -1223,31 +1140,22 @@ def test_estimate_projects_from_a_sample_and_is_not_a_run(tmp_path: Path) -> Non
     assert not (tmp_path / "out" / PREFIX / "e1").exists()
 
 
-def _load(name: str, path: Path) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 @pytest.fixture(scope="module")
 def cli() -> ModuleType:
-    return _load("backtest_ranges_experiment", ROOT / "scripts" / "backtest_ranges.py")
+    return load_module("backtest_ranges_experiment", ROOT / "scripts" / "backtest_ranges.py")
 
 
 @pytest.fixture(scope="module")
 def snapshot(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A freeze-script snapshot holding the protocol's 28 funds (synthetic prices)."""
-    freeze = _load("freeze_research_inputs", ROOT / "scripts" / "freeze_research_inputs.py")
+    freeze = load_module("freeze_research_inputs", ROOT / "scripts" / "freeze_research_inputs.py")
     from tests.test_backtest_ranges import _snapshot
 
     funds = [*freeze.TSP_MENU, *freeze.EXAMPLE_MENU]
     drift_vol = {
         fund: (1e-4 * (1 + i % 5), 0.002 + 0.001 * (i % 7)) for i, fund in enumerate(funds)
     }
-    sessions = _sessions()
+    sessions = xnys_sessions()
     days = pd.DatetimeIndex(
         sessions[(sessions >= pd.Timestamp("2022-01-03")) & (sessions <= pd.Timestamp(D_STAR))]
     )

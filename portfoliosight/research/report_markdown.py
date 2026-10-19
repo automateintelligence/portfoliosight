@@ -25,6 +25,19 @@ REALIZED_LABELS = {
     "volatility": "realized volatility",
 }
 _SHARES = frozenset({"loss", "below_20"})
+DELTA_LABELS = {"utility": "ΔU", "bad": "ΔB", "typical": "ΔT", "good": "ΔG", "es_25": "ΔES_2.5"}
+LEVEL_LABELS = {"utility": "U", "bad": "B", "typical": "T", "good": "G", "es_25": "ES_2.5"}
+ACROSS_ORIGINS = {
+    "bad": "q(.025) (Bad)",
+    "typical": "q(.50) (Typical)",
+    "good": "q(.975) (Good)",
+    "utility": "U of the quantiles",
+    "es_25": "ES_2.5",
+}
+
+
+def _result(passed: bool | None) -> str:
+    return "not assessed" if passed is None else "pass" if passed else "FAIL"
 
 
 def _references(summary: Mapping[str, Any]) -> list[str]:
@@ -81,7 +94,7 @@ def _contrast_block(title: str, block: Mapping[str, Any], menus: Sequence[str]) 
     lines.append("Pooled independent test banks (10,000 outcomes), bp, 95% interval at block 24:")
     lines.append("")
     for figure in block["replay"]:
-        lines.append(f"Δ{figure}:")
+        lines.append(f"{DELTA_LABELS.get(figure, figure)}:")
         lines.append("")
         lines += _table(
             ["menu", "risk cell", "mean paired difference"],
@@ -405,7 +418,7 @@ def _realized_lines(summary: Mapping[str, Any], menus: Sequence[str]) -> list[st
         rows,
     )
     for name, table in realized["quantile_contrasts_rd_minus_r"].items():
-        lines += [f"R+D minus R, {name} across origins (bp):", ""]
+        lines += [f"R+D minus R, {ACROSS_ORIGINS.get(name, name)} across origins (bp):", ""]
         lines += _table(["menu", "risk cell", "contrast"], _contrast_rows(table, menus))
     rows = []
     for menu in menus:
@@ -415,9 +428,11 @@ def _realized_lines(summary: Mapping[str, Any], menus: Sequence[str]) -> list[st
             if c["menu"] == menu and c["key"].startswith(("support.", "guard."))
         ]
         for c in guard:
-            rows.append([menu, c["location"], c["test"], c["value"], c["threshold"], c["passed"]])
+            rows.append(
+                [menu, c["location"], c["test"], c["value"], c["threshold"], _result(c["passed"])]
+            )
     lines += ["Realized guardrails and benefit support (99% intervals at block 24):", ""]
-    lines += _table(["menu", "location", "test", "value", "threshold", "passed"], rows)
+    lines += _table(["menu", "location", "test", "value", "threshold", "result"], rows)
     return lines
 
 
@@ -449,7 +464,7 @@ def _calibration_lines(summary: Mapping[str, Any], menus: Sequence[str]) -> list
                             menu,
                             arm,
                             forecast,
-                            f"{name} ({entry['nominal']})",
+                            f"{LEVEL_LABELS.get(name, name)} q({entry['nominal']})",
                             _num(m["coverage"], 3),
                             _num(m["pinball"], 5),
                             m["n"],
@@ -478,8 +493,8 @@ def _stability_lines(summary: Mapping[str, Any], menus: Sequence[str]) -> list[s
                         _pct(s["bad_sd_share"][cell]),
                         _num(s["turnover_median"][cell]),
                         _num(d["turnover_median_primary"]),
-                        ", ".join(f"{k} {_bp(v)}" for k, v in sd.items()),
-                        ", ".join(f"{k} {_bp(v)}" for k, v in d["bank_sd_median_primary"].items()),
+                        _levels(sd),
+                        _levels(d["bank_sd_median_primary"]),
                     ]
                 )
     return (
@@ -516,7 +531,7 @@ def _selection_lines(summary: Mapping[str, Any], menus: Sequence[str]) -> list[s
 def _native_lines(summary: Mapping[str, Any], menus: Sequence[str]) -> list[str]:
     lines = ["## Native-search selections (diagnostic; the union selections are primary)", ""]
     for figure in summary["native"]:
-        lines.append(f"Δ{figure} (R+D:native minus R:native, bp):")
+        lines.append(f"{DELTA_LABELS.get(figure, figure)} (R+D:native minus R:native, bp):")
         lines.append("")
         lines += _table(
             ["menu", "risk cell", "mean"], _contrast_rows(summary["native"][figure], menus)
@@ -671,13 +686,18 @@ def _criteria_lines(summary: Mapping[str, Any]) -> list[str]:
             c["test"],
             c["value"],
             c["threshold"],
-            "pass" if c["passed"] else "FAIL",
+            _result(c["passed"]),
+            c.get("reason") or "",
         ]
         for c in summary["criteria"]
     ]
     return lines + _table(
-        ["menu", "dimension", "location", "test", "value", "threshold", "result"], rows
+        ["menu", "dimension", "location", "test", "value", "threshold", "result", "reason"], rows
     )
+
+
+def _levels(values: Mapping[str, Any]) -> str:
+    return ", ".join(f"{LEVEL_LABELS.get(k, k)} {_bp(v)}" for k, v in values.items())
 
 
 def _readings_lines(summary: Mapping[str, Any]) -> list[str]:
