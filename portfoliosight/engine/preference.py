@@ -20,6 +20,12 @@ a diversification measure `M` (DR² or ENB) supplied by the caller. In order:
    allowance is contained in the set at a larger one.
 4. Stage B, diversification. The selection is the admissible set's maximum measure.
 
+Guard names are `bad`, `typical`, `good`, `u` (the allowance on U) and `veto`. A selection
+records two things about them: `guards`, the spec 7 ladder field, the constraints among `bad`,
+`typical`, `good` and `u` that the selection sits on (equality within `BINDING_TOLERANCE`, 1e-10;
+empty when the selection is `w_R` itself); and `excluding_guards`, the guards, veto included,
+that keep a more diversified pool member out.
+
 Ties, for each ranking: take its global maximum, form the tie set of everything within
 `TIE_TOLERANCE` (1e-12) of that maximum, then pick from the tie set by exact comparisons. Stage A
 prefers higher B, then T, then G, then the lexicographically smaller weight vector; Stage B
@@ -54,7 +60,8 @@ GOOD_GUARD = 0.0050  # 50 bp
 DOMINANCE_TOLERANCE = 1e-10  # "higher" in the dominance filter means higher by more than this
 VETO_TOLERANCE = 1e-10  # "lower" in the Bad-and-Typical veto means lower by more than this
 TIE_TOLERANCE = 1e-12  # the width of a ranking's tie set below its global maximum
-GUARDS = ("bad", "typical", "good", "utility", "veto")  # the order every guard list follows
+BINDING_TOLERANCE = 1e-10  # a guard binds a selection that meets it with equality within this
+GUARDS = ("bad", "typical", "good", "u", "veto")  # the order every guard list follows
 
 
 @dataclass(frozen=True)
@@ -107,9 +114,12 @@ class Selection:
     # U_R - U(selected), unrounded: in [0, allowance] up to rounding, except the tie-width edge
     # case of the module docstring (just below zero at allowance 0)
     sacrifice: float
+    # spec 7: those of bad, typical, good, u whose constraint the selection meets with equality
+    # within BINDING_TOLERANCE; empty when the selection is w_R itself (the ladder's level 0)
+    guards: frozenset[str]
     # the guards that exclude at least one scored member of `pool` with a strictly higher measure
     # than the selection, in GUARDS order; empty when no excluded member is more diversified
-    binding: tuple[str, ...]
+    excluding_guards: tuple[str, ...]
 
 
 def utility(bad: float, typical: float, good: float) -> float:
@@ -169,7 +179,7 @@ def failed_guards(candidate: Candidate, reference: Candidate, allowance: float) 
     if not candidate.good >= reference.good - GOOD_GUARD:
         failed.append("good")
     if not candidate.utility >= floor:
-        failed.append("utility")
+        failed.append("u")
     bad_lower = candidate.bad < reference.bad - VETO_TOLERANCE
     if bad_lower and candidate.typical < reference.typical - VETO_TOLERANCE:
         failed.append("veto")
@@ -197,17 +207,7 @@ def select_diversified(candidates: Sequence[Candidate]) -> Candidate:
     by higher U, then Bad, Typical, Good, then the lexicographically smaller weight vector.
     Raises `ValueError` when a member carries no measure: the caller scores what it offers.
     """
-    candidates = _checked(candidates)
-    measures = []
-    for i, candidate in enumerate(candidates):
-        if candidate.measure is None:
-            raise ValueError(
-                f"admissible candidate {i} (weights {candidate.weights}) carries no measure"
-            )
-        measures.append(candidate.measure)
-    best = max(measures)
-    ties = [c for c, m in zip(candidates, measures, strict=True) if m >= best - TIE_TOLERANCE]
-    return min(ties, key=lambda c: (-c.utility, -c.bad, -c.typical, -c.good, c.weights))
+    return _stage_b(_checked(candidates))[0]
 
 
 def select(pool: Sequence[Candidate], allowance: float) -> Selection:
@@ -216,11 +216,10 @@ def select(pool: Sequence[Candidate], allowance: float) -> Selection:
     filtered = nondominated(pool)
     reference = select_reference(filtered)
     allowed = admissible_set(filtered, reference, allowance)
-    selected = select_diversified(allowed)
-    assert selected.measure is not None  # select_diversified refuses an unscored member
+    selected, measure = _stage_b(allowed)
     excluded = set()
     for candidate in filtered:
-        if candidate.measure is not None and candidate.measure > selected.measure:
+        if candidate.measure is not None and candidate.measure > measure:
             excluded.update(failed_guards(candidate, reference, allowance))
     return Selection(
         pool=filtered,
@@ -229,8 +228,38 @@ def select(pool: Sequence[Candidate], allowance: float) -> Selection:
         admissible=allowed,
         selected=selected,
         sacrifice=reference.utility - selected.utility,
-        binding=tuple(guard for guard in GUARDS if guard in excluded),
+        guards=_guards_met(selected, reference, allowance),
+        excluding_guards=tuple(guard for guard in GUARDS if guard in excluded),
     )
+
+
+def _stage_b(candidates: tuple[Candidate, ...]) -> tuple[Candidate, float]:
+    """Stage B on a checked set: the selection and its measure."""
+    scored = []
+    for i, candidate in enumerate(candidates):
+        if candidate.measure is None:
+            raise ValueError(
+                f"admissible candidate {i} (weights {candidate.weights}) carries no measure"
+            )
+        scored.append((candidate, candidate.measure))
+    best = max(measure for _, measure in scored)
+    ties = [pair for pair in scored if pair[1] >= best - TIE_TOLERANCE]
+    return min(
+        ties, key=lambda p: (-p[0].utility, -p[0].bad, -p[0].typical, -p[0].good, p[0].weights)
+    )
+
+
+def _guards_met(selected: Candidate, reference: Candidate, allowance: float) -> frozenset[str]:
+    """Spec 7's `guards`: the constraints `selected` meets with equality within 1e-10."""
+    if selected == reference:
+        return frozenset()
+    gaps = {
+        "bad": selected.bad - (reference.bad - BAD_GUARD),
+        "typical": selected.typical - (reference.typical - TYPICAL_GUARD),
+        "good": selected.good - (reference.good - GOOD_GUARD),
+        "u": selected.utility - (reference.utility - allowance),
+    }
+    return frozenset(name for name, gap in gaps.items() if abs(gap) <= BINDING_TOLERANCE)
 
 
 def _checked(pool: Sequence[Candidate]) -> tuple[Candidate, ...]:

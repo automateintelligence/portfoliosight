@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import itertools
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import numpy as np
 import pytest
@@ -19,6 +19,7 @@ from portfoliosight.engine.measures import dr2_from
 from portfoliosight.engine.preference import (
     BAD_GUARD,
     BAD_WEIGHT,
+    BINDING_TOLERANCE,
     DOMINANCE_TOLERANCE,
     GOOD_GUARD,
     GOOD_WEIGHT,
@@ -73,7 +74,7 @@ def _oracle_fails(row: Row, ref: Row, allowance: float) -> list[str]:
     if not row[2] >= ref[2] - 0.0050:
         fails.append("good")
     if not _u(*row[:3]) >= _u(*ref[:3]) - allowance:
-        fails.append("utility")
+        fails.append("u")
     if row[0] < ref[0] - 1e-10 and row[1] < ref[1] - 1e-10:
         fails.append("veto")
     return fails
@@ -97,6 +98,19 @@ def _oracle(rows: Sequence[Row], allowance: float) -> tuple[list[Row], Row, list
     ties_b = [row for row in adm if _measure(row) >= best_m - 1e-12]
     pick = min(ties_b, key=lambda r: (-_u(*r[:3]), -r[0], -r[1], -r[2], r[4]))
     return kept, ref, adm, pick
+
+
+def _oracle_guards(pick: Row, ref: Row, allowance: float) -> frozenset[str]:
+    """Spec 7: the guards whose constraint holds with equality within 1e-10; none at w_R itself."""
+    if pick == ref:
+        return frozenset()
+    gaps = {
+        "bad": pick[0] - (ref[0] - 0.0010),
+        "typical": pick[1] - (ref[1] - 0.0025),
+        "good": pick[2] - (ref[2] - 0.0050),
+        "u": _u(*pick[:3]) - (_u(*ref[:3]) - allowance),
+    }
+    return frozenset(name for name, gap in gaps.items() if abs(gap) <= 1e-10)
 
 
 def _measure(row: Row) -> float:
@@ -129,15 +143,15 @@ def _at_u(bad, typical, target, weights, measure=None) -> Candidate:
     return _c(bad, typical, good, measure, weights)
 
 
-def _good_for(bad: float, typical: float, target: float, start: float) -> float:
-    """A Good near `start` whose U, by the test's formula, is exactly `target`."""
-    good = start
+def _exact_input(f: Callable[[float], float], target: float, start: float) -> float:
+    """An input near `start` at which the increasing `f` returns exactly `target`."""
+    x = start
     for _ in range(200):
-        u = _u(bad, typical, good)
-        if u == target:
-            return good
-        good = math.nextafter(good, math.inf if u < target else -math.inf)
-    raise AssertionError("fixture: no Good reproduces the target U exactly")
+        y = f(x)
+        if y == target:
+            return x
+        x = math.nextafter(x, math.inf if y < target else -math.inf)
+    raise AssertionError("fixture: no input reproduces the target exactly")
 
 
 def _exact_u_tie(*candidates: Candidate) -> None:
@@ -156,7 +170,8 @@ def test_coefficients_guards_and_tolerances_are_the_owner_policy():
     assert (BAD_WEIGHT, TYPICAL_WEIGHT, GOOD_WEIGHT) == (0.60, 0.30, 0.10)
     assert (BAD_GUARD, TYPICAL_GUARD, GOOD_GUARD) == (0.0010, 0.0025, 0.0050)
     assert DOMINANCE_TOLERANCE == 1e-10 and VETO_TOLERANCE == 1e-10 and TIE_TOLERANCE == 1e-12
-    assert GUARDS == ("bad", "typical", "good", "utility", "veto")
+    assert BINDING_TOLERANCE == 1e-10
+    assert GUARDS == ("bad", "typical", "good", "u", "veto")
     assert utility(1.0, 0.0, 0.0) == 0.60
     assert utility(0.0, 1.0, 0.0) == 0.30
     assert utility(0.0, 0.0, 1.0) == 0.10
@@ -365,21 +380,10 @@ def test_each_quantile_guard_admits_at_and_inside_and_rejects_outside(guard, pos
         assert admissible(candidate, reference, cap) is (position != "outside")
 
 
-def _bad_for_u(target: float) -> float:
-    """A Bad whose U, with Typical and Good 0, is exactly `target` by the test's formula."""
-    bad = target / 0.60
-    for _ in range(200):
-        u = _u(bad, 0.0, 0.0)
-        if u == target:
-            return bad
-        bad = math.nextafter(bad, math.inf if u < target else -math.inf)
-    raise AssertionError("fixture: no Bad reproduces the target U exactly")
-
-
 @pytest.mark.parametrize("cap", [0.0, 0.00025, 0.0005])
 def test_the_u_allowance_admits_at_and_inside_and_rejects_outside(cap):
     reference = _c(0.0, 0.0, 0.0, weights=_w(1))  # U_R = 0 exactly
-    at = _c(_bad_for_u(-cap), 0.0, 0.0, weights=_w(2))
+    at = _c(_exact_input(lambda b: _u(b, 0.0, 0.0), -cap, -cap / 0.60), 0.0, 0.0, weights=_w(2))
     assert _cu(at) == -cap and at.utility == -cap  # fixture precondition: exactly at the cap
     inside = _c((-cap + 1e-9) / 0.60, 0.0, 0.0, weights=_w(3))
     outside = _c((-cap - 1e-9) / 0.60, 0.0, 0.0, weights=_w(4))
@@ -387,7 +391,7 @@ def test_the_u_allowance_admits_at_and_inside_and_rejects_outside(cap):
         assert candidate.bad >= -0.0010  # a Bad-only reduction, inside the Bad guard
     assert failed_guards(at, reference, cap) == ()
     assert failed_guards(inside, reference, cap) == ()
-    assert failed_guards(outside, reference, cap) == ("utility",)
+    assert failed_guards(outside, reference, cap) == ("u",)
 
 
 def test_the_ten_bp_allowance_admits_inside_and_rejects_outside():
@@ -398,7 +402,7 @@ def test_the_ten_bp_allowance_admits_inside_and_rejects_outside():
     assert _cu(inside) == pytest.approx(-0.001 + 1e-9, abs=1e-15)
     assert _cu(outside) == pytest.approx(-0.001 - 1e-9, abs=1e-15)
     assert failed_guards(inside, reference, 0.001) == ()
-    assert failed_guards(outside, reference, 0.001) == ("utility",)
+    assert failed_guards(outside, reference, 0.001) == ("u",)
 
 
 @pytest.mark.parametrize("cap", CAPS)
@@ -439,7 +443,7 @@ def test_the_veto_holds_through_the_selector_despite_the_highest_measure():
     for cap in CAPS:
         result = select([double, r], cap)
         assert result.reference == r and result.selected == r
-        assert "veto" in result.binding
+        assert "veto" in result.excluding_guards
         assert double not in result.admissible
 
 
@@ -496,8 +500,10 @@ def _stage_b_by_bad() -> tuple[list[Candidate], Candidate]:
 
 def _stage_b_by_typical() -> tuple[list[Candidate], Candidate]:
     middle = _c(0.0, 0.25, 0.5, 2.0, _w(1))
-    best = _c(0.0, 0.26, _good_for(0.0, 0.26, _cu(middle), 0.47), 2.0 - 0.5e-12, _w(2))
-    low = _c(0.0, 0.24, _good_for(0.0, 0.24, _cu(middle), 0.53), 2.0 - 0.3e-12, _w(3))
+    best_good = _exact_input(lambda g: _u(0.0, 0.26, g), _cu(middle), 0.47)
+    low_good = _exact_input(lambda g: _u(0.0, 0.24, g), _cu(middle), 0.53)
+    best = _c(0.0, 0.26, best_good, 2.0 - 0.5e-12, _w(2))
+    low = _c(0.0, 0.24, low_good, 2.0 - 0.3e-12, _w(3))
     _exact_u_tie(middle, best, low)
     return [middle, best, low], best
 
@@ -556,7 +562,7 @@ LADDER = {  # name: (Bad, Typical, Good) moves in bp from w_R, measure; U move i
     "C7": ((3, -20, -10), 2.30),  # -5.2, Bad above w_R's
     "bad": ((-12, 15, 10), 3.00),  # -1.7, outside the Bad guard
     "veto": ((-1, -1, 5), 3.50),  # -0.4, Bad and Typical both lower
-    "utility": ((-9.9, 3, -49.9), 2.50),  # -10.03, outside every allowance up to 10 bp
+    "u": ((-9.9, 3, -49.9), 2.50),  # -10.03, outside every allowance up to 10 bp
     "typical": ((10, -26, 0), 2.60),  # -1.8, outside the Typical guard
     "good": ((5, 0, -51), 2.70),  # -2.1, outside the Good guard
     "dominated": ((-4, 0, 3), 5.00),  # -2.1, dominated by C2, the pool's highest measure
@@ -591,6 +597,7 @@ def test_one_pool_across_the_allowances_matches_the_oracle_and_its_construction(
         assert by_weights[result.selected.weights] == LADDER_PICKS[cap]
         assert result.sacrifice == pytest.approx(_cu(named["R"]) - _cu(result.selected), abs=1e-16)
         assert 0.0 <= result.sacrifice <= cap
+        assert result.guards == _oracle_guards(pick, ref, cap) == frozenset()  # strictly inside
         if previous is not None:
             assert _scored(result.selected) >= _scored(previous.selected)
             assert _cu(result.selected) <= _cu(previous.selected)
@@ -601,23 +608,26 @@ def test_one_pool_across_the_allowances_matches_the_oracle_and_its_construction(
     assert bads[1] < bads[0] and bads[2] < bads[1] and bads[3] > bads[0]
 
 
-def test_every_guard_is_reported_binding_where_it_excludes_a_more_diversified_member():
+def test_every_guard_is_reported_where_it_excludes_a_more_diversified_member():
     named = _ladder()
     for cap in CAPS:
-        assert select(list(named.values()), cap).binding == GUARDS
+        assert select(list(named.values()), cap).excluding_guards == GUARDS
 
 
-def test_binding_names_only_the_guards_that_exclude_a_more_diversified_member():
+def test_excluding_guards_names_only_the_guards_that_exclude_a_more_diversified_member():
     r = _c(*REF, 2.0, _w(1))
     ok = _c(REF[0] - 1 * BP, REF[1] + 1 * BP, REF[2], 2.5, _w(2))  # admissible at 2.5 bp
     bad = _c(REF[0] - 20 * BP, REF[1] + 35 * BP, REF[2], 3.0, _w(3))  # U -1.5 bp
     far = _c(REF[0] + 1 * BP, REF[1] - 20 * BP, REF[2], 2.8, _w(4))  # U -5.4 bp
     weak = _c(REF[0] + 5 * BP, REF[1] - 30 * BP, REF[2], 1.0, _w(5))  # fails Typical, low measure
     unscored = _c(REF[0] - 20 * BP, REF[1] + 30 * BP, REF[2], None, _w(6))  # fails Bad
-    assert select([r, ok], 0.00025).binding == ()
-    assert select([r, ok, weak], 0.00025).binding == ()
-    assert select([r, ok, unscored], 0.00025).binding == ()
-    assert select([r, ok, bad, far], 0.00025).binding == ("bad", "utility")
+    assert select([r, ok], 0.00025).excluding_guards == ()
+    assert select([r, ok, weak], 0.00025).excluding_guards == ()
+    assert select([r, ok, unscored], 0.00025).excluding_guards == ()
+    even = _c(REF[0] + 5 * BP, REF[1], REF[2] - 51 * BP, 2.5, _w(7))  # fails Good, measure = ok's
+    assert select([r, ok, even], 0.00025).selected == ok
+    assert select([r, ok, even], 0.00025).excluding_guards == ()  # not strictly more diversified
+    assert select([r, ok, bad, far], 0.00025).excluding_guards == ("bad", "u")
     assert select([r, ok, bad, far], 0.00025).selected == ok
 
 
@@ -650,11 +660,72 @@ def test_allowance_zero_admits_only_u_at_or_above_w_r():
     # Stage B may take the tie member above U_R: a sacrifice below zero by less than the tie width
     assert result.selected == above
     assert -1e-12 < result.sacrifice < 0.0
+    assert result.guards == frozenset({"u"})  # not w_R itself, and U_R - 0 holds within 1e-10
     lower = [
         _c(c.bad, c.typical, c.good, 0.5 if c is above else c.measure, c.weights) for c in pool
     ]
     plain = select(lower, 0.0)
     assert plain.selected.weights == w_r.weights and plain.sacrifice == 0.0
+    assert plain.guards == frozenset()
+
+
+# ---- spec 7 `guards`: the constraints the selection sits on ----------------------------------
+
+
+@pytest.mark.parametrize(
+    ("offset", "binds"),
+    [(0.0, True), (0.5e-10, True), (2e-10, False), (1e-9, False)],
+    ids=["at", "within-1e-10", "inside-2e-10", "inside-1e-9"],
+)
+@pytest.mark.parametrize("guard", ["bad", "typical", "good"])
+def test_guards_names_the_quantile_guard_the_selection_sits_on(guard, offset, binds):
+    b, t, g = EXACT_REF  # each guard's boundary is exactly representable here
+    r = _c(b, t, g, 1.0, _w(1))
+    selected = {
+        "bad": _c(b - 0.0010 + offset, t + 0.0005, g, 2.0, _w(2)),  # U -4.5 bp
+        "typical": _c(b + 0.0005, t - 0.0025 + offset, g, 2.0, _w(2)),  # U -4.5 bp
+        "good": _c(b + 0.0002, t, g - 0.0050 + offset, 2.0, _w(2)),  # U -3.8 bp
+    }[guard]
+    result = select([r, selected], 0.001)
+    assert result.reference == r and result.selected == selected
+    expected = frozenset({guard}) if binds else frozenset()
+    assert result.guards == _oracle_guards(_row(selected), _row(r), 0.001) == expected
+
+
+@pytest.mark.parametrize(
+    ("offset", "binds"),
+    [(1e-15, True), (0.5e-10, True), (2e-10, False), (1e-9, False)],
+    ids=["at", "within-1e-10", "inside-2e-10", "inside-1e-9"],
+)
+@pytest.mark.parametrize("cap", [0.00025, 0.0005])
+def test_guards_names_u_where_the_selection_uses_the_whole_allowance(cap, offset, binds):
+    r = _c(0.0, 0.0, -0.0005, 1.0, _w(1))  # U_R = -0.5 bp; Good below the candidate's
+    floor = _cu(r) - cap
+    selected = _c((floor + offset) / 0.60, 0.0, 0.0, 2.0, _w(2))  # a Bad cut of 5 or 9.2 bp
+    assert 0.0 < _cu(selected) - floor < offset + 1e-17  # admissible, `offset` above the floor
+    result = select([r, selected], cap)
+    assert result.reference == r and result.selected == selected
+    expected = frozenset({"u"}) if binds else frozenset()
+    assert result.guards == _oracle_guards(_row(selected), _row(r), cap) == expected
+
+
+def test_guards_can_name_several_constraints_at_once():
+    r = _c(0.0, 0.0, -0.0005, 1.0, _w(1))
+    selected = _c(-0.0010, 0.0, 0.0, 2.0, _w(2))  # on the Bad guard exactly
+    cap = _cu(r) - _cu(selected) + 1e-15  # and the allowance it uses is all but 1e-15 of the cap
+    result = select([r, selected], cap)
+    assert result.selected == selected
+    assert result.guards == frozenset({"bad", "u"}) == _oracle_guards(_row(selected), _row(r), cap)
+
+
+@pytest.mark.parametrize("cap", CAPS)
+def test_guards_is_empty_when_the_selection_is_w_r(cap):
+    r = _c(-0.05, 0.06, 0.20, 3.0, _w(1))
+    less_diversified = _c(-0.05 - 2 * BP, 0.06 + 2 * BP, 0.20, 2.0, _w(2))
+    for pool in ([r], [r, less_diversified]):
+        result = select(pool, cap)
+        assert result.selected == r == result.reference
+        assert result.guards == frozenset()  # at cap 0 its U meets U_R - 0 exactly: still empty
 
 
 # ---- validation -------------------------------------------------------------------------------
@@ -775,6 +846,7 @@ def test_enumerable_menu_selector_equals_the_exhaustive_oracle_at_every_allowanc
         assert [_row(c) for c in result.admissible] == adm
         assert _row(result.selected) == pick
         assert result.sacrifice == pytest.approx(_u(*ref[:3]) - _u(*pick[:3]), abs=1e-16)
+        assert result.guards == _oracle_guards(pick, ref, cap)
         picks.append(pick)
         # the fixture is not vacuous: the filter bites, and some guard other than the allowance
         # excludes a member whose U is inside it
@@ -784,7 +856,7 @@ def test_enumerable_menu_selector_equals_the_exhaustive_oracle_at_every_allowanc
                 guard
                 for row in kept
                 for guard in _oracle_fails(row, ref, cap)
-                if "utility" not in _oracle_fails(row, ref, cap)
+                if "u" not in _oracle_fails(row, ref, cap)
             }
             assert excluded == {"bad", "typical", "good", "veto"}
     assert len({pick[4] for pick in picks}) == 4  # every allowance selects a different mix
