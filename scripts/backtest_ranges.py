@@ -28,6 +28,8 @@ The return-optimization experiment (protocol 4-9; plan task 6b.5):
     .venv/bin/python scripts/backtest_ranges.py experiment run --snapshot SNAPSHOT [--out ROOT]
         [--stage 1|2] [--sensitivity coefficients|lookback|budget] [--run-id ID]
         [--workers 0|1|2] [--cpu-hours-ceiling HOURS]
+    .venv/bin/python scripts/backtest_ranges.py experiment report --run RUN_DIR
+        [--allow-incomplete]
 
 `run` without `--sensitivity` runs Stage 1 into `ROOT/<protocol sha256 prefix16>/<run id>/`;
 `--sensitivity NAME` and `--stage 2` name that Stage 1 run with `--run-id` and write beneath it.
@@ -35,16 +37,23 @@ The return-optimization experiment (protocol 4-9; plan task 6b.5):
 hours of Stage 1 plus the sensitivities against the 24-hour ceiling; it is not a run. `--out`
 defaults to this checkout's git-ignored `.omx/research/return-optimization/`. Every protocol value
 is fixed; `--cpu-hours-ceiling` alone changes a ceiling and is recorded as an amendment. The
-logic and the artifact schemas live in `portfoliosight/research/experiment.py` and
-`portfoliosight/research/artifacts.py`. This script holds BLAS to one thread
-(`OPENBLAS/OMP/MKL_NUM_THREADS`, unless already set; a value other than 1 is refused).
+logic and the artifact schemas live in `portfoliosight/research/experiment.py`,
+`portfoliosight/research/selection.py` and `portfoliosight/research/outcomes.py`. This script
+holds BLAS to one thread (`OPENBLAS/OMP/MKL_NUM_THREADS`, unless already set; a value other than
+1 is refused). `report` reads a Stage 1 run directory and its three sensitivity directories,
+verifies every artifact digest the manifests list, and writes `summary.json` (whose
+`stage_2.run` gates `run --stage 2`) and `report.md` into that run directory
+(`portfoliosight/research/report.py`, statistics in `portfoliosight/research/evidence.py`); an
+incomplete run is refused unless `--allow-incomplete`, which labels it inconclusive/invalid.
 
 Exit codes: 0 done (a gate that is not met is a result, not an error), 2 a bad argument or an
 output path inside the snapshot, the mirror it was copied from or the repository (unless
-git-ignored), 6 a snapshot that fails verification or changes while it is read, 7 an experiment
-refused before it starts (a dirty repository, BLAS threads, the TSP investigation digest, more
-than 120 scheduled origins, a Stage 1 run that is missing, incomplete or does not authorize
-Stage 2), 8 an experiment stopped at a resource ceiling (its partial artifacts are kept).
+git-ignored), 6 a snapshot that fails verification or changes while it is read, or a run
+artifact whose digest no longer matches its manifest, 7 an experiment refused before it starts
+(a dirty repository, BLAS threads, the TSP investigation digest, more than 120 scheduled origins,
+a Stage 1 run that is missing, incomplete or does not authorize Stage 2) or a report refused for
+an incomplete run, 8 an experiment stopped at a resource ceiling (its partial artifacts are
+kept).
 """
 
 from __future__ import annotations
@@ -78,6 +87,7 @@ from freeze_research_inputs import (  # noqa: E402
 
 from portfoliosight.engine.windows import LOOKBACK_ROWS  # noqa: E402
 from portfoliosight.research import experiment, harness  # noqa: E402
+from portfoliosight.research import report as run_report  # noqa: E402
 
 LEDGER_SUFFIXES = (".parquet", ".csv")
 REPO = Path(__file__).resolve().parents[1]
@@ -123,6 +133,13 @@ def _parser() -> argparse.ArgumentParser:
             action.add_argument("--run-id", help="the Stage 1 run id (needed beneath one)")
         else:
             action.add_argument("--estimate-id")
+    action = actions.add_parser("report", help="write summary.json and report.md of a run")
+    action.add_argument("--run", type=Path, required=True, help="the Stage 1 run directory")
+    action.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="report an incomplete run (labeled inconclusive/invalid)",
+    )
     for name, text in (
         ("ledger", "write the origins ledger"),
         ("coverage", "print the protocol 4 evidence gate"),
@@ -242,7 +259,29 @@ def _settings() -> experiment.Settings:
     return experiment.Settings()
 
 
+def _report(args: argparse.Namespace) -> int:
+    try:
+        written = run_report.write_report(args.run, allow_incomplete=args.allow_incomplete)
+    except run_report.ArtifactChanged as exc:
+        print(str(exc), file=sys.stderr)
+        return 6
+    except run_report.ReportRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 7
+    summary = written.summary
+    labels = summary["labels"]
+    print(f"{written.directory}: summary.json and report.md written")
+    print(f"experiment: {labels['experiment']}")
+    for menu, label in labels["menus"].items():
+        print(f"{menu}: {label['conditional']}; {label['realized']}")
+    stage_2 = summary["stage_2"]
+    print(f"stage 2: {'run' if stage_2['run'] else 'skip'}: {stage_2['reason']}")
+    return 0
+
+
 def _experiment(args: argparse.Namespace) -> int:
+    if args.action == "report":
+        return _report(args)
     try:
         inputs = experiment.read_inputs(args.snapshot, verify_snapshot)
     except (FreezeError, harness.SnapshotChanged) as exc:
