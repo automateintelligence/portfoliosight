@@ -65,6 +65,22 @@ Calibration (protocol 6), for a forecast quantile `f` at level `q` and a realize
 `breaches(y, bad, good)`, the counts of `y <= bad` (below Bad), `bad < y <= good` (inside) and
 `y > good` (above Good), all on the `1[y <= f]` convention, so a tie with Bad is a breach;
 `pit(y, outcomes)`, the share of simulated outcomes at or below `y`.
+
+Paired arms (protocol 5 and 6). `evaluate_arms(model, banks, horizon, arms)` evaluates labelled
+weight vectors (arms) on one origin model, one list of banks pooled in that order and the horizon
+of the same origin. Each `Arm` holds the training figures above plus `utility`, the owner's
+`U = 0.60 B + 0.30 T + 0.10 G` of `engine.preference.utility`, and the realized figures; each later
+arm is paired with the first by `difference`: `first - second` of Bad, Typical, Good, U and
+`ES_2.5`, and of the realized annual return and maximum drawdown (positive: `first` fell further).
+An arm records what it was evaluated on: the model `key`, the banks (engine, seed, index digest,
+in pooling order) and the horizon (menu, month, origin, status, returns digest). `difference`
+refuses two arms that differ in any of these, so a paired figure always compares the same draws
+and the same realized days. Each mix is simulated on its own, so an arm's figures do not depend on
+its label, its position or the other arms: equal weights give equal bits, and swapping two arms
+negates their differences exactly. A training difference is NaN, with the failing arm's status,
+when either arm has `nonpositive_daily_growth`; a realized one is None unless the horizon is
+complete. The banks pooled must share one engine; comparing engines on the same weights is a
+different pairing, not this one.
 """
 
 from __future__ import annotations
@@ -82,6 +98,7 @@ import pandas as pd
 
 from portfoliosight.data.returns import build_returns, window_sample
 from portfoliosight.engine import measures
+from portfoliosight.engine.preference import utility
 from portfoliosight.engine.ranges import (
     PERCENTILES,
     RangeModel,
@@ -127,6 +144,8 @@ _HORIZON_CODES = frozenset(
 )
 
 ModelKey = tuple[str, str, str, str]
+BankId = tuple[str, int, str]  # engine, seed, SHA-256 of the day indices
+HorizonId = tuple[str, str, str, str, str | None]  # menu, month, ISO origin, status, returns digest
 
 
 @dataclass(frozen=True)
@@ -266,6 +285,66 @@ class Breaches:
     below: int  # y <= bad
     inside: int  # bad < y <= good
     above: int  # y > good
+
+
+@dataclass(frozen=True)
+class Arm:
+    """One labelled weight vector at one origin: its pooled bank figures and its realized year."""
+
+    label: str
+    model_key: ModelKey
+    banks: tuple[BankId, ...]  # in pooling order
+    horizon: HorizonId
+    weights: tuple[float, ...]  # fixed menu order
+    status: str  # OK | NONPOSITIVE_DAILY_GROWTH
+    ruin_day: date | None
+    paths: int
+    bad: float  # NaN, like every training figure, unless the status is OK
+    typical: float
+    good: float
+    utility: float  # engine.preference.utility(bad, typical, good)
+    mean: float
+    es_25: float
+    p_loss: float
+    p_below_20: float
+    realized_status: str  # the horizon's status
+    annual_return: float | None  # None, like every realized figure, unless the horizon is complete
+    loss: bool | None
+    below_20: bool | None
+    worst_day: float | None
+    max_drawdown: float | None
+    volatility: float | None
+
+
+@dataclass(frozen=True)
+class Difference:
+    """`first` minus `second`, figure by figure, for two arms evaluated on the same inputs."""
+
+    first: str
+    second: str
+    status: str  # OK when both arms have training figures, else the first failing arm's status
+    realized_status: str  # the horizon's status
+    bad: float  # NaN, like every training difference, unless the status is OK
+    typical: float
+    good: float
+    utility: float
+    es_25: float
+    annual_return: float | None  # None, like the drawdown, unless the horizon is complete
+    max_drawdown: float | None  # positive: `first` fell further from its running peak
+
+
+@dataclass(frozen=True)
+class Paired:
+    """An origin's arms in the order given, and each later arm's difference from the first."""
+
+    arms: tuple[Arm, ...]
+    differences: tuple[Difference, ...]
+
+    def arm(self, label: str) -> Arm:
+        for entry in self.arms:
+            if entry.label == label:
+                return entry
+        raise KeyError(label)
 
 
 # ---------------------------------------------------------------------------- the three inputs
@@ -555,3 +634,120 @@ def _paired(a: npt.ArrayLike, b: npt.ArrayLike) -> tuple[np.ndarray, np.ndarray]
     if not (np.isfinite(x).all() and np.isfinite(y).all()):
         raise ValueError("realized returns and forecasts must be finite")
     return x, y
+
+
+# --------------------------------------------------------------------------------- paired arms
+
+
+def evaluate_arms(
+    model: OriginModel,
+    banks: Sequence[Bank],
+    horizon: Horizon,
+    arms: Mapping[str, npt.ArrayLike],
+) -> Paired:
+    """Every arm on ``model``, the pooled ``banks`` and ``horizon``; see the module docstring."""
+    labels = tuple(arms)
+    if len(labels) < 2:
+        raise ValueError(f"pairing needs at least two arms, got {len(labels)}")
+    if not all(isinstance(label, str) and label for label in labels):
+        raise ValueError(f"every arm needs a non-empty label, got {labels}")
+    if not banks:
+        raise ValueError("pairing needs at least one bank")
+    engines = sorted({drawn.engine for drawn in banks})
+    if len(engines) != 1:
+        raise ValueError(f"the banks pooled must share one engine, got {engines}")
+    own = (model.menu, model.month, model.origin, model.funds)
+    if (horizon.menu, horizon.month, horizon.origin, horizon.funds) != own:
+        raise ValueError(
+            f"the horizon ({horizon.menu}, {horizon.month}) is not the model's origin "
+            f"({model.menu}, {model.month}) with its funds {model.funds}"
+        )
+    rows = []
+    for label in labels:
+        mix = _mixes(len(model.funds), arms[label])
+        if len(mix) != 1:
+            raise ValueError(f"arm {label!r}: weights must be one mix of {len(model.funds)} funds")
+        rows.append(mix[0])
+    mixes = _mixes(len(model.funds), np.stack(rows))
+    figures = summarize([simulate(model, drawn, mixes) for drawn in banks])
+    outcome = realized(horizon, mixes)
+    bank_ids = tuple((drawn.engine, drawn.seed, drawn.index_sha256) for drawn in banks)
+    horizon_id = (
+        horizon.menu,
+        horizon.month,
+        horizon.origin.isoformat(),
+        horizon.status,
+        horizon.returns_sha256,
+    )
+    metrics = outcome.metrics
+    built = []
+    for j, label in enumerate(labels):
+        bad, typical, good = (
+            float(figures.bad[j]),
+            float(figures.typical[j]),
+            float(figures.good[j]),
+        )
+        built.append(
+            Arm(
+                label=label,
+                model_key=model.key,
+                banks=bank_ids,
+                horizon=horizon_id,
+                weights=tuple(float(x) for x in mixes[j]),
+                status=figures.status[j],
+                ruin_day=figures.ruin_day[j],
+                paths=figures.paths,
+                bad=bad,
+                typical=typical,
+                good=good,
+                utility=utility(bad, typical, good),
+                mean=float(figures.mean[j]),
+                es_25=float(figures.es_25[j]),
+                p_loss=float(figures.p_loss[j]),
+                p_below_20=float(figures.p_below_20[j]),
+                realized_status=outcome.status,
+                annual_return=None if metrics is None else float(metrics.annual_return[j]),
+                loss=None if metrics is None else bool(metrics.loss[j]),
+                below_20=None if metrics is None else bool(metrics.below_20[j]),
+                worst_day=None if metrics is None else float(metrics.worst_day[j]),
+                max_drawdown=None if metrics is None else float(metrics.max_drawdown[j]),
+                volatility=None if metrics is None else float(metrics.volatility[j]),
+            )
+        )
+    first = built[0]
+    return Paired(tuple(built), tuple(difference(arm, first) for arm in built[1:]))
+
+
+def difference(first: Arm, second: Arm) -> Difference:
+    """``first`` minus ``second``; refused unless both share the model, banks and horizon."""
+    names = f"arms {first.label!r} and {second.label!r}"
+    if first.model_key != second.model_key:
+        raise ValueError(f"{names} come from different origin models")
+    if first.banks != second.banks:
+        raise ValueError(
+            f"{names} were evaluated on different banks: {first.banks}, {second.banks}"
+        )
+    if first.horizon != second.horizon:
+        raise ValueError(f"{names} have different horizons: {first.horizon}, {second.horizon}")
+    failed = [arm.status for arm in (first, second) if arm.status != OK]
+    status = failed[0] if failed else OK
+
+    def trained(name: str) -> float:
+        return getattr(first, name) - getattr(second, name) if status == OK else math.nan
+
+    def lived(a: float | None, b: float | None) -> float | None:
+        return None if a is None or b is None else a - b
+
+    return Difference(
+        first=first.label,
+        second=second.label,
+        status=status,
+        realized_status=first.realized_status,
+        bad=trained("bad"),
+        typical=trained("typical"),
+        good=trained("good"),
+        utility=trained("utility"),
+        es_25=trained("es_25"),
+        annual_return=lived(first.annual_return, second.annual_return),
+        max_drawdown=lived(first.max_drawdown, second.max_drawdown),
+    )

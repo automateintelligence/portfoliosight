@@ -1,4 +1,4 @@
-"""Fixed-weight evaluation at one origin (protocol 3, 4, 5 steps 1 and 5, 6 and 8; plan 6.3).
+"""Fixed-weight evaluation and paired arms at one origin (protocol 3-6 and 8; plan 6.2, 6.3).
 
 Every fixture is synthetic: funds A, B, C, D and SGOV priced on the XNYS sessions of the installed
 `exchange_calendars` from 2023-01-03, with seeded random daily returns; D has no 2024-05-15
@@ -37,12 +37,15 @@ from portfoliosight.research import evaluate as evaluation
 from portfoliosight.research.evaluate import (
     NONPOSITIVE_DAILY_GROWTH,
     OK,
+    Arm,
     Horizon,
     OriginModel,
     at_or_below,
     bank,
     breaches,
+    difference,
     evaluate,
+    evaluate_arms,
     origin_model,
     path_metrics,
     pinball,
@@ -60,6 +63,7 @@ from portfoliosight.research.harness import (
     Ledger,
     build_ledger,
 )
+from tests.research.helpers import random_indices, record
 
 SESSIONS = pd.DatetimeIndex(
     xcals.get_calendar("XNYS", start="2022-06-01", end="2026-06-30").sessions
@@ -98,13 +102,7 @@ FIGURES = ("bad", "typical", "good", "mean", "es_25", "p_loss", "p_below_20")
 @functools.cache
 def _tr() -> dict[str, pd.Series]:
     """Each symbol's total-return index on every session from FIRST (D's gap not removed here)."""
-    days = SESSIONS[SESSIONS >= FIRST]
-    rng = np.random.default_rng(20261019)
-    out = {}
-    for symbol, (drift, vol) in DRIFT_VOL.items():
-        r = drift + vol * rng.standard_normal(len(days))
-        out[symbol] = pd.Series(np.concatenate(([1.0], np.cumprod(1.0 + r[1:]))), index=days)
-    return out
+    return random_indices(pd.DatetimeIndex(SESSIONS[SESSIONS >= FIRST]), DRIFT_VOL, 20261019)
 
 
 def _records(
@@ -121,15 +119,7 @@ def _records(
             values = values.drop(GAP)
         if drop is not None and drop[0] == symbol:
             values = values.drop(pd.Timestamp(drop[1]))
-        records[symbol] = pd.DataFrame(
-            {
-                "date": values.index,
-                "close": 100.0 * values.to_numpy(),
-                "tr_index": values.to_numpy(),
-                "div_cash": 0.0,
-                "split_factor": 1.0,
-            }
-        )
+        records[symbol] = record(values)
     return records
 
 
@@ -645,3 +635,198 @@ def test_coverage_indicators_breaches_and_pit() -> None:
         pit(0.0, [[0.1]])
     with pytest.raises(ValueError, match="finite"):
         at_or_below([np.nan], 0.0)
+
+
+# ------------------------------------------------------------------------------ paired arms
+
+ARMS = {"R": [0.6, 0.4, 0.0], "R+D": [0.25, 0.5, 0.25], "MV": [0.1, 0.8, 0.1]}
+INDEPENDENT = (20261113, 20261114)
+TRAINING = ("bad", "typical", "good", "utility", "mean", "es_25", "p_loss", "p_below_20")
+REALIZED = ("annual_return", "loss", "below_20", "worst_day", "max_drawdown", "volatility")
+DIFFERENCES = ("bad", "typical", "good", "utility", "es_25", "annual_return", "max_drawdown")
+
+
+def _oracle_arm(model: OriginModel, seeds: tuple[int, ...], horizon: np.ndarray, mix) -> dict:
+    """An arm's figures from explicit compounding, sorted oracles and a day-by-day wealth path."""
+    years = np.concatenate([_explicit_years(model, seed, np.asarray(mix)) for seed in seeds])
+    bad, typical, good = (_linear_percentile(years, q) for q in (2.5, 50.0, 97.5))
+    worst = sorted(years.tolist())[: math.ceil(0.025 * len(years))]
+    daily = [sum(w * r for w, r in zip(mix, row, strict=True)) for row in horizon.tolist()]
+    wealth, peak, drawdown = 1.0, 1.0, 0.0
+    for value in daily:
+        wealth *= 1.0 + value
+        peak = max(peak, wealth)
+        drawdown = max(drawdown, 1.0 - wealth / peak)
+    mean = sum(daily) / len(daily)
+    squares = sum((value - mean) ** 2 for value in daily)
+    return {
+        "bad": bad,
+        "typical": typical,
+        "good": good,
+        "utility": 0.60 * bad + 0.30 * typical + 0.10 * good,  # the owner's U, protocol 2
+        "mean": years.sum() / len(years),
+        "es_25": sum(worst) / len(worst),
+        "p_loss": np.count_nonzero(years < 0.0) / len(years),
+        "p_below_20": np.count_nonzero(years < -0.20) / len(years),
+        "annual_return": wealth - 1.0,
+        "loss": wealth - 1.0 < 0.0,
+        "below_20": wealth - 1.0 < -0.20,
+        "worst_day": min(daily),
+        "max_drawdown": drawdown,
+        "volatility": math.sqrt(252.0 * squares / (len(daily) - 1)),
+    }
+
+
+def _arm_bits(arm: Arm) -> tuple:
+    """Every field of an arm but its label, floats as hex so that NaN and -0.0 compare exactly."""
+    return tuple(
+        value.hex() if isinstance(value, float) else value
+        for name, value in vars(arm).items()
+        if name != "label"
+    )
+
+
+def _index_digest(seed: int) -> str:
+    return hashlib.sha256(bootstrap_index(252, seed=seed).astype("<i4").tobytes()).hexdigest()
+
+
+def test_paired_arms_share_one_model_bank_set_and_horizon(
+    ledger: Ledger, model: OriginModel
+) -> None:
+    banks = [bank(model, seed) for seed in INDEPENDENT]
+    horizon = realized_horizon(_records(), ledger, "2024-01", "m")
+    assert horizon.returns is not None
+    result = evaluate_arms(model, banks, horizon, ARMS)
+    assert [arm.label for arm in result.arms] == ["R", "R+D", "MV"]
+    oracles = {
+        label: _oracle_arm(model, INDEPENDENT, horizon.returns, mix) for label, mix in ARMS.items()
+    }
+    for arm in result.arms:
+        assert arm.model_key == model.key
+        assert arm.banks == tuple(("replay", seed, _index_digest(seed)) for seed in INDEPENDENT)
+        assert arm.horizon == ("m", "2024-01", "2024-01-31", COMPLETE, horizon.returns_sha256)
+        assert arm.weights == tuple(ARMS[arm.label])
+        assert (arm.status, arm.ruin_day, arm.paths, arm.realized_status) == (
+            OK,
+            None,
+            4000,
+            COMPLETE,
+        )
+        for name, value in oracles[arm.label].items():
+            assert getattr(arm, name) == pytest.approx(value, abs=1e-10), (arm.label, name)
+        # U is the owner's formula of the arm's own unrounded figures, nothing rounded first
+        assert arm.utility == 0.60 * arm.bad + 0.30 * arm.typical + 0.10 * arm.good
+    assert [(d.first, d.second) for d in result.differences] == [("R+D", "R"), ("MV", "R")]
+    for paired in result.differences:
+        first, second = result.arm(paired.first), result.arm(paired.second)
+        assert (paired.status, paired.realized_status) == (OK, COMPLETE)
+        for name in DIFFERENCES:
+            assert getattr(paired, name) == getattr(first, name) - getattr(second, name)
+            expected = oracles[paired.first][name] - oracles[paired.second][name]
+            assert getattr(paired, name) == pytest.approx(expected, abs=2e-10), name
+    with pytest.raises(KeyError):
+        result.arm("absent")
+
+
+def test_arm_labels_and_order_change_no_figure(ledger: Ledger, model: OriginModel) -> None:
+    banks = [bank(model, SEED)]
+    horizon = realized_horizon(_records(), ledger, "2024-01", "m")
+    w, v = ARMS["R"], ARMS["R+D"]
+    twins = evaluate_arms(model, banks, horizon, {"a": w, "b": w})
+    first, second = twins.arms
+    assert _arm_bits(first) == _arm_bits(second)
+    (same,) = twins.differences
+    assert all(getattr(same, name) == 0.0 for name in DIFFERENCES)
+
+    forward = evaluate_arms(model, banks, horizon, {"R": w, "R+D": v})
+    renamed = evaluate_arms(model, banks, horizon, {"x": w, "y": v})
+    backward = evaluate_arms(model, banks, horizon, {"R+D": v, "R": w})
+    alone = evaluate_arms(model, banks, horizon, {"R": w, "MV": ARMS["MV"]})
+    for arm in (forward.arm("R"), renamed.arm("x"), backward.arm("R"), alone.arm("R")):
+        assert _arm_bits(arm) == _arm_bits(first)
+    assert _arm_bits(renamed.arm("y")) == _arm_bits(backward.arm("R+D"))
+    (ahead,), (behind,) = forward.differences, backward.differences
+    assert (ahead.first, ahead.second, behind.first, behind.second) == ("R+D", "R", "R", "R+D")
+    for name in DIFFERENCES:
+        assert getattr(ahead, name) != 0.0
+        assert getattr(behind, name) == -getattr(ahead, name)
+    # arms of separate calls on the same model, banks and horizon pair as one call's arms do
+    across = difference(renamed.arm("y"), alone.arm("R"))
+    assert (across.first, across.second) == ("y", "R")
+    assert all(getattr(across, name) == getattr(ahead, name) for name in DIFFERENCES)
+
+
+def test_pairing_refuses_different_models_banks_or_horizons(
+    ledger: Ledger, model: OriginModel
+) -> None:
+    horizon = realized_horizon(_records(), ledger, "2024-01", "m")
+    drawn = bank(model, SEED)
+    base = evaluate_arms(model, [drawn], horizon, ARMS).arm("R")
+    other_seed = evaluate_arms(model, [bank(model, 20261113)], horizon, ARMS).arm("R+D")
+    pooled = evaluate_arms(model, [drawn, bank(model, 20261113)], horizon, ARMS).arm("R+D")
+    reordered = evaluate_arms(model, [bank(model, 20261113), drawn], horizon, ARMS).arm("R+D")
+    for arm in (other_seed, pooled):
+        with pytest.raises(ValueError, match="banks"):
+            difference(arm, base)
+    with pytest.raises(ValueError, match="banks"):
+        difference(
+            reordered, evaluate_arms(model, [drawn, bank(model, 20261113)], horizon, ARMS).arm("R")
+        )
+    other = replace(model, risk_free_rate=model.risk_free_rate + 0.01)  # one training input
+    with pytest.raises(ValueError, match="origin model"):
+        difference(evaluate_arms(other, [bank(other, SEED)], horizon, ARMS).arm("R+D"), base)
+    moved = realized_horizon(_records(bump=(("A", "2024-06-03"),)), ledger, "2024-01", "m")
+    with pytest.raises(ValueError, match="horizon"):
+        difference(evaluate_arms(model, [drawn], moved, ARMS).arm("R+D"), base)
+
+    with pytest.raises(ValueError, match="another"):
+        evaluate_arms(model, [bank(other, SEED)], horizon, ARMS)
+    for elsewhere in (
+        realized_horizon(_records(), ledger, "2024-02", "m"),
+        realized_horizon(_records(), ledger, "2024-01", "n"),
+    ):
+        with pytest.raises(ValueError, match="horizon"):
+            evaluate_arms(model, [drawn], elsewhere, ARMS)
+    with pytest.raises(ValueError, match="engine"):
+        evaluate_arms(model, [drawn, replace(bank(model, 20261113), engine="garch")], horizon, ARMS)
+    with pytest.raises(ValueError, match="at least one bank"):
+        evaluate_arms(model, [], horizon, ARMS)
+    with pytest.raises(ValueError, match="twice"):
+        evaluate_arms(model, [drawn, drawn], horizon, ARMS)
+    with pytest.raises(ValueError, match="two arms"):
+        evaluate_arms(model, [drawn], horizon, {"R": ARMS["R"]})
+    with pytest.raises(ValueError, match="label"):
+        evaluate_arms(model, [drawn], horizon, {"": ARMS["R"], "R+D": ARMS["R+D"]})
+    with pytest.raises(ValueError, match="weights"):
+        evaluate_arms(model, [drawn], horizon, {"R": ARMS["R"], "short": [0.5, 0.5]})
+
+
+def test_paired_arms_keep_named_statuses(ledger: Ledger, model: OriginModel) -> None:
+    ruin = _ruin_model(model)
+    horizon = realized_horizon(_records(), ledger, "2024-01", "m")
+    result = evaluate_arms(
+        ruin, [bank(ruin, SEED)], horizon, {"ok": [0.5, 0.5, 0.0], "ruined": [0.0, 0.0, 1.0]}
+    )
+    ok, ruined = result.arms
+    assert (ok.status, ok.ruin_day) == (OK, None)
+    assert (ruined.status, ruined.ruin_day) == (NONPOSITIVE_DAILY_GROWTH, ruin.days[1])
+    for name in TRAINING:
+        assert math.isfinite(getattr(ok, name)) and math.isnan(getattr(ruined, name)), name
+    (paired,) = result.differences
+    assert paired.status == NONPOSITIVE_DAILY_GROWTH
+    assert all(math.isnan(getattr(paired, name)) for name in DIFFERENCES[:5])
+    # the realized year of a weight vector does not depend on the training model
+    assert paired.realized_status == COMPLETE and ruined.realized_status == COMPLETE
+    assert ruined.annual_return is not None and ok.annual_return is not None
+    assert paired.annual_return == ruined.annual_return - ok.annual_return
+
+    n_model = origin_model(_records(), ledger, "2024-01", "n")
+    missing = realized_horizon(_records(), ledger, "2024-01", "n")
+    result = evaluate_arms(n_model, [bank(n_model, SEED)], missing, {"a": [1, 0], "b": [0.5, 0.5]})
+    for arm in result.arms:
+        assert (arm.status, arm.realized_status) == (OK, HORIZON_MISSING)
+        assert all(getattr(arm, name) is None for name in REALIZED)
+    (paired,) = result.differences
+    assert (paired.status, paired.realized_status) == (OK, HORIZON_MISSING)
+    assert (paired.annual_return, paired.max_drawdown) == (None, None)
+    assert math.isfinite(paired.utility)

@@ -1,10 +1,13 @@
-"""The rolling-origin harness: origins ledger and evidence gate (protocol 4 and 8; plan 6.1).
+"""The rolling-origin harness: ledger, evidence gate and leakage (protocol 4, 8; plan 6.1-6.2).
 
 Every fixture is synthetic: a few funds priced on the XNYS sessions of the installed
 `exchange_calendars` (real holidays), with chosen days removed or added. The expected dates and
 counts were worked out from the session list by hand and are written here as literals; no
 expectation comes from the code under test. CLI tests read snapshots written by the freeze
 script's own `build_snapshot` into `tmp_path`; the real mirror and snapshot root are never opened.
+The leakage metamorphism tests (6.2) compare the harness with itself before and after a price
+mutation, on seeded random returns from tests/research/helpers.py; their fixture is described
+above `LEAK_D_STAR`.
 
 Calendar facts the literals rest on: 2024 has 252 XNYS sessions (2024-01-02 .. 2024-12-31); 2023
 and 2025 have 250 (2025-01-09 was closed); August 2023 has 23 sessions; Good Friday closed
@@ -23,7 +26,7 @@ import os
 import stat
 import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Sequence
 from datetime import date
 from pathlib import Path
 from types import ModuleType
@@ -35,7 +38,9 @@ import pytest
 
 from portfoliosight.data.returns import build_returns
 from portfoliosight.engine.windows import select_window
+from portfoliosight.research import evaluate as evaluation
 from portfoliosight.research import harness
+from portfoliosight.research.evaluate import OriginModel
 from portfoliosight.research.harness import (
     COMPLETE,
     COMPLETE_ROWS_SHORT,
@@ -52,6 +57,7 @@ from portfoliosight.research.harness import (
     TRAINING_INELIGIBLE,
     UNION_ROWS_SHORT,
 )
+from tests.research.helpers import random_indices, record
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "backtest_ranges.py"
@@ -144,16 +150,7 @@ def _shifted(day: str, sessions: int) -> str:
 
 
 def _record(days: pd.DatetimeIndex, growth: float) -> pd.DataFrame:
-    tr = (1.0 + growth) ** np.arange(len(days), dtype=float)
-    return pd.DataFrame(
-        {
-            "date": pd.DatetimeIndex(days),
-            "close": 100.0 * tr,
-            "tr_index": tr,
-            "div_cash": 0.0,
-            "split_factor": 1.0,
-        }
-    )
+    return record(pd.Series((1.0 + growth) ** np.arange(len(days), dtype=float), index=days))
 
 
 def _fund(
@@ -727,6 +724,397 @@ def test_inputs_are_validated() -> None:
     assert len(harness.ledger_frame(empty)) == 0
 
 
+# ------------------------------------------------------------ leakage metamorphism (plan 6.2)
+#
+# Protocol 8 and the harness legs of A-SE-32: prices dated after an origin cannot change that
+# origin's ledger training facts, origin model or predictions; they may change its realized year.
+# The fixture: miniature TSP and Example menus with seeded random returns, so the moments and the
+# simulations are not degenerate; lookback 1y; every symbol trades on every XNYS session from its
+# first price. SGOV starts after the menus, so the risk-free source is TSP-G at the 2024-03 origin
+# and SGOV at the 2024-07 one; LATE and NEWF are future-only funds in neither menu. Each variant
+# rebuilds the ledger from its own records, as the runner would. A month's training facts are
+# every ledger field but the horizon's: status, maturity, risk-free source and rate, origin
+# prices, row counts, window start, eligibility and the training issues.
+
+LEAK_D_STAR = date(2025, 9, 30)
+LEAK_MENUS = {"tsp": ("TSP-G", "TSP-F", "TSP-C"), "example": ("X", "Y", "Z")}
+LEAK_DRIFT_VOL = {
+    "TSP-G": (1.2e-4, 2e-5),
+    "TSP-F": (1.5e-4, 0.003),
+    "TSP-C": (4e-4, 0.011),
+    "X": (3e-4, 0.009),
+    "Y": (2e-4, 0.005),
+    "Z": (5e-4, 0.014),
+    "SGOV": (1.6e-4, 1e-5),
+    "LATE": (2e-4, 0.010),
+    "NEWF": (1e-4, 0.008),
+}
+LEAK_FIRST = {"Z": "2023-02-01", "SGOV": "2023-06-01", "LATE": "2024-04-05", "NEWF": "2024-04-01"}
+O_TSP_G = "2024-03-28"  # the 2024-03 origin (Good Friday 2024-03-29): risk-free source TSP-G
+O_SGOV = "2024-07-31"  # the 2024-07 origin: risk-free source SGOV
+LEAK_MIXES = {
+    "tsp": np.array([[0.6, 0.2, 0.2], [1 / 3, 1 / 3, 1 / 3], [0.0, 0.0, 1.0], [0.2, 0.5, 0.3]]),
+    "example": np.array([[1 / 3, 1 / 3, 1 / 3], [0.25, 0.25, 0.5], [1.0, 0.0, 0.0], [0, 0.6, 0.4]]),
+}
+LEAK_SEEDS = (20261013, 20261113)  # a path seed and an independent-bank seed (protocol 5)
+TRAINING_CODES = frozenset({UNION_ROWS_SHORT, FUND_AFTER_START, COMPLETE_ROWS_SHORT})
+FIGURES = ("bad", "typical", "good", "mean", "es_25", "p_loss", "p_below_20")
+METRICS = ("annual_return", "loss", "below_20", "worst_day", "max_drawdown", "volatility")
+
+Mutation = Callable[[dict[str, pd.Series]], dict[str, pd.Series]]
+
+
+@functools.cache
+def _leak_indices() -> dict[str, pd.Series]:
+    """Every symbol's index from its first price through 40 sessions past D*."""
+    days = _days("2023-01-03", _shifted(LEAK_D_STAR.isoformat(), 40))
+    drawn = random_indices(days, LEAK_DRIFT_VOL, 20261020)
+    return {
+        symbol: values.loc[pd.Timestamp(LEAK_FIRST.get(symbol, "2023-01-03")) :]
+        for symbol, values in drawn.items()
+    }
+
+
+def _through_d_star(symbol: str) -> pd.Series:
+    return _leak_indices()[symbol].loc[: pd.Timestamp(LEAK_D_STAR)]
+
+
+def _scale(day: str, factor: float, *symbols: str) -> Mutation:
+    """Each symbol's value on ``day`` times ``factor``: that day's return and the next one move."""
+
+    def mutate(series: dict[str, pd.Series]) -> dict[str, pd.Series]:
+        for symbol in symbols:
+            values = series[symbol].copy()
+            values[pd.Timestamp(day)] *= factor  # a KeyError unless ``day`` is a price date
+            series[symbol] = values
+        return series
+
+    return mutate
+
+
+def _crash(day: str, factor: float, *symbols: str) -> Mutation:
+    """Every value from ``day`` on times ``factor``: one return of ``factor - 1`` on ``day``."""
+
+    def mutate(series: dict[str, pd.Series]) -> dict[str, pd.Series]:
+        for symbol in symbols:
+            values = series[symbol].copy()
+            values[values.index >= pd.Timestamp(day)] *= factor
+            series[symbol] = values
+        return series
+
+    return mutate
+
+
+def _drop(days: Sequence[str], *symbols: str) -> Mutation:
+    def mutate(series: dict[str, pd.Series]) -> dict[str, pd.Series]:
+        for symbol in symbols:
+            series[symbol] = series[symbol].drop(pd.DatetimeIndex(list(days)))
+        return series
+
+    return mutate
+
+
+def _past_d_star(series: dict[str, pd.Series]) -> dict[str, pd.Series]:
+    """Every symbol priced 40 more sessions, all after D*."""
+    return {symbol: _leak_indices()[symbol] for symbol in series}
+
+
+def _without(*symbols: str) -> Mutation:
+    def mutate(series: dict[str, pd.Series]) -> dict[str, pd.Series]:
+        return {symbol: values for symbol, values in series.items() if symbol not in symbols}
+
+    return mutate
+
+
+def _with(*symbols: str) -> Mutation:
+    def mutate(series: dict[str, pd.Series]) -> dict[str, pd.Series]:
+        return {**series, **{symbol: _through_d_star(symbol) for symbol in symbols}}
+
+    return mutate
+
+
+class _Leak:
+    """One set of records (the base ones, mutated in turn), its ledger and its origin models."""
+
+    def __init__(self, *mutations: Mutation) -> None:
+        series = {symbol: _through_d_star(symbol) for symbol in LEAK_DRIFT_VOL if symbol != "NEWF"}
+        for mutate in mutations:
+            series = mutate(dict(series))
+        self.records = {symbol: record(values) for symbol, values in series.items()}
+        self.ledger = harness.build_ledger(self.records, _xnys(), LEAK_D_STAR, LEAK_MENUS, "1y")
+        self._models: dict[tuple[str, str], OriginModel] = {}
+
+    def model(self, month: str, menu: str) -> OriginModel:
+        if (month, menu) not in self._models:
+            built = evaluation.origin_model(self.records, self.ledger, month, menu)
+            self._models[(month, menu)] = built
+        return self._models[(month, menu)]
+
+    def realized(self, month: str, menu: str) -> tuple:
+        """The realized year of the fixed mixes: the horizon's status, days and digest, figures."""
+        horizon = evaluation.realized_horizon(self.records, self.ledger, month, menu)
+        metrics = evaluation.realized(horizon, LEAK_MIXES[menu]).metrics
+        figures = None if metrics is None else tuple(getattr(metrics, n).tobytes() for n in METRICS)
+        return (horizon.status, horizon.days, horizon.returns_sha256, figures)
+
+
+@pytest.fixture(scope="module")
+def leak_base() -> _Leak:
+    return _Leak()
+
+
+def _training_facts(row: harness.OriginRow) -> tuple:
+    """Every ledger field of a month that is not about its realized horizon."""
+    menus = tuple(
+        (
+            entry.menu,
+            entry.origin_priced,
+            entry.union_rows,
+            entry.window_start,
+            entry.window_rows,
+            entry.complete_rows,
+            entry.training_eligible,
+            [code for code in _codes(entry.issues) if code[0] in TRAINING_CODES],
+        )
+        for entry in row.menus
+    )
+    return (
+        row.month,
+        row.origin,
+        row.status,
+        row.maturity_session,
+        row.mature,
+        row.risk_free_source,
+        row.risk_free_rate.hex(),
+        _codes(row.issues),
+        menus,
+    )
+
+
+def _model_facts(model: OriginModel) -> tuple:
+    """Everything of an origin model, bit for bit: key, sample, moments, risk-free, mu_s."""
+    moments = model.moments
+    assert moments.shrinkage is not None  # a fitted Ledoit-Wolf intensity
+    return (
+        model.key,
+        model.sample_sha256,
+        model.days,
+        model.sample.tobytes(),
+        moments.mu.tobytes(),
+        moments.sigma.tobytes(),
+        moments.cov.tobytes(),
+        moments.t_eff,
+        moments.shrinkage.hex(),
+        model.risk_free_source,
+        model.risk_free_rate.hex(),
+        model.mu_s.tobytes(),
+    )
+
+
+def _predictions(model: OriginModel) -> tuple:
+    """The fixed mixes on each seed's bank: the paths, every annual outcome and every figure."""
+    out = []
+    for seed in LEAK_SEEDS:
+        drawn = evaluation.bank(model, seed)
+        simulated = evaluation.simulate(model, drawn, LEAK_MIXES[model.menu])
+        figures = evaluation.summarize([simulated])
+        out.append(
+            (
+                drawn.index_sha256,
+                drawn.replay.counts.tobytes(),
+                simulated.status,
+                simulated.years.tobytes(),
+                *(getattr(figures, name).tobytes() for name in FIGURES),
+            )
+        )
+    return tuple(out)
+
+
+BOTH = frozenset(LEAK_MENUS)
+NEITHER: frozenset[str] = frozenset()
+
+# A single scaled price moves two returns that cancel in a compounded rate, so every mutation
+# of a risk-free series shifts its level instead: exactly one of its returns changes.
+#
+# name: (origin, first mutated date, mutations, the menus whose realized year at that origin
+#        moves, whether some later origin's model moves). Every first date is after the origin.
+AFTER_ORIGIN: dict[str, tuple[str, str, tuple[Mutation, ...], frozenset[str], bool]] = {
+    "scale_a_horizon_day": (
+        O_TSP_G,
+        "2024-04-12",
+        (_scale("2024-04-12", 1.5, "X", "TSP-C"),),
+        BOTH,
+        True,
+    ),
+    "crash_on_the_first_day_after": (
+        O_TSP_G,
+        "2024-04-01",
+        (_crash("2024-04-01", 0.7, "Y", "TSP-F"),),
+        BOTH,
+        True,
+    ),
+    # Z's gaps leave the Example horizon incomplete; the whole TSP menu loses a date, so its
+    # horizon becomes the next 252 dates of the shorter union calendar
+    "drop_horizon_days": (
+        O_TSP_G,
+        "2024-04-08",
+        (
+            _drop(["2024-04-24", "2024-04-25", "2024-04-26"], "Z"),
+            _drop(["2024-04-08"], "TSP-G", "TSP-F", "TSP-C"),
+        ),
+        BOTH,
+        True,
+    ),
+    "scale_a_day_past_the_horizon": (  # the horizon of 2024-03-28 ends 2025-04-01
+        O_TSP_G,
+        "2025-06-02",
+        (_scale("2025-06-02", 1.5, "X", "TSP-C"),),
+        NEITHER,
+        True,
+    ),
+    "append_days_past_d_star": (O_TSP_G, "2025-10-01", (_past_d_star,), NEITHER, False),
+    "risk_free_tsp_g_after": (  # TSP-G is the source here (SGOV is short) and a TSP fund
+        O_TSP_G,
+        "2024-04-12",
+        (_crash("2024-04-12", 0.98, "TSP-G"),),
+        frozenset({"tsp"}),
+        True,
+    ),
+    "risk_free_sgov_after": (  # inside SGOV's last 252 returns before D*: a rate read from the
+        O_SGOV,  # whole record would move at every origin
+        "2025-01-15",
+        (_crash("2025-01-15", 0.98, "SGOV"),),
+        NEITHER,
+        True,
+    ),
+    "crash_after_an_sgov_origin": (
+        O_SGOV,
+        "2024-08-01",
+        (_crash("2024-08-01", 0.6, "X", "TSP-C", "SGOV"),),
+        BOTH,
+        True,
+    ),
+}
+
+# name: (origin, mutations, the menus whose training sample moves, whether the risk-free rate
+#        moves, the example menu's complete rows at the origin). Every mutation is dated on or
+#        before the origin: the controls that prove the comparisons above can fail.
+AT_OR_BEFORE: dict[str, tuple[str, tuple[Mutation, ...], frozenset[str], bool, int]] = {
+    "scale_the_origin_day": (O_TSP_G, (_scale(O_TSP_G, 1.5, "X", "TSP-C"),), BOTH, False, 252),
+    "scale_a_window_day": (O_TSP_G, (_scale("2024-01-17", 1.5, "Y", "TSP-F"),), BOTH, False, 252),
+    "drop_a_window_day": (  # Z loses the return of that day and of the next
+        O_TSP_G,
+        (_drop(["2023-11-14"], "Z"),),
+        frozenset({"example"}),
+        False,
+        250,
+    ),
+    "risk_free_tsp_g_before": (
+        O_TSP_G,
+        (_crash("2024-02-14", 0.98, "TSP-G"),),
+        frozenset({"tsp"}),
+        True,
+        252,
+    ),
+    "risk_free_sgov_before": (O_SGOV, (_crash("2024-05-15", 0.98, "SGOV"),), NEITHER, True, 252),
+}
+
+
+def test_leakage_fixture_has_the_origins_it_claims(leak_base: _Leak) -> None:
+    for origin, source in ((O_TSP_G, "TSP-G"), (O_SGOV, "SGOV")):
+        row = leak_base.ledger.row(origin[:7])
+        assert (row.origin, row.status, row.risk_free_source) == (_d(origin), MATURE, source)
+        assert [entry.outcome for entry in row.menus] == [COMPLETE, COMPLETE]
+        assert row.menu("tsp").horizon_end is not None
+    assert leak_base.ledger.row("2024-03").menu("tsp").horizon_end == _d("2025-04-01")
+    for symbol in ("LATE", "NEWF"):
+        assert pd.DatetimeIndex(_leak_indices()[symbol].index)[0] > pd.Timestamp(O_TSP_G)
+
+
+@pytest.mark.parametrize("name", list(AFTER_ORIGIN))
+def test_prices_after_an_origin_change_only_its_realized_year(leak_base: _Leak, name: str) -> None:
+    origin, first, mutations, moved, seen_later = AFTER_ORIGIN[name]
+    cut = pd.Timestamp(first)
+    assert cut > pd.Timestamp(origin)
+    after = _Leak(*mutations)
+    month = origin[:7]
+    # every month before the first mutated date keeps its training facts and its origin models
+    for row, again in zip(leak_base.ledger.rows, after.ledger.rows, strict=True):
+        assert row.month == again.month
+        if pd.Timestamp(row.origin) >= cut:
+            continue
+        assert _training_facts(again) == _training_facts(row), row.month
+        if row.training_eligible:
+            for menu in LEAK_MENUS:
+                old, new = leak_base.model(row.month, menu), after.model(row.month, menu)
+                assert _model_facts(new) == _model_facts(old), (row.month, menu)
+    if cut > pd.Timestamp(LEAK_D_STAR):  # nothing dated after D* is read: the whole table agrees
+        pd.testing.assert_frame_equal(
+            harness.ledger_frame(after.ledger), harness.ledger_frame(leak_base.ledger)
+        )
+    # at the origin: the same predictions bit for bit; the realized year moves where it is hit
+    for menu in LEAK_MENUS:
+        assert _predictions(after.model(month, menu)) == _predictions(leak_base.model(month, menu))
+        changed = after.realized(month, menu) != leak_base.realized(month, menu)
+        assert changed == (menu in moved), menu
+    # the mutation is real: an origin whose window holds it reads it
+    later = [
+        row.month
+        for row in after.ledger.rows
+        if pd.Timestamp(row.origin) >= cut
+        and row.training_eligible
+        and leak_base.ledger.row(row.month).training_eligible
+    ]
+    differs = any(
+        _model_facts(after.model(m, menu)) != _model_facts(leak_base.model(m, menu))
+        for m in later
+        for menu in LEAK_MENUS
+    )
+    assert differs == seen_later
+
+
+@pytest.mark.parametrize("name", list(AT_OR_BEFORE))
+def test_prices_on_or_before_an_origin_change_its_training_side(
+    leak_base: _Leak, name: str
+) -> None:
+    origin, mutations, sampled, rate_moves, complete = AT_OR_BEFORE[name]
+    month = origin[:7]
+    before = _Leak(*mutations)
+    row, base_row = before.ledger.row(month), leak_base.ledger.row(month)
+    assert row.risk_free_source == base_row.risk_free_source
+    assert (row.risk_free_rate != base_row.risk_free_rate) is rate_moves
+    assert (row.menu("example").complete_rows, base_row.menu("example").complete_rows) == (
+        complete,
+        252,
+    )
+    rows_move = complete != 252
+    assert (_training_facts(row) != _training_facts(base_row)) is (rows_move or rate_moves)
+    for menu in LEAK_MENUS:
+        new, old = before.model(month, menu), leak_base.model(month, menu)
+        assert (new.sample_sha256 != old.sample_sha256) is (menu in sampled), menu
+        moves = menu in sampled or rate_moves
+        assert (new.key != old.key) is moves, menu
+        assert (_predictions(new) != _predictions(old)) is moves, menu
+
+
+def test_a_future_only_fund_changes_no_menu_and_no_training_fact(leak_base: _Leak) -> None:
+    base_frame = harness.ledger_frame(leak_base.ledger)
+    for variant in (_Leak(_without("LATE")), _Leak(_with("NEWF"))):
+        assert variant.ledger.menus == leak_base.ledger.menus == tuple(LEAK_MENUS.items())
+        assert (variant.ledger.boundary_month, variant.ledger.boundary_fund) == ("2023-02", "Z")
+        pd.testing.assert_frame_equal(harness.ledger_frame(variant.ledger), base_frame)
+        for row in leak_base.ledger.rows:
+            if not row.training_eligible:
+                continue
+            for menu in LEAK_MENUS:
+                old, new = leak_base.model(row.month, menu), variant.model(row.month, menu)
+                assert _model_facts(new) == _model_facts(old), (row.month, menu)
+        for menu in LEAK_MENUS:
+            new, old = variant.model("2024-03", menu), leak_base.model("2024-03", menu)
+            assert _predictions(new) == _predictions(old)
+            assert variant.realized("2024-03", menu) == leak_base.realized("2024-03", menu)
+
+
 # ---------------------------------------------------------------------------------- the CLI
 
 
@@ -803,7 +1191,7 @@ def _snapshot(
     return final
 
 
-def _menu_records(first: dict[str, str], last: date) -> dict[str, pd.DataFrame]:
+def _menu_records(first: dict[str, str], last: str | date) -> dict[str, pd.DataFrame]:
     records = {}
     for number, symbol in enumerate([*TSP, *EXAMPLE, "SGOV"]):
         start = first.get(symbol, "2021-01-04")
@@ -889,6 +1277,71 @@ def test_cli_quarter_end_origins(cli: ModuleType, long_snapshot: Path, tmp_path:
     assert list(frame["origin"]) == QUARTER_ENDS
     assert set(frame["lookback"]) == {"5y"} and set(frame["menu"]) == {"tsp"}
     assert set(frame["origins"]) == {"quarter-end"}
+
+
+TRAINING_COLUMNS = [
+    "month", "origin", "status", "training_eligible", "realized_denominator", "maturity_session",
+    "mature", "risk_free_source", "risk_free_rate", "month_issues", "menu", "funds",
+    "origin_priced", "union_rows", "window_start", "window_rows", "complete_rows",
+    "menu_training_eligible",
+]  # fmt: skip
+
+
+def test_cli_ledger_training_columns_ignore_later_prices_and_funds(
+    cli: ModuleType,
+    freeze: ModuleType,
+    snapshot: Path,
+    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The script on the `snapshot` fixture's prices changed only after 2024-03-28 (6.2, A-SE-32).
+
+    Every fund is priced 20 sessions past D*, TSP-C loses a date of the 2024-03 horizon, and the
+    snapshot holds a future-only fund in no menu.
+    """
+    records = _menu_records(
+        {"VWOB": "2022-07-11", "SGOV": "2023-01-30"}, _shifted("2026-10-01", 20)
+    )
+    tsp_c = records["TSP-C"]
+    records["TSP-C"] = tsp_c.loc[tsp_c["date"] != pd.Timestamp("2024-05-01")].reset_index(drop=True)
+    records["NEWF"] = _record(_days("2024-04-01", BASE_D_STAR), 2e-4)
+    later = _snapshot(tmp_path_factory.mktemp("later"), freeze, records, BASE_D_STAR)
+    menus = {
+        name: harness.read_snapshot(store, freeze.verify_snapshot).menus
+        for name, store in (("base", snapshot), ("later", later))
+    }
+    assert menus["later"] == menus["base"] == {"tsp": tuple(TSP), "example": tuple(EXAMPLE)}
+    frames = {}
+    for name, store in (("base", snapshot), ("later", later)):
+        out = tmp_path / f"{name}.parquet"
+        argv = ["ledger", "--store-dir", str(store), "--lookbacks", "1y", "--out", str(out)]
+        assert cli.main(argv) == 0
+        frames[name] = pd.read_parquet(out)
+    boundary = f"first month 2022-07: VWOB first priced 2022-07-11; earlier months are {PREHISTORY}"
+    assert capsys.readouterr().out.splitlines().count(boundary) == 2
+    base, moved = frames["base"], frames["later"]
+    assert list(moved["month"]) == list(base["month"])
+    assert list(moved["funds"]) == list(base["funds"])  # the fixed menus, in order
+    early = base["origin"] < pd.Timestamp("2024-04-01")
+    assert early.sum() == 21 * 2  # 2022-07 .. 2024-03
+    pd.testing.assert_frame_equal(
+        moved.loc[early, TRAINING_COLUMNS], base.loc[early, TRAINING_COLUMNS], check_exact=True
+    )
+    for old, new in zip(
+        base.loc[early, "menu_issues"], moved.loc[early, "menu_issues"], strict=True
+    ):
+        training = [i for i in json.loads(old) if i["code"] in TRAINING_CODES]
+        assert [i for i in json.loads(new) if i["code"] in TRAINING_CODES] == training
+    march = (base["month"] == "2024-03") & (base["menu"] == "tsp")
+    assert (base.loc[march, "outcome"].item(), moved.loc[march, "outcome"].item()) == (
+        COMPLETE,
+        HORIZON_MISSING,
+    )
+    issues = json.loads(moved.loc[march, "menu_issues"].item())
+    assert [(i["code"], i["fund"], i["date"]) for i in issues] == [
+        (HORIZON_VALUE_MISSING, "TSP-C", "2024-05-01")
+    ]
 
 
 def test_cli_refuses_a_snapshot_that_fails_verification(
