@@ -159,10 +159,14 @@ def test_a_se_10_deterministic_tensor_and_range_contract(tmp_path):
             inputs = _inputs(menu, lb, tmp_path)
             a, b = build(inputs, workers=1), build(inputs, workers=1)
             reused = build(replace(inputs, garch_artifact=a.artifacts["garch"]), workers=1)
+            comparable = [
+                {k: v for k, v in result.tensor.items() if k not in ("built_at", "build_seconds")}
+                for result in (a, b, reused)
+            ]
             assert (
-                builder.canonical_json(a.tensor)
-                == builder.canonical_json(b.tensor)
-                == builder.canonical_json(reused.tensor)
+                builder.canonical_json(comparable[0])
+                == builder.canonical_json(comparable[1])
+                == builder.canonical_json(comparable[2])
             )
             t = a.tensor
             assert t["schema"] >= 3 and tuple(map(int, t["engine_version"].split("."))) >= (0, 3, 0)

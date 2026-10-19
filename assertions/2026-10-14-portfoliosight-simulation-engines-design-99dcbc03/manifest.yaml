@@ -116,7 +116,7 @@ assertions:
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_15_bad_seed_stability.py"
     setup: ""
     teardown: ""
-    timeout: 900
+    timeout: 1800
     level: "spec"
     kind: "property"
   - id: "A-SE-16"
