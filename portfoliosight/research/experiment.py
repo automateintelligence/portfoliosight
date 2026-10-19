@@ -9,9 +9,15 @@ evaluation after the lock `research.outcomes`.
 Preflight, before any directory is made: the repository is clean (the run names the code by its
 HEAD), BLAS is held to one thread (`OPENBLAS/OMP/MKL_NUM_THREADS=1`), the output lies outside the
 snapshot, the mirror it was copied from and every git directory, and inside a worktree only where
-`git check-ignore` says so (the default `.omx/research/return-optimization/` is excluded), and the
-TSP investigation sample digest (TSP, 5y, as of 2026-10-16) reproduces `TSP_INVESTIGATION_DIGEST`
-(protocol 5, last paragraph); otherwise a named `Refused` error. Above 120 scheduled origins the
+`git check-ignore` says so (the default `.omx/research/return-optimization/` is excluded), the
+TSP investigation sample digest (TSP, 5y, as of 2026-10-16) reproduces `TSP_INVESTIGATION_DIGEST`,
+and the investigation's saved tensor (frozen into the snapshot) has its recorded ranges
+reproduced: `search.tensor_ranges` recomputes Bad/Typical/Good of its frontier and ladder mixes in
+risk columns 36 and 37 one mix at a time with production replay on the reconstructed sample, and
+the largest absolute discrepancy must be at most `TENSOR_RANGE_TOLERANCE` (1e-12: per-mix against
+the build's batched compounding; the investigation found 0); it is recorded in the manifest
+(protocol 5, last paragraph); otherwise a named `Refused` error (`InvestigationMismatch`,
+`InvestigationRangesMismatch`). Above 120 scheduled origins the
 run stops for a resource amendment (`ScheduleTooLarge`).
 
 Schedule and frozen denominator (protocol 3, 5). The scheduled origins are every common
@@ -128,9 +134,12 @@ from portfoliosight.research.search import (
     PATH_SEEDS,
     PRIMARY_ALLOWANCE,
     STAGE_1_ARMS,
+    TENSOR_RANGE_TOLERANCE,
     TSP_INVESTIGATION_ASOF,
+    TSP_INVESTIGATION_COLUMNS,
     TSP_INVESTIGATION_DIGEST,
     TSP_INVESTIGATION_LOOKBACK,
+    TSP_INVESTIGATION_TENSOR,
     Budget,
     Ceilings,
 )
@@ -187,6 +196,10 @@ class InvestigationMismatch(Refused):
     pass
 
 
+class InvestigationRangesMismatch(InvestigationMismatch):
+    """The investigation tensor's recorded ranges are not reproduced within the tolerance."""
+
+
 class ScheduleTooLarge(Refused):
     pass
 
@@ -204,12 +217,14 @@ class UnsafeOutput(Refused):
 
 @dataclass(frozen=True)
 class Investigation:
-    """The TSP investigation sample the harness must reproduce before it is trusted."""
+    """The TSP investigation sample and saved tensor the harness must reproduce first."""
 
     menu: str = "tsp"
     lookback: str = TSP_INVESTIGATION_LOOKBACK
     asof: date = TSP_INVESTIGATION_ASOF
     digest: str = TSP_INVESTIGATION_DIGEST
+    tensor: str = TSP_INVESTIGATION_TENSOR  # its path in the snapshot
+    columns: tuple[int, ...] = TSP_INVESTIGATION_COLUMNS  # the investigation's risk columns
 
 
 @dataclass(frozen=True)
@@ -341,8 +356,12 @@ def guard_output(path: Path, inputs: Inputs, provenance: Provenance) -> Path:
     return target
 
 
-def check_investigation(inputs: Inputs, investigation: Investigation) -> str:
-    """Reproduce the TSP investigation sample digest from the snapshot, or refuse the run."""
+def check_investigation(inputs: Inputs, investigation: Investigation) -> dict[str, Any]:
+    """Reproduce the TSP investigation's sample digest and recorded ranges, or refuse the run.
+
+    Returns what the manifest records: the reproduced digest and the range check (module
+    docstring, preflight).
+    """
     funds = inputs.data.menus.get(investigation.menu)
     if funds is None:
         raise InvestigationMismatch(f"the snapshot has no {investigation.menu!r} menu")
@@ -357,7 +376,39 @@ def check_investigation(inputs: Inputs, investigation: Investigation) -> str:
             f"the {investigation.menu} {investigation.lookback} sample as of "
             f"{investigation.asof} has digest {digest}, the investigation {investigation.digest}"
         )
-    return digest
+    raw = inputs.data.tensors.get(investigation.tensor)
+    if raw is None:
+        raise InvestigationMismatch(
+            f"the snapshot holds no investigation tensor {investigation.tensor}"
+        )
+    try:
+        tensor = json.loads(raw)
+        check = search.tensor_ranges(
+            inputs.data.records,
+            funds,
+            investigation.lookback,
+            investigation.asof,
+            tensor,
+            investigation.columns,
+        )
+    except ValueError as exc:
+        raise InvestigationMismatch(
+            f"the investigation tensor's ranges cannot be recomputed: {exc}"
+        ) from exc
+    ranges = {
+        "tensor": investigation.tensor,
+        "tensor_sha256": hashlib.sha256(raw).hexdigest(),
+        **check.record(),
+        "tolerance": TENSOR_RANGE_TOLERANCE,
+        "note": "per-mix replay (BLAS gemv) against the build's batched one_year_ranges (gemm): "
+        "summation order differs by about 1e-14",
+    }
+    if not check.max_abs_discrepancy <= TENSOR_RANGE_TOLERANCE:
+        raise InvestigationRangesMismatch(
+            f"the investigation tensor's recorded ranges differ by {check.max_abs_discrepancy!r} "
+            f"(at {check.worst}), more than {TENSOR_RANGE_TOLERANCE}"
+        )
+    return {"reproduced": digest, "ranges": ranges}
 
 
 # ----------------------------------------------------------------------------------- profiles
@@ -528,7 +579,7 @@ def build_schedule(
 def _origin_facts(records, ledger: harness.Ledger, month: str, menu: str, caps) -> OriginFacts:
     entry = ledger.row(month).menu(menu)
     if not entry.training_eligible:
-        reasons = ", ".join(issue.code for issue in entry.issues) or ledger.row(month).status
+        reasons = ", ".join(map(harness.issue_text, entry.issues)) or ledger.row(month).status
         return OriginFacts(ledger.lookback, month, menu, None, None, TRAINING_INELIGIBLE, reasons)
     model = origin_model(records, ledger, month, menu)
     try:
@@ -708,7 +759,7 @@ def run(
     blas = blas_environment()
     meter = meter or ProcMeter()  # from here on, this process's CPU is the run's
     root = guard_output(out_root, inputs, provenance)
-    digest = check_investigation(inputs, settings.investigation)
+    reproduced = check_investigation(inputs, settings.investigation)
     directory, name, cpu_before = _directory(
         root, provenance, inputs, settings, stage, sensitivity, run_id
     )
@@ -716,7 +767,7 @@ def run(
     directory.mkdir(parents=True)
     pq.write_table(_origins_table(schedule), directory / "origins.parquet")
     manifest = _manifest(
-        inputs, provenance, settings, limits, schedule, stage, sensitivity, name, digest, blas
+        inputs, provenance, settings, limits, schedule, stage, sensitivity, name, reproduced, blas
     )
     manifest_path = directory / "manifest.json"
     _write_json(manifest_path, manifest)
@@ -1009,7 +1060,7 @@ def _manifest(
     stage: int,
     sensitivity: str | None,
     run_id: str,
-    investigation_digest: str,
+    reproduced: Mapping[str, Any],
     blas: Mapping[str, str | None],
 ) -> dict[str, Any]:
     snapshot = inputs.manifest
@@ -1091,10 +1142,7 @@ def _manifest(
             "calendar": snapshot.get("calendar"),
             "risk_free": snapshot.get("risk_free"),
             "dependency_lock": snapshot.get("dependency_lock"),
-            "investigation": {
-                **dataclasses.asdict(settings.investigation),
-                "reproduced": investigation_digest,
-            },
+            "investigation": {**dataclasses.asdict(settings.investigation), **reproduced},
         },
         "ledger": {
             "lookback": base.lookback,

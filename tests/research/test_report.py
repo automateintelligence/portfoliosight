@@ -1518,7 +1518,13 @@ def test_a_clean_run_carries_no_descriptive_label(written: report.Report) -> Non
     assert written.summary["validity"]["descriptive_only"] is None
     assert "Descriptive only" not in written.markdown
     checks = {c["check"]: c for c in written.summary["validity"]["checks"]}
-    for name in ("no_failed_cells", "frozen_schedule", "denominator_agrees_with_manifest"):
+    for name in (
+        "no_failed_cells",
+        "frozen_schedule",
+        "denominator_agrees_with_manifest",
+        "investigation_digest",
+        "investigation_ranges",
+    ):
         assert checks[name]["met"] is True, name
     for name in ("coefficients", "lookback", "budget"):
         assert checks[f"sensitivity_{name}_cells"]["met"] is True, name

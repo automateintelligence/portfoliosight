@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import json
 import math
 from collections.abc import Sequence
 from dataclasses import replace
@@ -863,6 +864,44 @@ def test_combine_refuses_arms_of_another_cell_or_a_missing_arm() -> None:
 
 
 # ------------------------------------------------------------ investigation digest (5)
+
+
+def test_tensor_ranges_reproduce_a_production_build(store, d_g, tmp_path) -> None:
+    """Protocol 5: a production tensor's recorded ranges, recomputed one mix at a time on the
+    reconstructed sample, within 1e-12 of the build's batched compounding; a stored range moved
+    by 1e-9 is found where it was moved."""
+    tsp = ("TSP-G", "TSP-F", "TSP-C", "TSP-S", "TSP-I")
+    records = {fund: store_mod.get_record(store, fund) for fund in tsp}
+    inputs = inputs_from_store(
+        store,
+        funds=[{"id": fund, "min": None, "max": None} for fund in tsp],
+        lookback="5y",
+        asof=d_g,
+        cache_dir=tmp_path / "cache",
+        nx=6,
+        ny=4,
+        levels=3,
+        engines=("replay",),
+    )
+    tensor = json.loads(json.dumps(build_tensor(inputs, workers=1)))  # as saved
+    levels = len(tensor["ladder"]["w"][3])
+    check = search.tensor_ranges(records, tsp, "5y", d_g, tensor, (3, 4))
+    assert check.mixes == 2 * (1 + levels) and check.columns == (3, 4)
+    assert check.max_abs_discrepancy <= search.TENSOR_RANGE_TOLERANCE == 1e-12
+    assert check.moments_max_abs_discrepancy == 0.0
+    tensor["ladder"]["range"]["typical"][4][1] += 1e-9
+    moved = search.tensor_ranges(records, tsp, "5y", d_g, tensor, (3, 4))
+    assert moved.worst == "ladder column 4 level 1 typical"
+    assert moved.max_abs_discrepancy == pytest.approx(1e-9, abs=1e-12)
+    with pytest.raises(ValueError, match="funds"):
+        search.tensor_ranges(records, tsp[::-1], "5y", d_g, tensor, (3, 4))
+    del tensor["ladder"]["range"]["good"]
+    with pytest.raises(ValueError, match="ladder.range.good"):
+        search.tensor_ranges(records, tsp, "5y", d_g, tensor, (3, 4))
+    assert (search.TSP_INVESTIGATION_COLUMNS, search.TSP_INVESTIGATION_TENSOR) == (
+        (36, 37),
+        "tensors/2026-10-16-0.2.0/63643e52f0386317/5y.json",
+    )
 
 
 def _production_digest(store, funds, lookback: str, asof: date, tmp_path) -> str:

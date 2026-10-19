@@ -91,7 +91,15 @@ deterministic, and arm caches are isolated.
 
 `production_sample_digest` recomputes the sample digest a production build records for a menu,
 lookback and as-of date from price records, so the runner can reproduce the TSP investigation
-digest `TSP_INVESTIGATION_DIGEST` before it trusts the harness (protocol 5).
+digest `TSP_INVESTIGATION_DIGEST` before it trusts the harness (protocol 5). `tensor_ranges`
+reproduces the investigation's recorded ranges as well: on the reconstructed sample, with
+production's `estimate_moments`, `menu_beta_blend` at the tensor's recorded risk-free rate and
+History replay (`range_model` of the tensor's `range_method` seed, `one_year_ranges`), it
+recomputes Bad/Typical/Good of the tensor's stored frontier mix and every ladder level of the
+given risk columns, one mix at a time, and reports the largest absolute difference from the
+stored ranges. The build compounded every mix of the surface in one batch; NumPy hands a one-mix
+product to BLAS `gemv` and a batch to `gemm`, which add in different orders (about 1e-14 apart),
+so the runner allows `TENSOR_RANGE_TOLERANCE` (1e-12).
 """
 
 from __future__ import annotations
@@ -103,6 +111,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from datetime import date, datetime, time
 from types import MappingProxyType
+from typing import Any
 
 import cvxpy as cp
 import numpy as np
@@ -121,7 +130,8 @@ from portfoliosight.engine.optimize import (
     solve_with_retries,
 )
 from portfoliosight.engine.preference import COEFFICIENTS, Candidate
-from portfoliosight.engine.ranges import frame_digest
+from portfoliosight.engine.ranges import METHOD, frame_digest, one_year_ranges, range_model
+from portfoliosight.engine.stats import estimate_moments, menu_beta_blend
 from portfoliosight.engine.torsion import TorsionBasis, TorsionError, enb, torsion_basis
 from portfoliosight.engine.windows import select_window
 from portfoliosight.research.evaluate import (
@@ -181,6 +191,12 @@ UNDEFINED_MEASURE = "undefined_measure"
 TSP_INVESTIGATION_DIGEST = "d6f782a9947c0fad3a8b85f0ff6906160eff4b1e7a9c2de8e270ccd4eeeba24e"
 TSP_INVESTIGATION_ASOF = date(2026, 10, 16)
 TSP_INVESTIGATION_LOOKBACK = "5y"
+# ... and the saved tensor of that build, whose recorded ranges must be reproduced too: the
+# investigation's adjacent risk columns 36 and 37 (snapshot path as frozen by the freeze script).
+TSP_INVESTIGATION_TENSOR = "tensors/2026-10-16-0.2.0/63643e52f0386317/5y.json"
+TSP_INVESTIGATION_COLUMNS = (36, 37)
+TENSOR_RANGE_TOLERANCE = 1e-12  # per-mix (gemv) against the build's batched (gemm) compounding
+RANGE_FIGURES = ("bad", "typical", "good")
 
 
 class InvarianceError(RuntimeError):
@@ -1000,15 +1016,14 @@ class MdpProgram:
             return None, str(exc)
 
 
-def production_sample_digest(
+def production_sample(
     records: Mapping[str, pd.DataFrame], funds: Sequence[str], lookback: str, asof: date
-) -> str:
-    """The `lookback.sample_sha256` a production build of ``funds`` at ``asof`` records.
+) -> pd.DataFrame:
+    """The window sample a production build of ``funds`` at ``asof`` replays.
 
     Mirrors `jobs.build.inputs_from_store` and `engine.builder`: each fund's record cut to rows
-    dated on or before ``asof``, `build_returns` of those records, the frame in menu order,
-    `select_window` (every fund served) and `frame_digest` of its sample. Raises `ValueError`
-    when the window has no sample.
+    dated on or before ``asof``, `build_returns` of those records, the frame in menu order and
+    `select_window` (every fund served). Raises `ValueError` when the window has no sample.
     """
     when = datetime.combine(asof, time())
     cut = {}
@@ -1019,7 +1034,100 @@ def production_sample_digest(
     selection = select_window(frame, lookback, pd.Timestamp(asof))
     if selection.sample is None:
         raise ValueError(f"no {lookback} window at {asof}: {selection.message}")
-    return frame_digest(selection.sample)
+    return selection.sample
+
+
+def production_sample_digest(
+    records: Mapping[str, pd.DataFrame], funds: Sequence[str], lookback: str, asof: date
+) -> str:
+    """The `lookback.sample_sha256` a production build of ``funds`` at ``asof`` records."""
+    return frame_digest(production_sample(records, funds, lookback, asof))
+
+
+@dataclass(frozen=True)
+class RangeCheck:
+    """A saved tensor's recorded ranges recomputed one mix at a time (`tensor_ranges`)."""
+
+    columns: tuple[int, ...]
+    mixes: int  # each column's frontier mix and every ladder level
+    max_abs_discrepancy: float  # over every mix and Bad, Typical and Good
+    worst: str  # where it is: frontier|ladder, column, level, figure
+    moments_max_abs_discrepancy: float  # recomputed mu_s and covariance against the tensor's
+
+    def record(self) -> dict[str, object]:
+        return {
+            "columns": list(self.columns),
+            "mixes": self.mixes,
+            "max_abs_discrepancy": self.max_abs_discrepancy,
+            "worst": self.worst,
+            "moments_max_abs_discrepancy": self.moments_max_abs_discrepancy,
+        }
+
+
+def _field(tensor: Mapping[str, Any], *path: str | int) -> Any:
+    """``tensor[path[0]][path[1]]...``, a `ValueError` naming the path when it is absent."""
+    value: Any = tensor
+    for key in path:
+        try:
+            value = value[key]
+        except (KeyError, IndexError, TypeError) as exc:
+            where = ".".join(map(str, path))
+            raise ValueError(f"the tensor has no {where}") from exc
+    return value
+
+
+def tensor_ranges(
+    records: Mapping[str, pd.DataFrame],
+    funds: Sequence[str],
+    lookback: str,
+    asof: date,
+    tensor: Mapping[str, Any],
+    columns: Sequence[int],
+) -> RangeCheck:
+    """Recompute a saved tensor's recorded ranges in ``columns`` (module docstring).
+
+    Raises `ValueError` when the tensor is not a build of this sample (funds, digest, range
+    method) or lacks a field the check reads.
+    """
+    frame = production_sample(records, funds, lookback, asof)
+    stored_funds = [_field(entry, "id") for entry in _field(tensor, "universe", "funds")]
+    if stored_funds != list(funds):
+        raise ValueError(f"the tensor's funds {stored_funds} are not {list(funds)}")
+    if _field(tensor, "lookback", "sample_sha256") != frame_digest(frame):
+        raise ValueError("the tensor's sample digest is not the reconstructed sample's")
+    if _field(tensor, "range_method") != METHOD:
+        raise ValueError(f"the tensor's range method is not production's {METHOD}")
+    sample = frame.to_numpy()
+    moments = estimate_moments(sample)
+    mu_s, _ = menu_beta_blend(moments.mu, moments.cov, float(_field(tensor, "rf")))
+    moments_gap = max(
+        float(np.max(np.abs(mu_s - np.asarray(_field(tensor, "mu_s"), dtype=float)))),
+        float(np.max(np.abs(moments.cov - np.asarray(_field(tensor, "cov"), dtype=float)))),
+    )
+    model = range_model(sample, mu_s, moments.cov, int(_field(tensor, "range_method", "seed")))
+    mixes: list[tuple[str, np.ndarray, dict[str, float]]] = []
+    for column in columns:
+        mixes.append(
+            (
+                f"frontier column {column}",
+                np.asarray(_field(tensor, "frontier", "w", column), dtype=float),
+                {f: float(_field(tensor, "frontier", "range", f, column)) for f in RANGE_FIGURES},
+            )
+        )
+        for level, weights in enumerate(_field(tensor, "ladder", "w", column)):
+            stored = {
+                f: float(_field(tensor, "ladder", "range", f, column, level)) for f in RANGE_FIGURES
+            }
+            where = f"ladder column {column} level {level}"
+            mixes.append((where, np.asarray(weights, dtype=float), stored))
+    worst, gap = "", 0.0
+    for where, weights, stored in mixes:
+        found = one_year_ranges(model, weights[None, :])  # one mix at a time
+        for figure in RANGE_FIGURES:
+            difference = abs(float(found[figure][0]) - stored[figure])
+            if not difference <= gap:  # NaN or larger
+                worst, gap = f"{where} {figure}", difference
+    return RangeCheck(tuple(columns), len(mixes), gap, worst, moments_gap)
 
 
 def canonical(value: object) -> str:

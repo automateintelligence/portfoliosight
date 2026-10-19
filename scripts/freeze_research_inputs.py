@@ -7,12 +7,17 @@ Usage, from the repo root:
 
 Copies once, from the read-only mirror, every raw input of the return-optimization experiment:
 both menus' price records (protocol 3), the SGOV file when the mirror has it, `meta/manifest.json`
-and `meta/lake.json` (schema, splice and adjustment metadata), `data/presets.json` as committed at
+and `meta/lake.json` (schema, splice and adjustment metadata), the TSP investigation's saved
+tensor `INVESTIGATION_TENSOR` (protocol 5: the runner's preflight recomputes its recorded
+ranges; its digest is recorded under `investigation`), `data/presets.json` as committed at
 HEAD, a pinned XNYS session export (1 January of the earliest price year through
 `--calendar-end`, at least 2027-12-31), and a dependency lock (the installed distributions, the
-Python version and the git HEAD). The snapshot is `<root>/<D*>-<sha12>/`, `sha12` being the first
-12 hex characters of the SHA-256 of the canonical `snapshot.json` (compact, key-sorted JSON without
-`created_utc` and `manifest_sha256`). Files and directories end with `chmod a-w`.
+Python version and the git HEAD). Every copied price record must hold a finite, positive
+`tr_index` on every row: a NaN or a value at or below zero in any menu, SGOV or TSP-G record is
+refused, naming the file, the counts and the first date. The snapshot is
+`<root>/<D*>-<sha12>/`, `sha12` being the first 12 hex characters of the SHA-256 of the canonical
+`snapshot.json` (compact, key-sorted JSON without `created_utc` and `manifest_sha256`). Files and
+directories end with `chmod a-w`.
 
 Each mirror file is hashed before the copy, the copy is hashed, and the mirror file is hashed
 again once every copy is done; any difference is an error that leaves no snapshot behind. The
@@ -55,6 +60,7 @@ from pathlib import Path
 from typing import Any
 
 import exchange_calendars as xcals
+import numpy as np
 import pandas as pd
 
 from portfoliosight.data.returns import RECORD_COLUMNS
@@ -79,6 +85,8 @@ SGOV = "SGOV"
 TSP_G = "TSP-G"
 RISK_FREE_ORDER = [SGOV, TSP_G, "fallback"]
 META_FILES = ("meta/manifest.json", "meta/lake.json")
+# Protocol 5: the TSP investigation's saved 5y tensor, whose recorded ranges the runner reproduces.
+INVESTIGATION_TENSOR = "tensors/2026-10-16-0.2.0/63643e52f0386317/5y.json"
 PRESETS_FILE = "data/presets.json"
 SNAPSHOT_FILE = "snapshot.json"
 CALENDAR_FILE = "calendar/xnys_sessions.csv"
@@ -203,7 +211,7 @@ def collect_sources(mirror: Path, repo: Path, head: str) -> list[Source]:
     wanted = [price_path(symbol) for symbol in (*TSP_MENU, *EXAMPLE_MENU)]
     optional = [price_path(SGOV)]
     present = [name for name in optional if (mirror / name).is_file()]
-    required = [*wanted, *META_FILES]
+    required = [*wanted, *META_FILES, INVESTIGATION_TENSOR]
     missing = [name for name in required if not (mirror / name).is_file()]
     if missing:
         raise FreezeError(
@@ -239,6 +247,16 @@ def price_record(
     unset = int(frame["date"].isna().to_numpy().sum())
     if unset:
         raise FreezeError(f"{name}: {unset} row(s) with a missing date", 3)
+    values = frame["tr_index"].to_numpy(dtype=float)
+    missing = np.isnan(values)
+    invalid = ~missing & ~(np.isfinite(values) & (values > 0.0))
+    if missing.any() or invalid.any():
+        day = frame["date"][missing | invalid].min().date().isoformat()
+        raise FreezeError(
+            f"{name}: tr_index has {int(missing.sum())} missing (NaN) and {int(invalid.sum())} "
+            f"non-finite or non-positive value(s), the first on {day}",
+            3,
+        )
     first, last = frame["date"].min().date(), frame["date"].max().date()
     if in_menu and last < d_star:
         raise FreezeError(f"{name} ends {last.isoformat()}, before D* {d_star.isoformat()}", 3)
@@ -409,6 +427,8 @@ def build_snapshot(
                 symbol, copies[source.path], catalog[symbol], d_star, symbol in menu_symbols
             )
 
+    if INVESTIGATION_TENSOR not in copies:
+        raise FreezeError(f"the investigation tensor {INVESTIGATION_TENSOR} is not an input", 3)
     files = []
     for source in sources:
         entry = _file_record(source.path, copies[source.path], source.origin, source.path)
@@ -440,6 +460,10 @@ def build_snapshot(
             for key, (preset, funds) in MENU_PRESETS.items()
         },
         "files": sorted(files, key=lambda entry: entry["path"]),
+        "investigation": {
+            "tensor": INVESTIGATION_TENSOR,
+            "sha256": _digest(copies[INVESTIGATION_TENSOR]),
+        },
         "risk_free": {
             "order": RISK_FREE_ORDER,
             "sgov": _risk_free_entry(prices, SGOV),

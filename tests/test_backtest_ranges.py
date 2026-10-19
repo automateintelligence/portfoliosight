@@ -55,6 +55,7 @@ from portfoliosight.research.harness import (
     PREDECESSOR_MISSING,
     PREHISTORY,
     TRAINING_INELIGIBLE,
+    TRAINING_PRICE_INVALID,
     UNION_ROWS_SHORT,
 )
 from tests.research.helpers import random_indices, record
@@ -456,6 +457,7 @@ def test_read_snapshot_hashes_the_bytes_it_reads(snapshot: Path, freeze: ModuleT
     assert (inputs.d_star, inputs.root) == (BASE_D_STAR, snapshot.resolve())
     assert inputs.menus == {"example": tuple(EXAMPLE), "tsp": tuple(TSP)}
     assert len(inputs.records) == 29 and inputs.sessions[0] == pd.Timestamp("2021-01-04")
+    assert inputs.tensors == {freeze.INVESTIGATION_TENSOR: b'{"schema": 2}'}
     manifest = freeze.verify_snapshot(snapshot)
     forged = {
         **manifest,
@@ -534,6 +536,65 @@ def test_undercovered_window_is_rejected_at_ninety_percent() -> None:
     assert _codes(example.issues) == [(COMPLETE_ROWS_SHORT, None, None)]
     assert rejected.status == TRAINING_INELIGIBLE
     assert rejected.menu("tsp").training_eligible  # the other menu alone never qualifies
+
+
+def _set_price(records: dict[str, pd.DataFrame], symbol: str, day: str, value: float) -> None:
+    frame = records[symbol].copy()
+    hit = frame["date"] == pd.Timestamp(day)
+    assert hit.sum() == 1, f"{symbol} has no row on {day}"
+    frame.loc[hit, "tr_index"] = value
+    records[symbol] = frame
+
+
+@pytest.mark.parametrize("value", [-0.5, 0.0, np.inf])
+def test_an_invalid_training_price_is_a_named_data_defect(value: float) -> None:
+    """Codex P1-3: a present total-return value that is not finite and positive, on or before the
+    origin, makes the menu training-ineligible with the fund and date (never fitted)."""
+    records = _base()
+    _set_price(records, "X", "2024-02-15", value)
+    ledger = _ledger(records)
+    march = ledger.row("2024-03")
+    example = march.menu("example")
+    assert not example.training_eligible and march.status == TRAINING_INELIGIBLE
+    assert _codes(example.issues) == [(TRAINING_PRICE_INVALID, "X", _d("2024-02-15"))]
+    assert "1 total-return value" in example.issues[0].note
+    assert march.menu("tsp").training_eligible  # its own records are valid
+    january = ledger.row("2024-01")  # before the defect: unaffected
+    assert january.menu("example").training_eligible and january.status == MATURE
+    with pytest.raises(ValueError, match=TRAINING_PRICE_INVALID):
+        evaluation.origin_model(records, ledger, "2024-03", "example")
+    # handed records the ledger never saw, the model refuses to fit them
+    clean = _ledger(_base())
+    with pytest.raises(ValueError, match=f"{TRAINING_PRICE_INVALID}.*X 2024-02-15"):
+        evaluation.origin_model(records, clean, "2024-03", "example")
+
+
+# the ledger still records production's risk-free rate of the defective record (NaN here)
+@pytest.mark.filterwarnings("ignore:invalid value encountered in reduce:RuntimeWarning")
+def test_an_invalid_risk_free_price_makes_every_menu_ineligible() -> None:
+    records = _base(sgov_first="2023-01-30")
+    _set_price(records, "SGOV", "2023-06-15", 0.0)
+    july = _ledger(records).row("2023-07")
+    assert july.status == TRAINING_INELIGIBLE
+    for menu in ("tsp", "example"):
+        assert _codes(july.menu(menu).issues) == [
+            (TRAINING_PRICE_INVALID, "SGOV", _d("2023-06-15"))
+        ]
+    # TSP-G is a fund of one menu and a risk-free source: one issue, not two
+    records = _base()
+    _set_price(records, "TSP-G", "2023-06-15", -1.0)
+    july = _ledger(records).row("2023-07")
+    assert _codes(july.menu("tsp").issues) == [(TRAINING_PRICE_INVALID, "TSP-G", _d("2023-06-15"))]
+    assert _codes(july.menu("example").issues) == _codes(july.menu("tsp").issues)
+
+
+def test_a_missing_training_value_is_missingness_not_a_defect() -> None:
+    """NaN is an absent value: the completeness rule handles it, as for a dropped day."""
+    records = _base()
+    _set_price(records, "X", "2024-02-15", np.nan)
+    march = _ledger(records).row("2024-03").menu("example")
+    assert (march.window_rows, march.complete_rows) == (252, 250)
+    assert march.training_eligible and march.issues == ()
 
 
 def test_short_union_calendar_names_only_its_own_cause() -> None:
@@ -1146,9 +1207,14 @@ def _close(path: Path) -> None:
 
 
 def _snapshot(
-    base: Path, freeze: ModuleType, records: dict[str, pd.DataFrame], d_star: date
+    base: Path,
+    freeze: ModuleType,
+    records: dict[str, pd.DataFrame],
+    d_star: date,
+    tensor: bytes = b'{"schema": 2}',
 ) -> Path:
-    """A snapshot written by the freeze script's own builder from in-memory inputs."""
+    """A snapshot written by the freeze script's own builder from in-memory inputs; ``tensor``
+    stands for the investigation tensor (the ledger never reads it)."""
     sources, catalog = [], {}
     for symbol, frame in records.items():
         buffer = io.BytesIO()
@@ -1174,6 +1240,8 @@ def _snapshot(
     ):
         read = functools.partial(bytes, json.dumps(body).encode())
         sources.append(freeze.Source(path, "mirror", read))
+    read = functools.partial(bytes, tensor)
+    sources.append(freeze.Source(freeze.INVESTIGATION_TENSOR, "mirror", read))
     work = base / ".work"
     work.mkdir(parents=True)
     digest = freeze.build_snapshot(

@@ -17,7 +17,8 @@ rows. A month's origin is its last XNYS session.
 Status of a month, the first that applies:
   origin_price_missing       a fixed-menu fund has no finite, positive total-return value at the
                              origin (a coverage failure, listed by fund and date)
-  training_ineligible        some menu fails its training window (reasons on that menu)
+  training_ineligible        some menu fails its training window or has a defective raw input
+                             (reasons on that menu)
   administratively_immature  training-eligible, and the 252nd XNYS session after the origin is
                              after D*: scheduled, but outside the realized denominator
   mature                     training-eligible and administratively mature: the realized
@@ -29,8 +30,13 @@ last `LOOKBACK_ROWS[lookback]` union-calendar rows ending at the origin, 1,260 f
 complete-case rows over every menu fund. A menu is training-eligible when the union calendar has
 at least the window's rows on or before the origin, every fund has a price dated on or before the
 window's first date (no 10% inception slack; checked only once the union calendar is long
-enough, since a short calendar is already named as the cause), and the window has complete rows
-for at least 90% of its length, rounded up (1,134 of 1,260).
+enough, since a short calendar is already named as the cause), the window has complete rows
+for at least 90% of its length, rounded up (1,134 of 1,260), and no raw input is defective: every
+total-return value present (not NaN) in the menu's records and in the risk-free records (SGOV,
+TSP-G) dated on or before the origin is finite and positive. A defect is the named data error
+`training_price_invalid`, with the symbol, its first defective date and their count (protocol 5
+and 8; such an origin is never fitted). A NaN value is missing, not defective: the completeness
+rule above handles it.
 
 Realized horizon of a menu, for administratively mature months: the next 252 dates of the menu's
 frozen union price calendar (every record date of its funds) after the origin. It is complete when
@@ -100,6 +106,7 @@ HORIZON_MISSING = "mature_horizon_missing"
 UNION_ROWS_SHORT = "training_union_rows_short"
 FUND_AFTER_START = "training_fund_after_window_start"
 COMPLETE_ROWS_SHORT = "training_complete_rows_short"
+TRAINING_PRICE_INVALID = "training_price_invalid"  # a data defect: a value not finite and > 0
 PREDECESSOR_MISSING = "horizon_predecessor_missing"
 HORIZON_DATES_SHORT = "horizon_union_dates_short"
 HORIZON_PAST_D_STAR = "horizon_past_d_star"
@@ -342,6 +349,8 @@ def build_ledger(
     calendar = _session_index(sessions)
     d_stamp = to_stamp(d_star)
 
+    defects = {symbol: defect_dates(records[symbol], found) for symbol, found in dates.items()}
+    risk_free = [symbol for symbol in RISK_FREE_SOURCES if symbol in records]
     first = {fund: to_stamp(dates[fund][0]).date() for fund in fixed}
     latest = max(first.values())
     boundary_fund = next(fund for fund in fixed if first[fund] == latest)
@@ -361,9 +370,19 @@ def build_ledger(
         source, rate = risk_free_at(records, dates, stamp)
         entries, unpriced = [], []
         for name, funds in menu_items:
+            defective = price_defects(defects, (*funds, *risk_free), stamp)
             entries.append(
                 _menu_origin(
-                    name, funds, records, dates, prices[name], stamp, lookback, mature, d_stamp
+                    name,
+                    funds,
+                    records,
+                    dates,
+                    prices[name],
+                    stamp,
+                    lookback,
+                    mature,
+                    d_stamp,
+                    defective,
                 )
             )
             priced = prices[name].at(stamp)
@@ -437,6 +456,37 @@ def record_dates(symbol: str, record: pd.DataFrame) -> pd.DatetimeIndex:
     return dates
 
 
+def defect_dates(record: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """The dates whose total-return value is present (not NaN) but not finite and positive."""
+    values = record["tr_index"].to_numpy(dtype=float)
+    return pd.DatetimeIndex(dates[~np.isnan(values) & ~(np.isfinite(values) & (values > 0.0))])
+
+
+def price_defects(
+    defects: Mapping[str, pd.DatetimeIndex], symbols: Iterable[str], stamp: pd.Timestamp
+) -> tuple[Issue, ...]:
+    """`training_price_invalid` for each of ``symbols`` with a defect dated on or before
+    ``stamp`` (`defect_dates`), each named once."""
+    issues = []
+    for symbol in dict.fromkeys(symbols):
+        found = defects[symbol]
+        count = _position(found, stamp, "right")
+        if count:
+            day = to_stamp(found[0]).date()
+            note = (
+                f"{count} total-return value(s) on or before the origin are not finite and "
+                f"positive, the first on {day}"
+            )
+            issues.append(Issue(TRAINING_PRICE_INVALID, symbol, day, note))
+    return tuple(issues)
+
+
+def issue_text(issue: Issue) -> str:
+    """An issue as `code [fund] [date]`."""
+    parts = [issue.code, issue.fund, None if issue.day is None else issue.day.isoformat()]
+    return " ".join(part for part in parts if part)
+
+
 def _session_index(sessions: Iterable[Any]) -> pd.DatetimeIndex:
     index = pd.DatetimeIndex([to_stamp(session) for session in sessions])
     if len(index) == 0 or not (index.is_monotonic_increasing and index.is_unique):
@@ -496,6 +546,7 @@ def _menu_origin(
     lookback: str,
     mature: bool,
     d_stamp: pd.Timestamp,
+    defects: tuple[Issue, ...] = (),
 ) -> MenuOrigin:
     origin = stamp.date()
     truncated = {fund: rows_through(records[fund], dates[fund], stamp) for fund in funds}
@@ -526,6 +577,7 @@ def _menu_origin(
     if complete < needed:
         note = f"{complete} complete rows in the window, {needed} needed"
         issues.append(Issue(COMPLETE_ROWS_SHORT, note=note))
+    issues += defects
     training_eligible = not issues
 
     priced = prices.at(stamp)
@@ -841,6 +893,7 @@ class SnapshotInputs:
     menus: dict[str, tuple[str, ...]]
     records: dict[str, pd.DataFrame]  # every price file, by symbol
     sessions: pd.DatetimeIndex
+    tensors: dict[str, bytes] = field(default_factory=dict)  # saved tensors, by snapshot path
 
 
 def read_snapshot(path: str | Path, verify: Callable[[Path], Mapping[str, Any]]) -> SnapshotInputs:
@@ -848,7 +901,8 @@ def read_snapshot(path: str | Path, verify: Callable[[Path], Mapping[str, Any]])
 
     ``verify`` is ``verify_snapshot`` of scripts/freeze_research_inputs.py: it raises unless every
     file matches the snapshot's manifest and is read-only, and returns that manifest. Each file
-    read here is hashed again, so the bytes used are the bytes verified.
+    read here is hashed again, so the bytes used are the bytes verified. Saved tensors
+    (`tensors/**.json`, the TSP investigation's) are kept as bytes for the runner's preflight.
     """
     root = Path(path).resolve()
     manifest = verify(root)
@@ -865,6 +919,11 @@ def read_snapshot(path: str | Path, verify: Callable[[Path], Mapping[str, Any]])
         for relative in sorted(digests)
         if relative.startswith("prices/") and relative.endswith(".parquet")
     }
+    tensors = {
+        relative: read(relative)
+        for relative in sorted(digests)
+        if relative.startswith("tensors/") and relative.endswith(".json")
+    }
     lines = read(manifest["calendar"]["file"]).decode("utf-8").splitlines()
     if not lines or lines[0] != "session":
         raise ValueError(f"{root}: the XNYS session export has no 'session' header")
@@ -876,4 +935,5 @@ def read_snapshot(path: str | Path, verify: Callable[[Path], Mapping[str, Any]])
         menus={key: tuple(entry["funds"]) for key, entry in manifest["menus"].items()},
         records=records,
         sessions=pd.DatetimeIndex(pd.to_datetime(lines[1:], format="%Y-%m-%d")),
+        tensors=tensors,
     )

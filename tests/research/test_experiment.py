@@ -60,6 +60,7 @@ from portfoliosight.research.selection import (
 )
 from tests.research.fixtures import (
     D_STAR,
+    INVESTIGATION_COLUMNS,
     MENUS,
     PREFIX,
     PRIMARY,
@@ -67,12 +68,14 @@ from tests.research.fixtures import (
     ROOT,
     SECOND,
     TINY,
+    investigation_tensor,
     load_module,
     make_inputs,
     make_records,
     make_settings,
     run_experiment,
     scale_price,
+    tensor_bytes,
     xnys_sessions,
 )
 from tests.research.helpers import random_indices, record
@@ -880,6 +883,46 @@ def test_preflight_refusals_leave_no_directory(
     assert not (tmp_path / "out").exists()
 
 
+def test_preflight_reproduces_the_investigation_tensor_ranges(tmp_path: Path) -> None:
+    """R17 and the Codex note: the saved tensor's recorded ranges are recomputed one mix at a
+    time; above 1e-12 the run is refused before any directory, within it the check is recorded."""
+    records = make_records()
+    settings = make_settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
+    inputs = make_inputs(records, tmp_path)
+    raw = inputs.data.tensors[search.TSP_INVESTIGATION_TENSOR]
+    found = experiment.check_investigation(inputs, settings.investigation)
+    ranges = found["ranges"]
+    assert found["reproduced"] == settings.investigation.digest
+    assert ranges["columns"] == [0, 1] and ranges["mixes"] == 2 * (1 + 3)  # frontier + levels
+    assert 0.0 <= ranges["max_abs_discrepancy"] <= 1e-12 == ranges["tolerance"]
+    assert ranges["moments_max_abs_discrepancy"] == 0.0  # the same production fit
+    assert ranges["tensor"] == search.TSP_INVESTIGATION_TENSOR
+    assert ranges["tensor_sha256"] == hashlib.sha256(raw).hexdigest()
+    off = investigation_tensor(records)
+    off["ladder"]["range"]["good"][1][2] += 1e-9
+    with pytest.raises(
+        experiment.InvestigationRangesMismatch, match="at ladder column 1 level 2 good"
+    ):
+        run_experiment(tmp_path, records, settings=settings, tensor=json.dumps(off).encode())
+    other = tensor_bytes(records, lookback="2y")  # a build of another sample
+    with pytest.raises(experiment.InvestigationMismatch, match="sample digest"):
+        run_experiment(tmp_path, records, settings=settings, tensor=other)
+    bare = replace(inputs, data=replace(inputs.data, tensors={}))
+    with pytest.raises(experiment.InvestigationMismatch, match="no investigation tensor"):
+        experiment.run(bare, PROVENANCE, tmp_path / "out", settings=settings)
+    assert not (tmp_path / "out").exists()
+    near = investigation_tensor(records)
+    near["frontier"]["range"]["bad"][0] += 1e-13  # within the per-mix tolerance
+    result = run_experiment(
+        tmp_path, records, settings=settings, tensor=json.dumps(near).encode(), run_id="near"
+    )
+    recorded = json.loads((result.directory / "manifest.json").read_text())["data"]
+    gap = recorded["investigation"]["ranges"]["max_abs_discrepancy"]
+    assert 5e-14 < gap <= 1e-12
+    assert recorded["investigation"]["ranges"]["worst"] == "frontier column 0 bad"
+    assert recorded["investigation"]["columns"] == [0, 1]
+
+
 def test_output_must_avoid_the_snapshot_mirror_and_tracked_repository(tmp_path: Path) -> None:
     inputs = make_inputs(make_records(), tmp_path)
     repo = tmp_path / "repo"
@@ -1160,7 +1203,8 @@ def snapshot(tmp_path_factory: pytest.TempPathFactory) -> Path:
         sessions[(sessions >= pd.Timestamp("2022-01-03")) & (sessions <= pd.Timestamp(D_STAR))]
     )
     records = {fund: record(values) for fund, values in random_indices(days, drift_vol, 7).items()}
-    return _snapshot(tmp_path_factory.mktemp("cli"), freeze, records, D_STAR)
+    tensor = tensor_bytes(records, funds=tuple(freeze.TSP_MENU))
+    return _snapshot(tmp_path_factory.mktemp("cli"), freeze, records, D_STAR, tensor)
 
 
 def _cli_settings(snapshot: Path) -> Settings:
@@ -1170,7 +1214,9 @@ def _cli_settings(snapshot: Path) -> Settings:
     digest = search.production_sample_digest(
         inputs.data.records, inputs.data.menus["tsp"], "1y", D_STAR
     )
-    investigation = Investigation(menu="tsp", lookback="1y", asof=D_STAR, digest=digest)
+    investigation = Investigation(
+        menu="tsp", lookback="1y", asof=D_STAR, digest=digest, columns=INVESTIGATION_COLUMNS
+    )
     budget = Budget(points=8, starts=1, calls=24, maxiter=24)  # COBYLA needs N + 1 on 23 funds
     return Settings(
         lookback="2y", seeds=(PRIMARY,), budget=budget, months=("2024-08", "2024-08"),

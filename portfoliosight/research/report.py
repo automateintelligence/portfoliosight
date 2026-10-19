@@ -20,7 +20,8 @@ both sides of the failure rate, which is recorded with its 1% line as informatio
 count agrees with the denominator outcome the runner wrote to the manifest; the protocol 4
 evidence gate holds on the scheduled panel (at least 60 mature origins, at least 95% complete
 outcomes in each menu, no unexplained missing outcome, at least five disjoint intervals in each
-menu, at most 120 scheduled origins); the TSP investigation digest was reproduced; equal weights
+menu, at most 120 scheduled origins); the TSP investigation digest and the recorded ranges of
+its saved tensor were reproduced; equal weights
 in a cell have bit-identical outcomes (invariance); every completed cell has R and R+D at every
 allowance; and the run's settings are the protocol's. Each sensitivity profile is validated the
 same way against its own frozen schedule (failed, incomplete and missing cells, paired
@@ -671,6 +672,14 @@ def validity(
         "investigation_digest",
         expected is not None and reproduced == expected,
         f"reproduced {reproduced}, expected {expected}",
+    )
+    ranges = investigation.get("ranges") or {}
+    gap, line = ranges.get("max_abs_discrepancy"), ranges.get("tolerance")
+    check(
+        "investigation_ranges",
+        gap is not None and line is not None and gap <= line,
+        f"the investigation tensor's recorded ranges reproduced within {gap} (tolerance {line}) "
+        f"over {ranges.get('mixes')} mixes in columns {ranges.get('columns')}",
     )
     for name, run in sensitivities.items():
         if run is not None:

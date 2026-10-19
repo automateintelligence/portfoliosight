@@ -12,6 +12,8 @@ objects that are built once and shared:
   TSP-G, else the 4% fallback, through the production `risk_free_rate`); and blends `mu_s` with
   the production `menu_beta_blend`, as `engine.builder` does for a tensor. It refuses a menu the
   ledger does not call training-eligible, the `ew` lookback (protocol 2 pins the fixed window),
+  records with a defective raw input on or before the origin (`training_price_invalid`: a
+  present total-return value of a menu fund or risk-free source that is not finite and positive),
   and records that do not reproduce the ledger's window start, complete rows or risk-free rate.
 - `bank(model, seed)` -> `Bank`, one History-replay bank: the production `range_model` of the
   model's sample and moments, whose count matrix comes from the 2,000 x 252 stationary bootstrap
@@ -129,6 +131,9 @@ from portfoliosight.research.harness import (
     Ledger,
     MenuOrigin,
     OriginRow,
+    defect_dates,
+    issue_text,
+    price_defects,
     record_dates,
     risk_free_at,
     rows_through,
@@ -364,6 +369,18 @@ def origin_model(
         reasons = ", ".join(issue.code for issue in entry.issues) or row.status
         raise ValueError(f"{menu} at {month} is not training-eligible: {reasons}")
     stamp = to_stamp(row.origin)
+    symbols = (*funds, *(symbol for symbol in RISK_FREE_SOURCES if symbol in records))
+    defects = price_defects(
+        {
+            symbol: defect_dates(records[symbol], record_dates(symbol, records[symbol]))
+            for symbol in symbols
+        },
+        symbols,
+        stamp,
+    )
+    if defects:
+        found = "; ".join(issue_text(issue) for issue in defects)
+        raise ValueError(f"{menu} at {month}: defective raw input, never fitted: {found}")
     returns = build_returns({fund: _cut(records, fund, stamp) for fund in funds})
     start = select_window(returns, ledger.lookback, row.origin).start
     sources = [symbol for symbol in RISK_FREE_SOURCES if symbol in records]

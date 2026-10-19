@@ -40,6 +40,9 @@ EXAMPLE = [
 # fmt: on
 MENU_FUNDS = TSP + EXAMPLE
 RECORD_COLUMNS = ["date", "close", "tr_index", "div_cash", "split_factor"]
+# protocol 5: the TSP investigation's saved tensor, copied so the preflight can recompute its ranges
+TENSOR = "tensors/2026-10-16-0.2.0/63643e52f0386317/5y.json"
+TENSOR_BYTES = b'{"lookback": {"id": "5y"}, "schema": 2}'
 GIT_ENV = {
     **os.environ,
     "GIT_AUTHOR_NAME": "tester",
@@ -135,6 +138,9 @@ def make_mirror(base: Path, *, sgov: bool = True) -> Path:
     (meta / "budget.json").write_text("{}", encoding="utf-8")
     (mirror / "tensors").mkdir()
     (mirror / "tensors" / "5y.json").write_text("{}", encoding="utf-8")
+    (mirror / TENSOR).parent.mkdir(parents=True)
+    (mirror / TENSOR).write_bytes(TENSOR_BYTES)
+    (mirror / TENSOR).with_name("1y.json").write_text("{}", encoding="utf-8")  # not taken
     return mirror
 
 
@@ -220,9 +226,10 @@ def test_snapshot_holds_exactly_the_listed_inputs_byte_for_byte(script, mirror, 
     expected = {f"prices/{s}.parquet" for s in [*MENU_FUNDS, "SGOV"]}
     expected |= {"meta/manifest.json", "meta/lake.json", "data/presets.json"}
     expected |= {"calendar/xnys_sessions.csv", "environment/dependency_lock.txt", "snapshot.json"}
+    expected |= {TENSOR}
     assert set(files) == expected
     for relative in sorted(expected):
-        if relative.startswith(("prices/", "meta/")):
+        if relative.startswith(("prices/", "meta/", "tensors/")):
             assert files[relative] == (mirror / relative).read_bytes(), relative
     assert files["data/presets.json"] == (repo / "data" / "presets.json").read_bytes()
 
@@ -558,7 +565,7 @@ def test_the_mirror_is_never_written(script, mirror, repo, root):
 
 @pytest.mark.parametrize(
     "relative",
-    ["prices/VWOB.parquet", "prices/TSP-G.parquet", "meta/manifest.json", "meta/lake.json"],
+    ["prices/VWOB.parquet", "prices/TSP-G.parquet", "meta/manifest.json", "meta/lake.json", TENSOR],
 )
 def test_a_missing_required_file_is_named_and_nothing_is_left(script, mirror, repo, root, relative):
     (mirror / relative).unlink()
@@ -606,6 +613,43 @@ def test_a_menu_fund_that_stops_before_dstar_is_refused(script, mirror, repo, ro
     with pytest.raises(script.FreezeError, match=r"PCY.*2026-10-15.*2026-10-16") as caught:
         _freeze(script, mirror, root, repo)
     assert caught.value.code == 3
+
+
+@pytest.mark.parametrize(
+    ("symbol", "values", "said"),
+    [
+        ("VNQ", {5: -0.25, 9: -0.5}, "0 missing (NaN) and 2 non-finite or non-positive"),
+        ("TSP-C", {7: 0.0}, "0 missing (NaN) and 1 non-finite or non-positive"),
+        ("TSP-G", {3: np.nan, 4: np.nan}, "2 missing (NaN) and 0 non-finite or non-positive"),
+        ("SGOV", {6: np.inf}, "0 missing (NaN) and 1 non-finite or non-positive"),
+    ],
+)
+def test_a_total_return_value_that_is_not_finite_and_positive_is_refused(
+    script, mirror, repo, root, symbol, values, said
+):
+    """Codex P1-3: any menu, SGOV or TSP-G record with a NaN or <= 0 value refuses the freeze,
+    naming the file, the counts and the first date (exit 3)."""
+    frame = _price_frame(MENU_FUNDS.index(symbol) if symbol in MENU_FUNDS else 28)
+    for row, value in values.items():
+        frame.loc[row, "tr_index"] = value
+    _write_price(mirror, symbol, frame)
+    first = frame["date"].iloc[min(values)].date().isoformat()
+    pattern = rf"prices/{re.escape(symbol)}\.parquet: tr_index has {re.escape(said)}.*{first}"
+    with pytest.raises(script.FreezeError, match=pattern) as caught:
+        _freeze(script, mirror, root, repo)
+    assert caught.value.code == 3
+    assert list(root.iterdir()) == []
+
+
+def test_the_investigation_tensor_is_copied_and_recorded(script, mirror, repo, root):
+    snapshot = _freeze(script, mirror, root, repo)
+    manifest = _read_manifest(snapshot)
+    digest = hashlib.sha256(TENSOR_BYTES).hexdigest()
+    assert manifest["investigation"] == {"tensor": TENSOR, "sha256": digest}
+    listed = {entry["path"]: entry for entry in manifest["files"]}
+    assert listed[TENSOR]["sha256"] == digest and listed[TENSOR]["origin"] == "mirror"
+    assert (snapshot / TENSOR).read_bytes() == TENSOR_BYTES
+    assert script.INVESTIGATION_TENSOR == TENSOR
 
 
 def test_rows_after_dstar_are_kept_and_recorded(script, mirror, repo, root):
