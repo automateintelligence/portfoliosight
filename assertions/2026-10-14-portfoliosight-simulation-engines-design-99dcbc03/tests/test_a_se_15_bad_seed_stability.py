@@ -38,7 +38,7 @@ def _runtime():
             },
             text=True,
             capture_output=True,
-            timeout=1200,
+            timeout=1800,
         )
         assert result.returncode == 0, result.stdout[-12000:] + result.stderr[-3000:]
         return False

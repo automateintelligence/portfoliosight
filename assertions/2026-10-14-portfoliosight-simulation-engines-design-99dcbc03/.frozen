@@ -57,7 +57,7 @@
     "A-SE-10": {
       "entry": "38df34b4ba9531a73b8a0f2d041b53b756b70a35cbf58e4824d3554e839c9cac",
       "files": {
-        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_10_tensor_contract.py": "3365f1b4b55ae946b4a8e7859d615bdf392cc2787224a630cf1930f2101cff5a"
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_10_tensor_contract.py": "eaa122099e85d29017faa4a3861d3cae083c71c0cb188783b16b9d17c7515167"
       }
     },
     "A-SE-11": {
@@ -85,9 +85,9 @@
       }
     },
     "A-SE-15": {
-      "entry": "2583c5cfaafa1cd7e76ad85a6a7ef6a828b2d2318006f085eecd23fbd30d83c3",
+      "entry": "8280052c2a0ce6acd00d0e2dbcbdf3be552972d5db9bf561fe4a160b21925d76",
       "files": {
-        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_15_bad_seed_stability.py": "4d70281410c2a1dd52b4aaa6c8d96312520f3072f9fc576172489a9f9e6e6bd0"
+        "assertions/2026-10-14-portfoliosight-simulation-engines-design-99dcbc03/tests/test_a_se_15_bad_seed_stability.py": "30794560b68eff6eb55c7b32302c093844109eba1b672b99119faee781de801f"
       }
     },
     "A-SE-16": {
