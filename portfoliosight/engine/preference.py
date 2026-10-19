@@ -328,7 +328,8 @@ def checked_coefficients(coefficients: Sequence[float]) -> Coefficients:
             f"U coefficients must be three finite positive numbers (Bad, Typical, Good), "
             f"got {tuple(coefficients)}"
         )
-    return values  # pyright: ignore[reportReturnType]
+    k_bad, k_typical, k_good = values
+    return (k_bad, k_typical, k_good)
 
 
 def _checked_allowance(allowance: float) -> float:
