@@ -401,6 +401,11 @@ def _arm_timing(
         "cache_hits": arm.calls - arm.evaluations,
         "invalid": arm.invalid,
         "failed_starts": arm.failed_starts,
+        "started_calls": arm.started_calls,
+        "started_evaluations": arm.started_evaluations,
+        "interrupted_call": None
+        if arm.interrupted is None
+        else dataclasses.asdict(arm.interrupted),
         "cache": "fresh, preloaded with the shared broad archive only",
     }
 

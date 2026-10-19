@@ -908,6 +908,29 @@ def test_a_stopped_arm_keeps_its_attempts_and_the_cell_its_archive(monkeypatch) 
         search.combine(shared, [r])  # without a stopped arm every arm is required
 
 
+def test_a_timeout_inside_the_first_evaluation_keeps_the_started_call(monkeypatch) -> None:
+    """The call interrupted during evaluation is counted as started and recorded as interrupted,
+    with no completed row and no invented result."""
+    shared = prepare(_m4(), CAPS4, 0.5, SEED, budget=SMALL)
+
+    def interrupted(*args, **kwargs):
+        raise _Interrupted
+
+    monkeypatch.setattr(search, "assess", interrupted)
+    progress = search.ArmProgress()
+    with pytest.raises(_Interrupted):
+        run_arm(shared, "R+D", progress=progress)
+    monkeypatch.undo()
+    assert progress.rows == [] and progress.starts == []
+    assert progress.started_calls == progress.started_evaluations == 1
+    stopped = search.stopped_arm(shared, "R+D", progress, "the alarm rang")
+    assert stopped.calls == stopped.evaluations == 0 and stopped.rows == ()
+    assert stopped.started_calls == stopped.started_evaluations == 1
+    assert stopped.interrupted == search.InterruptedCall(start=0, call=1, evaluating=True)
+    whole = run_arm(shared, "R+D")
+    assert whole.interrupted is None and whole.started_calls == whole.calls
+
+
 # ------------------------------------------------------------ investigation digest (5)
 
 

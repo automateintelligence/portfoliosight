@@ -356,6 +356,15 @@ class StartRun:
 
 
 @dataclass(frozen=True)
+class InterruptedCall:
+    """An objective call begun and not completed: it has no result and no attempt row."""
+
+    start: int  # the local search's index
+    call: int  # its 1-based number within that search
+    evaluating: bool  # a cache miss: the replay evaluation had begun
+
+
+@dataclass(frozen=True)
 class ArmSearch:
     """One arm's local searches of one cell and its native result."""
 
@@ -370,6 +379,9 @@ class ArmSearch:
     error_detail: str | None
     native_reference: Candidate | None  # w_R of the arm's own archive
     native_selection: Candidate | None  # R: w_R; a measure arm: Stage B at the allowance
+    started_calls: int = 0  # objective calls begun (calls plus an interrupted one)
+    started_evaluations: int = 0  # cache misses begun (evaluations plus an interrupted one)
+    interrupted: InterruptedCall | None = None  # the call an interruption cut short
 
     @property
     def failure(self) -> str | None:
@@ -399,10 +411,14 @@ class ArmSearch:
 
 @dataclass
 class ArmProgress:
-    """An arm's attempts and completed starts so far, kept by its caller across an interruption."""
+    """An arm's attempts, completed starts and begun calls so far, kept by its caller across an
+    interruption; ``interrupted`` is the call that was running (None between calls)."""
 
     rows: list[Attempt] = field(default_factory=list)
     starts: list[StartRun] = field(default_factory=list)
+    started_calls: int = 0
+    started_evaluations: int = 0
+    interrupted: InterruptedCall | None = None
 
 
 class _Measures:
@@ -725,7 +741,7 @@ def run_arm(shared: SharedSearch, label: str, *, progress: ArmProgress | None = 
     native_reference = native_selection = None
     try:
         for index, (start, repeat) in enumerate(shared.starts):
-            run = _refine(shared, label, measure, reference, cache, rows, index, start, repeat)
+            run = _refine(shared, label, measure, reference, cache, progress, index, start, repeat)
             starts.append(run)
         native_reference, native_selection = _native(shared, measure, rows)
     except (measures.UndefinedMeasure, TorsionError) as exc:
@@ -742,6 +758,9 @@ def run_arm(shared: SharedSearch, label: str, *, progress: ArmProgress | None = 
         error_detail=detail,
         native_reference=native_reference,
         native_selection=native_selection,
+        started_calls=progress.started_calls,
+        started_evaluations=progress.started_evaluations,
+        interrupted=progress.interrupted,
     )
 
 
@@ -761,6 +780,9 @@ def stopped_arm(shared: SharedSearch, label: str, progress: ArmProgress, detail:
         error_detail=detail,
         native_reference=None,
         native_selection=None,
+        started_calls=progress.started_calls,
+        started_evaluations=progress.started_evaluations,
+        interrupted=progress.interrupted,
     )
 
 
@@ -1217,12 +1239,13 @@ def _refine(
     measure: str | None,
     reference: Candidate | None,
     cache: dict[bytes, Scored],
-    rows: list[Attempt],
+    progress: ArmProgress,
     index: int,
     start: tuple[float, ...],
     repeat: bool,
 ) -> StartRun:
-    """One COBYLA run from ``start`` under the external call counter; rows go to ``rows``."""
+    """One COBYLA run from ``start`` under the external call counter; rows go to ``progress``."""
+    rows = progress.rows
     model, drawn, scorer = shared.model, shared.bank, shared.scorer
     if shared.ceiling is None or scorer is None or drawn is None:
         raise ValueError("the shared search is incomplete")
@@ -1254,6 +1277,11 @@ def _refine(
             raise _CallBudgetExhausted
         state["calls"] += 1
         w = weights_of(x)
+        key = w.tobytes()
+        progress.started_calls += 1
+        progress.interrupted = InterruptedCall(index, int(state["calls"]), key not in cache)
+        if key not in cache:
+            progress.started_evaluations += 1
         scored, cached = lookup(w)
         score, guards, values = math.nan, None, {}
         if scored.status == OK:
@@ -1270,7 +1298,7 @@ def _refine(
         rows.append(
             Attempt(LOCAL, label, None, index, call, cached, scored, value, guards, **values)
         )
-        key = w.tobytes()
+        progress.interrupted = None
         if not first:
             first.append(key)
         if scored.status == OK:
