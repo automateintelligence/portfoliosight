@@ -7,8 +7,17 @@ fitting, log-space fund scaling followed by simple-space mix scaling, absorbed s
 and the matching loss-attribution formula. The owner's numbered Expectations are unchanged.
 
 Prepared with `spec-craft:expectations` and `spec-craft:executable-assertions` 0.3.0 on 2026-10-17.
+Amended on 2026-10-18 (owner timezone) for the owner's preference contract, slider semantics,
+measures and sequencing (spec §3 item 7, §5.5, §6, §7, §10 item 6, §13 items 19–23): A-SE-18
+and A-SE-20 are rewritten to the sacrifice-ladder semantics, A-SE-22 and A-SE-23 are marked
+"scope reconciled after C8", and A-SE-29 through A-SE-32 are added. The record of every change,
+with before/after/property/reason, is `docs/reviews/2026-10-18-gate-change-objective-and-slider.md`.
+The frozen tests under `assertions/` are not changed by this file; the run leader re-freezes them
+through the installed Conductor workflow. A-SE-29 and A-SE-32 tests are linted and frozen into
+the run gate before `ledger phase-done <6b-issue>`; A-SE-18, A-SE-20, A-SE-22, A-SE-23, A-SE-30
+and A-SE-31 re-freeze after C8 is recorded and before phases 7–9 are accepted.
 These are assertion **specifications**, not test code or permission to change either default.
-Stable `A-SE-*` IDs identify the future machine checks.
+Stable `A-SE-*` IDs identify the future machine checks; no ID is renumbered.
 
 ## 0. Scope and handoff
 
@@ -19,9 +28,12 @@ by a disabled Copula option, a mock copula, or omission from the gate.
 
 | Normative phase | Assertion IDs | Boundary |
 |---|---|---|
-| Phase 1 — Volatility model | A-SE-01 through A-SE-16 | Replay/GARCH, provenance, artifacts, API, page, validation, measured budgets |
-| Phase 2 — Diversification measures | A-SE-17 through A-SE-23 | DR² ladders, ENLC, presentation, comparison and stability |
+| Phase 1 — Volatility model | A-SE-01 through A-SE-16, A-SE-32 | Replay/GARCH, provenance, artifacts, API, page, validation, measured budgets; the rolling-origin harness's leakage check (A-SE-32, added 2026-10-18; the harness is first in the owner's order) |
+| Phase 2 — Diversification measures and the preference contract | A-SE-17 through A-SE-23, A-SE-29 through A-SE-31 | DR², the two-stage contract and sacrifice ladders, ENLC, `ES_2.5`, presentation, comparison and stability |
 | Phase 3 — Copula, future scope | A-SE-24 through A-SE-28 | Actual fitted dependence, artifacts, integration, validation and measured budgets |
+
+IDs 24–28 were assigned before 29–32 and keep their Phase 3 place; the new IDs follow the
+next-free rule and are listed under the phase they check, not in numerical order.
 
 Phase 0 is a prerequisite, not reassigned to Phase 1: retain evidence for S1/M1 from the
 annotated rollback tag, remote tag, runbook and pinned generation before engine work. A test
@@ -94,12 +106,16 @@ Each line gives the assertion, traceability, and the silent failure it prevents.
 - **A-SE-15 — Bad-year seed stability.** S4/S8/F7: reported differences must not be unexamined simulation noise.
 - **A-SE-16 — Phase 1 measured budgets.** S11/M6: performance success must use the full calculation on the target host.
 - **A-SE-17 — DR² identities and qualified bound.** S6/F2: a correlated fund menu must not turn one holding into many risks.
-- **A-SE-18 — DR² ladder semantics.** S6/F2: optimizing the numerator alone must not break diversification ordering or risk-line honesty.
+- **A-SE-18 — Sacrifice-ladder semantics (rewritten 2026-10-18).** S6/S13/S14/F2/F10: a ladder that holds risk exactly, breaks a guard, or lands anywhere but `w_R` by default would reintroduce the TSP 5y default of 2026-10-18.
 - **A-SE-19 — ENLC attribution and loser-only entropy.** S6/S7/F7/M5: hedges, zero holdings and undefined loss shares must not produce invented diversification.
-- **A-SE-20 — Measure selection and shared state.** S7/S10/F4: the selected word, map and loss details must obey their distinct stated meanings.
+- **A-SE-20 — Measure and engine selection and shared state (rewritten 2026-10-18).** S7/S10/S12/F4/F9: the selected word, map, holdings and loss details must obey their distinct stated meanings, and selecting a measure or engine must select its actual holdings.
 - **A-SE-21 — Scores are not presented as holdings.** F3/S6/S7 and §6.1: a mathematically correct number can still make the forbidden claim to visitors.
-- **A-SE-22 — Measures comparison evidence.** S8/F8/M3: a change of optimized measure needs comparable measured evidence.
-- **A-SE-23 — ENLC seed stability.** S7/F7: unstable tail shares must not be accepted by dropping difficult seeds.
+- **A-SE-22 — Measures comparison evidence (scope reconciled after C8).** S8/F8/M3: a change of optimized measure needs comparable measured evidence.
+- **A-SE-23 — ENLC seed stability (scope reconciled after C8).** S7/F7: unstable tail shares must not be accepted by dropping difficult seeds.
+- **A-SE-29 — Preference-contract oracle (added 2026-10-18).** S13/F10 and §5.5/§10.6: a selector that picks A over B, penalizes an improvement, admits a double deterioration, or lets the measure reach into Stage A would silently replace the owner's preference.
+- **A-SE-30 — Default-landing regression (added 2026-10-18).** S14/F11 and §6/§10.6: a default that is not `w_R` can hand the visitor a mix worse on both Bad and Typical than `w_R`. F11's "worse than another mix on screen" leg (the frontier mix) is recorded as a C8 finding, not asserted.
+- **A-SE-31 — `ES_2.5` identity and single-fund checks (added 2026-10-18).** §3.7 D5, §4.1, §10.5/6: a tail average that is wrong, or that quietly steers the selection, would mislabel the one new figure.
+- **A-SE-32 — Harness leakage metamorphism (added 2026-10-18).** S8/F8 and §10.1: prices after an origin must not change that origin's selection or prediction, or the experiment's evidence is not out-of-sample.
 - **A-SE-24 — Real copula shocks through the upstream seam.** S4/S9/M2: a relabelled bootstrap or changed margins do not implement the chosen dependence model.
 - **A-SE-25 — Copula artifact replay and refusal.** S3/S10/F7: the API must reproduce the build's dependence draw.
 - **A-SE-26 — Copula reaches the preset page.** S2/S3/F4: a library implementation alone does not expose the feature.
@@ -154,6 +170,33 @@ a default switch, including a report that meets the proposed numerical rule.
    that case as unavailable because no allocation was supplied, not fabricate holdings or
    claim to have tested an entered portfolio. The owner can supply allocations for a fuller
    comparison; these assertions do not choose them.
+9. **Level zero and the white line (D3, deferred to C8; added 2026-10-18).** A-SE-10's leg
+   "level zero equals its frontier node" and the demo gates that read it (A-PS-17/18/34) are
+   true for schema-3 fixed-risk ladders. On a schema-4 sacrifice ladder level zero is `w_R`
+   (spec §5.5, §7), which equals the frontier node only under D3 option (i). A-SE-18 checks
+   level zero against `w_R`; the frontier-node leg of A-SE-10 is reconciled at C8 and is not
+   silently kept or dropped here.
+10. **Guards between levels (added 2026-10-18).** The hop rule verifies the midpoint blend of
+   two adjacent levels only, as the risk-line hop rule did; a between-level or between-column
+   position's guards are not re-verified in the browser, and its exact figures arrive through
+   C3. A-SE-18 checks the hop flags at midpoints and that the trade-off line is marked
+   estimated while C3 is pending; it does not invent a guarantee for every interior position.
+11. **Engine switch and chart geometry (added 2026-10-18).** A-SE-12's "no chart-geometry
+   change" leg holds for Phase 1 tensors, whose ENB ladder is engine-independent. Under the
+   contract the ladder is the engine's, so on schema-4 tensors the selected point, ladder and
+   map move with the engine (spec §6); S3 is narrowed pending the owner's confirmation (§13
+   item 22). A-SE-20 checks the schema-4 behaviour; A-SE-12 is unchanged for its fixtures.
+12. **Build cost (added 2026-10-18).** Spec §9 states that the sacrifice ladders' cost is
+   unknown and names the levers; no assertion here fixes a budget for them. A-SE-22's repeat
+   of A-SE-16's workload stands; whether the 30 s build budget survives the contract is a
+   measurement for phase 7 and, if it does not fit, an owner choice (§13 item 23).
+13. **DR² covariance oracle (added 2026-10-19).** Spec §10.6's DR²-covariance oracle (DR² on
+   the production `estimate_moments` covariance reproduced, the applied shrinkage recorded,
+   shrunk DR² at least raw-sample DR² on a non-negative-correlation fixture, the sign reported
+   for a negatively correlated pair) is covered by focused unit tests (plan 6b.2a
+   `tests/engine/test_stats.py`; 6b.2 and 7.1 `tests/engine/test_measures.py`) and by protocol
+   §8's bit-identical estimator check, not by a gate assertion. A-SE-17's frozen identities are
+   correct as frozen, and the covariance definition is an engine contract tested at unit level.
 
 These are limitations of the currently determined boundary, not passing exceptions in a
 downstream test. Keep them visible in the plan and final phase verification.
@@ -483,23 +526,50 @@ Phase 2 · unit · S6, F2; §5.2, §10.3
   outside this nonzero-risk identity rather than being invented here.
 - **Kind.** property.
 
-### A-SE-18 — DR² ladders preserve feasible monotone levels and truthful risk flags
-Phase 2 · unit/ui · S6, F2; §5.2, §5.5, §7, §11
+### A-SE-18 — Sacrifice ladders are admissible at every level, monotone in the measure, and open on `w_R`
+Phase 2 · unit/ui · S6, S13, S14, F2, F10; §5.5, §6, §7, §10.6, §11 (rewritten 2026-10-18)
 
-- **Claim.** A DR²-selected ladder is feasible, gains no less DR² while giving up return,
-  and truthfully marks every level and hop relative to its risk column.
-- **Setup.** Build both `LADDER_MEASURE` variants on both presets and synthetic menus with
-  binding and nonbinding risk constraints; include a small enumerable optimization case,
-  collapsed columns and a midpoint that loses more than 1% of its column risk.
-- **Observation.** Through the actual builder, verify caps, sum-to-one, return floors and risk
-  ceilings under inherited tolerances. The small case agrees with an independent constrained
-  optimum for the SOCP objective. Every floor's selected point is the highest-DR² eligible
-  candidate in that column's pool; successive levels never lose DR² or gain return.
-  `on_line` agrees with measured risk; off-line levels are not moved onto the line by
-  fabricated coordinates. Hops obey the midpoint rule and the browser honors flagged hops.
-  `ladder.z`, `grid.z`, both covariance measures and `refs` match the chosen ladder, with
-  `enb_ref = refs.enb`. The two builds really select their respective optimization paths;
-  changing only `ladder.measure` on one common ladder fails.
+- **Claim.** Every level of a variant's ladder under an engine is a feasible mix at or inside
+  the column's risk ceiling that satisfies the guards and its allowance relative to that
+  column's `w_R` under that engine; level zero is `w_R`; the measure never falls and the
+  sacrifice never exceeds the allowance down the ladder; hops and collapses are flagged
+  truthfully; and both variants' ladders hold actual, distinct selections.
+- **Setup.** Build both `LADDER_MEASURE` variants under `replay` and `garch` on both presets
+  and on synthetic menus: a ceiling that binds and one that does not; a menu where the best
+  measure is `w_R` (collapsed); a menu where adjacent levels share a mix; a small enumerable
+  menu (3 funds, a coarse weight grid, a fixed shared draw) whose `w_R`, admissible sets and
+  Stage B selections at every allowance are computed by an independent oracle; and a fixture
+  where the midpoint blend of two adjacent levels breaks a guard while keeping the ceiling.
+  Fixtures include a column where the highest-measure feasible mix has lower `U` than `w_R`
+  by more than the cap (so it must not appear) and one where it is within the cap (so it
+  appears at the cap end).
+- **Observation.** Through the actual builder, verify at every level and engine: caps,
+  sum-to-one, `sigma <= X_j + 1e-6` with `sigma` equal to the recomputed risk (no level is
+  required to sit on the line, and none is moved onto it); recomputed `B/T/G/U/ES_2.5` on the
+  consumed draw equal the stored unrounded values; `B >= B_R − 10 bp`, `T >= T_R − 25 bp`,
+  `G >= G_R − 50 bp`, `U >= U_R − allowance[l]`, and not both `B` and `T` below `w_R`'s by more
+  than `1e-10`; `sacrifice[l] = U_R − U_l` lies in `[0, allowance[l]]`; `guards[l]` names exactly
+  the constraints that hold with equality within `1e-10`. Level zero equals `w_R` with
+  `sacrifice = 0` and empty guards, and is the same mix in both variants under one engine.
+  The small case's `w_R` and every level agree with the oracle's Stage A and Stage B (D1's
+  max-measure rule, with the §5.5 tie rule); the variant's measure is non-decreasing down
+  the ladder, and no level is the highest-measure admissible pool member of a smaller
+  allowance than its own. `collapsed[j]` is true exactly when the cap end equals `w_R`'s
+  measure within `1e-6`. `hop[j][l]` is true exactly when the midpoint blend, evaluated on the
+  shared draw, leaves `A(allowance[l+1])`; the browser's `interpolate` holds the upper level to
+  the middle of a hopped step and blends elsewhere; the risk of every blend stays at or
+  under the ceiling. `ladders[e].z`, `grid[e].z`, both covariance measures and `refs` match the
+  variant and engine, with `enb_ref = refs.enb` and `refs` the maximum over that variant's
+  ladders under every carried engine. `t_suggested` is 0 at every column; `on_line`,
+  `t_balanced`, `y_balanced`, `y_suggested`, `default_point` and `grid.y_sug` are absent from
+  schema 4. The raster cell `(j, k)` is the highest-measure level of column `j` with
+  `y >= Y_k`, a level and never a blend. The `enb` and `dr2` builds really take their own Stage
+  B: on a fixture where the two measures rank admissible candidates differently, the cap ends
+  differ; changing only `ladders[e].measure` on one common ladder fails. The `replay` and
+  `garch` ladders of one variant really take their own Stage A: on a fixture with
+  deliberately different engine percentiles, `w_R` differs. Where D3 option (i) is chosen at
+  C8, add that level zero equals the frontier node; where option (ii), that the frontier
+  block is unchanged by the ladder.
 - **Kind.** property.
 
 ### A-SE-19 — ENLC measures the actual losing contributions of the selected engine
@@ -524,28 +594,52 @@ Phase 2 · unit/api · S6, S7, F7, M5; amended §4.5/§5.3, §7, §10.3
   loss-sources block passes. Ruined-tail tie/post-ruin policy remains the explicit §2 gap.
 - **Kind.** property.
 
-### A-SE-20 — Measure selection changes the intended surfaces and survives sharing
-Phase 2 · ui/api · S7, S10, F4; §6, §7, §10.3
+### A-SE-20 — Measure and engine selection select actual holdings on the sacrifice ladder and survive sharing
+Phase 2 · ui/api · S7, S10, S12, S14, F4, F9; §5.5, §6, §7, §10.3 (rewritten 2026-10-18)
 
-- **Claim.** A selected measure and engine consistently determine the page's measure
-  surfaces and survive a canonical shared-link round trip without rebuilding mixes.
-- **Setup.** Actual built tensors with distinguishable DR², ENB and per-engine ENLC values,
-  defined and null ENLC, several levels, and an interpolated request with a controlled delayed
-  answer. Exercise every available `m`/`e` combination through controls and fresh URLs.
-- **Observation.** The measure control is details-only. Switching DR²/ENB updates map colors,
-  legend, word and reference from the requested tensor fields without moving mix geometry or
-  requesting a rebuild. Selecting ENLC leaves the map/Optimized point on `ladder.measure`,
-  labels that map correctly, and uses the selected engine's loss values and hedge IDs in
-  details; undefined ENLC shows the specified no-loss message and DR² fallback. While an
-  interpolated response is pending, the nearer-level placeholder and eventual response follow
-  the active engine/mix, including a selection change before a response arrives. The real
-  share validator accepts `m`, canonical URL order/omitted defaults hold, absent `m` resolves
-  from the loaded tensor, and a fresh page reproduces state. For DR² and ENB with `ref > 1`,
-  independently compute `q = (measure - 1)/(ref - 1)` and check the words immediately below,
-  at and above 0.30, 0.50 and 0.75: Poor, Fair, Average and Good follow the specified cut points.
-  Legacy `measure/ref` normalization or shifted boundary comparisons must fail.
-  Exact disputed ENLC normalization
-  and `ref=1` presentation remain deferred in §2 rather than receiving invented constants.
+- **Claim.** The selected measure, engine and allowance position consistently determine the
+  page's holdings and every holdings-derived surface from `variants[m].ladders[e]`, the
+  default position is `w_R`, and the state survives a canonical shared-link round trip
+  without rebuilding mixes.
+- **Setup.** Actual built schema-4 tensors with distinguishable `enb`/`dr2` cap-end mixes,
+  distinguishable `replay`/`garch` `w_R` at the same column, distinguishable DR², ENB and
+  per-engine ENLC values, defined and null ENLC, several allowance levels, a hopped step, a
+  collapsed column, and an interpolated request with a controlled delayed answer. Exercise
+  every available `m`/`e` combination at `d = 0`, at an interior `d`, and at `d = 1`, through
+  the controls and fresh URLs, including addresses carrying `d=auto`, no `d`, and a numeric
+  `d` written before 2026-10-18.
+- **Observation.** The measure control is details-only. Loading without `d`, with `d=auto`
+  or with `d=0` lands on `w_R` of the active variant and engine at the risk position (the
+  blend of the two columns' `w_R` between columns), and the canonical address writes `d=0`.
+  Switching `m` at `d = 0` moves nothing; at `d > 0` it changes the selected holdings to the
+  other variant's level at the same allowance and, with them, the selected marker, holdings
+  table and mix cards, score/word/reference, result-strip ranges, `ES_2.5`, trade-off line,
+  ENLC and hedge IDs, stress results, trades and exported CSV, and the map's cells and legend
+  from `variants[m].grid[e]`; the frontier, entered mix and chart moments do not move. Switching
+  `e` changes the ladder to `variants[m].ladders[e]`: the selected holdings move wherever the
+  two engines' selections differ, with every surface above, while `d` is kept, `r` is clamped
+  into the new `s_safe` domain, and the axes, ceiling line and entered mix do not move; the
+  readouts follow D3 as chosen at C8. The trade-off line shows the signed differences of the
+  selected mix's exact figures against `w_R`'s ("Trade-off vs no-trade-off mix: …"), reads
+  "No trade-off" at `d = 0`, and is marked estimated while an exact result is pending; the
+  slider's left end reads "No trade-off", the chosen mix is labelled "Selected mix", and no
+  slider end or trade-off line calls `w_R` "Optimized", "best-return" or "Best return". Selecting ENLC in details leaves the
+  map and selected point on `ladders[e].measure`, labels that map correctly, and uses the
+  selected engine's loss values and hedge IDs; undefined ENLC shows the specified no-loss
+  message and the covariance-measure fallback. While an interpolated response is pending, the
+  nearer-level placeholder and eventual response follow the active engine, variant and mix,
+  including a selection change before a response arrives; a late reply for an earlier
+  selection never replaces the current one. The real share validator accepts `m`, `e` and
+  `d`; canonical URL order and omitted defaults hold (`d` always written); absent `m` resolves
+  from the loaded tensor; a fresh page reproduces holdings, position and figures. No build or
+  rebuild request occurs for any precomputed level. For DR² and ENB with `ref > 1`,
+  independently compute `q = (measure − 1)/(ref − 1)` and check the words immediately below,
+  at and above 0.30, 0.50 and 0.75: Poor, Fair, Average and Good follow the specified cut
+  points; `ref` is the variant's maximum over every carried engine's ladder. Legacy
+  `measure/ref` normalization or shifted boundary comparisons must fail. A page that
+  relabels one variant's or one engine's holdings as another's fails. Exact disputed ENLC
+  normalization and `ref = 1` presentation remain deferred in §2 rather than receiving
+  invented constants.
 - **Kind.** contract.
 
 ### A-SE-21 — Served copy distinguishes scores from holdings and confines technical terms
@@ -568,18 +662,30 @@ Phase 2 · ui · F3, S6, S7; §6, §6.1
 ### A-SE-22 — The measures report compares both actual ladder methods
 Phase 2 · validation/unit · S8, F8, M3; §10.3/7, §11
 
-- **Claim.** The measures report computes the specified paired ENB-versus-DR² comparison
-  from distinct real ladders on the same evaluation scope.
+**Scope reconciled after C8 (2026-10-18).** This observation was written for the fixed-risk
+comparison (Optimized point and peak of each column). Spec §10 item 7 now takes its arms,
+comparison points (`w_R` and the cap end of each column's sacrifice ladder) and selection
+rule from the experiment protocol and §5.5, and its default-change bar from D4. The realized
+metrics below are unchanged as reporting requirements; the points they are computed on, and
+whether an ENB arm exists at all, are fixed at C8. Until then this assertion is not frozen
+as a test; the claim and observation are retained for the parts that do not depend on C8.
+
+- **Claim.** The measures report computes the specified paired comparison of the evaluated
+  arms from distinct real selections on the same evaluation scope.
 - **Setup.** The §10.1 origin/menu/lookback dataset, both ladder selectors, independent
   hand-computable metric fixtures, and the actual validation script with provider access blocked.
-- **Observation.** The script runs both optimization paths on matching inputs and records
-  the Optimized and peak mix of every column. Independently check sampled realized-risk
-  errors/exceedances, stress/worst-year losses, realized loss concentration, return given up,
-  and weight stability. Report both menus, single-fund/bound results, off-line level counts,
-  word distribution, the 100-fund DR² measurement, and the required comparison table/verdict.
-  Trace metric rows to the evaluated weights and future prices; a heading or copied table
-  is insufficient. Aggregation choices are disclosed rather than secretly tuned. A tie leaves
-  ENB as the default, and the report cannot itself authorize a default/headline switch.
+- **Observation.** The script runs every evaluated arm on matching inputs and records `w_R`
+  and the cap-end mix of every column under each measure the arm uses (the ENB arm only if
+  D4 gated it in; otherwise the report says "unevaluated"). Independently check sampled
+  realized-risk errors/exceedances against the ceiling, stress/worst-year losses, realized
+  loss concentration, return given up, and weight stability. Report both menus, single-fund/
+  bound results, the count of levels inside their ceiling by more than `1e-6` (replacing the
+  off-line level count), word distribution, the 100-fund DR² measurement, and the required
+  comparison table/verdict. Trace metric rows to the evaluated weights and future prices; a
+  heading or copied table is insufficient. Aggregation choices are disclosed rather than
+  secretly tuned. A tie leaves ENB as the default, and the report cannot itself authorize a
+  default/headline switch; "confirmed worthwhile benefit" (realized benefit support in both
+  menus and no material-harm risk cell, protocol §7) is the bar.
   Repeat A-SE-16's full target-host workload with Phase 2 enabled, retaining the same
   23-fund build, preset-nightly and warm-range budgets and full path count. Separately
   record the specified 100-fund DR² measurement without inventing a 30-second budget for it.
@@ -589,17 +695,157 @@ Phase 2 · validation/unit · S8, F8, M3; §10.3/7, §11
 ### A-SE-23 — ENLC satisfies the prescribed seed check without hiding failed runs
 Phase 2 · validation · S7, F7; §10.4, §13.5
 
+**Scope reconciled after C8 (2026-10-18).** "Optimized point" below meant the knee of the
+fixed-risk ladder. Under spec §5.5 the tested points are each frontier node and each column's
+`w_R` (the default landing) under each engine, plus the cap end of the sacrifice ladder under
+each measure the C8 scope ships. The threshold, seeds, path count and alpha rule are unchanged.
+
 - **Claim.** Defined ENLC values at each tested point have across-seed standard deviation
   at most 0.3 at the explicitly selected tail level.
-- **Setup.** Both presets and validation lookbacks, replay/GARCH, every frontier node and
-  Optimized point required by §10.4, seeds 20261013–20261017, 2,000 paths per run, initially
-  alpha 5%; preserve null/no-loss outcomes separately from numeric samples.
+- **Setup.** Both presets and validation lookbacks, replay/GARCH, every frontier node, `w_R`
+  and cap-end point required by §10.4 as reconciled at C8, seeds 20261013–20261017, 2,000
+  paths per run, initially alpha 5%; preserve null/no-loss outcomes separately from numeric
+  samples. Because `w_R` is itself selected on the seed-20261013 draw, re-evaluate the fixed
+  seed-20261013 weights under the other seeds; do not re-select.
 - **Observation.** Recompute the actual tail sets and ENLC for all five seeds and compare
   every defined point with 0.3. If the specified 5% check fails, preserve that evidence and
   perform the allowed complete 10% rerun with the selected alpha consistently recorded in
   method/report/copy; no per-point alpha or omitted seed may pass. Numeric/null transitions
   are reported as unresolved outcomes, not converted to zero or dropped to manufacture a
   standard deviation. A failed final check remains failed.
+- **Kind.** property.
+
+### A-SE-29 — The selector obeys the owner's preference contract
+Phase 2 · unit · S13, F10; §3.7 D1, §5.5, §10.6, §13.19 (added 2026-10-18)
+
+- **Claim.** Stage A selects by `U = 0.60 B + 0.30 T + 0.10 G` with finite trade-offs; the
+  admissible set bounds reductions only, vetoes a joint Bad-and-Typical deterioration, and is
+  nested in the allowance; Stage B selects the most diversified admissible mix found without
+  touching Stage A; ties and dominance are resolved against global maxima and are acyclic.
+- **Setup.** Independent oracles on hand-built candidate tables of `(B, T, G, M, w)` with no
+  simulation: the owner's A `[−0.0500, 0.04, 0.12]` and B `[−0.0501, 0.08, 0.18]`; candidates
+  exactly at, just inside (`−1e-9`) and just outside (`+1e-9`) each guard on one quantile with
+  the others above `w_R`; a candidate above `w_R` on every quantile; a candidate lower on Bad
+  and Typical by `2e-10` with Good high enough to keep `U` within the allowance and a higher
+  measure; candidates lower on Bad only and on Typical only within their guards; one pool
+  selected at caps 0, 2.5, 5 and 10 bp; a pool whose highest-measure feasible member has a
+  higher `U` than every Stage A start; the three-candidate cycle fixture `A = (0, 0, 0)`,
+  `B = (1.5e, −0.75e, −0.75e)`, `C = (0.75e, 0.75e, −1.5e)`, `e = 1e-10`, in all six input
+  orders; a tie set of three candidates within `1e-12` of the maximum `U` differing in
+  `B`, then `T`, then `G`, then weight order; a Stage B tie set of admissible candidates whose
+  measures lie within `1e-12` of the admissible maximum and which differ in `U`, with further
+  members tied on `U` and differing in `B`, then `T`, then `G`, then weight order; and a
+  dominated candidate (no return quantile above another pool member's, one lower by more than
+  `1e-10`) carrying the highest measure of the pool and a `U` within the allowance. Then the
+  same oracles on a small enumerable menu (3 funds, a coarse weight grid, one fixed shared
+  `replay` draw) where every candidate's `B/T/G` is computed independently of production.
+- **Observation.** Call the production selector on the tables and the menu; the oracle never
+  calls it. `U(B) − U(A) = +0.01794` and B is `w_R`; a strict lexicographic rule, which picks A,
+  fails. At allowance 0 the only admissible candidates are those with `U >= U_R` (so `w_R` or
+  its ties); the at-guard and inside-guard candidates are admissible and the outside-guard
+  ones are not, each compared to `w_R`'s unrounded figures; the all-above candidate is never
+  excluded by a guard. The joint-deterioration candidate is inadmissible at every cap
+  including 10 bp despite its higher Good, admissible `U` and higher measure; the Bad-only and
+  Typical-only candidates are admissible. Across caps 0 → 2.5 → 5 → 10 bp the selected
+  measure is non-decreasing, the selected `U` non-increasing, every selected `sacrifice` is in
+  `[0, cap]`, and each cap's admissible set contains the smaller cap's. Changing every
+  candidate's measure leaves `w_R`, `U_R`, the guards and the allowance-0 selection unchanged,
+  and Stage A reaches the high-`U` candidate through `U` alone. The cycle fixture yields the
+  same acyclic dominance relation in all six orders; the Stage A tie set is formed against the
+  global maximum `U` within `1e-12`, not by pairwise comparisons, and resolves by higher `B`,
+  then `T`, then `G`, then the lexicographically smaller weights. The Stage B tie set is formed
+  against the admissible set's global maximum measure within `1e-12` and resolves by higher
+  `U`, then `B`, then `T`, then `G`, then the lexicographically smaller weights; a selector
+  that picks the lower-`U` member, or that orders Stage B ties by `B` before `U`, fails. The
+  dominated candidate is removed before Stage A (it is absent from the filtered pool the
+  selector reports) and is never the Stage B pick at any cap, including 10 bp, despite holding
+  the pool's highest measure; the dominating member remains eligible. On the enumerable menu
+  the production `w_R` and every allowance level equal the oracle's exhaustive filter, Stage A
+  and Stage B (D1's max-measure rule). A selector that rounds before comparing, compares to
+  displayed figures, penalizes an improvement, or lets the measure change `w_R` fails.
+- **Kind.** property.
+
+### A-SE-30 — The default landing point is `w_R` on both presets and every lookback, its rendered figures equal `w_R`'s exact figures, and the old-default/frontier/new-landing comparison is printed
+Phase 2 · unit/ui · S14, F11; §5.5, §6, §10.6 (added 2026-10-18)
+
+- **Claim.** With no explicit allowance the page lands on `w_R` of the active variant and
+  engine at the selected risk, on both presets, at every lookback, at every column and at
+  interpolated positions; the figures it renders there equal `w_R`'s exact figures; and on
+  the TSP 5y fixture the old default's, the frontier mix's and the new landing's figures are
+  printed side by side. Whether the landing is below the frontier mix on both Bad and Typical
+  (F11's "worse than another mix on screen" leg) is recorded as a C8 finding, not asserted.
+- **Setup.** Actual schema-4 tensors for both presets and all six lookbacks under `replay`
+  and `garch`; the TSP 5y fixture of spec §5.5 (the saved artifact
+  `2026-10-16-0.2.0/63643e52f0386317/5y.json` and its successor built under the contract) at
+  the default landing position (the column whose ceiling is 9.1%: old default Bad −10.5% /
+  Typical +7.4% against the frontier mix's −7.9% / +8.2%) and, separately, the investigation
+  position `r = 36.382658` (≈ 12.53% risk: `d=1` −15.4 / +7.9 / +33.7 against `d=0`
+  −12.4 / +9.8 / +34.5, word Average → Good); browser loads without `d`, with
+  `d=auto` and with `d=0`; the intercepted exact-range response for the landing mix.
+- **Observation.** For every preset, lookback, engine and column, the landing weights equal
+  `ladders[e].w[j][0]` exactly, and between columns the blend of the two columns' level zero;
+  the landing mix's exact Bad and Typical, recomputed on the consumed draw and returned by the
+  real `/v1/range`, equal `w_R`'s, so neither is below it. The strip's figures at landing are
+  `w_R`'s under the active engine, the chosen mix is labelled "Selected mix", the slider's
+  left end reads "No trade-off" and the trade-off line reads "No trade-off" (never
+  "Optimized", "best-return" or "Best return" for `w_R`). On the TSP
+  5y fixture the report prints, for the same ceiling, the old default's figures
+  (−10.5 / +7.4), the frontier mix's (−7.9 / +8.2) and the new landing's; the landing's `U` is
+  at least the frontier mix's (the frontier mix is feasible at the ceiling). If the landing is
+  below the frontier mix on both Bad and Typical at any column, the report records it with
+  its figures as a C8 finding; the test does not move the default or alter the contract to
+  hide it. A page that lands on a knee, the peak, a cached old position or a mix of a
+  different variant or engine fails. The check reads the rendered holdings and figures, not
+  the store's intended position.
+- **Kind.** property.
+
+### A-SE-31 — `ES_2.5` is the mean of the worst 2.5% of years and steers nothing
+Phase 2 · unit/api/ui · §3.7 D5, §4.1, §6, §7, §10.5/6 (added 2026-10-18)
+
+- **Claim.** Every reported `ES_2.5` equals the mean of the 50 lowest of the 2,000 compounded
+  years on the consumed draw under the stated engine, sits at or below Bad, equals the
+  compounded return on a constant portfolio, is shown in details only, and is read by no
+  selection, guard or word.
+- **Setup.** Deterministic `replay` and `garch` paths with uniquely ranked years, a
+  constant-return portfolio, every single fund of both presets at the validation lookbacks,
+  ladder levels, the entered mix and `/v1/range` for unseen weights; a mutation harness that
+  perturbs the stored `es` of every level and the response's `es`.
+- **Observation.** Independently sort the consumed compounded years and average the 50
+  lowest; compare with `ladders[e].es`, `frontier.ranges[e].es`, `entered.ranges[e].es` and the
+  `/v1/range` `es` to documented float error. `es <= bad` everywhere; the constant portfolio
+  gives `es = bad = typical = good`; a single fund's `es` under `replay` equals the same
+  computation on its own resampled years. With every `es` perturbed, `w_R`, every level, every
+  guard flag, every word and every headline figure are unchanged. With details off, no
+  rendered text contains the tail average or "expected shortfall"; with details on, the
+  plain line and its technical line appear with `data-testid="details-es"`, and the figure
+  is never in the result strip or the risk readouts. A value computed from a different tail
+  size, from the additive year, or from a different engine than the one named fails.
+- **Kind.** property.
+
+### A-SE-32 — Prices after an origin cannot change that origin's selection or prediction
+Phase 1 (harness) · unit/validation · S8, F8, M3; §10.1, §11 (added 2026-10-18)
+
+- **Claim.** In the generalized rolling-origin harness, every quantity the harness predicts
+  or selects at an origin depends only on records dated at or before that origin, for the
+  engine validation and for every experiment arm alike.
+- **Setup.** The actual `scripts/backtest_ranges.py` on a small synthetic timeline with
+  several origins, both menus' shapes in miniature, `replay` and `garch`, the return baseline
+  arm and the +DR² arm (the +ENB arm if gated in); a mutation harness that alters prices
+  strictly after a chosen origin (a shift, a spike, a missing day) and, separately, prices at
+  or before it.
+- **Observation.** Run the harness before and after each mutation. For the chosen origin,
+  the after-origin mutation leaves byte-identical: the fitted shape, the pool, the lookback
+  moments, the frontier nodes, `w_R` and each arm's selection at every allowance the harness
+  evaluates under each engine and measure (the harness produces arm selections at evaluated
+  allowances, not the 14-level product ladder), the predicted Bad/Typical/Good/`ES_2.5`, and the tuning inputs
+  of the preference step; it changes the realized one-year return, coverage, breaches,
+  pinball losses and the realized-outcome legs of every arm. The at-or-before mutation
+  changes that origin's prediction or selection. Later origins may change under either
+  mutation, and the harness records which. Blocking provider access does not alter the
+  result. A harness that reads a whole-history artifact, a current tensor, or a cached
+  selection keyed without the origin fails; so does one whose engine validation and
+  experiment legs use different origin sets or exclusion rules. This extends A-SE-14's
+  prediction leg to selection and to the experiment's arms; A-SE-14 is unchanged.
 - **Kind.** property.
 
 ### Phase 3 — Copula, future scope
