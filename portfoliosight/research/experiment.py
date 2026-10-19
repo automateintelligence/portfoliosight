@@ -51,10 +51,10 @@ independent banks drawn: the locked file is read back once and verified against 
 the evaluation of each (profile, menu, origin) gets its rows of that file and its origin model,
 never a search result (`research.outcomes`, which the search and selection modules never import).
 
-Resources (protocol 7). At most two worker processes (spawned, one BLAS thread each; `workers=0`
+Resources (protocol 7). At most six worker processes (spawned, one BLAS thread each; `workers=0`
 runs the cells in this process), aggregate peak RSS of this process and its workers at most
 4 GiB (the sum of each process's peak, read from /proc), 120 s per arm (measured, and enforced by
-an alarm inside the arm), and 24 CPU-hours for Stage 1 and its sensitivities together (a
+an alarm inside the arm), and 36 CPU-hours for Stage 1 and its sensitivities together (a
 sensitivity run counts the CPU its Stage 1 run and earlier sensitivities recorded). The CPU
 ceiling changes only through `Limits(cpu_hours=..., cpu_amended=True)` (the CLI's
 `--cpu-hours-ceiling`), which the manifest records as an amendment; Stage 2, for which the
@@ -158,12 +158,12 @@ from portfoliosight.research.selection import (
 
 PROTOCOL_PATH = "docs/plans/2026-10-18-return-optimization-experiment-protocol.md"
 MENU_CAPS = (("tsp", 0.60), ("example", 0.25))  # protocol 3
-MAX_WORKERS = 2
+MAX_WORKERS = 6
 # ruling R22 (wording as qualified by the Codex review): the parent prepares serially
-PROCESS_MODEL = "1 coordinator (serial preparation, no concurrent compute) + <=2 compute workers"
+PROCESS_MODEL = "1 coordinator (serial preparation, no concurrent compute) + <=6 compute workers"
 RSS_CEILING = 4 * 2**30
 ARM_SECONDS = 120.0
-CPU_HOURS = 24.0
+CPU_HOURS = 36.0
 MAX_ORIGINS = harness.MAX_SCHEDULED_ORIGINS
 FAILURE_RATE_LIMIT = 0.01
 SENSITIVITY_ORIGINS = 6

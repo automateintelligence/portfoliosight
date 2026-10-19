@@ -356,7 +356,7 @@ def test_the_manifest_records_provenance_and_claims_no_review(
     }  # fmt: skip
     assert manifest["preference"]["u_allowances_evaluated"] == [0.00025, 0.0, 0.0005, 0.001]
     assert manifest["search"]["independent_bank_seeds"] == list(TEST_SEEDS)
-    assert manifest["limits"]["cpu_hours"] == 24.0 and not manifest["limits"]["cpu_hours_amendment"]
+    assert manifest["limits"]["cpu_hours"] == 36.0 and not manifest["limits"]["cpu_hours_amendment"]
     assert (
         manifest["limits"]["arm_seconds"] == 120.0 and manifest["limits"]["rss_bytes"] == 4 * 2**30
     )
@@ -772,9 +772,9 @@ def test_the_monitor_names_each_aggregate_breach() -> None:
     assert spent is not None and spent.rule == "cpu_hours" and spent.value == 86_405.0
 
 
-def test_limits_hold_two_workers_and_a_recorded_cpu_amendment() -> None:
-    with pytest.raises(ValueError, match="at most 2"):
-        Limits(workers=3)
+def test_limits_hold_six_workers_and_a_recorded_cpu_amendment() -> None:
+    with pytest.raises(ValueError, match="at most 6"):
+        Limits(workers=7)
     with pytest.raises(ValueError, match="amendment"):
         Limits(cpu_hours=48.0)
     assert Limits(cpu_hours=48.0, cpu_amended=True).cpu_hours == 48.0
@@ -802,7 +802,7 @@ def _stopped(result: experiment.RunResult, rule: str, evaluated: bool = False) -
     ("usage", "rule"),
     [
         (Usage(1.0, 2**20, 5 * 2**30), "aggregate_peak_rss"),
-        (Usage(86_401.0, 2**20, 2**20), "cpu_hours"),
+        (Usage(129_601.0, 2**20, 2**20), "cpu_hours"),
     ],
 )
 def test_an_aggregate_breach_stops_the_run_and_keeps_partial_artifacts(
@@ -1030,7 +1030,7 @@ def test_output_must_avoid_the_snapshot_mirror_and_tracked_repository(tmp_path: 
 # -------------------------------------------------------------------------- determinism
 
 
-def test_one_and_two_workers_write_byte_identical_artifacts(tmp_path: Path) -> None:
+def test_any_worker_count_writes_byte_identical_artifacts(tmp_path: Path) -> None:
     records = make_records()
     settings = make_settings(records, months=("2024-08", "2024-09"), seeds=(PRIMARY,))
     results = {
@@ -1042,7 +1042,7 @@ def test_one_and_two_workers_write_byte_identical_artifacts(tmp_path: Path) -> N
             run_id=f"d{workers}",
             out=tmp_path / str(workers),
         )  # fmt: skip
-        for workers in (0, 1, 2)
+        for workers in (0, 1, 2, 4)
     }
     for name in ("search.parquet", "locked.parquet", "outcomes.parquet", "origins.parquet"):
         digests = {
@@ -1062,7 +1062,7 @@ def test_one_and_two_workers_write_byte_identical_artifacts(tmp_path: Path) -> N
     }
     assert limits[2]["process_model"] == limits[1]["process_model"] == experiment.PROCESS_MODEL
     assert experiment.PROCESS_MODEL == (
-        "1 coordinator (serial preparation, no concurrent compute) + <=2 compute workers"
+        "1 coordinator (serial preparation, no concurrent compute) + <=6 compute workers"
     )
     assert limits[0]["process_model"].startswith("in-process")
     workers = [entry for entry in _resources(results[2].directory) if entry["kind"] == "worker"]
@@ -1235,7 +1235,7 @@ def test_an_estimate_that_crosses_a_ceiling_records_it_and_refuses(tmp_path: Pat
         experiment.estimate(
             make_inputs(records, tmp_path), PROVENANCE, tmp_path / "out",
             settings=make_settings(records), limits=Limits(workers=0), estimate_id="hot",
-            meter=_Meter(Usage(86_401.0, 2**20, 2**20), calls=1),
+            meter=_Meter(Usage(129_601.0, 2**20, 2**20), calls=1),
         )  # fmt: skip
     directory = tmp_path / "out" / PREFIX / "estimates" / "hot"
     body = json.loads((directory / "estimate.json").read_text())
@@ -1256,7 +1256,7 @@ def test_estimate_projects_from_a_sample_and_is_not_a_run(tmp_path: Path) -> Non
     assert projection.sample_cells == 6  # three sensitivity origins x two menus x x50 x primary
     assert projection.stage_1_cells == {"tsp": 18, "example": 18}
     assert projection.total_cpu_hours == pytest.approx(sum(projection.parts.values()) / 3600)
-    assert projection.fits and projection.cpu_hours_ceiling == 24.0
+    assert projection.fits and projection.cpu_hours_ceiling == 36.0
     body = json.loads((projection.directory / "estimate.json").read_text())
     assert body["not_a_run"] is True and body["sample"][0].startswith('["')
     lines = [

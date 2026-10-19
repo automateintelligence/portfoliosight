@@ -24,10 +24,10 @@ on which the gates do not apply.
 
 The return-optimization experiment (protocol 4-9; plan task 6b.5):
     .venv/bin/python scripts/backtest_ranges.py experiment estimate --snapshot SNAPSHOT
-        [--out ROOT] [--workers 0|1|2] [--estimate-id ID]
+        [--out ROOT] [--workers 0..6] [--estimate-id ID]
     .venv/bin/python scripts/backtest_ranges.py experiment run --snapshot SNAPSHOT [--out ROOT]
         [--stage 1|2] [--sensitivity coefficients|lookback|budget] [--run-id ID]
-        [--workers 0|1|2] [--cpu-hours-ceiling HOURS] [--review TEXT ...]
+        [--workers 0..6] [--cpu-hours-ceiling HOURS] [--review TEXT ...]
     .venv/bin/python scripts/backtest_ranges.py experiment report --run RUN_DIR
         [--allow-incomplete] [--review TEXT ...]
 
@@ -136,7 +136,7 @@ def _parser() -> argparse.ArgumentParser:
         action = actions.add_parser(name, help=text)
         action.add_argument("--snapshot", type=Path, required=True, help="frozen research snapshot")
         action.add_argument("--out", type=Path, default=DEFAULT_OUT, help="artifact root")
-        action.add_argument("--workers", type=int, choices=(0, 1, 2), default=2)
+        action.add_argument("--workers", type=int, choices=tuple(range(7)), default=2)
         action.add_argument(
             "--cpu-hours-ceiling", type=float, help="an amended CPU-hour ceiling (recorded)"
         )

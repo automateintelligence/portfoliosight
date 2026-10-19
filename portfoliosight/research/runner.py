@@ -18,7 +18,7 @@ protocol 7 ceilings.
   draws while the cell runs, each exclusive of the others nested in it (`ARM_PARTS`; the rest of
   an arm is the solver's).
 - `run_evaluation_task` evaluates the locked rows of one origin (`outcomes.evaluate_group`).
-- `Inline` runs tasks in this process; `Processes` spawns at most two workers, each holding BLAS to
+- `Inline` runs tasks in this process; `Processes` spawns at most six workers, each holding BLAS to
   one thread (`threadpoolctl`, after checking the inherited environment) and warmed with a small
   COBYLA solve before any timed arm. `drive` feeds tasks in order, one per idle worker, and stops
   at the first breach, reporting which tasks were running (interrupted) and which never started.
