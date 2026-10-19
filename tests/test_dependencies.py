@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import importlib.metadata
 import importlib.util
@@ -228,3 +229,102 @@ def test_qse_import_closure() -> None:
     assert not beyond, f"an ordinary import loads what {QSE_ROOTS} do not declare: {beyond}"
     loaded = sorted(set(NEVER_PULLED) & (set(plain["modules"]) | set(plain["tops"])))
     assert not loaded, f"an ordinary import of qse.distributions.joint loads {loaded}"
+
+
+# The research package stays out of the product (plan 6.3; protocol 9): no module of the engine,
+# the API or the jobs reaches `portfoliosight.research`, directly or through another module of
+# the package. The import graph is read from the sources (the AST of every module under
+# `portfoliosight/`), so it needs none of the API's own dependencies and it also sees an import
+# made inside a function. Importing a module runs its parent packages, so they count as edges.
+PACKAGE = ROOT / "portfoliosight"
+PRODUCTION = ("engine", "api", "jobs")
+RESEARCH = "portfoliosight.research"
+
+
+def _module(path: Path) -> str:
+    parts = path.relative_to(ROOT).with_suffix("").parts
+    return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+
+
+def _imported(source: str, path: Path) -> list[str]:
+    """Absolute names a module at ``path`` imports, relative imports resolved."""
+    package = list(path.relative_to(ROOT).with_suffix("").parts[:-1])
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            found += [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = package[: len(package) - node.level + 1] if node.level else []
+            module = ".".join([*base, *(node.module or "").split(".")]).strip(".")
+            found += [module] + [f"{module}.{alias.name}" for alias in node.names]
+    return found
+
+
+def _edges(names: list[str], module: str, modules: set[str]) -> set[str]:
+    """The package modules that importing ``names`` from ``module`` runs."""
+    targets = set()
+    for name in [*names, module]:
+        parts = name.split(".")
+        targets.update(".".join(parts[:k]) for k in range(1, len(parts) + 1))
+    return (targets & modules) - {module}
+
+
+def _import_graph() -> dict[str, set[str]]:
+    paths = {_module(path): path for path in sorted(PACKAGE.rglob("*.py"))}
+    modules = set(paths)
+    return {
+        module: _edges(_imported(path.read_text(encoding="utf-8"), path), module, modules)
+        for module, path in paths.items()
+    }
+
+
+def _reached(graph: dict[str, set[str]], start: str) -> set[str]:
+    seen, todo = set(), [start]
+    while todo:
+        module = todo.pop()
+        if module not in seen:
+            seen.add(module)
+            todo += sorted(graph.get(module, ()))
+    return seen
+
+
+def _research(modules: set[str]) -> set[str]:
+    return {name for name in modules if name == RESEARCH or name.startswith(RESEARCH + ".")}
+
+
+def test_import_graph_scanner_catches_each_route() -> None:
+    planted = PACKAGE / "engine" / "probe.py"
+    modules = {"portfoliosight", "portfoliosight.engine", RESEARCH, f"{RESEARCH}.harness"}
+    for source in (
+        "from ..research import harness",
+        "from .. import research",
+        "import portfoliosight.research.harness as h",
+        "def f():\n    from portfoliosight.research import harness",
+    ):
+        edges = _edges(_imported(source, planted), "portfoliosight.engine.probe", modules)
+        assert _research(edges), source
+    clean = _edges(
+        _imported("from . import stats\nimport numpy", planted),
+        "portfoliosight.engine.probe",
+        modules,
+    )
+    assert clean == {"portfoliosight", "portfoliosight.engine"}
+    # through another module of the package
+    graph = {"a": {"portfoliosight.data.x"}, "portfoliosight.data.x": {f"{RESEARCH}.harness"}}
+    assert _research(_reached(graph, "a")) == {f"{RESEARCH}.harness"}
+
+
+def test_production_packages_never_reach_research() -> None:
+    graph = _import_graph()
+    starts = sorted(
+        module
+        for module in graph
+        if any(module.split(".")[:2] == ["portfoliosight", package] for package in PRODUCTION)
+    )
+    assert len(starts) >= 20
+    for package in PRODUCTION:
+        assert f"portfoliosight.{package}" in starts
+    for module in starts:
+        assert not _research(_reached(graph, module)), module
+    # the graph does follow real edges: the research evaluation reaches engine modules
+    assert "portfoliosight.engine.ranges" in _reached(graph, f"{RESEARCH}.evaluate")

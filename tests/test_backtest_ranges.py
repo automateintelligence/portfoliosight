@@ -15,7 +15,6 @@ it is 2024-07-31.
 
 from __future__ import annotations
 
-import ast
 import functools
 import importlib.util
 import io
@@ -1049,41 +1048,3 @@ def test_harness_runs_with_store_provider_and_qse_routes_blocked(
         "socket.getaddrinfo",
         "open",
     ]
-
-
-# --------------------------------------------------------------------------------- boundary
-
-
-def _imports(source: str, path: Path) -> list[str]:
-    """Absolute names a module at ``path`` imports, relative imports resolved."""
-    package = list(path.relative_to(ROOT).with_suffix("").parts[:-1])
-    found = []
-    for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.Import):
-            found += [alias.name for alias in node.names]
-        elif isinstance(node, ast.ImportFrom):
-            base = package[: len(package) - node.level + 1] if node.level else []
-            module = ".".join([*base, *(node.module or "").split(".")]).strip(".")
-            found += [module] + [f"{module}.{alias.name}" for alias in node.names]
-    return found
-
-
-def _research(names: list[str]) -> list[str]:
-    return [name for name in names if name.split(".")[:2] == ["portfoliosight", "research"]]
-
-
-def test_production_packages_never_import_research() -> None:
-    planted = ROOT / "portfoliosight" / "engine" / "probe.py"
-    for source in (
-        "from ..research import harness",
-        "from .. import research",
-        "import portfoliosight.research.harness as h",
-    ):
-        assert _research(_imports(source, planted)), source
-    assert not _research(_imports("from . import stats\nimport numpy", planted))
-    scanned = 0
-    for package in ("engine", "api", "jobs"):
-        for path in sorted((ROOT / "portfoliosight" / package).rglob("*.py")):
-            scanned += 1
-            assert not _research(_imports(path.read_text(encoding="utf-8"), path)), path
-    assert scanned >= 20
