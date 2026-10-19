@@ -69,6 +69,21 @@ method are in `docs/reviews/`.
      mix's simulated bad years, measured under the selected engine and shown in the details.
   3. Copula: a fitted vine copula with fat-tailed margins replaces the resampled shock rows
      through QSE's `ShockSource` seam, for joint bad days beyond what the history contains.
+- Retirement planner, ported from `examples/IRA_Planning_Tool_Jeff_2026_template.xlsx` (IRA
+  accumulation, RMD and Social Security taxation rules, a monthly Monte Carlo of 500 or more
+  trials, and the constant-return (AAR) solve for the worst, median and best outcomes). Written
+  in Python as a vectorized NumPy module (loop over months, vectorized across trials; the AAR
+  solve by a root-finder instead of the sheet's unrolled bisection), exposed through the existing
+  API. A pluggable return engine, in three steps so any change in answers can be attributed:
+  1. iid-normal draws, as the workbook has them, checked against the workbook with fixed shocks
+     (parity tests on the tax, RMD and Social Security logic).
+  2. QSE GARCH(1,1)-t joint filtered historical simulation through the same shock seam, sharing
+     the frontier's return model. Long-run mean return stays a visible assumption (GARCH models
+     volatility, not the mean), and nominal versus real dollars get an explicit inflation path.
+  3. The copula, once it ships, for tails beyond what ten years of history contain.
+  Language decision: stay in Python. Profile first (`scripts/bench_build.py --profile`); if a
+  kernel dominates, Numba, then a Rust extension for that kernel only. Rust compiled to WASM is
+  worth revisiting only if live in-browser slider feedback is wanted.
 - Later product options: a TSP preset that includes the L Funds as comparison choices.
 
 ## Out of scope for the demo and parked
