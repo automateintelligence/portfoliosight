@@ -16,6 +16,7 @@ EXPECTED = {
     "measures",
     "optimize",
     "parallel",
+    "preference",
     "ranges",
     "shape",
     "stats",
