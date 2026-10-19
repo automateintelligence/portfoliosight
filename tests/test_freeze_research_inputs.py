@@ -227,11 +227,23 @@ def test_snapshot_holds_exactly_the_listed_inputs_byte_for_byte(script, mirror, 
     assert files["data/presets.json"] == (repo / "data" / "presets.json").read_bytes()
 
 
-def test_presets_come_from_head_not_from_the_working_tree(script, mirror, repo, root):
-    committed = (repo / "data" / "presets.json").read_bytes()
+def test_clean_tree_is_recorded_and_untracked_files_do_not_count(script, mirror, repo, root):
+    (repo / "scratch.txt").write_text("untracked", encoding="utf-8")
+    manifest = _read_manifest(_freeze(script, mirror, root, repo))
+    assert manifest["repo_dirty"] is False
+
+
+@pytest.mark.parametrize("staged", [False, True])
+def test_a_modified_tracked_file_refuses_the_freeze_and_is_named(
+    script, mirror, repo, root, staged
+):
     (repo / "data" / "presets.json").write_text('{"presets": []}', encoding="utf-8")
-    snapshot = _freeze(script, mirror, root, repo)
-    assert (snapshot / "data" / "presets.json").read_bytes() == committed
+    if staged:
+        _git(repo, "add", "data/presets.json")
+    with pytest.raises(script.FreezeError, match=r"uncommitted.*data/presets\.json") as caught:
+        _freeze(script, mirror, root, repo)
+    assert caught.value.code == 3
+    assert not root.exists()
 
 
 def test_manifest_lists_every_file_with_independent_size_and_digest(script, mirror, repo, root):
@@ -609,6 +621,16 @@ def test_an_empty_price_file_is_refused(script, mirror, repo, root):
         _freeze(script, mirror, root, repo)
 
 
+def test_a_missing_date_in_a_price_file_is_refused_and_named(script, mirror, repo, root):
+    frame = _price_frame(7)
+    frame.loc[5, "date"] = pd.NaT
+    _write_price(mirror, "VNQ", frame)
+    with pytest.raises(script.FreezeError, match=r"prices/VNQ\.parquet.*missing date") as caught:
+        _freeze(script, mirror, root, repo)
+    assert caught.value.code == 3
+    assert list(root.iterdir()) == []
+
+
 def test_presets_that_differ_from_the_protocol_menu_are_refused(script, tmp_path, mirror, root):
     repo = make_repo(tmp_path, tsp=["TSP-G", "TSP-F", "TSP-C", "TSP-I", "TSP-S"])
     with pytest.raises(script.FreezeError, match=r"tsp.*protocol") as caught:
@@ -675,6 +697,135 @@ def test_a_destination_beside_the_repository_and_mirror_is_accepted(script, mirr
         assert snapshot.is_dir()
     finally:
         _make_writable(tmp_path / "elsewhere")
+
+
+# -------------------------------------------------------------------------- verify only
+
+
+def _open_for_write(path: Path) -> int:
+    """Make ``path`` writable; returns the mode it had so the caller can close it again."""
+    mode = stat.S_IMODE(path.stat().st_mode)
+    path.chmod(mode | 0o200)
+    return mode
+
+
+def test_verify_a_clean_snapshot_needs_neither_mirror_nor_repository(script, mirror, repo, root):
+    snapshot = _freeze(script, mirror, root, repo)
+    shutil.rmtree(mirror)
+    shutil.rmtree(repo)
+    manifest = script.verify_snapshot(snapshot)
+    assert manifest == _read_manifest(snapshot)
+    assert manifest["d_star"] == D_STAR
+
+
+def test_verify_finds_a_flipped_byte(script, mirror, repo, root):
+    snapshot = _freeze(script, mirror, root, repo)
+    target = snapshot / "prices" / "VTI.parquet"
+    mode = _open_for_write(target)
+    data = bytearray(target.read_bytes())
+    data[len(data) // 2] ^= 0x01
+    target.write_bytes(bytes(data))
+    target.chmod(mode)
+    with pytest.raises(script.FreezeError, match=r"prices/VTI\.parquet: differs") as caught:
+        script.verify_snapshot(snapshot)
+    assert caught.value.code == 6
+
+
+def test_verify_finds_a_missing_file(script, mirror, repo, root):
+    snapshot = _freeze(script, mirror, root, repo)
+    directory = snapshot / "meta"
+    mode = _open_for_write(directory)
+    (directory / "lake.json").unlink()
+    directory.chmod(mode)
+    with pytest.raises(script.FreezeError, match=r"meta/lake\.json: missing") as caught:
+        script.verify_snapshot(snapshot)
+    assert caught.value.code == 6
+
+
+def test_verify_finds_an_extra_file(script, mirror, repo, root):
+    snapshot = _freeze(script, mirror, root, repo)
+    mode = _open_for_write(snapshot)
+    (snapshot / "stray.txt").write_text("x", encoding="utf-8")
+    (snapshot / "stray.txt").chmod(0o444)
+    snapshot.chmod(mode)
+    with pytest.raises(script.FreezeError, match=r"stray\.txt: not part of the snapshot") as caught:
+        script.verify_snapshot(snapshot)
+    assert caught.value.code == 6
+
+
+def test_verify_finds_a_file_that_was_made_writable(script, mirror, repo, root):
+    snapshot = _freeze(script, mirror, root, repo)
+    _open_for_write(snapshot / "prices" / "BND.parquet")
+    with pytest.raises(script.FreezeError, match=r"prices/BND\.parquet: writable") as caught:
+        script.verify_snapshot(snapshot)
+    assert caught.value.code == 6
+
+
+@pytest.mark.parametrize("relative", ["prices", "."])
+def test_verify_finds_a_directory_that_was_made_writable(script, mirror, repo, root, relative):
+    snapshot = _freeze(script, mirror, root, repo)
+    _open_for_write(snapshot / relative)
+    with pytest.raises(script.FreezeError, match=rf"{re.escape(relative)}: writable") as caught:
+        script.verify_snapshot(snapshot)
+    assert caught.value.code == 6
+
+
+def test_verify_finds_a_renamed_directory(script, mirror, repo, root):
+    snapshot = _freeze(script, mirror, root, repo)
+    renamed = snapshot.rename(root / "2026-10-16-renamed")
+    with pytest.raises(script.FreezeError, match=r"2026-10-16-renamed.*named") as caught:
+        script.verify_snapshot(renamed)
+    assert snapshot.name in str(caught.value)
+    assert caught.value.code == 6
+
+
+def test_verify_finds_an_edited_manifest(script, mirror, repo, root):
+    snapshot = _freeze(script, mirror, root, repo)
+    target = snapshot / "snapshot.json"
+    mode = _open_for_write(target)
+    manifest = json.loads(target.read_text())
+    manifest["source_root"] = "/somewhere/else"
+    target.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    target.chmod(mode)
+    with pytest.raises(script.FreezeError, match="manifest_sha256") as caught:
+        script.verify_snapshot(snapshot)
+    assert caught.value.code == 6
+
+
+def test_verify_names_every_problem_at_once(script, mirror, repo, root):
+    snapshot = _freeze(script, mirror, root, repo)
+    _open_for_write(snapshot / "prices" / "BND.parquet")
+    _open_for_write(snapshot / "prices" / "AGG.parquet")
+    with pytest.raises(script.FreezeError) as caught:
+        script.verify_snapshot(snapshot)
+    assert "prices/BND.parquet: writable" in str(caught.value)
+    assert "prices/AGG.parquet: writable" in str(caught.value)
+
+
+def test_verify_refuses_a_directory_that_is_no_snapshot(script, tmp_path):
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(script.FreezeError, match=r"snapshot\.json") as caught:
+        script.verify_snapshot(tmp_path / "empty")
+    assert caught.value.code == 6
+
+
+def test_main_verify_prints_the_path_and_returns_zero_without_a_mirror(
+    script, mirror, repo, root, capsys
+):
+    snapshot = _freeze(script, mirror, root, repo)
+    shutil.rmtree(mirror)
+    assert script.main(["--verify", str(snapshot)]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.splitlines() == [str(snapshot)]
+
+
+def test_main_verify_reports_a_mismatch_with_code_six(script, mirror, repo, root, capsys):
+    snapshot = _freeze(script, mirror, root, repo)
+    _open_for_write(snapshot / "prices" / "BND.parquet")
+    assert script.main(["--verify", str(snapshot)]) == 6
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "prices/BND.parquet: writable" in captured.err
 
 
 # -------------------------------------------------------------------------- command line

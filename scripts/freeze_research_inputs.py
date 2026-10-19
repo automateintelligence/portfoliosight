@@ -3,6 +3,7 @@
 Usage, from the repo root:
     .venv/bin/python scripts/freeze_research_inputs.py [--mirror DIR] [--root DIR] [--repo DIR]
         [--d-star YYYY-MM-DD] [--calendar-end YYYY-MM-DD]
+    .venv/bin/python scripts/freeze_research_inputs.py --verify SNAPSHOT_DIR
 
 Copies once, from the read-only mirror, every raw input of the return-optimization experiment:
 both menus' price records (protocol 3), the SGOV file when the mirror has it, `meta/manifest.json`
@@ -19,10 +20,16 @@ snapshot is built in a hidden sibling directory and renamed into place. A snapsh
 with identical contents is verified and returned; one with other contents is an error.
 
 The mirror is only read. The destination root may not lie inside the mirror or inside the git
-repository (any of its worktrees).
+repository (any of its worktrees). A repository with uncommitted changes to tracked files is
+refused: the snapshot names the code by its HEAD.
 
-Exit codes: 0 done (or already there, identical), 2 bad argument or unsafe destination, 3 a
-missing or invalid input, 4 a hash mismatch, 5 an existing snapshot with other contents.
+`--verify SNAPSHOT_DIR` (also `verify_snapshot(path)`) needs neither the mirror nor the repository:
+it re-hashes every file against `snapshot.json`, checks the directory name against the canonical
+manifest and that every file and directory is still read-only. The runner calls it before replay.
+
+Exit codes: 0 done (or already there, identical, or verified), 2 bad argument or unsafe
+destination, 3 a missing or invalid input or a dirty repository, 4 a hash mismatch while copying,
+5 an existing snapshot with other contents, 6 a snapshot that fails verification.
 """
 
 from __future__ import annotations
@@ -36,6 +43,7 @@ import os
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import uuid
@@ -120,6 +128,14 @@ def repo_head(repo: Path) -> str:
     if done.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}", head):
         raise FreezeError(f"cannot read the git HEAD of {repo}", 3)
     return head
+
+
+def dirty_paths(repo: Path) -> list[str]:
+    """Tracked files with staged or unstaged changes; untracked files do not count."""
+    done = _git(repo, "status", "--porcelain", "--untracked-files=no")
+    if done.returncode != 0:
+        raise FreezeError(f"cannot read the git status of {repo}", 3)
+    return [line[3:].decode(errors="replace") for line in done.stdout.splitlines() if line]
 
 
 def repo_blob(repo: Path, head: str, name: str) -> bytes:
@@ -220,6 +236,9 @@ def price_record(
         )
     if frame.empty or not pd.api.types.is_datetime64_any_dtype(frame["date"]):
         raise FreezeError(f"{name}: no rows, or a date column that is not a date", 3)
+    unset = int(frame["date"].isna().to_numpy().sum())
+    if unset:
+        raise FreezeError(f"{name}: {unset} row(s) with a missing date", 3)
     first, last = frame["date"].min().date(), frame["date"].max().date()
     if in_menu and last < d_star:
         raise FreezeError(f"{name} ends {last.isoformat()}, before D* {d_star.isoformat()}", 3)
@@ -357,6 +376,7 @@ def build_snapshot(
     sources: list[Source],
     mirror: Path,
     head: str,
+    repo_dirty: bool,
     d_star: date,
     calendar_end: date,
 ) -> str:
@@ -414,6 +434,7 @@ def build_snapshot(
         "d_star": d_star.isoformat(),
         "source_root": str(mirror),
         "repo_head": head,
+        "repo_dirty": repo_dirty,
         "menus": {
             key: {"preset": preset, "funds": list(funds)}
             for key, (preset, funds) in MENU_PRESETS.items()
@@ -480,6 +501,13 @@ def freeze(
         raise FreezeError(f"the mirror {mirror} is not a directory", 3)
     root = guard_destination(Path(root), mirror, repo)
     head = repo_head(repo)
+    dirty = dirty_paths(repo)
+    if dirty:
+        raise FreezeError(
+            f"refusing: {repo} has uncommitted changes to tracked files ({', '.join(dirty)}); "
+            f"the snapshot names the code by its HEAD {head}",
+            3,
+        )
     check_menus(repo_blob(repo, head, PRESETS_FILE))
     sources = collect_sources(mirror, repo, head)
 
@@ -492,6 +520,7 @@ def freeze(
             sources=sources,
             mirror=mirror,
             head=head,
+            repo_dirty=bool(dirty),
             d_star=d_star,
             calendar_end=calendar_end,
         )
@@ -512,6 +541,67 @@ def freeze(
             _remove_tree(work)
 
 
+def verify_snapshot(path: Path) -> dict[str, Any]:
+    """Check a frozen snapshot against its own ``snapshot.json``; returns that manifest.
+
+    Needs no mirror and no repository. Every file is re-hashed, the directory name must be
+    ``<D*>-<sha12>`` of the canonical manifest, nothing may be missing or extra, and every file
+    and directory must still be read-only. All problems are raised together as one FreezeError
+    with code 6.
+    """
+    root = Path(path).resolve()
+    try:
+        manifest = json.loads((root / SNAPSHOT_FILE).read_text(encoding="utf-8"))
+        files = {entry["path"]: entry for entry in manifest["files"]}
+        d_star = manifest["d_star"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise FreezeError(
+            f"{root}: cannot read a snapshot from {SNAPSHOT_FILE} ({exc!r})", 6
+        ) from exc
+    problems: list[str] = []
+    body = {k: v for k, v in manifest.items() if k not in ("created_utc", "manifest_sha256")}
+    digest = _digest(_canonical(body))
+    if manifest.get("manifest_sha256") != digest:
+        problems.append(f"{SNAPSHOT_FILE}: manifest_sha256 does not match its contents")
+    expected = f"{d_star}-{digest[:12]}"
+    if root.name != expected:
+        problems.append(
+            f"the directory is named {root.name}, the canonical manifest says {expected}"
+        )
+    if manifest.get("repo_dirty") is not False:
+        problems.append(f"{SNAPSHOT_FILE}: repo_dirty is not false")
+    for relative, entry in sorted(files.items()):
+        if Path(relative).is_absolute() or ".." in Path(relative).parts:
+            problems.append(f"{relative}: path leaves the snapshot")
+            continue
+        target = root / relative
+        if not os.path.lexists(target):
+            problems.append(f"{relative}: missing")
+        elif target.is_symlink() or not target.is_file():
+            problems.append(f"{relative}: not a regular file")
+        elif target.stat().st_size != entry.get("bytes") or _digest(
+            target.read_bytes()
+        ) != entry.get("sha256"):
+            problems.append(f"{relative}: differs")
+    listed = {*files, SNAPSHOT_FILE}
+    closed = [(".", root)]
+    for top, dirs, names in os.walk(root):
+        for name in (*dirs, *names):
+            entry_path = Path(top) / name
+            relative = entry_path.relative_to(root).as_posix()
+            closed.append((relative, entry_path))
+            if entry_path.is_symlink():
+                problems.append(f"{relative}: is a link")
+            elif name in names and relative not in listed:
+                problems.append(f"{relative}: not part of the snapshot")
+    for relative, entry_path in closed:
+        if not entry_path.is_symlink() and stat.S_IMODE(entry_path.stat().st_mode) & _WRITE_BITS:
+            problems.append(f"{relative}: writable")
+    if problems:
+        raise FreezeError(f"{root} fails verification: {'; '.join(problems)}", 6)
+    return manifest
+
+
 def _iso_date(text: str) -> date:
     try:
         return date.fromisoformat(text)
@@ -521,6 +611,12 @@ def _iso_date(text: str) -> date:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Freeze the research inputs as a snapshot.")
+    parser.add_argument(
+        "--verify",
+        type=Path,
+        metavar="SNAPSHOT_DIR",
+        help="only verify an existing snapshot (needs no mirror); the other options are ignored",
+    )
     parser.add_argument("--mirror", type=Path, default=DEFAULT_MIRROR, help="read-only data mirror")
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT, help="snapshots directory")
     parser.add_argument("--repo", type=Path, default=REPO, help="git repository (HEAD, presets)")
@@ -533,6 +629,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
+        if args.verify is not None:
+            manifest = verify_snapshot(args.verify)
+            print(f"verified {len(manifest['files']) + 1} files", file=sys.stderr)
+            print(args.verify.resolve())
+            return 0
         snapshot = freeze(
             mirror=args.mirror,
             root=args.root,
