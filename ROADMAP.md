@@ -36,6 +36,10 @@ method are in `docs/reviews/`.
 
 ## Next
 
+- Additional ready-made example menus with moderate stock/bond allocations:
+  - Vanguard-only: a moderate allocation mix using Vanguard ETFs and/or mutual funds.
+  - Fidelity-only: a moderate allocation mix using Fidelity ETFs and/or mutual funds.
+  Select the funds and starting allocation percentages when designing each menu.
 - Tester access: a SecuritySight-style login (authorized email domains, one-time code, 30-day
   session) replaces the private-preview link when testers are invited.
 - Paid tier: more than 30 funds per portfolio, and tickers outside the served universe fetched on
