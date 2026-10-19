@@ -36,14 +36,14 @@ import pyarrow.parquet as pq
 import pytest
 
 from portfoliosight.engine.ranges import bootstrap_index
-from portfoliosight.research import artifacts, evaluate, experiment, harness, runner, search
-from portfoliosight.research.artifacts import (
-    ALLOWANCES,
-    LOCKED_SCHEMA,
-    OUTCOMES_SCHEMA,
-    SEARCH_SCHEMA,
-    EvaluationTask,
-    LockedFileChanged,
+from portfoliosight.research import (
+    evaluate,
+    experiment,
+    harness,
+    outcomes,
+    runner,
+    search,
+    selection,
 )
 from portfoliosight.research.experiment import (
     Inputs,
@@ -53,8 +53,15 @@ from portfoliosight.research.experiment import (
     Settings,
     build_schedule,
 )
+from portfoliosight.research.outcomes import OUTCOMES_SCHEMA, TEST_SEEDS, EvaluationTask
 from portfoliosight.research.runner import Breach, Monitor, Usage
 from portfoliosight.research.search import Budget
+from portfoliosight.research.selection import (
+    ALLOWANCES,
+    LOCKED_SCHEMA,
+    SEARCH_SCHEMA,
+    LockedFileChanged,
+)
 from tests.research.helpers import random_indices, record
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -169,6 +176,15 @@ def _rows(directory: Path, name: str) -> list[dict[str, Any]]:
     return pq.read_table(directory / name).to_pylist()
 
 
+def _hex(value: Any) -> Any:
+    """Floats as hex (exact, NaN-safe), lists element by element, anything else as it is."""
+    if isinstance(value, float):
+        return value.hex()
+    if isinstance(value, list):
+        return [_hex(item) for item in value]
+    return value
+
+
 def _bytes(table: pa.Table) -> bytes:
     buffer = io.BytesIO()
     pq.write_table(table, buffer)
@@ -211,7 +227,7 @@ def models() -> dict[tuple[str, str], evaluate.OriginModel]:
 
 
 def test_cell_key_is_compact_json_and_hashed_as_utf8() -> None:
-    key = artifacts.cell_key("tsp", date(2024, 3, 28), "x25", 20261013)
+    key = selection.cell_key("tsp", date(2024, 3, 28), "x25", 20261013)
     assert key == '["tsp","2024-03-28","x25",20261013]'
     hand = hashlib.sha256(b'["tsp","2024-03-28","x25",20261013]').hexdigest()
     spec = next(iter(_spec_list()))
@@ -219,9 +235,9 @@ def test_cell_key_is_compact_json_and_hashed_as_utf8() -> None:
     assert len(hand) == 64
 
 
-def _spec_list() -> list[artifacts.CellSpec]:
+def _spec_list() -> list[selection.CellSpec]:
     return [
-        artifacts.CellSpec(
+        selection.CellSpec(
             "stage-1", "tsp", "2024-03", date(2024, 3, 28), "5y", "x25", 0.25, 20261013,
             ("x25",), 1 / 3, '["tsp","2024-03-28","x25",20261013]',
             hashlib.sha256(b'["tsp","2024-03-28","x25",20261013]').hexdigest(),
@@ -406,7 +422,7 @@ def test_the_manifest_records_provenance_and_claims_no_review(
         "lookback", "seeds", "budget", "months", "investigation",
     }  # fmt: skip
     assert manifest["preference"]["u_allowances_evaluated"] == [0.00025, 0.0, 0.0005, 0.001]
-    assert manifest["search"]["independent_bank_seeds"] == list(artifacts.TEST_SEEDS)
+    assert manifest["search"]["independent_bank_seeds"] == list(TEST_SEEDS)
     assert manifest["limits"]["cpu_hours"] == 24.0 and not manifest["limits"]["cpu_hours_amendment"]
     assert (
         manifest["limits"]["arm_seconds"] == 120.0 and manifest["limits"]["rss_bytes"] == 4 * 2**30
@@ -490,16 +506,16 @@ def _explicit_years(model: evaluate.OriginModel, seed: int, w: np.ndarray) -> np
 def test_outcomes_pool_five_new_banks_and_match_explicit_compounding(
     stage1: experiment.RunResult, models: dict
 ) -> None:
-    outcomes = _rows(stage1.directory, "outcomes.parquet")
+    written = _rows(stage1.directory, "outcomes.parquet")
     locked = {row["selection_id"]: row for row in _rows(stage1.directory, "locked.parquet")}
-    assert len(outcomes) == len(locked)
-    assert {row["test_paths"] for row in outcomes} == {10_000}
-    assert {row["train_paths"] for row in outcomes} == {2_000}
-    assert all(row["bank_seeds"] == list(artifacts.TEST_SEEDS) for row in outcomes)
-    assert all(row["primary"] == (row["seed"] == PRIMARY) for row in outcomes)
-    ok = [row for row in outcomes if row["test_status"] == "ok"]
+    assert len(written) == len(locked)
+    assert {row["test_paths"] for row in written} == {10_000}
+    assert {row["train_paths"] for row in written} == {2_000}
+    assert all(row["bank_seeds"] == list(TEST_SEEDS) for row in written)
+    assert all(row["primary"] == (row["seed"] == PRIMARY) for row in written)
+    ok = [row for row in written if row["test_status"] == "ok"]
     assert all(row["test_es_25"] <= row["test_bad"] for row in ok)
-    for row in outcomes:
+    for row in written:
         before = locked[row["selection_id"]]
         if before["status"] == "ok":
             for name in ("train_bad", "train_typical", "train_good", "train_es_25"):
@@ -507,7 +523,7 @@ def test_outcomes_pool_five_new_banks_and_match_explicit_compounding(
     row = next(r for r in ok if r["role"] == "R+D" and r["allowance"] == ALLOWANCES[0])
     model = models[(row["month"], row["menu"])]
     w = np.asarray(row["weights"])
-    years = np.concatenate([_explicit_years(model, seed, w) for seed in artifacts.TEST_SEEDS])
+    years = np.concatenate([_explicit_years(model, seed, w) for seed in TEST_SEEDS])
     ordered = np.sort(years)
     for name, q in (("bad", 0.025), ("typical", 0.5), ("good", 0.975)):
         position = q * (len(ordered) - 1)
@@ -515,7 +531,7 @@ def test_outcomes_pool_five_new_banks_and_match_explicit_compounding(
         value = ordered[low] + (position - low) * (ordered[low + 1] - ordered[low])
         assert row[f"test_{name}"] == pytest.approx(value, abs=1e-12)
     assert row["test_es_25"] == pytest.approx(ordered[:250].mean(), abs=1e-12)
-    first = _explicit_years(model, artifacts.TEST_SEEDS[0], w)
+    first = _explicit_years(model, TEST_SEEDS[0], w)
     assert row["bank_bad"][0] == pytest.approx(np.percentile(first, 2.5), abs=1e-12)
     assert row["test_utility"] == pytest.approx(
         0.6 * row["test_bad"] + 0.3 * row["test_typical"] + 0.1 * row["test_good"], abs=1e-15
@@ -525,11 +541,11 @@ def test_outcomes_pool_five_new_banks_and_match_explicit_compounding(
 def test_realized_legs_follow_the_ledger_and_hand_compounding(
     stage1: experiment.RunResult,
 ) -> None:
-    outcomes = _rows(stage1.directory, "outcomes.parquet")
-    immature = [row for row in outcomes if row["month"] == "2024-09"]
+    written = _rows(stage1.directory, "outcomes.parquet")
+    immature = [row for row in written if row["month"] == "2024-09"]
     assert {row["realized_status"] for row in immature} == {harness.IMMATURE}
     assert all(row["annual_return"] is None and row["forecast_error"] is None for row in immature)
-    mature = [row for row in outcomes if row["month"] != "2024-09"]
+    mature = [row for row in written if row["month"] != "2024-09"]
     assert {row["realized_status"] for row in mature} == {harness.COMPLETE}
     records = _records()
     ledger = harness.build_ledger(records, _sessions(), D_STAR, MENUS, "2y")
@@ -550,7 +566,7 @@ def test_realized_legs_follow_the_ledger_and_hand_compounding(
 
 
 def test_cross_row_columns_pair_seeds_and_adjacent_origins(stage1: experiment.RunResult) -> None:
-    outcomes = _rows(stage1.directory, "outcomes.parquet")
+    written = _rows(stage1.directory, "outcomes.parquet")
 
     def key(row: dict[str, Any], **changes: Any) -> tuple:
         row = {**row, **changes}
@@ -563,9 +579,9 @@ def test_cross_row_columns_pair_seeds_and_adjacent_origins(stage1: experiment.Ru
             row["allowance"],
         )
 
-    index = {key(row): row for row in outcomes}
+    index = {key(row): row for row in written}
     previous = {"2024-07": None, "2024-08": "2024-07", "2024-09": "2024-08"}
-    for row in outcomes:
+    for row in written:
         annual = row["annual_return"]
         if annual is not None:
             assert row["forecast_error"] == annual - row["expected_return"]
@@ -606,7 +622,7 @@ def test_forecast_error_diagnostic_matches_hand_values() -> None:
     mx, my = sum(x) / 3, sum(y) / 3
     cov = sum((a - mx) * (b - my) for a, b in zip(x, y, strict=True))
     hand = cov / math.sqrt(sum((a - mx) ** 2 for a in x) * sum((b - my) ** 2 for b in y))
-    result = artifacts.forecast_error_diagnostic(pd.DataFrame(rows))
+    result = outcomes.forecast_error_diagnostic(pd.DataFrame(rows))
     assert result.to_dict("records") == [
         {"menu": "tsp", "ceiling_id": "x25", "n": 3, "correlation": pytest.approx(hand), "sign": -1}
     ]
@@ -647,7 +663,7 @@ def test_the_lock_is_written_before_any_independent_draw_or_realized_read(
     assert result.directory == directory and result.status == "complete"
     draws = [event for event in events if event[0] in ("bank", "horizon")]
     assert draws and all(locked for _, _, locked in draws)
-    assert {seed for kind, seed, _ in draws if kind == "bank"} == {PRIMARY, *artifacts.TEST_SEEDS}
+    assert {seed for kind, seed, _ in draws if kind == "bank"} == {PRIMARY, *TEST_SEEDS}
     kinds = [entry["kind"] for entry in _resources(directory)]
     assert kinds.index("lock") < kinds.index("evaluation")
     assert max(i for i, kind in enumerate(kinds) if kind == "cell") < kinds.index("lock")
@@ -667,7 +683,7 @@ def test_the_lock_is_written_before_any_independent_draw_or_realized_read(
     assert arms == expected
 
 
-def test_evaluation_reads_only_the_locked_file(
+def test_evaluation_reads_only_the_locked_rows(
     stage1: experiment.RunResult, models: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def refuse(*args, **kwargs):
@@ -675,26 +691,71 @@ def test_evaluation_reads_only_the_locked_file(
 
     for name in ("prepare", "run_arm", "combine", "search_cell"):
         monkeypatch.setattr(search, name, refuse)
-    monkeypatch.setattr(artifacts.preference, "select", refuse)
+    monkeypatch.setattr(selection.preference, "select", refuse)
+    for name in ("choose", "lock_rows", "search_table"):
+        monkeypatch.setattr(selection, name, refuse)
     copy = tmp_path / "locked.parquet"
     shutil.copyfile(stage1.directory / "locked.parquet", copy)
     digest = hashlib.sha256(copy.read_bytes()).hexdigest()
+    groups = dict(outcomes.evaluation_groups(selection.read_locked(copy, digest)))
+    assert list(groups) == [
+        ("stage-1", menu, month) for menu in MENUS for month in ("2024-07", "2024-08", "2024-09")
+    ]
     records = _records()
     ledger = harness.build_ledger(records, _sessions(), D_STAR, MENUS, "2y")
     horizon = evaluate.realized_horizon(records, ledger, "2024-08", "tsp")
-    task = EvaluationTask(
-        "stage-1", "tsp", "2024-08", models[("2024-08", "tsp")], horizon, str(copy), digest
-    )
-    rows = artifacts.evaluate_group(task).to_pylist()
-    outcomes = _frame(stage1.directory, "outcomes.parquet").set_index("selection_id")
-    for row in rows:
-        assert row["test_bad"] == outcomes.loc[row["selection_id"], "test_bad"]
-        assert row["annual_return"] == outcomes.loc[row["selection_id"], "annual_return"]
+    rows = tuple(groups[("stage-1", "tsp", "2024-08")])
+    model = models[("2024-08", "tsp")]
+    task = EvaluationTask("stage-1", "tsp", "2024-08", model, horizon, rows, digest)
+    evaluated = outcomes.evaluate_group(task).to_pylist()
+    written = {row["selection_id"]: row for row in _rows(stage1.directory, "outcomes.parquet")}
+    assert [row["selection_id"] for row in evaluated] == [row["selection_id"] for row in rows]
+    for row in evaluated:
+        for name in ("test_bad", "test_es_25", "train_typical", "annual_return"):
+            assert float(row[name]).hex() == float(written[row["selection_id"]][name]).hex()
+    other = groups[("stage-1", "example", "2024-08")][:1]
+    with pytest.raises(ValueError, match="holds locked rows of"):
+        outcomes.evaluate_group(replace(task, rows=(*rows, *other)))
     buffer = io.BytesIO()
     pq.write_table(pq.read_table(copy).slice(1), buffer)  # one selection fewer
     copy.write_bytes(buffer.getvalue())
-    with pytest.raises(LockedFileChanged):
-        artifacts.evaluate_group(task)
+    with pytest.raises(LockedFileChanged):  # the runner reads and verifies the file once
+        selection.read_locked(copy, digest)
+
+
+def test_selection_and_search_never_import_the_evaluation_side() -> None:
+    """The pre-lock modules cannot reach realized returns or the post-lock evaluation."""
+    import ast
+    import subprocess
+
+    forbidden_modules = {"portfoliosight.research.outcomes"}
+    forbidden_names = {"Horizon", "realized", "realized_horizon", "path_metrics", "outcomes"}
+    for name in ("search", "selection"):
+        tree = ast.parse((ROOT / "portfoliosight" / "research" / f"{name}.py").read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                assert not {alias.name for alias in node.names} & forbidden_modules, name
+            if isinstance(node, ast.ImportFrom):
+                assert node.module not in forbidden_modules, (name, node.module)
+                assert not {alias.name for alias in node.names} & forbidden_names, (
+                    name,
+                    node.module,
+                )
+            if isinstance(node, ast.Attribute):
+                assert node.attr not in forbidden_names - {"outcomes"}, (name, node.attr)
+    loaded = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, portfoliosight.research.search, portfoliosight.research.selection; "
+            "print('portfoliosight.research.outcomes' in sys.modules)",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=ROOT,
+    )
+    assert loaded.stdout.strip() == "False"
 
 
 # -------------------------------------------------------------------------------- isolation
@@ -770,7 +831,7 @@ def test_limits_hold_two_workers_and_a_recorded_cpu_amendment() -> None:
     assert Limits(cpu_hours=48.0, cpu_amended=True).cpu_hours == 48.0
 
 
-def _stopped(result: experiment.RunResult, rule: str) -> pd.DataFrame:
+def _stopped(result: experiment.RunResult, rule: str, evaluated: bool = False) -> pd.DataFrame:
     assert (
         result.status == "incomplete" and result.breach is not None and result.breach.rule == rule
     )
@@ -782,7 +843,7 @@ def _stopped(result: experiment.RunResult, rule: str) -> pd.DataFrame:
         entry["kind"] == "breach" and entry["rule"] == rule
         for entry in _resources(result.directory)
     )
-    assert not (result.directory / "outcomes.parquet").exists()
+    assert (result.directory / "outcomes.parquet").exists() == evaluated
     cells = _frame(result.directory, "search.parquet").query("kind == 'cell'")
     assert len(cells) == result.cells  # every scheduled cell keeps a row
     return cells
@@ -817,6 +878,18 @@ def test_an_arm_past_its_ceiling_stops_the_run(tmp_path: Path) -> None:
     cells = _stopped(result, "arm_seconds")
     assert list(cells["cell_status"]) == ["resource_breach"] + ["unattempted"] * 5
     assert result.breach is not None and result.breach.value == 200.0
+    _breached_arm(result, cells, "measured 200.0 s > 120.0 s")
+
+
+def _breached_arm(result: experiment.RunResult, cells: pd.DataFrame, said: str) -> None:
+    """The stopped cell keeps one arm row naming the breach and the discarded attempt rows."""
+    rows = _rows(result.directory, "search.parquet")
+    (arm,) = [row for row in rows if row["kind"] == "arm"]
+    assert arm["cell_key"] == cells["cell_key"].iloc[0]
+    assert arm["arm"] == list(cells["arm_order"].iloc[0])[0]
+    assert (arm["error"], arm["failure"]) == ("arm_seconds", "resource_breach")
+    assert said in arm["error_detail"] and "attempt rows are discarded" in arm["error_detail"]
+    assert not any(row["kind"] in ("candidate", "start") for row in rows)
 
 
 def test_the_alarm_stops_an_arm_that_overruns_inside_the_solver(tmp_path: Path) -> None:
@@ -829,6 +902,29 @@ def test_the_alarm_stops_an_arm_that_overruns_inside_the_solver(tmp_path: Path) 
     cells = _stopped(result, "arm_seconds")
     assert cells["cell_status"].iloc[0] == "resource_breach"
     assert "alarm" in result.breach.detail  # type: ignore[union-attr]
+    _breached_arm(result, cells, "the alarm stopped the arm inside its search")
+
+
+def test_a_breach_while_evaluating_keeps_the_lock_and_partial_outcomes(tmp_path: Path) -> None:
+    records = _records()
+    settings = _settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
+    # reads: 1 before the search and 6 after its cells pass, 1 before evaluating passes, and the
+    # read after the first (profile, menu, origin) group reports 5 GiB
+    meter = _Meter(Usage(1.0, 2**20, 5 * 2**30), calls=8)
+    result = _run(tmp_path, records, settings=settings, run_id="late", meter=meter)
+    cells = _stopped(result, "aggregate_peak_rss", evaluated=True)
+    assert set(cells["cell_status"]) == {"ok"}
+    manifest = json.loads((result.directory / "manifest.json").read_text())
+    assert manifest["lock"]["sha256"] == manifest["artifacts"]["locked.parquet"]
+    assert manifest["status"]["denominator"]["completed"] == 6
+    locked = _rows(result.directory, "locked.parquet")
+    written = _rows(result.directory, "outcomes.parquet")
+    assert {row["menu"] for row in locked} == {"tsp", "example"}
+    assert [row["selection_id"] for row in written] == [
+        row["selection_id"] for row in locked if row["menu"] == "tsp"
+    ]  # the first group only
+    kinds = [entry["kind"] for entry in _resources(result.directory)]
+    assert kinds.count("evaluation") == 1 and kinds.index("lock") < kinds.index("breach")
 
 
 def test_the_arm_alarm_interrupts_python_code() -> None:
@@ -921,6 +1017,13 @@ def test_one_and_two_workers_write_byte_identical_artifacts(tmp_path: Path) -> N
             manifest.pop(volatile)
         manifests.append(manifest)
     assert manifests[0] == manifests[1] == manifests[2]
+    limits = {
+        n: json.loads((r.directory / "manifest.json").read_text())["limits"]
+        for n, r in results.items()
+    }
+    assert limits[2]["process_model"] == limits[1]["process_model"] == experiment.PROCESS_MODEL
+    assert experiment.PROCESS_MODEL == "1 idle coordinator + <=2 compute workers"
+    assert limits[0]["process_model"].startswith("in-process")
     workers = [entry for entry in _resources(results[2].directory) if entry["kind"] == "worker"]
     assert len(workers) == 2 and all(w["env"]["OPENBLAS_NUM_THREADS"] == "1" for w in workers)
     pids = {entry["pid"] for entry in _resources(results[2].directory) if entry["kind"] == "cell"}
@@ -951,18 +1054,28 @@ def test_prices_after_the_origin_change_only_the_realized_legs(tmp_path: Path) -
     assert (
         locked["after"] == locked["base"]
     )  # w_R and every selection at every allowance, bit for bit
-    outcomes = {name: _frame(runs[name], "outcomes.parquet") for name in runs}
     predicted = [c for c in OUTCOMES_SCHEMA.names if c.startswith(("train_", "test_", "bank_"))]
     predicted = [
         c for c in predicted if "pinball" not in c and "at_or_below" not in c and c != "test_pit"
     ]
-    pd.testing.assert_frame_equal(outcomes["after"][predicted], outcomes["base"][predicted])
+    tables = {name: pq.read_table(runs[name] / "outcomes.parquet") for name in runs}
+    keyed = ["selection_id", "weights", *predicted]
+    # byte-identical: written to parquet, every float is compared bit for bit, NaN included
+    assert _bytes(tables["after"].select(keyed)) == _bytes(tables["base"].select(keyed))
+    for column in predicted:
+        for a, b in zip(
+            tables["after"][column].to_pylist(), tables["base"][column].to_pylist(), strict=True
+        ):
+            assert _hex(a) == _hex(b), column
     for menu in MENUS:  # the mutation reaches both menus' horizons
-        moved = outcomes["after"]["menu"] == menu
-        assert (
-            outcomes["after"].loc[moved, "annual_return"]
-            != outcomes["base"].loc[moved, "annual_return"]
-        ).all()
+        rows = {
+            name: [row for row in tables[name].to_pylist() if row["menu"] == menu]
+            for name in ("after", "base")
+        }
+        assert all(
+            a["annual_return"] != b["annual_return"]
+            for a, b in zip(rows["after"], rows["base"], strict=True)
+        )
     for menu in MENUS:  # a mutation on or before the origin moves w_R in both menus
         chosen = {
             name: [
@@ -1006,13 +1119,13 @@ def test_sensitivities_write_separate_artifacts_on_the_primary_seed(
         manifest = json.loads((result.directory / "manifest.json").read_text())
         assert manifest["execution"]["cpu_before"] == pytest.approx(spent)
         spent += manifest["execution"]["cpu_seconds"]
-        outcomes = _frame(result.directory, "outcomes.parquet")
-        assert set(outcomes["profile"]) == profiles and set(outcomes["seed"]) == {PRIMARY}
-        assert set(outcomes["month"]) == {"2024-08", "2024-09"}
+        written = _frame(result.directory, "outcomes.parquet")
+        assert set(written["profile"]) == profiles and set(written["seed"]) == {PRIMARY}
+        assert set(written["month"]) == {"2024-08", "2024-09"}
         for profile in manifest["profiles"]:
             assert profile["seeds"] == [PRIMARY]
         if name == "coefficients":
-            heavy = outcomes[outcomes["profile"] == "coefficients-70-20-10"]
+            heavy = written[written["profile"] == "coefficients-70-20-10"]
             assert all(list(k) == [0.7, 0.2, 0.1] for k in heavy["coefficients"])
             assert heavy["test_utility"].tolist() == pytest.approx(
                 (
@@ -1020,7 +1133,7 @@ def test_sensitivities_write_separate_artifacts_on_the_primary_seed(
                 ).tolist()
             )
         if name == "lookback":
-            assert set(outcomes["lookback"]) == {"1y"}
+            assert set(written["lookback"]) == {"1y"}
         if name == "budget":
             cells = _frame(result.directory, "search.parquet").query("kind == 'cell'")
             assert {json.loads(b)["points"] for b in cells["budget"]} == {16}
@@ -1069,6 +1182,22 @@ def test_stage_2_needs_the_report_and_an_amended_ceiling(
 
 
 # ------------------------------------------------------------------------------ estimate, CLI
+
+
+def test_an_estimate_that_crosses_a_ceiling_records_it_and_refuses(tmp_path: Path) -> None:
+    records = _records()
+    with pytest.raises(experiment.Refused, match="crossed a ceiling"):
+        experiment.estimate(
+            _inputs(records, tmp_path), PROVENANCE, tmp_path / "out", settings=_settings(records),
+            limits=Limits(workers=0), estimate_id="hot",
+            meter=_Meter(Usage(86_401.0, 2**20, 2**20), calls=1),
+        )  # fmt: skip
+    directory = tmp_path / "out" / PREFIX / "estimates" / "hot"
+    body = json.loads((directory / "estimate.json").read_text())
+    assert body["complete"] is False and body["not_a_run"] is True
+    assert body["breach"]["rule"] == "cpu_hours" and body["cells_done"] == 1
+    lines = [json.loads(line) for line in (directory / "resources.jsonl").read_text().splitlines()]
+    assert lines[-1]["kind"] == "breach" and lines[-1]["rule"] == "cpu_hours"
 
 
 def test_estimate_projects_from_a_sample_and_is_not_a_run(tmp_path: Path) -> None:

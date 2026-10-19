@@ -3,7 +3,8 @@
 `run` executes Stage 1 (R and R+D on both menus), a prespecified sensitivity or Stage 2 from a
 verified research snapshot and writes the protocol 9 artifacts; `estimate` measures a small fixed
 sample of real cells and projects the CPU cost of Stage 1 plus the sensitivities. The search of
-one cell is `research.search`, the selection, lock, tables and evaluation `research.artifacts`.
+one cell is `research.search`, the selection, lock and search tables `research.selection`, the
+evaluation after the lock `research.outcomes`.
 
 Preflight, before any directory is made: the repository is clean (the run names the code by its
 HEAD), BLAS is held to one thread (`OPENBLAS/OMP/MKL_NUM_THREADS=1`), the output lies outside the
@@ -37,8 +38,9 @@ solver's. Every cell's record goes to `resources.jsonl`.
 
 Lock, then evaluate (protocol 5 step 8). When every cell has been searched, the locked selections
 of all cells are written to `locked.parquet` and hashed; only then are realized horizons built and
-independent banks drawn, and the evaluation of each (profile, menu, origin) reads the locked file
-(verified against its digest) and its origin model, never a search result.
+independent banks drawn: the locked file is read back once and verified against its digest, and
+the evaluation of each (profile, menu, origin) gets its rows of that file and its origin model,
+never a search result (`research.outcomes`, which the search and selection modules never import).
 
 Resources (protocol 7). At most two worker processes (spawned, one BLAS thread each; `workers=0`
 runs the cells in this process), aggregate peak RSS of this process and its workers at most
@@ -64,9 +66,9 @@ Artifacts, under `<out>/<protocol SHA-256 prefix16>/<run id>/` (a sensitivity in
 `sensitivity-<name>/` and Stage 2 in `stage-2/` beneath its Stage 1 run): `manifest.json`,
 `origins.parquet` (the ledger of every enumerated month with each scheduled origin's model and
 ceilings), `search.parquet`, `locked.parquet`, `outcomes.parquet` and `resources.jsonl`; the
-schemas are `artifacts.SEARCH_SCHEMA`, `LOCKED_SCHEMA` and `OUTCOMES_SCHEMA`. `summary.json` and
-`report.md` are the report writer's. The same inputs and settings give byte-identical parquet
-files whatever the number of workers.
+schemas are `selection.SEARCH_SCHEMA`, `selection.LOCKED_SCHEMA` and
+`outcomes.OUTCOMES_SCHEMA`. `summary.json` and `report.md` are the report writer's. The same
+inputs and settings give byte-identical parquet files whatever the number of workers.
 """
 
 from __future__ import annotations
@@ -93,22 +95,9 @@ import pyarrow.parquet as pq
 
 from portfoliosight.engine import preference
 from portfoliosight.engine.optimize import SolveError
-from portfoliosight.research import artifacts, harness, search
-from portfoliosight.research.artifacts import (
-    ALLOWANCES,
-    DEFINITIONS,
-    INTERRUPTED,
-    OK_CELL,
-    RESOURCE_BREACH,
-    TEST_SEEDS,
-    TRAINING_INELIGIBLE,
-    UNATTEMPTED,
-    CellSpec,
-    EvaluationTask,
-    Profile,
-    cell_key,
-)
+from portfoliosight.research import harness, outcomes, search, selection
 from portfoliosight.research.evaluate import OriginModel, origin_model, realized_horizon
+from portfoliosight.research.outcomes import DEFINITIONS, TEST_SEEDS, EvaluationTask
 from portfoliosight.research.runner import (
     BLAS_ENV,
     Breach,
@@ -143,10 +132,22 @@ from portfoliosight.research.search import (
     Budget,
     Ceilings,
 )
+from portfoliosight.research.selection import (
+    ALLOWANCES,
+    INTERRUPTED,
+    OK_CELL,
+    RESOURCE_BREACH,
+    TRAINING_INELIGIBLE,
+    UNATTEMPTED,
+    CellSpec,
+    Profile,
+    cell_key,
+)
 
 PROTOCOL_PATH = "docs/plans/2026-10-18-return-optimization-experiment-protocol.md"
 MENU_CAPS = (("tsp", 0.60), ("example", 0.25))  # protocol 3
 MAX_WORKERS = 2
+PROCESS_MODEL = "1 idle coordinator + <=2 compute workers"  # ruling R22
 RSS_CEILING = 4 * 2**30
 ARM_SECONDS = 120.0
 CPU_HOURS = 24.0
@@ -840,7 +841,7 @@ def _search_phase(
     """Every cell, written to search.parquet in schedule order; the results by order."""
     results: dict[int, CellResult] = {}
     written = 0
-    writer = pq.ParquetWriter(directory / "search.parquet", artifacts.SEARCH_SCHEMA)
+    writer = pq.ParquetWriter(directory / "search.parquet", selection.SEARCH_SCHEMA)
 
     def handle(index: int, result: CellResult) -> Breach | None:
         nonlocal written
@@ -868,8 +869,8 @@ def _search_phase(
                 results[cell.order] = replace(done, table=None)
             else:
                 status = INTERRUPTED if cell.order in stop.interrupted else UNATTEMPTED
-                row = artifacts.cell_row(cell, status, profile=schedule.profile(cell.profile))
-                writer.write_table(artifacts.status_table([row]))
+                row = selection.cell_row(cell, status, profile=schedule.profile(cell.profile))
+                writer.write_table(selection.status_table([row]))
     finally:
         writer.close()
     return stop, results
@@ -907,35 +908,30 @@ def _lock(
 ) -> str:
     """Write every locked selection, before any independent draw or realized return is read."""
     table = _locked(schedule, results)
-    digest = artifacts.write_locked(table, directory / "locked.parquet")
+    digest = selection.write_locked(table, directory / "locked.parquet")
     resources.write({"kind": "lock", "utc": utc(), "rows": table.num_rows, "sha256": digest})
     return digest
 
 
 def _locked(schedule: Schedule, results: Mapping[int, CellResult]) -> pa.Table:
-    """Every cell's locked rows, cells in canonical order (`artifacts.cell_sort_key`)."""
+    """Every cell's locked rows, cells in canonical order (`selection.cell_sort_key`)."""
     names = [profile.name for profile in schedule.profiles]
     ordered = sorted(
-        results.values(), key=lambda r: artifacts.cell_sort_key(r.cell, names, schedule.menus)
+        results.values(), key=lambda r: selection.cell_sort_key(r.cell, names, schedule.menus)
     )
-    return pa.concat_tables([artifacts.lock_table([]), *(result.locked for result in ordered)])
+    return pa.concat_tables([selection.lock_table([]), *(result.locked for result in ordered)])
 
 
 def _evaluation_tasks(
     schedule: Schedule, settings: Settings, inputs: Inputs, path: Path, digest: str
 ) -> list[tuple[int, EvaluationTask]]:
-    """One task per (profile, menu, origin) of the locked file, in its order."""
-    table = artifacts.read_locked(path, digest)
-    groups = dict.fromkeys(
-        zip(
-            table["profile"].to_pylist(),
-            table["menu"].to_pylist(),
-            table["month"].to_pylist(),
-            strict=True,
-        )
-    )
+    """One task per (profile, menu, origin) of the locked file, in its order.
+
+    The file is read and verified against its digest once, here; each task carries its rows.
+    """
+    table = selection.read_locked(path, digest)
     tasks = []
-    for index, (name, menu, month) in enumerate(groups):
+    for index, ((name, menu, month), rows) in enumerate(outcomes.evaluation_groups(table)):
         profile = schedule.profile(name)
         facts = schedule.origins[(profile.lookback, month, menu)]
         if facts.model is None:
@@ -945,7 +941,7 @@ def _evaluation_tasks(
             inputs.data.records, schedule.ledgers[profile.lookback], month, menu
         )
         task = EvaluationTask(
-            name, menu, month, facts.model, horizon, str(path), digest, settings.test_seeds
+            name, menu, month, facts.model, horizon, tuple(rows), digest, settings.test_seeds
         )
         tasks.append((index, task))
     return tasks
@@ -977,11 +973,11 @@ def _evaluation_phase(
     if stop.breach is not None:
         resources.write({"kind": "breach", "utc": utc(), **stop.breach.record()})
     evaluated = pa.concat_tables(
-        [pa.Table.from_pylist([], schema=artifacts.EVALUATED_SCHEMA)]
+        [pa.Table.from_pylist([], schema=outcomes.EVALUATED_SCHEMA)]
         + [tables[index] for index in sorted(tables)]
     )
     months = {profile.name: schedule.months(profile) for profile in schedule.profiles}
-    pq.write_table(artifacts.finish_outcomes(evaluated, months), directory / "outcomes.parquet")
+    pq.write_table(outcomes.finish_outcomes(evaluated, months), directory / "outcomes.parquet")
     return stop
 
 
@@ -1111,6 +1107,9 @@ def _manifest(
         "limits": {
             "workers": limits.workers,
             "max_workers": MAX_WORKERS,
+            "process_model": PROCESS_MODEL
+            if limits.workers
+            else "in-process: the coordinator computes every cell (workers=0)",
             "rss_bytes": limits.rss_bytes,
             "arm_seconds": limits.arm_seconds,
             "cpu_hours": limits.cpu_hours,
@@ -1237,13 +1236,14 @@ def estimate(
     pool: Any = Inline(clock, True) if limits.workers == 0 else Processes(limits.workers)
     results: dict[int, CellResult] = {}
     groups: list[GroupResult] = []
+    chosen = set(sample)
     try:
         for worker in pool.workers:
             resources.write(worker)
         tasks = [
             (i, task)
             for i, (_, task) in enumerate(
-                t for t in _search_tasks(schedule, settings, limits) if t[1].cell in sample
+                t for t in _search_tasks(schedule, settings, limits) if t[1].cell in chosen
             )
         ]
 
@@ -1253,20 +1253,38 @@ def estimate(
             return result.breach
 
         stop = drive(pool, tasks, monitor, limits.poll_seconds, keep)
-        if stop.breach is not None:
-            raise Refused(f"the estimate crossed a ceiling: {stop.breach.record()}")
-        path = directory / "locked.parquet"
-        digest = artifacts.write_locked(_locked(schedule, results), path)
-        eval_tasks = _evaluation_tasks(schedule, settings, inputs, path, digest)
+        if stop.breach is None:
+            path = directory / "locked.parquet"
+            digest = selection.write_locked(_locked(schedule, results), path)
+            eval_tasks = _evaluation_tasks(schedule, settings, inputs, path, digest)
 
-        def gather(index: int, result: GroupResult) -> Breach | None:
-            groups.append(result)
-            resources.write(result.resources)
-            return None
+            def gather(index: int, result: GroupResult) -> Breach | None:
+                groups.append(result)
+                resources.write(result.resources)
+                return None
 
-        drive(pool, eval_tasks, monitor, limits.poll_seconds, gather)
+            stop = drive(pool, eval_tasks, monitor, limits.poll_seconds, gather)
     finally:
         pool.terminate()
+    if stop.breach is not None:  # an estimate that crossed a ceiling projects nothing
+        resources.write({"kind": "breach", "utc": utc(), **stop.breach.record()})
+        resources.close()
+        _write_json(
+            directory / "estimate.json",
+            {
+                "not_a_run": True,
+                "complete": False,
+                "breach": stop.breach.record(),
+                "cells_done": len(results),
+                "sample": [cell.key for cell in sample],
+                "workers": limits.workers,
+                "protocol_sha256": provenance.protocol_sha256,
+                "head": provenance.head,
+                "snapshot_manifest_sha256": inputs.data.manifest_sha256,
+                "settings": settings.record(),
+            },
+        )
+        raise Refused(f"the estimate crossed a ceiling: {stop.breach.record()}")
     per_cell = {}
     cells_by_menu = Counter(cell.menu for cell in schedule.cells)
     six_cells = Counter(
@@ -1312,6 +1330,8 @@ def estimate(
         "scheduled_over_limit": len(schedule.scheduled) > MAX_ORIGINS,
         "settings": settings.record(),
         "not_a_run": True,
+        "complete": True,
+        "breach": None,
     }
     resources.write({"kind": "projection", **body})
     resources.close()

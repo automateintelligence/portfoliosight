@@ -12,7 +12,7 @@ protocol 7 ceilings.
   an arm past the per-arm ceiling stops the run, whether measured after the arm or raised inside it
   by `arm_alarm` (SIGALRM, in the main thread of the process running the arm). `Probe` splits the
   time into replay evaluation, measure scoring and bank draws while the cell runs.
-- `run_evaluation_task` evaluates the locked rows of one origin (`artifacts.evaluate_group`).
+- `run_evaluation_task` evaluates the locked rows of one origin (`outcomes.evaluate_group`).
 - `Inline` runs tasks in this process; `Processes` spawns at most two workers, each holding BLAS to
   one thread (`threadpoolctl`, after checking the inherited environment) and warmed with a small
   COBYLA solve before any timed arm. `drive` feeds tasks in order, one per idle worker, and stops
@@ -44,17 +44,17 @@ from typing import Any, Protocol
 import numpy as np
 import pyarrow as pa
 
-from portfoliosight.research import artifacts, search
-from portfoliosight.research.artifacts import (
+from portfoliosight.research import outcomes, search, selection
+from portfoliosight.research.evaluate import OriginModel
+from portfoliosight.research.outcomes import EvaluationTask
+from portfoliosight.research.search import COMPUTATIONAL_ERROR, PRIMARY_ALLOWANCE, Ceilings
+from portfoliosight.research.selection import (
     OK_CELL,
     RESOURCE_BREACH,
     TRAINING_INELIGIBLE,
     CellSpec,
-    EvaluationTask,
     Profile,
 )
-from portfoliosight.research.evaluate import OriginModel
-from portfoliosight.research.search import COMPUTATIONAL_ERROR, PRIMARY_ALLOWANCE, Ceilings
 
 BLAS_ENV = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
 SAMPLE_SECONDS = 60.0  # how often a monitor sample is kept for resources.jsonl
@@ -300,13 +300,13 @@ def run_search_task(
                 "breach": None if breach is None else breach.record(),
             }
         )
-        return CellResult(spec, status, table, artifacts.lock_table(locked), record, breach)
+        return CellResult(spec, status, table, selection.lock_table(locked), record, breach)
 
     if spec.preset is not None or task.model is None:
-        row = artifacts.cell_row(
+        row = selection.cell_row(
             spec, _preset_class(spec), spec.preset, spec.preset_detail, profile=profile
         )
-        return finish(row["cell_status"], artifacts.status_table([row]))
+        return finish(row["cell_status"], selection.status_table([row]))
     model = task.model
     with Probe() as probe:
         shared = search.prepare(
@@ -325,13 +325,15 @@ def run_search_task(
                     with arm_alarm(task.arm_seconds, alarm):
                         arm = search.run_arm(shared, label)
                 except ArmTimeLimit as exc:
-                    breach = Breach(
-                        "arm_seconds", task.arm_seconds, clock() - start, f"{label}: {exc}"
+                    wall = clock() - start
+                    breach = Breach("arm_seconds", task.arm_seconds, wall, f"{label}: {exc}")
+                    detail = (
+                        f"{exc}; the alarm stopped the arm inside its search, so its attempt "
+                        "rows are discarded (the run stops at this breach)"
                     )
-                    row = artifacts.cell_row(
-                        spec, RESOURCE_BREACH, "arm_seconds", str(exc), profile=profile
+                    return finish(
+                        RESOURCE_BREACH, _breach_table(spec, profile, label, detail), breach=breach
                     )
-                    return finish(RESOURCE_BREACH, artifacts.status_table([row]), breach=breach)
                 wall = clock() - start
                 after = probe.mark()
                 spent = {name: after.get(name, 0.0) - before.get(name, 0.0) for name in after}
@@ -356,22 +358,47 @@ def run_search_task(
                 record["arms"] = timings
                 if wall > task.arm_seconds:
                     breach = Breach("arm_seconds", task.arm_seconds, wall, label)
-                    row = artifacts.cell_row(
-                        spec, RESOURCE_BREACH, "arm_seconds", label, profile=profile
+                    detail = (
+                        f"measured {wall!r} s > {task.arm_seconds!r} s; the arm's attempt rows are "
+                        "discarded (the run stops at this breach)"
                     )
-                    return finish(RESOURCE_BREACH, artifacts.status_table([row]), breach=breach)
+                    return finish(
+                        RESOURCE_BREACH, _breach_table(spec, profile, label, detail), breach=breach
+                    )
                 arms.append(arm)
         start = clock()
         cell = search.combine(shared, arms)
         record["union"] = clock() - start
     start = clock()
-    chosen = None if cell.failure is not None else artifacts.choose(cell, profile.coefficients)
-    locked = [] if chosen is None else artifacts.lock_rows(spec, profile, cell, chosen, model)
+    chosen = None if cell.failure is not None else selection.choose(cell, profile.coefficients)
+    locked = [] if chosen is None else selection.lock_rows(spec, profile, cell, chosen, model)
     record["selection"] = clock() - start
     start = clock()
-    table = artifacts.search_table(spec, profile, cell, chosen, model)
+    table = selection.search_table(spec, profile, cell, chosen, model)
     record["tables"] = clock() - start
     return finish(OK_CELL if cell.failure is None else cell.failure, table, locked)
+
+
+def _breach_table(spec: CellSpec, profile: Profile, label: str, detail: str) -> pa.Table:
+    """The rows of a cell stopped by an arm past its time ceiling: the cell and that arm."""
+    cell = selection.cell_row(spec, RESOURCE_BREACH, "arm_seconds", detail, profile=profile)
+    arm = {
+        key: cell[key]
+        for key in (
+            "profile", "cell_key", "cell_sha256", "menu", "month", "origin", "lookback",
+            "ceiling_id", "fraction", "seed",
+        )
+    }  # fmt: skip
+    arm.update(
+        {
+            "kind": "arm",
+            "arm": label,
+            "error": "arm_seconds",
+            "error_detail": detail,
+            "failure": RESOURCE_BREACH,
+        }
+    )
+    return selection.status_table([cell, arm])
 
 
 def _preset_class(spec: CellSpec) -> str:
@@ -382,7 +409,7 @@ def run_evaluation_task(
     task: EvaluationTask, clock: Callable[[], float] = time.perf_counter
 ) -> GroupResult:
     start, cpu = clock(), time.process_time()
-    rows = artifacts.evaluate_group(task)
+    rows = outcomes.evaluate_group(task)
     record = {
         "kind": "evaluation", "profile": task.profile, "menu": task.menu, "month": task.month,
         "mixes": rows.num_rows, "wall": clock() - start, "cpu": time.process_time() - cpu,
