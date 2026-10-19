@@ -79,7 +79,12 @@ computational error in its measure (`ArmSearch.error`: `UNDEFINED_MEASURE`; `fai
 search (`CellSearch.error`; `failure`: `COMPUTATIONAL_ERROR`) or when any of its arms fails
 (`failure`: `FAILED_ARM`); a failed cell has no pool. Any other exception propagates.
 
-Determinism. The same model, caps, ceiling, seed, budget, allowance and arms give a
+U coefficients. Every use of U (the replayed figures' `utility`, the start order, the R+D guard
+reference, R's objective, the local U guard and the native selections) takes the cell's
+`coefficients`, by default the owner's `preference.COEFFICIENTS`; protocol 7 (b) re-searches with
+(.70, .20, .10) and (.50, .35, .15), since the arms' objectives are written in U.
+
+Determinism. The same model, caps, ceiling, seed, budget, allowance, coefficients and arms give a
 byte-identical archive (`CellSearch.digest`, over `canonical`) in any arm order: evaluations are
 per mix and bit-identical (`research.evaluate`), the Sobol generator and COBYLA are
 deterministic, and arm caches are isolated.
@@ -115,7 +120,7 @@ from portfoliosight.engine.optimize import (
     cholesky_factor,
     solve_with_retries,
 )
-from portfoliosight.engine.preference import Candidate
+from portfoliosight.engine.preference import COEFFICIENTS, Candidate
 from portfoliosight.engine.ranges import frame_digest
 from portfoliosight.engine.torsion import TorsionBasis, TorsionError, enb, torsion_basis
 from portfoliosight.engine.windows import select_window
@@ -386,13 +391,14 @@ class _Measures:
 class SharedSearch:
     """Everything both arms share: the bank, ceilings, anchors, broad archive and starts."""
 
-    key: tuple  # model key, caps, fraction, seed, budget, allowance: what an arm must match
+    key: tuple  # model key, caps, fraction, seed, budget, allowance, coefficients
     model: OriginModel = field(compare=False, repr=False)
     caps: tuple[float, ...]
     fraction: float
     seed: int
     budget: Budget
     allowance: float
+    coefficients: tuple[float, float, float]  # U's (Bad, Typical, Good) weights
     arms: tuple[str, ...]  # the cell's required arms, canonical order
     measures: tuple[str, ...]  # what the union scores: dr2, and enb with R+E
     ceilings: Ceilings | None
@@ -429,6 +435,7 @@ class CellSearch:
     generator_seed: int
     budget: Budget
     allowance: float
+    coefficients: tuple[float, float, float]
     measures: tuple[str, ...]
     bank_sha256: str | None  # None when the cell stopped before its bank was drawn
     sobol_sha256: str | None
@@ -486,13 +493,23 @@ def search_cell(
     order: Sequence[str] | None = None,
     budget: Budget = DEFAULT_BUDGET,
     allowance: float = PRIMARY_ALLOWANCE,
+    coefficients: Sequence[float] = COEFFICIENTS,
 ) -> CellSearch:
     """One whole cell: `prepare`, each arm in ``order`` (default canonical), then `combine`."""
     labels = _arms(arms)
     sequence = labels if order is None else tuple(order)
     if len(set(sequence)) != len(sequence) or set(sequence) != set(labels):
         raise ValueError(f"order must list each arm of the cell once: {labels}, got {sequence}")
-    shared = prepare(model, caps, fraction, seed, arms=labels, budget=budget, allowance=allowance)
+    shared = prepare(
+        model,
+        caps,
+        fraction,
+        seed,
+        arms=labels,
+        budget=budget,
+        allowance=allowance,
+        coefficients=coefficients,
+    )
     if shared.error is not None:
         return combine(shared, ())
     return combine(shared, [run_arm(shared, label) for label in sequence])
@@ -507,9 +524,11 @@ def prepare(
     arms: Sequence[str] = STAGE_1_ARMS,
     budget: Budget = DEFAULT_BUDGET,
     allowance: float = PRIMARY_ALLOWANCE,
+    coefficients: Sequence[float] = COEFFICIENTS,
 ) -> SharedSearch:
     """The shared part of a cell: bank, ceilings, anchors, broad archive, starts, reference."""
     limits = _caps(model, caps)
+    k = preference.checked_coefficients(coefficients)
     fraction = _fraction(fraction)
     labels = _arms(arms)
     if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
@@ -525,13 +544,14 @@ def prepare(
 
     def shared(**changes) -> SharedSearch:
         base = {
-            "key": (model.key, tuple(limits.tolist()), fraction, seed, budget, allowance),
+            "key": (model.key, tuple(limits.tolist()), fraction, seed, budget, allowance, k),
             "model": model,
             "caps": tuple(limits.tolist()),
             "fraction": fraction,
             "seed": seed,
             "budget": budget,
             "allowance": allowance,
+            "coefficients": k,
             "arms": labels,
             "measures": names,
             "ceilings": None,
@@ -576,7 +596,7 @@ def prepare(
         key = w.tobytes()
         cached = key in cache
         if not cached:
-            cache[key] = assess(model, drawn, limits, ceiling, w)
+            cache[key] = assess(model, drawn, limits, ceiling, w, coefficients=k)
         rows.append(Attempt(source, None, name, index, None, cached, cache[key]))
         return cache[key]
 
@@ -642,8 +662,8 @@ def prepare(
         **drawn_fields,
         sobol_sha256=_sha256(matrix),
         broad_sha256=_sha256(np.vstack(proposals)),
-        starts=select_starts(feasible, budget.starts, START_SPACING),
-        reference=preference.select_reference(feasible),
+        starts=select_starts(feasible, budget.starts, START_SPACING, k),
+        reference=preference.select_reference(feasible, k),
         scorer=scorer,
     )
 
@@ -715,6 +735,7 @@ def combine(shared: SharedSearch, arms: Iterable[ArmSearch]) -> CellSearch:
         generator_seed=shared.seed + GENERATOR_OFFSET,
         budget=shared.budget,
         allowance=shared.allowance,
+        coefficients=shared.coefficients,
         measures=shared.measures,
         bank_sha256=shared.bank_sha256,
         sobol_sha256=shared.sobol_sha256,
@@ -746,13 +767,15 @@ def assess(
     caps: npt.ArrayLike,
     ceiling: float,
     weights: npt.ArrayLike,
+    coefficients: Sequence[float] = COEFFICIENTS,
 ) -> Scored:
     """Check ``weights`` against the caps, the sum and the ceiling, then replay them if valid.
 
     A breach above 1e-8 of any bound, of the sum or of the ceiling makes the proposal
     `INFEASIBLE`, penalized `1e6 + 1e6 * (sum of positive violations)` and never replayed; a
     valid proposal is evaluated on ``drawn`` (`research.evaluate`), and a recentred `g_t <= 0`
-    makes it `NONPOSITIVE_DAILY_GROWTH`, penalized 1e6, with its first such date.
+    makes it `NONPOSITIVE_DAILY_GROWTH`, penalized 1e6, with its first such date. Its
+    `utility` is U under ``coefficients`` (the owner's by default).
     """
     limits = np.asarray(caps, dtype=float)
     w = _clean(np.asarray(weights, dtype=float))
@@ -797,7 +820,7 @@ def assess(
         bad=bad,
         typical=typical,
         good=good,
-        utility=preference.utility(bad, typical, good),
+        utility=preference.utility(bad, typical, good, coefficients),
         mean=float(figures.mean[0]),
         es_25=float(figures.es_25[0]),
     )
@@ -818,13 +841,15 @@ def constraint_values(
     ceiling: float,
     reference: Candidate | None,
     allowance: float,
+    coefficients: Sequence[float] = COEFFICIENTS,
 ) -> np.ndarray:
     """COBYLA's inequality constraints at a proposal, each feasible when >= 0.
 
     `w_i` and `cap_i - w_i` for every fund (the last weight is `1 - sum(x)`), `X - risk`, and for
     a measure arm (``reference`` given) the protocol 2 guards relative to ``reference``: Bad,
-    Typical, Good, U at ``allowance``, and the veto `max(B - (B_R - 1e-10), T - (T_R - 1e-10))`.
-    An invalid proposal has no figures: each guard is minus its penalty.
+    Typical, Good, U at ``allowance`` (U under ``coefficients``, as the proposal's own `utility`
+    was scored), and the veto `max(B - (B_R - 1e-10), T - (T_R - 1e-10))`. An invalid proposal
+    has no figures: each guard is minus its penalty.
     """
     w = np.asarray(scored.weights, dtype=float)
     plain = np.concatenate([w, np.asarray(caps, dtype=float) - w, [ceiling - scored.risk]])
@@ -838,7 +863,11 @@ def constraint_values(
         scored.bad - (reference.bad - preference.BAD_GUARD),
         scored.typical - (reference.typical - preference.TYPICAL_GUARD),
         scored.good - (reference.good - preference.GOOD_GUARD),
-        scored.utility - (reference.utility - allowance),
+        scored.utility
+        - (
+            preference.utility(reference.bad, reference.typical, reference.good, coefficients)
+            - allowance
+        ),
         max(scored.bad - (reference.bad - veto), scored.typical - (reference.typical - veto)),
     ]
     return np.concatenate([plain, guards])
@@ -902,7 +931,10 @@ def broad_candidate(
 
 
 def select_starts(
-    candidates: Sequence[Candidate], count: int, spacing: float = START_SPACING
+    candidates: Sequence[Candidate],
+    count: int,
+    spacing: float = START_SPACING,
+    coefficients: Sequence[float] = COEFFICIENTS,
 ) -> tuple[tuple[tuple[float, ...], bool], ...]:
     """``count`` local starts as (weights, repeat), from feasible broad candidates.
 
@@ -916,7 +948,8 @@ def select_starts(
         distinct.setdefault(candidate.weights, candidate)
     if not distinct:
         raise ValueError("there is no feasible broad candidate to start from")
-    order = sorted(distinct.values(), key=_stage_a_order)
+    k = preference.checked_coefficients(coefficients)
+    order = sorted(distinct.values(), key=lambda candidate: _stage_a_order(candidate, k))
     kept: list[Candidate] = []
     for candidate in order:
         if len(kept) == count:
@@ -1033,7 +1066,7 @@ def _refine(
         raise ValueError("the shared search is incomplete")
     ceiling = shared.ceiling
     limits = np.asarray(shared.caps, dtype=float)
-    budget, allowance = shared.budget, shared.allowance
+    budget, allowance, k = shared.budget, shared.allowance, shared.coefficients
     n = len(limits)
     state = {"calls": 0, "feasible": 0, "best": math.nan}
     first: list[bytes] = []
@@ -1051,7 +1084,7 @@ def _refine(
         key = w.tobytes()
         if key in cache:
             return cache[key], True
-        cache[key] = assess(model, drawn, limits, ceiling, w)
+        cache[key] = assess(model, drawn, limits, ceiling, w, coefficients=k)
         return cache[key], False
 
     def fun(x: npt.ArrayLike) -> float:
@@ -1069,7 +1102,7 @@ def _refine(
                 values[measure] = score
                 if reference is not None:
                     found = _candidate(scored)
-                    guards = preference.failed_guards(found, reference, allowance)
+                    guards = preference.failed_guards(found, reference, allowance, k)
         value = objective(scored, score)
         call = int(state["calls"])
         rows.append(
@@ -1094,7 +1127,7 @@ def _refine(
                 "COBYLA asked for constraints at a point the objective has not evaluated: "
                 "the external call counter would miss it"
             )
-        return constraint_values(cache[key], limits, ceiling, reference, allowance)
+        return constraint_values(cache[key], limits, ceiling, reference, allowance, k)
 
     options = {"rhobeg": RHOBEG, "tol": COBYLA_TOL, "catol": CATOL, "maxiter": budget.maxiter}
     try:
@@ -1142,14 +1175,15 @@ def _native(
     for row in (*shared.rows, *rows):
         if row.scored.status == OK:
             own.setdefault(row.scored.weights, row.scored)
+    k = shared.coefficients
     if measure is None:
-        reference = preference.select_reference([_candidate(s) for s in own.values()])
+        reference = preference.select_reference([_candidate(s) for s in own.values()], k)
         return reference, reference
     scorer = shared.scorer
     if scorer is None:
         raise ValueError("the shared search is incomplete")
     pool = [_candidate(s, scorer.value(measure, s.weights)) for s in own.values()]
-    chosen = preference.select(pool, shared.allowance)
+    chosen = preference.select(pool, shared.allowance, k)
     return chosen.reference, chosen.selected
 
 
@@ -1233,9 +1267,9 @@ def _candidate(scored: Scored, measure: float | None = None) -> Candidate:
     return Candidate(scored.weights, scored.bad, scored.typical, scored.good, measure)
 
 
-def _stage_a_order(candidate: Candidate) -> tuple:
+def _stage_a_order(candidate: Candidate, coefficients: Sequence[float]) -> tuple:
     return (
-        -candidate.utility,
+        -preference.utility(candidate.bad, candidate.typical, candidate.good, coefficients),
         -candidate.bad,
         -candidate.typical,
         -candidate.good,

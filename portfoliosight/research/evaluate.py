@@ -69,9 +69,11 @@ Calibration (protocol 6), for a forecast quantile `f` at level `q` and a realize
 Paired arms (protocol 5 and 6). `evaluate_arms(model, banks, horizon, arms)` evaluates labelled
 weight vectors (arms) on one origin model, one list of banks pooled in that order and the horizon
 of the same origin. Each `Arm` holds the training figures above plus `utility`, the owner's
-`U = 0.60 B + 0.30 T + 0.10 G` of `engine.preference.utility`, and the realized figures; each later
-arm is paired with the first by `difference`: `first - second` of Bad, Typical, Good, U and
-`ES_2.5`, and of the realized annual return and maximum drawdown (positive: `first` fell further).
+`U = 0.60 B + 0.30 T + 0.10 G` of `engine.preference.utility`, `expected_return` (the forecast
+`mu_s'w` that the protocol 6 forecast-error diagnostic sets against the realized annual return)
+and the realized figures; each later arm is paired with the first by `difference`:
+`first - second` of Bad, Typical, Good, U and `ES_2.5`, and of the realized annual return and
+maximum drawdown (positive: `first` fell further).
 An arm records what it was evaluated on: the model `key`, the banks (engine, seed, index digest,
 in pooling order) and the horizon (menu, month, origin, status, returns digest). `difference`
 refuses two arms that differ in any of these, so a paired figure always compares the same draws
@@ -303,6 +305,7 @@ class Arm:
     typical: float
     good: float
     utility: float  # engine.preference.utility(bad, typical, good)
+    expected_return: float  # mu_s'w: the model's expected annual return of the weights
     mean: float
     es_25: float
     p_loss: float
@@ -701,6 +704,7 @@ def evaluate_arms(
                 typical=typical,
                 good=good,
                 utility=utility(bad, typical, good),
+                expected_return=float(model.mu_s @ mixes[j]),
                 mean=float(figures.mean[j]),
                 es_25=float(figures.es_25[j]),
                 p_loss=float(figures.p_loss[j]),

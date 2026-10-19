@@ -963,3 +963,78 @@ def test_constraints_at_an_uncounted_point_fail_loudly(monkeypatch) -> None:
     monkeypatch.setattr(search, "minimize", constraints_first)
     with pytest.raises(RuntimeError, match="has not evaluated"):
         run_arm(shared, "R")
+
+
+# ------------------------------------------------- U coefficients other than the owner's (7 b)
+
+HEAVY = (0.70, 0.20, 0.10)
+
+
+def _hand_u(bad: float, typical: float, good: float, k: Sequence[float]) -> float:
+    return k[0] * bad + k[1] * typical + k[2] * good
+
+
+def test_default_coefficients_give_the_same_archive_as_no_argument() -> None:
+    plain = search_cell(_m4(), CAPS4, 0.5, SEED, budget=SMALL)
+    named = search_cell(_m4(), CAPS4, 0.5, SEED, budget=SMALL, coefficients=(0.60, 0.30, 0.10))
+    assert plain.coefficients == preference.COEFFICIENTS
+    assert named.digest() == plain.digest()
+
+
+def test_assess_scores_u_with_the_coefficients_given() -> None:
+    model = _m4()
+    ceiling = risk_ceilings(model, CAPS4).value(1.0)
+    drawn = bank(model, SEED)
+    w = np.array([0.25, 0.25, 0.25, 0.25])
+    scored = assess(model, drawn, CAPS4, ceiling, w, coefficients=HEAVY)
+    assert scored.status == OK
+    assert scored.utility.hex() == _hand_u(scored.bad, scored.typical, scored.good, HEAVY).hex()
+    owner = assess(model, drawn, CAPS4, ceiling, w)
+    assert (owner.bad, owner.typical, owner.good) == (scored.bad, scored.typical, scored.good)
+    assert owner.utility != scored.utility
+
+
+def test_coefficients_steer_the_starts_the_guard_reference_and_the_r_arm() -> None:
+    cell = search_cell(_m4(), CAPS4, 0.5, SEED, budget=SMALL, coefficients=HEAVY)
+    assert cell.failure is None and cell.coefficients == HEAVY
+    broad = [row.scored for row in cell.rows if row.source != "local" and row.scored.status == OK]
+    best = max(_hand_u(s.bad, s.typical, s.good, HEAVY) for s in broad)
+    ties = [s for s in broad if _hand_u(s.bad, s.typical, s.good, HEAVY) >= best - 1e-12]
+    top = min(ties, key=lambda s: (-s.bad, -s.typical, -s.good, s.weights))
+    assert cell.reference is not None and cell.reference.weights == top.weights
+    assert cell.starts[0][0] == top.weights  # the first start is the broad maximum of this U
+    r = cell.arm("R")
+    own = broad + [row.scored for row in r.rows if row.scored.status == OK]
+    best_r = max(_hand_u(s.bad, s.typical, s.good, HEAVY) for s in own)
+    assert r.native_selection is not None
+    picked = r.native_selection
+    assert _hand_u(picked.bad, picked.typical, picked.good, HEAVY) >= best_r - 1e-12
+    for row in r.rows:  # R's objective is minus this U
+        if row.scored.status == OK:
+            u = _hand_u(row.scored.bad, row.scored.typical, row.scored.good, HEAVY)
+            assert row.objective == -u
+    reference = cell.reference
+    d = cell.arm("R+D")
+    for row in d.rows:  # R+D's local guards are taken under the same U
+        if row.scored.status == OK:
+            s = row.scored
+            floor = (
+                _hand_u(reference.bad, reference.typical, reference.good, HEAVY) - PRIMARY_ALLOWANCE
+            )
+            failed_u = not _hand_u(s.bad, s.typical, s.good, HEAVY) >= floor
+            assert row.local_guards is not None and ("u" in row.local_guards) == failed_u
+    owner = search_cell(_m4(), CAPS4, 0.5, SEED, budget=SMALL)
+    assert owner.digest() != cell.digest()
+
+
+def test_constraint_values_take_the_u_guard_under_the_coefficients_given() -> None:
+    model = _m4()
+    ceiling = risk_ceilings(model, CAPS4).value(1.0)
+    drawn = bank(model, SEED)
+    reference = Candidate((0.25, 0.25, 0.25, 0.25), 0.01, 0.05, 0.12)
+    scored = assess(
+        model, drawn, CAPS4, ceiling, np.array([0.25, 0.25, 0.25, 0.25]), coefficients=HEAVY
+    )
+    values = constraint_values(scored, CAPS4, ceiling, reference, 0.00025, coefficients=HEAVY)
+    u_floor = _hand_u(0.01, 0.05, 0.12, HEAVY) - 0.00025
+    assert values[-2] == scored.utility - u_floor

@@ -716,6 +716,9 @@ def test_paired_arms_share_one_model_bank_set_and_horizon(
             assert getattr(arm, name) == pytest.approx(value, abs=1e-10), (arm.label, name)
         # U is the owner's formula of the arm's own unrounded figures, nothing rounded first
         assert arm.utility == 0.60 * arm.bad + 0.30 * arm.typical + 0.10 * arm.good
+        # the forecast the protocol 6 diagnostic compares with the realized year: mu_s'w
+        forecast = sum(m * w for m, w in zip(model.mu_s.tolist(), ARMS[arm.label], strict=True))
+        assert arm.expected_return == pytest.approx(forecast, abs=1e-15)
     assert [(d.first, d.second) for d in result.differences] == [("R+D", "R"), ("MV", "R")]
     for paired in result.differences:
         first, second = result.arm(paired.first), result.arm(paired.second)
