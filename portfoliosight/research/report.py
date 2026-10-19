@@ -532,7 +532,10 @@ def invariance_breaks(outcomes: pa.Table, profile: str | None = None) -> list[st
 
 
 def _paired_complete(run: RunFiles, profile: str = STAGE_1) -> list[str]:
-    """Completed cells without an R row and an R+D row at every allowance."""
+    """Completed cells without an R row and an R+D row at every nonzero allowance.
+
+    The 0 bp control is a diagnostic that never blocks (R26): its row is not required.
+    """
     if run.outcomes is None:
         return []
     have = Counter()
@@ -543,7 +546,7 @@ def _paired_complete(run: RunFiles, profile: str = STAGE_1) -> list[str]:
     for cell in run.cells:
         if cell["profile"] != profile or cell["cell_status"] != OK_CELL:
             continue
-        needed = [("R", None)] + [("R+D", a) for a in ALLOWANCES]
+        needed = [("R", None)] + [("R+D", a) for a in ALLOWANCES if a != 0.0]
         if any(have[(cell["cell_key"], role, a)] != 1 for role, a in needed):
             missing.append(cell["cell_key"])
     return missing
@@ -724,8 +727,13 @@ def validity(
     return Validity(valid=not reasons, reasons=reasons), checks
 
 
-def descriptive_note(stage1: RunFiles, counted: Mapping[str, Any]) -> str | None:
-    """The label of every statistic computed over a partial Stage 1 (None when it is whole)."""
+def descriptive_note(
+    stage1: RunFiles, counted: Mapping[str, Any], unpaired: Sequence[str] = ()
+) -> str | None:
+    """The label of every statistic computed over a partial Stage 1 (None when it is whole).
+
+    ``unpaired`` are the completed cells missing a required paired outcome (`_paired_complete`).
+    """
     parts = [
         f"{counted[name]} {text}"
         for name, text in (
@@ -735,13 +743,16 @@ def descriptive_note(stage1: RunFiles, counted: Mapping[str, Any]) -> str | None
         )
         if counted[name]
     ]
+    if unpaired:
+        shown = ", ".join(unpaired[:3]) + (", ..." if len(unpaired) > 3 else "")
+        parts.append(f"{len(unpaired)} completed cells lack a required paired outcome ({shown})")
     if not parts and stage1.state == "complete":
         return None
     said = []
     if parts:
         said.append(
-            " and ".join(parts) + " Stage 1 cells stay in the denominator and are listed under "
-            "Protocol compliance"
+            " and ".join(parts) + " (Stage 1 cells stay in the denominator and are listed under "
+            "Protocol compliance)"
         )
     if stage1.state != "complete":
         said.append(f"the Stage 1 run is {stage1.state}")
@@ -841,6 +852,7 @@ def build_summary(
     panel = build_panel(stage1, menus) if stage1.origins is not None else None
     problems = sensitivity_problems(sensitivities)
     valid, checks = validity(stage1, sensitivities, panel, counted, problems)
+    unpaired_cells = _paired_complete(stage1)
     summary: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "run": {
@@ -872,7 +884,8 @@ def build_summary(
             "valid": valid.valid,
             "reasons": list(valid.reasons),
             "checks": checks,
-            "descriptive_only": descriptive_note(stage1, counted),
+            "descriptive_only": descriptive_note(stage1, counted, unpaired_cells),
+            "unpaired_cells": unpaired_cells,
         },
     }
     if stage1.outcomes is None or panel is None:

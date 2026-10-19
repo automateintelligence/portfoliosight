@@ -1615,6 +1615,55 @@ def test_a_failed_sensitivity_cell_makes_its_setting_unavailable_and_the_run_inv
         assert settings["coefficients-70-20-10"]["descriptive_only"] is False
 
 
+def _drop_outcomes(directory: Path, key: str, role: str, allowance: float | None) -> None:
+    _rewrite(
+        directory,
+        "outcomes.parquet",
+        lambda row: (
+            None
+            if (row["cell_key"], row["role"], row["allowance"]) == (key, role, allowance)
+            else row
+        ),
+    )
+
+
+def test_a_missing_zero_cap_output_alone_never_blocks_in_any_profile(
+    run_root: Path, tmp_path: Path
+) -> None:
+    """R26: the 0 bp control is not required; a missing required arm still invalidates."""
+    directory = _copy(run_root, tmp_path)
+    budget = directory / "sensitivity-budget"
+    stage1_key = _stage_1_cell(directory, "tsp", "x25", "2024-08")
+    budget_key = _stage_1_cell(budget, "tsp", "x25", "2024-08")
+    _drop_outcomes(directory, stage1_key, "R+D", 0.0)
+    _drop_outcomes(budget, budget_key, "R+D", 0.0)
+    checks = {c["check"]: c for c in report.write_report(directory).summary["validity"]["checks"]}
+    assert checks["paired_arms"]["met"] is True
+    assert checks["sensitivity_budget_cells"]["met"] is True
+    _drop_outcomes(directory, stage1_key, "R+D", 0.0005)
+    _drop_outcomes(budget, budget_key, "R", None)
+    checks = {c["check"]: c for c in report.write_report(directory).summary["validity"]["checks"]}
+    assert checks["paired_arms"]["met"] is False
+    assert checks["sensitivity_budget_cells"]["met"] is False
+    assert (
+        "budget-x2: 1 completed cells lack a paired arm"
+        in (checks["sensitivity_budget_cells"]["detail"])
+    )
+
+
+def test_a_completed_cell_missing_its_primary_outcome_labels_the_tables_descriptive(
+    run_root: Path, tmp_path: Path
+) -> None:
+    directory = _copy(run_root, tmp_path)
+    key = _stage_1_cell(directory, "example", "x50")
+    _drop_outcomes(directory, key, "R+D", 0.00025)
+    summary = report.write_report(directory).summary
+    assert any(r.startswith("paired_arms") for r in summary["validity"]["reasons"])
+    note = summary["validity"]["descriptive_only"]
+    assert note is not None and "lack a required paired outcome" in note and key in note
+    assert summary["validity"]["unpaired_cells"] == [key]
+
+
 def test_the_manifest_and_the_report_count_failures_alike(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
