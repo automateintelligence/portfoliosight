@@ -16,7 +16,10 @@ objects that are built once and shared:
 - `bank(model, seed)` -> `Bank`, one History-replay bank: the production `range_model` of the
   model's sample and moments, whose count matrix comes from the 2,000 x 252 stationary bootstrap
   (mean block 21) of `seed`, with the SHA-256 of that bootstrap's day indices. Replay is the only
-  engine (`Literal["replay"]`); GARCH joins under its own locked replication (protocol 1).
+  engine (`Literal["replay"]`); GARCH joins under its own locked replication (protocol 1). A bank
+  belongs to its model's `key` (menu, origin, lookback and a SHA-256 of the fund order, sample,
+  `mu_s`, covariance and risk-free rate and source), and `simulate` refuses it for any other
+  model: a cache keyed by origin, input digests, menu order and parameters (protocol 4).
 - `realized_horizon(records, ledger, month, menu)` -> `Horizon`, the menu's daily returns on the
   252 horizon dates the ledger names, read from records cut at the horizon end (never after D*).
   A horizon that is not complete carries the ledger's named outcome (`mature_horizon_missing`,
@@ -107,10 +110,10 @@ from portfoliosight.research.harness import (
     Ledger,
     MenuOrigin,
     OriginRow,
-    _record_dates,
-    _risk_free,
-    _stamp,
-    _through,
+    record_dates,
+    risk_free_at,
+    rows_through,
+    to_stamp,
 )
 
 Engine = Literal["replay"]
@@ -144,9 +147,34 @@ class OriginModel:
     mu_s: np.ndarray  # production `menu_beta_blend(moments.mu, moments.cov, risk_free_rate)`
 
     @property
+    def inputs_sha256(self) -> str:
+        """SHA-256 of everything a simulation reads or is labelled with.
+
+        Menu, month, origin, lookback, the fund order, the sample digest, the risk-free source and
+        rate (exact, as a float hex), and the bytes of `mu_s` and of the covariance.
+        """
+        digest = hashlib.sha256()
+        texts = (
+            self.menu,
+            self.month,
+            self.origin.isoformat(),
+            self.lookback,
+            "\x1f".join(self.funds),
+            self.sample_sha256,
+            self.risk_free_source,
+            float(self.risk_free_rate).hex(),
+        )
+        for text in texts:
+            digest.update(text.encode("utf-8") + b"\x1e")
+        for array in (self.mu_s, self.moments.cov):
+            values = np.ascontiguousarray(array, dtype="<f8")
+            digest.update(repr(values.shape).encode("ascii") + values.tobytes() + b"\x1e")
+        return digest.hexdigest()
+
+    @property
     def key(self) -> ModelKey:
-        """What a bank is drawn for: menu, ISO origin, lookback and the sample digest."""
-        return (self.menu, self.origin.isoformat(), self.lookback, self.sample_sha256)
+        """What a bank is drawn for: menu, ISO origin, lookback and `inputs_sha256`."""
+        return (self.menu, self.origin.isoformat(), self.lookback, self.inputs_sha256)
 
 
 @dataclass(frozen=True)
@@ -253,12 +281,12 @@ def origin_model(
     if not entry.training_eligible:
         reasons = ", ".join(issue.code for issue in entry.issues) or row.status
         raise ValueError(f"{menu} at {month} is not training-eligible: {reasons}")
-    stamp = _stamp(row.origin)
+    stamp = to_stamp(row.origin)
     returns = build_returns({fund: _cut(records, fund, stamp) for fund in funds})
     start = select_window(returns, ledger.lookback, row.origin).start
     sources = [symbol for symbol in RISK_FREE_SOURCES if symbol in records]
-    source, rate = _risk_free(
-        records, {symbol: _record_dates(symbol, records[symbol]) for symbol in sources}, stamp
+    source, rate = risk_free_at(
+        records, {symbol: record_dates(symbol, records[symbol]) for symbol in sources}, stamp
     )
     frame = window_sample(returns, list(funds), start, row.origin) if start else returns.iloc[:0]
     found = (start, len(frame), source, rate)
@@ -312,9 +340,9 @@ def realized_horizon(
     if entry.outcome != COMPLETE:
         issues = tuple(issue for issue in entry.issues if issue.code in _HORIZON_CODES)
         return Horizon(menu, funds, month, row.origin, entry.outcome, issues, (), None, None)
-    end = _stamp(entry.horizon_end)
+    end = to_stamp(entry.horizon_end)
     returns = build_returns({fund: _cut(records, fund, end) for fund in funds})
-    after = np.asarray(pd.DatetimeIndex(returns.index) > _stamp(row.origin))
+    after = np.asarray(pd.DatetimeIndex(returns.index) > to_stamp(row.origin))
     block = returns.loc[after, list(funds)]
     days = tuple(day.date() for day in pd.DatetimeIndex(block.index))
     values = block.to_numpy(dtype=float, copy=True)
@@ -344,7 +372,7 @@ def _menu_row(
 def _cut(records: Mapping[str, pd.DataFrame], symbol: str, stamp: pd.Timestamp) -> pd.DataFrame:
     """The record's rows dated on or before ``stamp``."""
     record = records[symbol]
-    return _through(record, _record_dates(symbol, record), stamp)
+    return rows_through(record, record_dates(symbol, record), stamp)
 
 
 # --------------------------------------------------------------------------- training figures
@@ -451,7 +479,11 @@ def realized(horizon: Horizon, weights: npt.ArrayLike) -> Realized:
 
 
 def path_metrics(returns: npt.ArrayLike, weights: npt.ArrayLike) -> PathMetrics:
-    """Constant-weight figures of each mix over T x N daily returns (T >= 2); see the docstring."""
+    """Constant-weight figures of each mix over T x N daily returns (T >= 2); see the docstring.
+
+    The loop over mixes is deliberate: each mix's figures come from the same one-mix operations
+    whatever the batch, so they are bit-identical however the mixes are split or ordered.
+    """
     daily_returns = np.asarray(returns, dtype=float)
     if daily_returns.ndim != 2 or len(daily_returns) < 2:
         raise ValueError(f"returns must be T x N with T >= 2 rows, got {daily_returns.shape}")

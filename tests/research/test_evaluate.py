@@ -210,7 +210,8 @@ def test_origin_model_rebuilds_the_training_window_with_production_estimators(
     assert model.sample_sha256 == sample_digest(
         ["A", "B", "C"], [day.date().isoformat() for day in window], oracle
     )
-    assert model.key == ("m", "2024-01-31", "1y", model.sample_sha256)
+    assert model.key[:3] == ("m", "2024-01-31", "1y")
+    assert len(model.key[3]) == 64 and model.key[3] == model.inputs_sha256
 
     sgov = _returns_on("SGOV", _window("2024-01-31"))  # its last 252 own-date returns at the origin
     rate = float(np.prod(1.0 + sgov) - 1.0)
@@ -307,6 +308,31 @@ def test_bank_is_the_production_replay_bank(model: OriginModel) -> None:
     assert other.index_sha256 != drawn.index_sha256
     with pytest.raises(ValueError, match="engine"):
         bank(model, SEED, "garch")  # pyright: ignore[reportArgumentType]
+
+
+def test_a_bank_belongs_to_one_model(model: OriginModel) -> None:
+    drawn = bank(model, SEED)
+    # each variant differs from the model in one input only
+    variants = {
+        "risk_free_rate": replace(model, risk_free_rate=model.risk_free_rate + 0.01),
+        "risk_free_source": replace(model, risk_free_source="TSP-G"),
+        "mu_s": replace(model, mu_s=model.mu_s + 1e-12),
+        "cov": replace(model, moments=replace(model.moments, cov=model.moments.cov * 1.000001)),
+        "fund order": replace(model, funds=("B", "A", "C")),
+        "sample": replace(model, sample_sha256="0" * 64),
+        "lookback": replace(model, lookback="5y"),
+        "origin": replace(model, origin=date(2024, 2, 29)),
+        "month": replace(model, month="2024-02"),
+        "menu": replace(model, menu="n"),
+    }
+    for name, other in variants.items():
+        assert other.key != model.key, name
+        with pytest.raises(ValueError, match="another"):
+            simulate(other, drawn, MIXES[:1])
+    # the same inputs in a new object: the same key, the bank is accepted
+    twin = replace(model, mu_s=model.mu_s.copy())
+    assert twin.key == model.key
+    assert simulate(twin, drawn, MIXES[:1]).status == (OK,)
 
 
 # ------------------------------------------------------------------------ training figures

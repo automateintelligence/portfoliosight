@@ -287,12 +287,12 @@ class _MenuPrices:
     def at(self, stamp: pd.Timestamp) -> np.ndarray:
         """Usable values at ``stamp``: all False when no fund has a record row that day."""
         position = _position(self.calendar, stamp)
-        if position < len(self.calendar) and _stamp(self.calendar[position]) == stamp:
+        if position < len(self.calendar) and to_stamp(self.calendar[position]) == stamp:
             return self.valid[position]
         return np.zeros(len(self.funds), dtype=bool)
 
 
-def _stamp(day: Any) -> pd.Timestamp:
+def to_stamp(day: Any) -> pd.Timestamp:
     """A date as a midnight Timestamp; NaT or a non-date is an error."""
     stamp = pd.Timestamp(day)
     if not isinstance(stamp, pd.Timestamp):
@@ -338,17 +338,17 @@ def build_ledger(
     menu_items = _menu_items(menus, records)
     fixed = list(dict.fromkeys(fund for _, funds in menu_items for fund in funds))
     used = [*fixed, *(symbol for symbol in RISK_FREE_SOURCES if symbol in records)]
-    dates = {symbol: _record_dates(symbol, records[symbol]) for symbol in dict.fromkeys(used)}
+    dates = {symbol: record_dates(symbol, records[symbol]) for symbol in dict.fromkeys(used)}
     calendar = _session_index(sessions)
-    d_stamp = _stamp(d_star)
+    d_stamp = to_stamp(d_star)
 
-    first = {fund: _stamp(dates[fund][0]).date() for fund in fixed}
+    first = {fund: to_stamp(dates[fund][0]).date() for fund in fixed}
     latest = max(first.values())
     boundary_fund = next(fund for fund in fixed if first[fund] == latest)
     boundary = _month(latest)
     after_d_star = d_star + timedelta(days=1)
     last = _month(d_star if after_d_star.month != d_star.month else d_star.replace(day=1) - DAY)
-    month_ends = {_month(stamp.date()): stamp for stamp in map(_stamp, calendar)}
+    month_ends = {_month(stamp.date()): stamp for stamp in map(to_stamp, calendar)}
     prices = {name: _MenuPrices.of(funds, records) for name, funds in menu_items}
 
     rows = []
@@ -358,7 +358,7 @@ def build_ledger(
         stamp = month_ends[month]
         maturity = _maturity(calendar, stamp, d_stamp)
         mature = maturity is not None and maturity <= d_stamp
-        source, rate = _risk_free(records, dates, stamp)
+        source, rate = risk_free_at(records, dates, stamp)
         entries, unpriced = [], []
         for name, funds in menu_items:
             entries.append(
@@ -424,7 +424,8 @@ def _menu_items(
     return tuple(items)
 
 
-def _record_dates(symbol: str, record: pd.DataFrame) -> pd.DatetimeIndex:
+def record_dates(symbol: str, record: pd.DataFrame) -> pd.DatetimeIndex:
+    """A price record's dates, checked: ``date`` and ``tr_index`` present, dates strictly rising."""
     missing = {"date", "tr_index"} - set(record.columns)
     if missing:
         raise ValueError(f"{symbol}: the price record lacks {sorted(missing)}")
@@ -437,13 +438,15 @@ def _record_dates(symbol: str, record: pd.DataFrame) -> pd.DatetimeIndex:
 
 
 def _session_index(sessions: Iterable[Any]) -> pd.DatetimeIndex:
-    index = pd.DatetimeIndex([_stamp(session) for session in sessions])
+    index = pd.DatetimeIndex([to_stamp(session) for session in sessions])
     if len(index) == 0 or not (index.is_monotonic_increasing and index.is_unique):
         raise ValueError("the XNYS sessions must be a non-empty, strictly increasing list")
     return index
 
 
-def _through(record: pd.DataFrame, dates: pd.DatetimeIndex, stamp: pd.Timestamp) -> pd.DataFrame:
+def rows_through(
+    record: pd.DataFrame, dates: pd.DatetimeIndex, stamp: pd.Timestamp
+) -> pd.DataFrame:
     """The record's rows dated on or before ``stamp``."""
     return record.iloc[: _position(dates, stamp, "right")]
 
@@ -454,8 +457,8 @@ def _maturity(
     """The 252nd session strictly after the origin; None when it lies beyond the list's end."""
     target = _position(calendar, stamp, "right") + MATURITY_SESSIONS - 1
     if target < len(calendar):
-        return _stamp(calendar[target])
-    final = _stamp(calendar[-1])
+        return to_stamp(calendar[target])
+    final = to_stamp(calendar[-1])
     if final > d_stamp:
         return None  # beyond a list that already passes D*: certainly after D*
     raise ValueError(
@@ -464,7 +467,7 @@ def _maturity(
     )
 
 
-def _risk_free(
+def risk_free_at(
     records: Mapping[str, pd.DataFrame],
     dates: Mapping[str, pd.DatetimeIndex],
     stamp: pd.Timestamp,
@@ -473,7 +476,7 @@ def _risk_free(
     series = {}
     for symbol in RISK_FREE_SOURCES:
         if symbol in records:
-            own = _through(records[symbol], dates[symbol], stamp)
+            own = rows_through(records[symbol], dates[symbol], stamp)
             series[symbol] = build_returns({symbol: own})[symbol]
     # The source is the first one `risk_free_rate` accepts: TRADING_DAYS returns that are set.
     source = next(
@@ -495,7 +498,7 @@ def _menu_origin(
     d_stamp: pd.Timestamp,
 ) -> MenuOrigin:
     origin = stamp.date()
-    truncated = {fund: _through(records[fund], dates[fund], stamp) for fund in funds}
+    truncated = {fund: rows_through(records[fund], dates[fund], stamp) for fund in funds}
     returns = build_returns(truncated)
     length = LOOKBACK_ROWS[lookback]
     window_start = select_window(returns, lookback, origin).start
@@ -516,7 +519,7 @@ def _menu_origin(
                 note = "no price on or before the origin"
                 issues.append(Issue(FUND_AFTER_START, fund, None, note))
                 continue
-            day = _stamp(record["date"].iloc[0]).date()
+            day = to_stamp(record["date"].iloc[0]).date()
             if day > window_start:
                 note = f"first price {day}, after the window's first date {window_start}"
                 issues.append(Issue(FUND_AFTER_START, fund, day, note))
@@ -535,9 +538,9 @@ def _menu_origin(
         outcome = HORIZON_MISSING if horizon_issues else COMPLETE
         horizon_rows = len(horizon)
         if horizon_rows:
-            horizon_start = _stamp(horizon[0]).date()
+            horizon_start = to_stamp(horizon[0]).date()
         if horizon_rows == HORIZON_ROWS:
-            horizon_end = _stamp(horizon[-1]).date()
+            horizon_end = to_stamp(horizon[-1]).date()
     else:
         outcome = IMMATURE
     return MenuOrigin(
@@ -575,14 +578,14 @@ def _horizon(
     if len(horizon) < HORIZON_ROWS:
         note = f"{len(horizon)} union dates after the origin, {HORIZON_ROWS} needed"
         issues.append(Issue(HORIZON_DATES_SHORT, note=note))
-    elif _stamp(horizon[-1]) > d_stamp:
-        day = _stamp(horizon[-1]).date()
+    elif to_stamp(horizon[-1]) > d_stamp:
+        day = to_stamp(horizon[-1]).date()
         note = f"the {HORIZON_ROWS}th union date {day} is after D* {d_stamp.date()}"
         issues.append(Issue(HORIZON_PAST_D_STAR, None, day, note))
     readable = np.asarray(horizon <= d_stamp)
     block = prices.valid[after : after + len(horizon)]
     for column, fund in enumerate(prices.funds):
-        gaps = [_stamp(day).date() for day in horizon[readable & ~block[:, column]]]
+        gaps = [to_stamp(day).date() for day in horizon[readable & ~block[:, column]]]
         if gaps:
             note = (
                 f"{len(gaps)} horizon date(s) without a total-return value, "
@@ -609,8 +612,8 @@ def _assign_intervals(
         spans = []
         for i in panel:
             entry = rows[i].menus[k]  # complete, so both horizon ends are set
-            first = _position(calendar, _stamp(entry.horizon_start))
-            last = _position(calendar, _stamp(entry.horizon_end))
+            first = _position(calendar, to_stamp(entry.horizon_start))
+            last = _position(calendar, to_stamp(entry.horizon_end))
             spans.append((first, last))
         retained_end: date | None = None
         for j, i in enumerate(panel):
