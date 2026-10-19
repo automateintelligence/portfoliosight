@@ -863,6 +863,51 @@ def test_combine_refuses_arms_of_another_cell_or_a_missing_arm() -> None:
     assert search.combine(shared, [d, r]).digest() == _cell().digest()
 
 
+class _Interrupted(Exception):
+    """Stands for the runner's arm alarm going off inside a search."""
+
+
+def test_a_stopped_arm_keeps_its_attempts_and_the_cell_its_archive(monkeypatch) -> None:
+    """Codex P2-5: what an arm did before it was stopped survives the exception: its local
+    attempts, raw statuses and completed starts, as an arm with the arm-time error, and the cell
+    keeps the shared archive and every arm that ran (no pool, failure resource_breach)."""
+    shared = prepare(_m4(), CAPS4, 0.5, SEED, budget=SMALL)
+    progress = search.ArmProgress()
+    whole = run_arm(shared, "R+D", progress=progress)
+    assert progress.rows == list(whole.rows) and progress.starts == list(whole.starts)
+    original = search.assess
+    first_start = sum(row.index == 0 for row in whole.rows)
+
+    def interrupted(*args, **kwargs):
+        if len(progress.rows) >= first_start + 2:  # the second start's third call or later
+            raise _Interrupted
+        return original(*args, **kwargs)
+
+    r = run_arm(shared, "R")
+    monkeypatch.setattr(search, "assess", interrupted)
+    progress = search.ArmProgress()
+    with pytest.raises(_Interrupted):
+        run_arm(shared, "R+D", progress=progress)
+    monkeypatch.undo()
+    stopped = search.stopped_arm(shared, "R+D", progress, "the alarm rang")
+    assert stopped.error == search.ARM_TIME_LIMIT == "arm_seconds"
+    assert stopped.failure == search.RESOURCE_BREACH == "resource_breach"
+    assert stopped.error_detail == "the alarm rang"
+    # the same search up to the interruption: a prefix of the whole arm, its first start whole
+    assert stopped.rows == tuple(progress.rows) == whole.rows[: len(progress.rows)]
+    assert stopped.starts == whole.starts[:1] and stopped.failed_starts == whole.starts[0].failed
+    assert stopped.calls == len(progress.rows) > first_start
+    assert {row.index for row in stopped.rows} == {0, 1}
+    assert stopped.native_reference is None and stopped.native_selection is None
+    cell = search.combine(shared, [stopped, r])
+    assert cell.failure == search.RESOURCE_BREACH and cell.pool_rows == ()
+    assert cell.rows == (*shared.rows, *r.rows, *stopped.rows)  # canonical arm order
+    alone = search.combine(shared, [stopped])  # the arm that never ran is not invented
+    assert [arm.label for arm in alone.arms] == ["R+D"]
+    with pytest.raises(ValueError, match="arm"):
+        search.combine(shared, [r])  # without a stopped arm every arm is required
+
+
 # ------------------------------------------------------------ investigation digest (5)
 
 

@@ -27,9 +27,9 @@ The return-optimization experiment (protocol 4-9; plan task 6b.5):
         [--out ROOT] [--workers 0|1|2] [--estimate-id ID]
     .venv/bin/python scripts/backtest_ranges.py experiment run --snapshot SNAPSHOT [--out ROOT]
         [--stage 1|2] [--sensitivity coefficients|lookback|budget] [--run-id ID]
-        [--workers 0|1|2] [--cpu-hours-ceiling HOURS]
+        [--workers 0|1|2] [--cpu-hours-ceiling HOURS] [--review TEXT ...]
     .venv/bin/python scripts/backtest_ranges.py experiment report --run RUN_DIR
-        [--allow-incomplete]
+        [--allow-incomplete] [--review TEXT ...]
 
 `run` without `--sensitivity` runs Stage 1 into `ROOT/<protocol sha256 prefix16>/<run id>/`;
 `--sensitivity NAME` and `--stage 2` name that Stage 1 run with `--run-id` and write beneath it.
@@ -45,6 +45,9 @@ verifies every artifact digest the manifests list, and writes `summary.json` (wh
 `stage_2.run` gates `run --stage 2`) and `report.md` into that run directory
 (`portfoliosight/research/report.py`, statistics in `portfoliosight/research/evidence.py`); an
 incomplete run is refused unless `--allow-incomplete`, which labels it inconclusive/invalid.
+`--review TEXT` (repeatable; `run` and `report`) records a review's identity, date and scope
+verbatim in the run's manifest.json `reviews` (`report` appends to the Stage 1 manifest); nothing
+reads or interprets it.
 
 Exit codes: 0 done (a gate that is not met is a result, not an error), 2 a bad argument or an
 output path inside the snapshot, the mirror it was copied from or the repository (unless
@@ -111,6 +114,16 @@ def _lookbacks(text: str) -> list[str]:
     return names
 
 
+def _review_option(action: argparse.ArgumentParser) -> None:
+    action.add_argument(
+        "--review",
+        action="append",
+        default=[],
+        metavar="TEXT",
+        help="a review's identity, date and scope, recorded verbatim in manifest.json (repeatable)",
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Origins ledger and evidence gate of a snapshot.")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -131,6 +144,7 @@ def _parser() -> argparse.ArgumentParser:
             action.add_argument("--stage", type=int, choices=(1, 2), default=1)
             action.add_argument("--sensitivity", choices=experiment.SENSITIVITIES)
             action.add_argument("--run-id", help="the Stage 1 run id (needed beneath one)")
+            _review_option(action)
         else:
             action.add_argument("--estimate-id")
     action = actions.add_parser("report", help="write summary.json and report.md of a run")
@@ -140,6 +154,7 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="report an incomplete run (labeled inconclusive/invalid)",
     )
+    _review_option(action)
     for name, text in (
         ("ledger", "write the origins ledger"),
         ("coverage", "print the protocol 4 evidence gate"),
@@ -261,7 +276,9 @@ def _settings() -> experiment.Settings:
 
 def _report(args: argparse.Namespace) -> int:
     try:
-        written = run_report.write_report(args.run, allow_incomplete=args.allow_incomplete)
+        written = run_report.write_report(
+            args.run, allow_incomplete=args.allow_incomplete, reviews=args.review
+        )
     except run_report.ArtifactChanged as exc:
         print(str(exc), file=sys.stderr)
         return 6
@@ -304,6 +321,7 @@ def _experiment(args: argparse.Namespace) -> int:
         result = experiment.run(
             inputs, _provenance(), args.out, settings=_settings(), limits=limits,
             stage=args.stage, sensitivity=args.sensitivity, run_id=args.run_id,
+            reviews=args.review,
         )  # fmt: skip
     except experiment.UnsafeOutput as exc:
         print(str(exc), file=sys.stderr)

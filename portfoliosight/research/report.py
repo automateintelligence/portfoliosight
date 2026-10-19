@@ -45,7 +45,7 @@ import math
 import os
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -774,8 +774,15 @@ def _sensitivity_runs(directory: Path, allow: bool) -> dict[str, RunFiles | None
     return found
 
 
-def write_report(directory: str | Path, *, allow_incomplete: bool = False) -> Report:
-    """Read the run directory, compute every statistic and decision, write both files."""
+def write_report(
+    directory: str | Path, *, allow_incomplete: bool = False, reviews: Sequence[str] = ()
+) -> Report:
+    """Read the run directory, compute every statistic and decision, write both files.
+
+    ``reviews`` (ruling R28) are appended verbatim to the Stage 1 manifest's `reviews`, each
+    entry once, before the summary is built; they are recorded, never interpreted. Without
+    them no file but `summary.json` and `report.md` is written.
+    """
     root = Path(directory)
     stage1 = read_run(root)
     if stage1.manifest.get("stage") != 1 or stage1.manifest.get("sensitivity") is not None:
@@ -783,6 +790,15 @@ def write_report(directory: str | Path, *, allow_incomplete: bool = False) -> Re
     if stage1.state != "complete" and not allow_incomplete:
         raise IncompleteRun(f"the Stage 1 run is {stage1.state}; pass allow_incomplete to label it")
     sensitivities = _sensitivity_runs(root, allow_incomplete)
+    recorded = list(stage1.manifest.get("reviews") or [])
+    added = [str(entry) for entry in dict.fromkeys(reviews) if str(entry) not in recorded]
+    if added:
+        manifest = {**stage1.manifest, "reviews": recorded + added}
+        path = root / "manifest.json"
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(manifest, indent=2, default=str) + "\n", encoding="utf-8")
+        temporary.replace(path)
+        stage1 = replace(stage1, manifest=manifest)
     summary, verdict = build_summary(stage1, sensitivities)
     markdown = render(summary)
     (root / "summary.json").write_text(
@@ -1546,6 +1562,7 @@ def _profile_cost(run: RunFiles, profile: str | None, menus: Sequence[str]) -> d
                     "wall",
                     "return_evaluation",
                     "score",
+                    "native_selection",
                     "solver",
                     "calls",
                     "evaluations",
@@ -1613,10 +1630,11 @@ def _cost_section(
     limits = stage1.manifest.get("limits") or {}
     return {
         "separation": "search cost = an arm's warm wall time from its fresh cache to its native "
-        "selection (replay scoring 'return_evaluation', measure scoring 'score', solver and "
+        "selection (replay scoring 'return_evaluation', measure scoring 'score', the native "
+        "selection on its own archive 'native_selection' net of its scoring, solver and "
         "overhead 'solver'); shared preprocessing and broad search, union rescoring and "
         "independent evaluation are charged separately; failed calls are inside the arm wall "
-        "and counted under 'invalid'",
+        "and counted under 'invalid'; an arm stopped at the time ceiling counts what it did",
         "stage_1": _profile_cost(stage1, STAGE_1, menus),
         "sensitivities": {
             name: None if run is None else _profile_cost(run, None, menus)

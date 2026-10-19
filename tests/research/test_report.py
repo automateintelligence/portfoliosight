@@ -930,6 +930,8 @@ def test_the_summary_has_every_section_and_a_stage_2_decision(written: report.Re
     assert summary["denominator"]["cells"] == 36 and summary["denominator"]["failed"] == 0
     names = {"locked.parquet", "origins.parquet", "outcomes.parquet", "search.parquet"}
     assert set(summary["verification"]["stage_1"]) == names | {"resources.jsonl"}
+    arms = summary["cost"]["stage_1"]["tsp"]["search_cost_by_arm"]
+    assert arms["R+D"]["native_selection"]["sum"] > 0.0  # a timed sub-part of each arm
     for name, entry in summary["verification"]["sensitivities"].items():
         assert entry["state"] == "complete", name
     assert summary["panel"]["months"] == ["2024-07", "2024-08", "2024-09"]
@@ -1121,9 +1123,12 @@ def test_cli_writes_the_report_and_names_refusals(
     cli: ModuleType, run_root: Path, tmp_path: Path, capsys
 ) -> None:
     directory = _copy(run_root, tmp_path)
-    assert cli.main(["experiment", "report", "--run", str(directory)]) == 0
+    review = ["--review", "Codex (GPT-6), 2026-10-25, Stage 1 results"]
+    assert cli.main(["experiment", "report", "--run", str(directory), *review]) == 0
     printed = capsys.readouterr().out
     assert "summary.json and report.md written" in printed and "stage 2: skip" in printed
+    manifest = json.loads((directory / "manifest.json").read_text())
+    assert manifest["reviews"] == ["Codex (GPT-6), 2026-10-25, Stage 1 results"]
     lone = _copy(run_root, tmp_path / "lone", sensitivities=False)
     assert cli.main(["experiment", "report", "--run", str(lone)]) == 7
     assert "refused" in capsys.readouterr().err

@@ -10,8 +10,13 @@ protocol 7 ceilings.
 - `run_search_task` searches, selects and locks one cell. Each arm is timed from `search.run_arm`
   (a fresh arm-local cache preloaded with the shared broad archive only) to its native selection;
   an arm past the per-arm ceiling stops the run, whether measured after the arm or raised inside it
-  by `arm_alarm` (SIGALRM, in the main thread of the process running the arm). `Probe` splits the
-  time into replay evaluation, measure scoring and bank draws while the cell runs.
+  by `arm_alarm` (SIGALRM, in the main thread of the process running the arm). Either way the
+  cell keeps its evidence: the shared archive, every arm that ran and the stopped arm's attempts,
+  completed starts, raw statuses and counters so far (`search.ArmProgress`, `search.stopped_arm`),
+  written to search.parquet as a `resource_breach` cell; the run stops at the breach. `Probe`
+  splits the time into replay evaluation, measure scoring, the arm's native selection and bank
+  draws while the cell runs, each exclusive of the others nested in it (`ARM_PARTS`; the rest of
+  an arm is the solver's).
 - `run_evaluation_task` evaluates the locked rows of one origin (`outcomes.evaluate_group`).
 - `Inline` runs tasks in this process; `Processes` spawns at most two workers, each holding BLAS to
   one thread (`threadpoolctl`, after checking the inherited environment) and warmed with a small
@@ -36,7 +41,7 @@ import time
 import traceback
 from collections import Counter, deque
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -58,6 +63,7 @@ from portfoliosight.research.selection import (
 
 BLAS_ENV = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
 SAMPLE_SECONDS = 60.0  # how often a monitor sample is kept for resources.jsonl
+ARM_PARTS = ("return_evaluation", "score", "native_selection")  # timed parts of an arm's wall
 
 
 class ArmTimeLimit(Exception):
@@ -209,7 +215,8 @@ def arm_alarm(seconds: float, enabled: bool = True) -> Iterator[None]:
 
 
 class Probe:
-    """Times replay evaluation, measure scoring and bank draws inside the search while active."""
+    """Times replay evaluation, measure scoring, native selection and bank draws inside the
+    search while active; a label's seconds exclude the probed calls nested in it."""
 
     def __init__(self, clock: Callable[[], float] = time.perf_counter) -> None:
         self.clock = clock
@@ -222,6 +229,7 @@ class Probe:
             (search, "assess", "return_evaluation"),
             (search, "bank", "bank"),
             (search._Measures, "value", "score"),
+            (search, "_native", "native_selection"),
         ):
             original = getattr(owner, name)
             self._saved.append((owner, name, original))
@@ -235,11 +243,14 @@ class Probe:
 
     def _timed(self, original: Callable, label: str) -> Callable:
         def timed(*args, **kwargs):
+            before = sum(self.seconds.values())
             start = self.clock()
             try:
                 return original(*args, **kwargs)
             finally:
-                self.seconds[label] = self.seconds.get(label, 0.0) + self.clock() - start
+                elapsed = self.clock() - start
+                nested = sum(self.seconds.values()) - before  # probed calls inside this one
+                self.seconds[label] = self.seconds.get(label, 0.0) + elapsed - nested
                 self.calls[label] += 1
 
         return timed
@@ -318,57 +329,47 @@ def run_search_task(
         shared_marks = probe.mark()
         record["shared"] = {"wall": clock() - started, **shared_marks}
         arms, timings = [], []
+        breach = None
         if shared.error is None:
             for position, label in enumerate(spec.arm_order):
                 before, start = probe.mark(), clock()
+                progress = search.ArmProgress()
                 try:
                     with arm_alarm(task.arm_seconds, alarm):
-                        arm = search.run_arm(shared, label)
+                        arm = search.run_arm(shared, label, progress=progress)
                 except ArmTimeLimit as exc:
                     wall = clock() - start
                     breach = Breach("arm_seconds", task.arm_seconds, wall, f"{label}: {exc}")
                     detail = (
-                        f"{exc}; the alarm stopped the arm inside its search, so its attempt "
-                        "rows are discarded (the run stops at this breach)"
+                        f"{exc}; the alarm stopped the arm inside its search: its attempt rows "
+                        "so far are kept (the run stops at this breach)"
                     )
-                    return finish(
-                        RESOURCE_BREACH, _breach_table(spec, profile, label, detail), breach=breach
-                    )
-                wall = clock() - start
-                after = probe.mark()
-                spent = {name: after.get(name, 0.0) - before.get(name, 0.0) for name in after}
-                timings.append(
-                    {
-                        "arm": label,
-                        "position": position,
-                        "wall": wall,
-                        **spent,
-                        "solver": wall
-                        - spent.get("return_evaluation", 0.0)
-                        - spent.get("score", 0.0),
-                        "calls": arm.calls,
-                        "evaluations": arm.evaluations,
-                        "cache_hits": arm.calls - arm.evaluations,
-                        "invalid": arm.invalid,
-                        "failed_starts": arm.failed_starts,
-                        "preloaded_rows": len(shared.cache),
-                        "cache": "fresh, preloaded with the shared broad archive only",
-                    }
-                )
+                    arm = search.stopped_arm(shared, label, progress, detail)
+                else:
+                    wall = clock() - start
+                    if wall > task.arm_seconds:
+                        breach = Breach("arm_seconds", task.arm_seconds, wall, label)
+                        detail = (
+                            f"measured {wall!r} s > {task.arm_seconds!r} s; the arm's attempt "
+                            "rows so far are kept (the run stops at this breach)"
+                        )
+                        arm = replace(arm, error=search.ARM_TIME_LIMIT, error_detail=detail)
+                timings.append(_arm_timing(label, position, wall, before, probe.mark(), arm))
+                if breach is not None:
+                    timings[-1]["stopped"] = search.ARM_TIME_LIMIT
+                timings[-1]["preloaded_rows"] = len(shared.cache)
                 record["arms"] = timings
-                if wall > task.arm_seconds:
-                    breach = Breach("arm_seconds", task.arm_seconds, wall, label)
-                    detail = (
-                        f"measured {wall!r} s > {task.arm_seconds!r} s; the arm's attempt rows are "
-                        "discarded (the run stops at this breach)"
-                    )
-                    return finish(
-                        RESOURCE_BREACH, _breach_table(spec, profile, label, detail), breach=breach
-                    )
                 arms.append(arm)
+                if breach is not None:
+                    break
         start = clock()
         cell = search.combine(shared, arms)
         record["union"] = clock() - start
+    if breach is not None:  # the stopped cell's evidence, nothing selected or locked
+        start = clock()
+        table = selection.search_table(spec, profile, cell, None, model)
+        record["tables"] = clock() - start
+        return finish(RESOURCE_BREACH, table, breach=breach)
     start = clock()
     chosen = None if cell.failure is not None else selection.choose(cell, profile.coefficients)
     locked = [] if chosen is None else selection.lock_rows(spec, profile, cell, chosen, model)
@@ -379,26 +380,29 @@ def run_search_task(
     return finish(OK_CELL if cell.failure is None else cell.failure, table, locked)
 
 
-def _breach_table(spec: CellSpec, profile: Profile, label: str, detail: str) -> pa.Table:
-    """The rows of a cell stopped by an arm past its time ceiling: the cell and that arm."""
-    cell = selection.cell_row(spec, RESOURCE_BREACH, "arm_seconds", detail, profile=profile)
-    arm = {
-        key: cell[key]
-        for key in (
-            "profile", "cell_key", "cell_sha256", "menu", "month", "origin", "lookback",
-            "ceiling_id", "fraction", "seed",
-        )
-    }  # fmt: skip
-    arm.update(
-        {
-            "kind": "arm",
-            "arm": label,
-            "error": "arm_seconds",
-            "error_detail": detail,
-            "failure": RESOURCE_BREACH,
-        }
-    )
-    return selection.status_table([cell, arm])
+def _arm_timing(
+    label: str,
+    position: int,
+    wall: float,
+    before: Mapping[str, float],
+    after: Mapping[str, float],
+    arm: search.ArmSearch,
+) -> dict[str, Any]:
+    """An arm's resource record: its wall, the probed parts, the solver's rest and counters."""
+    spent = {name: after.get(name, 0.0) - before.get(name, 0.0) for name in after}
+    return {
+        "arm": label,
+        "position": position,
+        "wall": wall,
+        **spent,
+        "solver": wall - sum(spent.get(name, 0.0) for name in ARM_PARTS),
+        "calls": arm.calls,
+        "evaluations": arm.evaluations,
+        "cache_hits": arm.calls - arm.evaluations,
+        "invalid": arm.invalid,
+        "failed_starts": arm.failed_starts,
+        "cache": "fresh, preloaded with the shared broad archive only",
+    }
 
 
 def _preset_class(spec: CellSpec) -> str:

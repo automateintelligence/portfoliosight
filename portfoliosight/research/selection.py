@@ -10,8 +10,9 @@ module and never the reverse (tests/research/test_experiment.py checks the impor
    2.5 bp and the protocol 7 (a) sweep 0, 5 and 10 bp, all from the same union pool, no new
    search) `preference.select`, and the filtered pool's unconstrained most diversified member.
 2. `search_table(spec, cell, chosen, model)`: every row of the cell for `search.parquet`, one
-   long table whose `kind` says what a row is: `cell` (status, failure class, ceilings, hashes,
-   the local guard reference, pool sizes), `anchor`, `arm` (failure, calls, native results),
+   long table whose `kind` says what a row is: `cell` (status, failure class and its reason, the
+   first failing arm's when the cell has none of its own, ceilings, hashes, the local guard
+   reference, pool sizes), `anchor`, `arm` (failure, calls, native results),
    `start` (COBYLA's raw report) and `candidate` (every attempted proposal, its evaluation, DR²
    and ENB, and its flags in the union pool: dominated, `w_r`, admissible and the guards it fails
    relative to the union `w_R` at the primary allowance, `stage_b`, native winners).
@@ -46,6 +47,7 @@ import pyarrow.parquet as pq
 from portfoliosight.engine import measures, preference
 from portfoliosight.engine.preference import Candidate, Selection
 from portfoliosight.engine.torsion import enb, torsion_basis
+from portfoliosight.research import search
 from portfoliosight.research.evaluate import OK, OriginModel
 from portfoliosight.research.search import (
     FEASIBILITY_TOL,
@@ -76,7 +78,7 @@ ROLES = (
 # cell statuses beyond the search's failure classes
 OK_CELL = "ok"
 TRAINING_INELIGIBLE = "training_ineligible"  # a sensitivity lookback without a training window
-RESOURCE_BREACH = "resource_breach"  # the cell crossed a resource ceiling: the run stopped
+RESOURCE_BREACH = search.RESOURCE_BREACH  # the cell crossed a resource ceiling: the run stopped
 UNATTEMPTED = "unattempted"  # never started: the run stopped first
 INTERRUPTED = "interrupted"  # running when the run stopped
 
@@ -402,7 +404,11 @@ def search_table(
     """Every row of one searched cell for `search.parquet` (see the module docstring)."""
     ident = _identity(spec)
     status = OK_CELL if cell.failure is None else cell.failure
-    top = cell_row(spec, status, cell.error, cell.error_detail, profile=profile)
+    error, detail = cell.error, cell.error_detail
+    failing = [arm for arm in cell.arms if arm.error is not None]
+    if error is None and failing:  # the cell's reason is its first failing arm's
+        error, detail = failing[0].error, f"{failing[0].label}: {failing[0].error_detail}"
+    top = cell_row(spec, status, error, detail, profile=profile)
     ceilings = cell.ceilings
     reference = cell.reference
     top.update(

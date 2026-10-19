@@ -39,6 +39,7 @@ from portfoliosight.research import (
     experiment,
     harness,
     outcomes,
+    report,
     runner,
     search,
     selection,
@@ -267,8 +268,8 @@ def test_a_forced_failed_cell_stays_in_the_denominator(
     settings = make_settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
     original = search.run_arm
 
-    def failing(shared, label):
-        arm = original(shared, label)
+    def failing(shared, label, **kwargs):
+        arm = original(shared, label, **kwargs)
         if label == "R+D" and shared.fraction == 0.5 and shared.model.menu == "example":
             return replace(arm, error=search.UNDEFINED_MEASURE, error_detail="injected")
         return arm
@@ -317,6 +318,22 @@ def test_the_protocol_9_artifacts_exist_with_their_schemas(stage1: experiment.Ru
     assert all(row["shrinkage"] is None for row in origins if not row["scheduled"])
     kinds = {entry["kind"] for entry in _resources(directory)}
     assert {"run", "cell", "lock", "evaluation"} <= kinds
+
+
+def test_reviews_are_recorded_verbatim_by_the_run_and_the_report(tmp_path: Path) -> None:
+    """R28: `reviews` holds each entry exactly as given, never interpreted; default empty."""
+    records = make_records()
+    settings = make_settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
+    given = ("Codex (GPT-6), 2026-10-19: Stage 1 code at HEAD", "  owner; scope: none  ")
+    result = run_experiment(tmp_path, records, settings=settings, run_id="rv", reviews=given)
+    path = result.directory / "manifest.json"
+    assert json.loads(path.read_text())["reviews"] == list(given)
+    later = "Fable 5.1, 2026-10-20, results"
+    written = report.write_report(result.directory, allow_incomplete=True, reviews=(later,))
+    assert json.loads(path.read_text())["reviews"] == [*given, later]
+    assert later in written.summary["scope"]["review"]
+    report.write_report(result.directory, allow_incomplete=True, reviews=(later,))
+    assert json.loads(path.read_text())["reviews"] == [*given, later]  # recorded once
 
 
 def test_the_manifest_records_provenance_and_claims_no_review(
@@ -568,9 +585,9 @@ def test_the_lock_is_written_before_any_independent_draw_or_realized_read(
         events.append(("horizon", args[2], (directory / "locked.parquet").exists()))
         return original_horizon(*args)
 
-    def spy_arm(shared, label):
+    def spy_arm(shared, label, **kwargs):
         events.append(("arm", (shared.model.menu, shared.fraction, label), False))
-        return original_arm(shared, label)
+        return original_arm(shared, label, **kwargs)
 
     monkeypatch.setattr(evaluate, "bank", spy_bank)
     monkeypatch.setattr(experiment, "realized_horizon", spy_horizon)
@@ -794,18 +811,38 @@ def test_an_arm_past_its_ceiling_stops_the_run(tmp_path: Path) -> None:
     cells = _stopped(result, "arm_seconds")
     assert list(cells["cell_status"]) == ["resource_breach"] + ["unattempted"] * 5
     assert result.breach is not None and result.breach.value == 200.0
-    _breached_arm(result, cells, "measured 200.0 s > 120.0 s")
+    arm = _breached_arm(result, cells, "measured 200.0 s > 120.0 s")
+    # measured after the arm finished: every start and its native selection are kept
+    assert arm["calls"] > 0 and arm["native_selection"] is not None
+    starts = _rows(result.directory, "search.parquet")
+    assert sum(row["kind"] == "start" for row in starts) == TINY.starts
 
 
-def _breached_arm(result: experiment.RunResult, cells: pd.DataFrame, said: str) -> None:
-    """The stopped cell keeps one arm row naming the breach and the discarded attempt rows."""
-    rows = _rows(result.directory, "search.parquet")
+def _breached_arm(result: experiment.RunResult, cells: pd.DataFrame, said: str) -> dict[str, Any]:
+    """The stopped cell keeps the shared archive and the breached arm's attempts so far, its
+    starts, raw statuses and counters (Codex P2-5); returns the arm row."""
+    key = cells["cell_key"].iloc[0]
+    rows = [row for row in _rows(result.directory, "search.parquet") if row["cell_key"] == key]
+    label = list(cells["arm_order"].iloc[0])[0]
     (arm,) = [row for row in rows if row["kind"] == "arm"]
-    assert arm["cell_key"] == cells["cell_key"].iloc[0]
-    assert arm["arm"] == list(cells["arm_order"].iloc[0])[0]
+    assert arm["arm"] == label
     assert (arm["error"], arm["failure"]) == ("arm_seconds", "resource_breach")
-    assert said in arm["error_detail"] and "attempt rows are discarded" in arm["error_detail"]
-    assert not any(row["kind"] in ("candidate", "start") for row in rows)
+    assert said in arm["error_detail"] and "attempt rows so far are kept" in arm["error_detail"]
+    (cell,) = [row for row in rows if row["kind"] == "cell"]
+    assert (cell["cell_status"], cell["error"]) == ("resource_breach", "arm_seconds")
+    assert cell["error_detail"].startswith(f"{label}: ")
+    candidates = [row for row in rows if row["kind"] == "candidate"]
+    assert sum(row["source"] == "broad" for row in candidates) == TINY.points
+    assert sum(row["source"] == "anchor" for row in candidates) >= 2
+    local = [row for row in candidates if row["source"] == "local"]
+    assert {row["arm"] for row in local} <= {label} and arm["calls"] == len(local)
+    assert arm["evaluations"] == sum(not row["cached"] for row in local)
+    record = next(
+        r for r in _resources(result.directory) if r["kind"] == "cell" and r["cell_key"] == key
+    )
+    (timing,) = record["arms"]
+    assert (timing["arm"], timing["stopped"], timing["calls"]) == (label, "arm_seconds", len(local))
+    return arm
 
 
 def test_the_alarm_stops_an_arm_that_overruns_inside_the_solver(tmp_path: Path) -> None:
@@ -818,7 +855,8 @@ def test_the_alarm_stops_an_arm_that_overruns_inside_the_solver(tmp_path: Path) 
     cells = _stopped(result, "arm_seconds")
     assert cells["cell_status"].iloc[0] == "resource_breach"
     assert "alarm" in result.breach.detail  # type: ignore[union-attr]
-    _breached_arm(result, cells, "the alarm stopped the arm inside its search")
+    arm = _breached_arm(result, cells, "the alarm stopped the arm inside its search")
+    assert arm["native_selection"] is None  # stopped before it
 
 
 def test_a_breach_while_evaluating_keeps_the_lock_and_partial_outcomes(tmp_path: Path) -> None:
@@ -841,6 +879,35 @@ def test_a_breach_while_evaluating_keeps_the_lock_and_partial_outcomes(tmp_path:
     ]  # the first group only
     kinds = [entry["kind"] for entry in _resources(result.directory)]
     assert kinds.count("evaluation") == 1 and kinds.index("lock") < kinds.index("breach")
+
+
+def test_each_arm_records_its_native_selection_time(stage1: experiment.RunResult) -> None:
+    """Fable Minor 2: an arm's native selection is a timed sub-part of its wall time."""
+    for entry in _resources(stage1.directory):
+        if entry["kind"] != "cell":
+            continue
+        for arm in entry["arms"]:
+            assert arm["native_selection"] > 0.0
+            parts = sum(arm.get(name, 0.0) for name in runner.ARM_PARTS)
+            assert arm["solver"] == pytest.approx(arm["wall"] - parts, abs=1e-12)
+            assert runner.ARM_PARTS == ("return_evaluation", "score", "native_selection")
+
+
+def test_the_probe_counts_a_nested_call_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Measure scoring inside the native selection is scoring, not selection."""
+    monkeypatch.setattr(search._Measures, "value", lambda self, name, weights: 0.0)
+
+    def native(shared: Any, measure: Any, rows: Any) -> tuple[None, None]:
+        search._Measures.value(None, "dr2", ())  # type: ignore[arg-type]
+        return None, None
+
+    monkeypatch.setattr(search, "_native", native)
+    ticks = iter(range(100))
+    with runner.Probe(clock=lambda: float(next(ticks))) as probe:
+        search._native(None, None, ())  # type: ignore[arg-type]
+    # native from 0 to 3, its scoring from 1 to 2
+    assert probe.seconds == {"score": 1.0, "native_selection": 2.0}
+    assert probe.calls == {"score": 1, "native_selection": 1}
 
 
 def test_the_arm_alarm_interrupts_python_code() -> None:
@@ -978,7 +1045,9 @@ def test_one_and_two_workers_write_byte_identical_artifacts(tmp_path: Path) -> N
         for n, r in results.items()
     }
     assert limits[2]["process_model"] == limits[1]["process_model"] == experiment.PROCESS_MODEL
-    assert experiment.PROCESS_MODEL == "1 idle coordinator + <=2 compute workers"
+    assert experiment.PROCESS_MODEL == (
+        "1 coordinator (serial preparation, no concurrent compute) + <=2 compute workers"
+    )
     assert limits[0]["process_model"].startswith("in-process")
     workers = [entry for entry in _resources(results[2].directory) if entry["kind"] == "worker"]
     assert len(workers) == 2 and all(w["env"]["OPENBLAS_NUM_THREADS"] == "1" for w in workers)
@@ -1242,10 +1311,13 @@ def test_cli_runs_and_estimates_the_experiment(
         "--run-id",
         "cli",
     ]
-    assert cli.main(argv) == 0
+    reviews = ["--review", "Codex, 2026-10-19, code", "--review", "Fable, 2026-10-19"]
+    assert cli.main([*argv, *reviews]) == 0
     printed = capsys.readouterr().out
     assert f"{out.resolve() / PREFIX / 'cli'}: complete" in printed
     assert "cells 6: completed 6, failed 0, incomplete 0" in printed
+    manifest = json.loads((out.resolve() / PREFIX / "cli" / "manifest.json").read_text())
+    assert manifest["reviews"] == ["Codex, 2026-10-19, code", "Fable, 2026-10-19"]
     assert cli.main([*argv[:-2], "--run-id", "cli", "--sensitivity", "budget"]) == 0
     argv = [
         "experiment",

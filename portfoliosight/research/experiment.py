@@ -41,8 +41,9 @@ and the arm order rotates with the sorted index: R first at even indices, R+D fi
 (with three arms, a cyclic rotation). Each cell is searched by `search.prepare`, then each arm by
 `search.run_arm` on a fresh arm-local cache preloaded with the shared broad archive only, timed
 from that call to its native selection, then `search.combine` and the selections. `Probe` splits
-the time into replay evaluation, measure scoring and bank draws; the rest of an arm is the
-solver's. Every cell's record goes to `resources.jsonl`.
+the time into replay evaluation, measure scoring, the arm's native selection and bank draws; the
+rest of an arm is the solver's. Every cell's record goes to `resources.jsonl`. An arm stopped at
+the per-arm ceiling keeps its attempts so far in search.parquet (`runner.run_search_task`).
 
 Lock, then evaluate (protocol 5 step 8). When every cell has been searched, the locked selections
 of all cells are written to `locked.parquet` and hashed; only then are realized horizons built and
@@ -158,7 +159,8 @@ from portfoliosight.research.selection import (
 PROTOCOL_PATH = "docs/plans/2026-10-18-return-optimization-experiment-protocol.md"
 MENU_CAPS = (("tsp", 0.60), ("example", 0.25))  # protocol 3
 MAX_WORKERS = 2
-PROCESS_MODEL = "1 idle coordinator + <=2 compute workers"  # ruling R22
+# ruling R22 (wording as qualified by the Codex review): the parent prepares serially
+PROCESS_MODEL = "1 coordinator (serial preparation, no concurrent compute) + <=2 compute workers"
 RSS_CEILING = 4 * 2**30
 ARM_SECONDS = 120.0
 CPU_HOURS = 24.0
@@ -747,8 +749,12 @@ def run(
     meter: Meter | None = None,
     clock: Callable[[], float] = time.perf_counter,
     alarm: bool = True,
+    reviews: Sequence[str] = (),
 ) -> RunResult:
-    """Run Stage 1, a sensitivity or Stage 2 and write its artifacts (module docstring)."""
+    """Run Stage 1, a sensitivity or Stage 2 and write its artifacts (module docstring).
+
+    ``reviews`` are recorded verbatim in the manifest's `reviews` (ruling R28), never read.
+    """
     run_profiles = profiles(stage, sensitivity, settings)
     if stage == 2 and not limits.cpu_amended:
         raise Refused("the protocol states no Stage 2 CPU ceiling: set one as an amendment")
@@ -769,6 +775,7 @@ def run(
     manifest = _manifest(
         inputs, provenance, settings, limits, schedule, stage, sensitivity, name, reproduced, blas
     )
+    manifest["reviews"] = [str(entry) for entry in reviews]
     manifest_path = directory / "manifest.json"
     _write_json(manifest_path, manifest)
     resources = Resources(directory / "resources.jsonl")

@@ -75,9 +75,14 @@ Failure taxonomy (protocol 5), each class named by a `failure` property. An inva
 start produced no feasible candidate other than its own first point (`StartRun.failure`:
 `FAILED_START`); budget exhaustion with refinements is normal completion. An arm fails on a named
 computational error in its measure (`ArmSearch.error`: `UNDEFINED_MEASURE`; `failure`:
-`FAILED_ARM`) and then has no native result. A cell fails on a named computational error before
-search (`CellSearch.error`; `failure`: `COMPUTATIONAL_ERROR`) or when any of its arms fails
-(`failure`: `FAILED_ARM`); a failed cell has no pool. Any other exception propagates.
+`FAILED_ARM`) and then has no native result. An arm stopped at the per-arm time ceiling by its
+runner keeps what it did (`run_arm` accumulates its attempts and completed starts in an
+`ArmProgress` that survives the interruption; `stopped_arm` makes them an arm with the error
+`ARM_TIME_LIMIT`, failure `RESOURCE_BREACH`). A cell fails on a named computational error before
+search (`CellSearch.error`; `failure`: `COMPUTATIONAL_ERROR`), at the time ceiling (`failure`:
+`RESOURCE_BREACH`, the shared archive and every arm that ran kept, never an arm that did not) or
+when any of its arms fails (`failure`: `FAILED_ARM`); a failed cell has no pool. Any other
+exception propagates.
 
 U coefficients. Every use of U (the replayed figures' `utility`, the start order, the R+D guard
 reference, R's objective, the local U guard and the native selections) takes the cell's
@@ -186,6 +191,9 @@ ANCHOR_INFEASIBLE = "anchor_infeasible"
 TORSION_FAILED = "torsion_basis_failed"
 # ... and of an arm's measure.
 UNDEFINED_MEASURE = "undefined_measure"
+# An arm stopped at the per-arm time ceiling (protocol 7): its error, and its and its cell's class.
+ARM_TIME_LIMIT = "arm_seconds"
+RESOURCE_BREACH = "resource_breach"
 
 # Protocol 5: the latest saved TSP sample (5y, built 2026-10-16) must reproduce this digest.
 TSP_INVESTIGATION_DIGEST = "d6f782a9947c0fad3a8b85f0ff6906160eff4b1e7a9c2de8e270ccd4eeeba24e"
@@ -365,8 +373,11 @@ class ArmSearch:
 
     @property
     def failure(self) -> str | None:
-        """`FAILED_ARM` when a named computational error stopped the arm."""
-        return None if self.error is None else FAILED_ARM
+        """`FAILED_ARM` when a named computational error stopped the arm, `RESOURCE_BREACH`
+        when its runner stopped it at the time ceiling."""
+        if self.error is None:
+            return None
+        return RESOURCE_BREACH if self.error == ARM_TIME_LIMIT else FAILED_ARM
 
     @property
     def calls(self) -> int:
@@ -384,6 +395,14 @@ class ArmSearch:
     @property
     def invalid(self) -> int:
         return sum(row.scored.status != OK for row in self.rows)
+
+
+@dataclass
+class ArmProgress:
+    """An arm's attempts and completed starts so far, kept by its caller across an interruption."""
+
+    rows: list[Attempt] = field(default_factory=list)
+    starts: list[StartRun] = field(default_factory=list)
 
 
 class _Measures:
@@ -467,9 +486,12 @@ class CellSearch:
 
     @property
     def failure(self) -> str | None:
-        """The cell's failure class: a named computational error, a failed arm, or None."""
+        """The cell's failure class: a named computational error, an arm stopped at the time
+        ceiling, a failed arm, or None."""
         if self.error is not None:
             return COMPUTATIONAL_ERROR
+        if any(arm.error == ARM_TIME_LIMIT for arm in self.arms):
+            return RESOURCE_BREACH
         if any(arm.error is not None for arm in self.arms):
             return FAILED_ARM
         return None
@@ -684,8 +706,12 @@ def prepare(
     )
 
 
-def run_arm(shared: SharedSearch, label: str) -> ArmSearch:
-    """One arm's six local searches from the shared starts, on a fresh arm-local cache."""
+def run_arm(shared: SharedSearch, label: str, *, progress: ArmProgress | None = None) -> ArmSearch:
+    """One arm's six local searches from the shared starts, on a fresh arm-local cache.
+
+    Its attempts and completed starts accumulate in ``progress`` (a new one by default), which
+    the caller keeps if an exception interrupts the arm (`stopped_arm`).
+    """
     if label not in shared.arms:
         raise ValueError(f"arm {label!r} is not one of this cell's arms {shared.arms}")
     if shared.error is not None:
@@ -693,8 +719,8 @@ def run_arm(shared: SharedSearch, label: str) -> ArmSearch:
     measure = ARM_MEASURES[label]
     reference = shared.reference if measure is not None else None
     cache = dict(shared.cache)
-    rows: list[Attempt] = []
-    starts: list[StartRun] = []
+    progress = ArmProgress() if progress is None else progress
+    rows, starts = progress.rows, progress.starts
     error = detail = None
     native_reference = native_selection = None
     try:
@@ -719,8 +745,31 @@ def run_arm(shared: SharedSearch, label: str) -> ArmSearch:
     )
 
 
+def stopped_arm(shared: SharedSearch, label: str, progress: ArmProgress, detail: str) -> ArmSearch:
+    """The arm its runner stopped at the time ceiling: what ``progress`` holds, no native
+    result, the error `ARM_TIME_LIMIT`."""
+    measure = ARM_MEASURES[label]
+    return ArmSearch(
+        cell=shared.key,
+        label=label,
+        measure=measure,
+        reference=shared.reference if measure is not None else None,
+        allowance=shared.allowance,
+        starts=tuple(progress.starts),
+        rows=tuple(progress.rows),
+        error=ARM_TIME_LIMIT,
+        error_detail=detail,
+        native_reference=None,
+        native_selection=None,
+    )
+
+
 def combine(shared: SharedSearch, arms: Iterable[ArmSearch]) -> CellSearch:
-    """The cell's archive: shared rows and every required arm's rows, and the union pool."""
+    """The cell's archive: shared rows and every required arm's rows, and the union pool.
+
+    A cell whose runner stopped an arm at the time ceiling has the arms that ran (each once, at
+    least the stopped one) and no pool.
+    """
     given = list(arms)
     for arm in given:
         if arm.cell != shared.key:
@@ -728,7 +777,9 @@ def combine(shared: SharedSearch, arms: Iterable[ArmSearch]) -> CellSearch:
     labels = sorted((arm.label for arm in given), key=ARMS.index)
     if shared.error is not None and given:
         raise ValueError(f"the cell stopped before search ({shared.error}); it has no arms")
-    if shared.error is None and tuple(labels) != shared.arms:
+    stopped = any(arm.error == ARM_TIME_LIMIT for arm in given)
+    partial = stopped and len(set(labels)) == len(labels) and set(labels) <= set(shared.arms)
+    if shared.error is None and tuple(labels) != shared.arms and not partial:
         raise ValueError(f"the cell's arms are {shared.arms}; got {tuple(labels)}")
     ordered = tuple(sorted(given, key=lambda arm: ARMS.index(arm.label)))
     rows = [*shared.rows, *(row for arm in ordered for row in arm.rows)]
