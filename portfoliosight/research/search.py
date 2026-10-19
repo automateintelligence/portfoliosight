@@ -1176,7 +1176,10 @@ def tensor_ranges(
         found = one_year_ranges(model, weights[None, :])  # one mix at a time
         for figure in RANGE_FIGURES:
             difference = abs(float(found[figure][0]) - stored[figure])
-            if not difference <= gap:  # NaN or larger
+            if not math.isfinite(found[figure][0]) or not math.isfinite(stored[figure]):
+                gap = math.inf  # a non-finite figure is refused at once, never outvoted
+                return RangeCheck(tuple(columns), len(mixes), gap, f"{where} {figure}", moments_gap)
+            if difference > gap:
                 worst, gap = f"{where} {figure}", difference
     return RangeCheck(tuple(columns), len(mixes), gap, worst, moments_gap)
 

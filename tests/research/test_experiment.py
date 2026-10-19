@@ -994,6 +994,13 @@ def test_preflight_reproduces_the_investigation_tensor_ranges(tmp_path: Path) ->
     with pytest.raises(experiment.InvestigationMismatch, match="no investigation tensor"):
         experiment.run(bare, PROVENANCE, tmp_path / "out", settings=settings)
     assert not (tmp_path / "out").exists()
+    for bad_value in (math.nan, math.inf):  # a non-finite figure is never outvoted by later ones
+        broken = investigation_tensor(records)
+        broken["frontier"]["range"]["bad"][0] = bad_value
+        with pytest.raises(
+            experiment.InvestigationRangesMismatch, match="at frontier column 0 bad"
+        ):
+            run_experiment(tmp_path, records, settings=settings, tensor=json.dumps(broken).encode())
     near = investigation_tensor(records)
     near["frontier"]["range"]["bad"][0] += 1e-13  # within the per-mix tolerance
     result = run_experiment(
