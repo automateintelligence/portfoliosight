@@ -22,31 +22,66 @@ snapshot menus that together form the fixed menu (default: all of them, the prot
 `year-end` are the spec 10 subsets of the monthly ledger (2015-12 through 2025-09, and 2024-12),
 on which the gates do not apply.
 
+The return-optimization experiment (protocol 4-9; plan task 6b.5):
+    .venv/bin/python scripts/backtest_ranges.py experiment estimate --snapshot SNAPSHOT
+        [--out ROOT] [--workers 0|1|2] [--estimate-id ID]
+    .venv/bin/python scripts/backtest_ranges.py experiment run --snapshot SNAPSHOT [--out ROOT]
+        [--stage 1|2] [--sensitivity coefficients|lookback|budget] [--run-id ID]
+        [--workers 0|1|2] [--cpu-hours-ceiling HOURS]
+
+`run` without `--sensitivity` runs Stage 1 into `ROOT/<protocol sha256 prefix16>/<run id>/`;
+`--sensitivity NAME` and `--stage 2` name that Stage 1 run with `--run-id` and write beneath it.
+`estimate` searches a fixed sample of real cells with full budgets and prints the projected CPU
+hours of Stage 1 plus the sensitivities against the 24-hour ceiling; it is not a run. `--out`
+defaults to this checkout's git-ignored `.omx/research/return-optimization/`. Every protocol value
+is fixed; `--cpu-hours-ceiling` alone changes a ceiling and is recorded as an amendment. The
+logic and the artifact schemas live in `portfoliosight/research/experiment.py` and
+`portfoliosight/research/artifacts.py`. This script holds BLAS to one thread
+(`OPENBLAS/OMP/MKL_NUM_THREADS`, unless already set; a value other than 1 is refused).
+
 Exit codes: 0 done (a gate that is not met is a result, not an error), 2 a bad argument or an
-output path inside the snapshot or the mirror it was copied from, 6 a snapshot that fails
-verification or changes while it is read.
+output path inside the snapshot, the mirror it was copied from or the repository (unless
+git-ignored), 6 a snapshot that fails verification or changes while it is read, 7 an experiment
+refused before it starts (a dirty repository, BLAS threads, the TSP investigation digest, more
+than 120 scheduled origins, a Stage 1 run that is missing, incomplete or does not authorize
+Stage 2), 8 an experiment stopped at a resource ceiling (its partial artifacts are kept).
 """
 
 from __future__ import annotations
 
-import argparse
-import json
-import sys
-from dataclasses import asdict
-from datetime import date
-from pathlib import Path
+import os
 
-import pandas as pd
+for _name in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_name, "1")  # before NumPy is loaded (protocol 5: one BLAS thread)
+
+import argparse  # noqa: E402
+import hashlib  # noqa: E402
+import json  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+from dataclasses import asdict  # noqa: E402
+from datetime import date  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import pandas as pd  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # this checkout's package
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the freeze script beside this one
 
-from freeze_research_inputs import FreezeError, verify_snapshot  # noqa: E402
+from freeze_research_inputs import (  # noqa: E402
+    FreezeError,
+    dirty_paths,
+    repo_blob,
+    repo_head,
+    verify_snapshot,
+)
 
 from portfoliosight.engine.windows import LOOKBACK_ROWS  # noqa: E402
-from portfoliosight.research import harness  # noqa: E402
+from portfoliosight.research import experiment, harness  # noqa: E402
 
 LEDGER_SUFFIXES = (".parquet", ".csv")
+REPO = Path(__file__).resolve().parents[1]
+DEFAULT_OUT = REPO / ".omx" / "research" / "return-optimization"
 
 
 def _names(text: str) -> list[str]:
@@ -69,6 +104,25 @@ def _lookbacks(text: str) -> list[str]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Origins ledger and evidence gate of a snapshot.")
     commands = parser.add_subparsers(dest="command", required=True)
+    trial = commands.add_parser("experiment", help="the return-optimization experiment")
+    actions = trial.add_subparsers(dest="action", required=True)
+    for name, text in (
+        ("estimate", "project the CPU cost from a sample of real cells (not a run)"),
+        ("run", "run Stage 1, a sensitivity or Stage 2"),
+    ):
+        action = actions.add_parser(name, help=text)
+        action.add_argument("--snapshot", type=Path, required=True, help="frozen research snapshot")
+        action.add_argument("--out", type=Path, default=DEFAULT_OUT, help="artifact root")
+        action.add_argument("--workers", type=int, choices=(0, 1, 2), default=2)
+        action.add_argument(
+            "--cpu-hours-ceiling", type=float, help="an amended CPU-hour ceiling (recorded)"
+        )
+        if name == "run":
+            action.add_argument("--stage", type=int, choices=(1, 2), default=1)
+            action.add_argument("--sensitivity", choices=experiment.SENSITIVITIES)
+            action.add_argument("--run-id", help="the Stage 1 run id (needed beneath one)")
+        else:
+            action.add_argument("--estimate-id")
     for name, text in (
         ("ledger", "write the origins ledger"),
         ("coverage", "print the protocol 4 evidence gate"),
@@ -142,9 +196,121 @@ def _inside(path: Path, bases: list[str | Path]) -> Path | None:
     return None
 
 
+def _git(*args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(["git", "-C", str(REPO), *args], capture_output=True, timeout=30)
+
+
+def _ignored(path: Path) -> bool:
+    """Whether git ignores ``path`` in the worktree that holds it."""
+    for parent in (path, *path.parents):
+        if (parent / ".git").exists():
+            done = subprocess.run(
+                ["git", "-C", str(parent), "check-ignore", "-q", "--no-index", str(path)],
+                capture_output=True,
+                timeout=30,
+            )
+            return done.returncode == 0
+    return False
+
+
+def _provenance() -> experiment.Provenance:
+    """HEAD, its cleanliness, the protocol at HEAD and the repository's locations."""
+    head = repo_head(REPO)
+    protocol = repo_blob(REPO, head, experiment.PROTOCOL_PATH)
+    status = next((line for line in protocol.decode("utf-8").splitlines() if "Status:" in line), "")
+    common = Path(
+        _git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.decode().strip()
+    )
+    worktrees = [
+        Path(line.removeprefix(b"worktree ").decode())
+        for line in _git("worktree", "list", "--porcelain").stdout.splitlines()
+        if line.startswith(b"worktree ")
+    ]
+    return experiment.Provenance(
+        head=head,
+        dirty=tuple(dirty_paths(REPO)),
+        protocol_sha256=hashlib.sha256(protocol).hexdigest(),
+        protocol_status=status,
+        worktrees=tuple(path.resolve() for path in worktrees),
+        git_dirs=(common.resolve(),),
+        ignored=_ignored,
+    )
+
+
+def _settings() -> experiment.Settings:
+    """The protocol's settings; the CLI exposes none of them."""
+    return experiment.Settings()
+
+
+def _experiment(args: argparse.Namespace) -> int:
+    try:
+        inputs = experiment.read_inputs(args.snapshot, verify_snapshot)
+    except (FreezeError, harness.SnapshotChanged) as exc:
+        print(str(exc), file=sys.stderr)
+        return 6
+    amended = args.cpu_hours_ceiling is not None
+    limits = experiment.Limits(
+        workers=args.workers,
+        cpu_hours=args.cpu_hours_ceiling if amended else experiment.CPU_HOURS,
+        cpu_amended=amended,
+    )
+    try:
+        if args.action == "estimate":
+            projection = experiment.estimate(
+                inputs, _provenance(), args.out, settings=_settings(), limits=limits,
+                estimate_id=args.estimate_id,
+            )  # fmt: skip
+            print("\n".join(_projection_lines(projection)))
+            return 0
+        result = experiment.run(
+            inputs, _provenance(), args.out, settings=_settings(), limits=limits,
+            stage=args.stage, sensitivity=args.sensitivity, run_id=args.run_id,
+        )  # fmt: skip
+    except experiment.UnsafeOutput as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except experiment.Refused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 7
+    outcome = result.outcome
+    print(f"{result.directory}: {result.status}")
+    print(
+        f"cells {result.cells}: completed {outcome.get('completed')}, "
+        f"failed {outcome.get('failed')}, incomplete {outcome.get('incomplete')}, "
+        f"failure rate {outcome.get('failure_rate', 0):.4f}"
+    )
+    if result.breach is not None:
+        breach = result.breach
+        print(f"stopped at a ceiling: {breach.rule} {breach.value} > {breach.limit}")
+        return 8
+    return 0
+
+
+def _projection_lines(projection: experiment.Projection) -> list[str]:
+    lines = [
+        f"estimate in {projection.directory} (not a run)",
+        f"scheduled origins {projection.scheduled_origins}; sample cells {projection.sample_cells}",
+    ]
+    for menu, cells in projection.stage_1_cells.items():
+        per = projection.search_cpu_per_cell[menu]
+        lines.append(f"{menu}: {cells} Stage 1 cells at {per:.2f} CPU s per cell searched")
+    lines.append(f"evaluation: {projection.evaluation_cpu_per_mix:.4f} CPU s per locked mix")
+    for part, seconds in projection.parts.items():
+        lines.append(f"  {part}: {seconds / 3600:.2f} CPU h")
+    verdict = "within" if projection.fits else "OVER"
+    lines.append(
+        f"projected {projection.total_cpu_hours:.2f} CPU h, {verdict} the "
+        f"{projection.cpu_hours_ceiling:g} CPU h ceiling; "
+        f"longest arm {projection.max_arm_seconds:.1f} s"
+    )
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
+    if args.command == "experiment":
+        return _experiment(args)
     out: Path | None = args.out
     if args.command == "ledger" and out is not None and out.suffix not in LEDGER_SUFFIXES:
         parser.error(f"--out must end in {' or '.join(LEDGER_SUFFIXES)}")
