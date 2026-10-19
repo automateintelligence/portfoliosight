@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 import numpy as np
+import numpy.typing as npt
 
 from portfoliosight.engine.stats import Moments
 
@@ -59,7 +60,7 @@ class Dr2:
     shrinkage: float | None  # `Moments.shrinkage`: fitted (fixed window), 0.2 (EW), None if none
 
 
-def dr2(weights, moments: Moments) -> Dr2:
+def dr2(weights: npt.ArrayLike, moments: Moments) -> Dr2:
     """DR² of `weights` on `moments`, with the shrinkage those moments applied."""
     return Dr2(
         value=dr2_from(weights, moments.sigma, moments.cov),
@@ -67,7 +68,7 @@ def dr2(weights, moments: Moments) -> Dr2:
     )
 
 
-def dr2_from(weights, sigma, cov) -> float:
+def dr2_from(weights: npt.ArrayLike, sigma: npt.ArrayLike, cov: npt.ArrayLike) -> float:
     """`(w'sigma)² / (w'Sigma w)` for `weights` held in the annual `sigma` and `cov`.
 
     The weights need not sum to 1 or be non-negative; the score is the same at any positive scale.
@@ -86,7 +87,7 @@ def dr2_from(weights, sigma, cov) -> float:
     return float((w @ s) ** 2 / variance)
 
 
-def es_25(annual_returns) -> float:
+def es_25(annual_returns: npt.ArrayLike) -> float:
     """Mean of the lowest `ceil(0.025 P)` of `P` simulated annual returns.
 
     The tail is the `k` smallest values by value, so paths tied at the cut are interchangeable and
@@ -101,7 +102,9 @@ def es_25(annual_returns) -> float:
     return float(cut + math.fsum((tail - cut).tolist()) / k)
 
 
-def _dr2_arrays(weights, sigma, cov) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _dr2_arrays(
+    weights: npt.ArrayLike, sigma: npt.ArrayLike, cov: npt.ArrayLike
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     w = np.asarray(weights, dtype=float)
     if w.ndim != 1:
         raise ValueError(f"weights must be a 1-D array, got shape {w.shape}")
@@ -121,7 +124,7 @@ def _dr2_arrays(weights, sigma, cov) -> tuple[np.ndarray, np.ndarray, np.ndarray
     return w, s, c
 
 
-def _annual_returns(annual_returns) -> np.ndarray:
+def _annual_returns(annual_returns: npt.ArrayLike) -> np.ndarray:
     x = np.asarray(annual_returns, dtype=float)
     if x.ndim != 1:
         raise ValueError(f"annual returns must be a 1-D array, got shape {x.shape}")

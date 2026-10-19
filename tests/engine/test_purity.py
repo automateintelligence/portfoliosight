@@ -13,6 +13,7 @@ EXPECTED = {
     "caps",
     "invariants",
     "ladder",
+    "measures",
     "optimize",
     "parallel",
     "ranges",
