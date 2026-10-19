@@ -12,16 +12,17 @@ a runner can time each arm on its own (protocol 7, timing contract).
 2. Ceilings (protocol 3). `w_min` is production's minimum-variance program, `w_top` production's
    cap-constrained greedy fill of `mu_s`; `X(a) = sigma_min + a (sigma_top - sigma_min)` for
    a in {.25, .50} and `X(1) = sigma_top` exactly, as production's frontier ends on it. When the
-   two ends are within 1e-6 the ceilings collapse: the cell at a = 1 is the one distinct cell and
+   two ends are within 1e-6 the ceilings collapse: the cell at a = 1 is the one distinct cell,
+   its ceiling `max(sigma_min, sigma_top)` so that solver noise cannot put `w_min` above it, and
    .25 and .50 are its aliases, each keeping its aggregation weight `CELL_WEIGHT` (1/3).
 3. Anchors, at most eight, in this order: minimum variance (`w_min`); equal weight, exactly
    1/N, projected on the capped simplex only where 1/N exceeds a cap; the max-`mu_s` frontier
    mixes at X(.25), X(.50) (production's frontier program) and X(1) (the greedy fill `w_top`,
-   production's frontier end); and the
-   most-diversified portfolios (`MdpProgram`: maximize `sigma'w` s.t. `|C w| <= X`, `1'w = 1`,
-   `0 <= w <= caps`) at the same three ceilings; frontier and MDP only at ceilings at or below the
-   cell's X. Every solved anchor must meet its bounds, sum and own ceiling within 1e-8, and
-   `w_min` must also have `g_t > 0` on every recentred training row; otherwise the cell stops
+   production's frontier end); and the most-diversified portfolios (`MdpProgram`: maximize
+   `sigma'w` s.t. `|C w| <= X`, `1'w = 1`, `0 <= w <= caps`, solved by production's
+   `solve_with_retries`) at the same three ceilings; frontier and MDP only at ceilings at or
+   below the cell's X. Every solved anchor must meet its bounds, sum and own ceiling within 1e-8,
+   and `w_min` must also have `g_t > 0` on every recentred training row; otherwise the cell stops
    with a named computational error (`MIN_VARIANCE_UNSOLVED`, `W_MIN_INFEASIBLE`,
    `W_MIN_NONPOSITIVE_GROWTH`, `ANCHOR_UNSOLVED`, `ANCHOR_INFEASIBLE`). Equal weight is not
    solved: above the cell's ceiling it is an ordinary invalid proposal, recorded and kept out of
@@ -93,7 +94,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from datetime import date, datetime, time
@@ -110,11 +110,10 @@ from portfoliosight.data.returns import build_returns
 from portfoliosight.engine import measures, preference
 from portfoliosight.engine.caps import greedy_fill
 from portfoliosight.engine.optimize import (
-    RETRY_OPTIONS,
-    SOLVER_OPTIONS,
     MenuPrograms,
     SolveError,
     cholesky_factor,
+    solve_with_retries,
 )
 from portfoliosight.engine.preference import Candidate
 from portfoliosight.engine.ranges import frame_digest
@@ -221,8 +220,15 @@ class Ceilings:
     collapsed: bool  # |sigma_top - sigma_min| <= 1e-6: one distinct cell
 
     def value(self, fraction: float) -> float:
-        """`X(a) = sigma_min + a (sigma_top - sigma_min)`; `X(1)` is `sigma_top` itself."""
+        """`X(a) = sigma_min + a (sigma_top - sigma_min)`; `X(1)` is `sigma_top` itself.
+
+        Collapsed, every fraction is the one cell's ceiling `max(sigma_min, sigma_top)`: solver
+        noise can put `sigma(w_min)` up to 1e-6 above `sigma(w_top)`, and neither end may fall
+        outside the cell.
+        """
         fraction = _fraction(fraction)
+        if self.collapsed:
+            return max(self.sigma_min, self.sigma_top)
         if fraction == 1.0:
             return self.sigma_top
         return self.sigma_min + fraction * (self.sigma_top - self.sigma_min)
@@ -391,8 +397,8 @@ class SharedSearch:
     measures: tuple[str, ...]  # what the union scores: dr2, and enb with R+E
     ceilings: Ceilings | None
     ceiling: float | None
-    bank: Bank = field(compare=False, repr=False)
-    bank_sha256: str
+    bank: Bank | None = field(compare=False, repr=False)  # None when it stopped before the bank
+    bank_sha256: str | None
     sobol_sha256: str | None
     broad_sha256: str | None
     anchors: tuple[Anchor, ...]
@@ -424,7 +430,7 @@ class CellSearch:
     budget: Budget
     allowance: float
     measures: tuple[str, ...]
-    bank_sha256: str
+    bank_sha256: str | None  # None when the cell stopped before its bank was drawn
     sobol_sha256: str | None
     broad_sha256: str | None
     anchors: tuple[Anchor, ...]
@@ -512,7 +518,6 @@ def prepare(
     if not (math.isfinite(allowance) and allowance >= 0.0):
         raise ValueError(f"the U allowance must be finite and non-negative, got {allowance}")
     names = ("dr2", "enb") if "R+E" in labels else ("dr2",)
-    drawn = bank(model, seed)
     cov = model.moments.cov
     rows: list[Attempt] = []
     anchors: list[Anchor] = []
@@ -531,8 +536,8 @@ def prepare(
             "measures": names,
             "ceilings": None,
             "ceiling": None,
-            "bank": drawn,
-            "bank_sha256": drawn.index_sha256,
+            "bank": None,
+            "bank_sha256": None,
             "sobol_sha256": None,
             "broad_sha256": None,
             "anchors": tuple(anchors),
@@ -563,6 +568,8 @@ def prepare(
         return shared(
             ceilings=ceilings, ceiling=ceiling, error=TORSION_FAILED, error_detail=str(exc)
         )
+    drawn = bank(model, seed)  # after the cheap checks: the cell will be searched or fail named
+    drawn_fields = {"bank": drawn, "bank_sha256": drawn.index_sha256}
 
     def propose(source: str, name: str | None, index: int, weights: npt.ArrayLike) -> Scored:
         w = _clean(np.asarray(weights, dtype=float))
@@ -574,7 +581,9 @@ def prepare(
         return cache[key]
 
     def stop(error: str, detail: str) -> SharedSearch:
-        return shared(ceilings=ceilings, ceiling=ceiling, error=error, error_detail=detail)
+        return shared(
+            ceilings=ceilings, ceiling=ceiling, error=error, error_detail=detail, **drawn_fields
+        )
 
     # protocol 5 step 3: w_min first, checked before anything is searched
     w_min = np.asarray(ceilings.w_min)
@@ -630,6 +639,7 @@ def prepare(
     return shared(
         ceilings=ceilings,
         ceiling=ceiling,
+        **drawn_fields,
         sobol_sha256=_sha256(matrix),
         broad_sha256=_sha256(np.vstack(proposals)),
         starts=select_starts(feasible, budget.starts, START_SPACING),
@@ -930,7 +940,7 @@ class MdpProgram:
 
     `maximize sigma'w  s.t.  |C w| <= X,  1'w = 1,  0 <= w <= caps`, with `C` production's
     `cholesky_factor` of the training covariance; one DPP-parametrized program re-solved per
-    ceiling with production's Clarabel options and retry ladder.
+    ceiling by production's `solve_with_retries` (Clarabel options and retry ladder).
     """
 
     def __init__(self, sigma: npt.ArrayLike, cov: npt.ArrayLike, caps: npt.ArrayLike):
@@ -949,23 +959,12 @@ class MdpProgram:
         self._problem = cp.Problem(cp.Maximize(volatility @ self._w), menu)
 
     def solve(self, ceiling: float) -> tuple[np.ndarray | None, str]:
-        """The MDP at ``ceiling`` and Clarabel's status; None unless Clarabel calls it optimal."""
+        """The MDP at ``ceiling`` and its status: `optimal`, or None and the `SolveError` text."""
         self._x.value = ceiling
-        status = "not attempted"
-        for extra in RETRY_OPTIONS:
-            try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")  # the status is read below, not the warning
-                    self._problem.solve(
-                        solver=cp.CLARABEL, warm_start=False, **SOLVER_OPTIONS, **extra
-                    )
-            except cp.SolverError as exc:
-                status = f"solver error: {exc}"
-                continue
-            status = str(self._problem.status)
-            if status == cp.OPTIMAL:
-                return np.array(self._w.value, dtype=float), status
-        return None, status
+        try:
+            return solve_with_retries(self._problem, self._w, f"MDP at risk {ceiling!r}"), "optimal"
+        except SolveError as exc:
+            return None, str(exc)
 
 
 def production_sample_digest(
@@ -1030,7 +1029,7 @@ def _refine(
 ) -> StartRun:
     """One COBYLA run from ``start`` under the external call counter; rows go to ``rows``."""
     model, drawn, scorer = shared.model, shared.bank, shared.scorer
-    if shared.ceiling is None or scorer is None:
+    if shared.ceiling is None or scorer is None or drawn is None:
         raise ValueError("the shared search is incomplete")
     ceiling = shared.ceiling
     limits = np.asarray(shared.caps, dtype=float)
@@ -1089,8 +1088,13 @@ def _refine(
         return value
 
     def constraints(x: npt.ArrayLike) -> np.ndarray:
-        scored, _ = lookup(weights_of(x))  # the objective has just evaluated this point
-        return constraint_values(scored, limits, ceiling, reference, allowance)
+        key = weights_of(x).tobytes()
+        if key not in cache:  # every point must have been an objective call, so counted
+            raise RuntimeError(
+                "COBYLA asked for constraints at a point the objective has not evaluated: "
+                "the external call counter would miss it"
+            )
+        return constraint_values(cache[key], limits, ceiling, reference, allowance)
 
     options = {"rhobeg": RHOBEG, "tol": COBYLA_TOL, "catol": CATOL, "maxiter": budget.maxiter}
     try:

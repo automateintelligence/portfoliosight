@@ -231,8 +231,40 @@ def test_collapsed_ceilings_keep_one_cell_and_alias_the_others() -> None:
     assert search.CELL_WEIGHT == pytest.approx(1 / 3)
     with pytest.raises(ValueError, match="alias"):
         prepare(_m4(), caps, 0.25, SEED, budget=SMALL)
+    high = max(ceilings.sigma_min, ceilings.sigma_top)
+    assert ceilings.value(0.25) == ceilings.value(0.5) == ceilings.value(1.0) == high
     cell = search_cell(_m4(), caps, 1.0, SEED, budget=SMALL)
-    assert cell.failure is None and cell.ceiling == ceilings.sigma_top
+    assert cell.failure is None and cell.ceiling == high
+
+
+def test_a_collapsed_cell_keeps_a_noisy_w_min_inside_its_ceiling(monkeypatch) -> None:
+    """Solver noise puts the minimum-variance answer 5e-7 above sigma(w_top): still one cell."""
+    model = _m4()
+    cov = model.moments.cov
+    caps = np.asarray(CAPS4)
+    top = np.asarray(risk_ceilings(model, CAPS4).w_top)
+    gradient = cov @ top / _risk(top, cov)
+    moves = [
+        (gradient[j] - gradient[i], i, j)
+        for i in range(4)
+        for j in range(4)
+        if i != j and top[i] > 0.0 and top[j] < caps[j]
+    ]
+    slope, i, j = max(moves)
+    noisy = top.copy()
+    noisy[i] -= 5e-7 / slope
+    noisy[j] += 5e-7 / slope
+    gap = _risk(noisy, cov) - _risk(top, cov)
+    assert 1e-8 < gap < 1e-6 and _feasible(noisy, CAPS4, cov, 1.0)
+    monkeypatch.setattr(MenuPrograms, "min_variance", lambda self: noisy.copy())
+    ceilings = risk_ceilings(model, CAPS4)
+    assert ceilings.collapsed and ceilings.sigma_min - ceilings.sigma_top == gap
+    assert ceilings.value(1.0) == ceilings.sigma_min  # not sigma_top: w_min would break it
+    cell = search_cell(model, CAPS4, 1.0, SEED, budget=SMALL)
+    assert cell.error is None and cell.failure is None and cell.ceiling == ceilings.sigma_min
+    assert cell.anchors[0].weights == tuple(noisy.tolist())
+    for candidate in cell.pool():
+        assert _feasible(candidate.weights, CAPS4, cov, cell.ceiling)
 
 
 def test_inputs_are_validated() -> None:
@@ -434,7 +466,10 @@ def test_the_mdp_program_walks_the_production_retry_ladder(monkeypatch) -> None:
 
     monkeypatch.setattr(cp.Problem, "solve", failing)
     weights, status = program.solve(0.1)
-    assert weights is None and status == "solver error: injected"
+    assert weights is None
+    assert status == "MDP at risk 0.1: no optimal solution from Clarabel (last status: " + (
+        "solver error: injected)"
+    )
     assert len(seen) == len(RETRY_OPTIONS)
     for kwargs, extra in zip(seen, RETRY_OPTIONS, strict=True):
         assert kwargs["solver"] == cp.CLARABEL and kwargs["tol_feas"] == 1e-8
@@ -624,7 +659,8 @@ def test_call_budgets_are_capped_by_the_external_counter() -> None:
 
 
 def test_a_start_with_no_refinement_and_no_success_is_failed_not_the_arm() -> None:
-    cell = _cell(budget=Budget(points=8, starts=2, calls=1, maxiter=1))
+    with pytest.warns(UserWarning, match="Invalid MAXFUN"):  # PRIMA's own floor of N + 1
+        cell = search_cell(_m4(), CAPS4, 0.5, SEED, budget=Budget(8, 2, calls=1, maxiter=1))
     for arm in cell.arms:
         assert arm.failure is None and arm.native_selection is not None
         for start in arm.starts:
@@ -808,6 +844,7 @@ def test_a_named_measure_error_fails_the_arm_and_the_paired_cell(monkeypatch) ->
     monkeypatch.setattr(search, "torsion_basis", broken)
     cell = search_cell(_m4(), CAPS4, 0.5, SEED, arms=("R", "R+E"), budget=SMALL)
     assert cell.error == TORSION_FAILED and cell.failure == COMPUTATIONAL_ERROR
+    assert cell.bank_sha256 is None  # stopped before the bank was drawn
 
 
 def test_combine_refuses_arms_of_another_cell_or_a_missing_arm() -> None:
@@ -890,3 +927,39 @@ def test_the_union_refuses_two_evaluations_of_the_same_weights() -> None:
     rows = tuple(shifted if item is row else item for item in d.rows)
     with pytest.raises(search.InvarianceError, match="dr2"):
         search.combine(shared, [r, replace(d, rows=rows)])
+
+
+def test_cheap_checks_run_before_the_bank_is_drawn(monkeypatch) -> None:
+    drawn: list[int] = []
+    real = search.bank
+
+    def counted(model, seed):
+        drawn.append(seed)
+        return real(model, seed)
+
+    monkeypatch.setattr(search, "bank", counted)
+    with pytest.raises(ValueError, match="alias"):
+        prepare(_m4(), (0.25,) * 4, 0.5, SEED, budget=SMALL)
+
+    def unsolved(self):
+        raise SolveError("injected")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(MenuPrograms, "min_variance", unsolved)
+        cell = search_cell(_m4(), CAPS4, 0.5, SEED, budget=SMALL)
+    assert cell.error == MIN_VARIANCE_UNSOLVED and cell.bank_sha256 is None
+    assert drawn == []
+    shared = prepare(_m4(), CAPS4, 0.5, SEED, budget=SMALL)
+    assert drawn == [SEED] and shared.bank_sha256 == real(_m4(), SEED).index_sha256
+
+
+def test_constraints_at_an_uncounted_point_fail_loudly(monkeypatch) -> None:
+    """COBYLA must call the objective, which counts, before the constraints at any point."""
+
+    def constraints_first(fun, x0, method, constraints, options):
+        return constraints[0]["fun"](np.asarray(x0) + 0.01)
+
+    shared = prepare(_m4(), CAPS4, 0.5, SEED, budget=SMALL)
+    monkeypatch.setattr(search, "minimize", constraints_first)
+    with pytest.raises(RuntimeError, match="has not evaluated"):
+        run_arm(shared, "R")
