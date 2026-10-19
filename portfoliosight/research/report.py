@@ -137,10 +137,15 @@ PROTOCOL_READINGS = (
     "evidence and no sensitivity disclosure blocks progression (controller ruling 1). A menu that "
     "qualifies only through the stability branch therefore cannot authorize Stage 2 under the "
     "protocol as written: its cross-seed stability sensitivity is unavailable.",
-    "The 0 bp allowance is inert by construction (R+D = w_R or a 1e-12 U tie) and never blocks; "
-    "5 and 10 bp and the coefficient, lookback and budget settings block on a sign reversal of the "
-    "pooled six-origin ΔU, a failed return floor or fewer than 4/5 banks with positive ΔU; a "
-    "positive gain under 5 bp is reported but does not block alone (ruling 2).",
+    "The 0 bp allowance is a diagnostic control, inert by construction (R+D = w_R or a 1e-12 U "
+    "tie): it never blocks Stage 2, including when it is unavailable or tied (protocol amendment "
+    "R26, superseding R24-2). 5 and 10 bp and the coefficient, lookback and budget settings block "
+    "on a sign reversal of the pooled six-origin ΔU, a failed return floor, fewer than 4/5 banks "
+    "with positive ΔU or an unavailable setting; a positive gain under 5 bp is reported but does "
+    "not block alone.",
+    "A setting's sign reversal is judged against Stage 1 on the same six indexed origins (R+D at "
+    "2.5 bp minus R, primary seed, pooled test ΔU), not the full-panel ΔU (protocol amendment "
+    "R27); without that baseline a reversal cannot be ruled out and the setting blocks.",
     "The stability branch is evaluated only when the primary pooled mean paired ΔU is under 5 bp "
     "(ruling 3); its bank rule counts banks meeting every floor, not banks with a gain.",
     "training_ineligible is not a failure (recorded, excluded from numerator and denominator); "
@@ -970,7 +975,7 @@ def build_summary(
                 disjoint=panel.facts[menu]["disjoint_panel"],
             ),
         )
-    verdict = evidence.decide(valid, menu_evidence, replays.settings)
+    verdict = evidence.decide(valid, menu_evidence, replays.settings, replays.primary_six)
     summary["sensitivities"] = _sensitivity_section(replays, six, verdict)
     summary["cost"] = _cost_section(stage1, sensitivities, menus)
     summary["cost"]["evidence"] = {
@@ -1469,6 +1474,7 @@ def _sensitivity_section(
     return {
         "origins": list(six),
         "seed": "primary only; cross-seed stability is unavailable for every setting",
+        "reversal_baseline": "stage_1_six_origins: Stage 1 on these six origins (R27)",
         "menus": {
             menu: {
                 "stage_1_six_origins": _replay_record(replays.primary_six.get(menu)),

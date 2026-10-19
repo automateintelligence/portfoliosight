@@ -47,9 +47,12 @@ guardrail or independent-replay floor is material harm at its location. An inval
 (ruling R25: any unresolved failure, among others) gets no protocol 7 verdict label: every menu
 label is inconclusive/invalid and no branch qualifies. Stage 2 runs iff the experiment is valid,
 both menus have PCME and no sensitivity disclosure blocks progression (ruling 1): a sign
-reversal, a failed floor or bank check, or an unavailable setting or stability sensitivity. A menu
-that qualifies only through the stability branch therefore cannot authorize Stage 2. The 0 bp cap
-is inert by construction and never blocks (ruling 2). Confirmed worthwhile benefit (positive
+reversal, a failed floor or bank check, or an unavailable setting or stability sensitivity. A
+setting's sign reversal is judged against Stage 1 on the same six indexed origins, not the
+full-panel ΔU (protocol amendment R27); without that baseline a reversal is unverified and
+blocks. A menu that qualifies only through the stability branch therefore cannot authorize
+Stage 2. The 0 bp cap is a diagnostic control, inert by construction: it never blocks Stage 2,
+unavailable or tied included (protocol amendment R26). Confirmed worthwhile benefit (positive
 conditional-model evidence and realized support in both menus, no material harm, a valid
 experiment) is reported and never gates Stage 2.
 """
@@ -121,7 +124,8 @@ SENSITIVITY_SETTINGS = (
     "lookback-252",
     "budget-x2",
 )
-INERT_SETTINGS = frozenset({"cap-0bp"})  # R+D = w_R or a 1e-12 U tie: never blocks (ruling 2)
+# R+D = w_R or a 1e-12 U tie: a diagnostic control that never blocks (protocol amendment R26)
+INERT_SETTINGS = frozenset({"cap-0bp"})
 
 VALID = "valid experiment"
 INVALID = "inconclusive/invalid"
@@ -836,12 +840,14 @@ class Disclosure:
     blocking: bool
     reasons: tuple[str, ...]
     branch: str | None = None  # the menu's qualifying branch it is judged against
+    baseline: float | None = None  # Stage 1's pooled ΔU on the same six origins (R27)
 
     def record(self) -> dict[str, Any]:
         return {
             "menu": self.menu,
             "setting": self.setting,
             "branch": self.branch,
+            "baseline_u": self.baseline,
             "available": self.available,
             "u": self.u,
             "sign_reversal": self.sign_reversal,
@@ -1229,11 +1235,20 @@ _UNAVAILABLE = (
 _NO_STABILITY = "stability sensitivity unavailable: the sensitivities run the primary seed only"
 
 
+_INERT = (
+    "a diagnostic control, inert by construction (R+D = w_R or a 1e-12 U tie): never blocks "
+    "Stage 2 (protocol amendment R26)"
+)
+_NO_BASELINE = "Stage 1 six-origin baseline unavailable: a sign reversal cannot be ruled out (R27)"
+
+
 def _disclose(
-    menu: str, branch: str | None, primary: Replay, setting: str, found: Replay | None
+    menu: str, branch: str | None, baseline: Replay | None, setting: str, found: Replay | None
 ) -> Disclosure:
-    """One setting against the menu's qualifying branch (rulings 1 and 2)."""
+    """One setting against the menu's qualifying branch (ruling 1) and, for its sign, against
+    ``baseline``, Stage 1 on the same six origins (R27); the 0 bp cap never blocks (R26)."""
     inert = setting in INERT_SETTINGS
+    base = None if baseline is None else baseline.u
     if found is None:
         return Disclosure(
             menu,
@@ -1246,18 +1261,18 @@ def _disclose(
             0,
             inert,
             not inert and branch is not None,
-            (_UNAVAILABLE,),
+            (_INERT, _UNAVAILABLE) if inert else (_UNAVAILABLE,),
             branch,
+            base,
         )
     reversal = bool(
-        found.u is not None
-        and primary.u is not None
-        and np.sign(found.u) == -np.sign(primary.u) != 0
+        found.u is not None and base is not None and np.sign(found.u) == -np.sign(base) != 0
     )
     positive, floor_banks = _positive_banks(found), _floor_banks(found)
     floors = _floors_hold(found, pooled_u=branch != REPLAY_BRANCH)
     reasons: list[str] = []
     if branch == REPLAY_BRANCH:
+        reasons += [_NO_BASELINE] if base is None else []
         reasons += ["replay-return sign reversal"] if reversal else []
         reasons += [] if floors else ["a return floor fails"]
         reasons += (
@@ -1271,7 +1286,7 @@ def _disclose(
             else [f"every floor holds in {floor_banks} of 5 banks"]
         )
     if inert:
-        reasons.insert(0, "inert by construction (R+D = w_R or a 1e-12 U tie): never blocks")
+        reasons.insert(0, _INERT)
     blocking = not inert and branch is not None and bool(reasons)
     return Disclosure(
         menu,
@@ -1286,6 +1301,7 @@ def _disclose(
         blocking,
         tuple(reasons),
         branch,
+        base,
     )
 
 
@@ -1293,8 +1309,13 @@ def decide(
     validity: Validity,
     menus: Mapping[str, MenuEvidence],
     sensitivities: Mapping[str, Mapping[str, Replay | None]],
+    baselines: Mapping[str, Replay | None],
 ) -> Verdict:
-    """Every protocol 7 criterion, label and the Stage 2 decision (module docstring)."""
+    """Every protocol 7 criterion, label and the Stage 2 decision (module docstring).
+
+    ``sensitivities`` holds each menu's six-origin setting contrasts (None: unavailable),
+    ``baselines`` each menu's Stage 1 contrast on the same six origins.
+    """
     criteria: list[Criterion] = []
     verdicts: dict[str, MenuVerdict] = {}
     disclosures: list[Disclosure] = []
@@ -1350,8 +1371,9 @@ def decide(
         # an invalid experiment has no qualifying branch: no label derives from its statistics
         assessed = branch if validity.valid else None
         settings = sensitivities.get(name, {})
+        baseline = baselines.get(name)
         found = [
-            _disclose(name, assessed, e.replay, setting, settings.get(setting))
+            _disclose(name, assessed, baseline, setting, settings.get(setting))
             for setting in SENSITIVITY_SETTINGS
         ]
         if assessed == STABILITY_BRANCH:
@@ -1369,6 +1391,7 @@ def decide(
                     True,
                     (_NO_STABILITY,),
                     assessed,
+                    None if baseline is None else baseline.u,
                 )
             )
         disclosures += found

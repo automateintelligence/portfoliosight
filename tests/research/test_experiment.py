@@ -471,6 +471,22 @@ def test_outcomes_pool_five_new_banks_and_match_explicit_compounding(
     )
 
 
+def test_an_infeasible_reference_is_flagged_beside_its_evaluated_figures(
+    stage1: experiment.RunResult,
+) -> None:
+    """Fable Minor 1: an equal-weight reference above its ceiling keeps its locked status
+    `infeasible`; the row's evaluated figures carry `reference_infeasible`, so it never reads
+    `status: infeasible` with `train_status: ok` and nothing else."""
+    rows = _rows(stage1.directory, "outcomes.parquet")
+    flagged = [row for row in rows if row["reference_infeasible"]]
+    assert flagged and {row["role"] for row in flagged} == {"equal_weight"}
+    for row in rows:
+        assert row["reference_infeasible"] is (row["status"] == search.INFEASIBLE)
+    for row in flagged:
+        assert row["train_status"] == "ok" and row["within_ceiling"] is False
+        assert row["risk"] > row["ceiling"]
+
+
 def test_realized_legs_follow_the_ledger_and_hand_compounding(
     stage1: experiment.RunResult,
 ) -> None:

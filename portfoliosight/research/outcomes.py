@@ -5,7 +5,10 @@ independent banks and reads realized horizons. Nothing in the search or the sele
 
 - `evaluate_group(task)` evaluates the locked rows of one (profile, menu, origin), which the
   runner reads once from the locked file (verified against its digest) and hands over with the
-  origin model and the realized horizon; it never sees a search result. Each row is replayed on
+  origin model and the realized horizon; it never sees a search result. A reference locked as
+  `infeasible` (equal weight above the cell's ceiling) keeps that status and is evaluated all the
+  same; its row says so in `reference_infeasible`, beside its evaluated `train_status`. Each row
+  is replayed on
   its own optimization bank (whose figures must equal the locked ones bit for bit,
   `InvarianceError` otherwise), on the five independent banks `TEST_SEEDS` one by one and pooled
   (10,000 outcomes; pooled within one optimizer seed's selection, never across optimizer seeds),
@@ -39,7 +42,7 @@ import pyarrow as pa
 from portfoliosight.engine import preference
 from portfoliosight.research import evaluate
 from portfoliosight.research.evaluate import COMPLETE, OK, Horizon, OriginModel
-from portfoliosight.research.search import PRIMARY_ALLOWANCE, InvarianceError
+from portfoliosight.research.search import INFEASIBLE, PRIMARY_ALLOWANCE, InvarianceError
 from portfoliosight.research.selection import LOCKED_SCHEMA, MEASURE_ARMS, PRIMARY_SEED
 
 _F = pa.float64()
@@ -71,6 +74,7 @@ OUTCOMES_SCHEMA = pa.schema(
     list(LOCKED_SCHEMA)
     + [
         ("train_status", _S),
+        ("reference_infeasible", _B),  # locked infeasible (status), evaluated nonetheless
         ("train_paths", _I),
         ("train_p_loss", _F),
         ("train_p_below_20", _F),
@@ -234,6 +238,7 @@ def evaluate_group(task: EvaluationTask) -> pa.Table:
             **row,
             **{f"train_{name}": value for name, value in train.items()},
             "train_status": figures.status[local],
+            "reference_infeasible": row["status"] == INFEASIBLE,
             "train_paths": figures.paths,
             "test_status": pooled.status[j],
             "test_paths": pooled.paths,

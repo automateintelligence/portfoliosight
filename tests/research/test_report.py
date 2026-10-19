@@ -462,7 +462,13 @@ def _decide(tsp: MenuEvidence | None = None, example: MenuEvidence | None = None
     menus = {"tsp": tsp or _menu("tsp"), "example": example or _menu("example")}
     validity = kw.pop("validity", VALID)
     sensitivities = kw.pop("sensitivities", {menu: _settings() for menu in menus})
-    return evidence.decide(validity, menus, sensitivities)
+    baselines = kw.pop("baselines", {menu: _replay() for menu in menus})  # Stage 1, six origins
+    return evidence.decide(validity, menus, sensitivities, baselines)
+
+
+def _disclosure(verdict: evidence.Verdict, menu: str, setting: str) -> evidence.Disclosure:
+    (found,) = [d for d in verdict.disclosures if (d.menu, d.setting) == (menu, setting)]
+    return found
 
 
 def _criterion(
@@ -586,7 +592,7 @@ def test_an_undefined_r_turnover_fails_general_stability_with_its_reason() -> No
 
 
 def test_no_menu_is_no_confirmed_benefit() -> None:
-    verdict = evidence.decide(VALID, {}, {})
+    verdict = evidence.decide(VALID, {}, {}, {})
     assert verdict.confirmed_worthwhile_benefit is False and verdict.stage_2["run"] is False
 
 
@@ -773,6 +779,14 @@ def test_sensitivity_disclosures_block_stage_2_except_the_inert_0_bp_cap() -> No
     inert = _settings()
     inert["cap-0bp"] = _replay(0.0, banks=[_bank(0.0)] * 5)
     assert _decide(sensitivities={"tsp": inert, "example": inert}).stage_2["run"] is True
+    # protocol amendment R26: the 0 bp diagnostic control never blocks, unavailable included
+    gone = _settings()
+    gone["cap-0bp"] = None
+    verdict = _decide(sensitivities={"tsp": gone, "example": gone})
+    assert verdict.stage_2["run"] is True
+    zero = _disclosure(verdict, "example", "cap-0bp")
+    assert not zero.available and zero.inert and not zero.blocking
+    assert any("R26" in reason for reason in _disclosure(verdict, "tsp", "cap-0bp").reasons)
     small = _settings()
     small["budget-x2"] = _replay(1 * BP)  # positive, under 5 bp: reported, does not block alone
     assert _decide(sensitivities={"tsp": _settings(), "example": small}).stage_2["run"] is True
@@ -791,6 +805,36 @@ def test_sensitivity_disclosures_block_stage_2_except_the_inert_0_bp_cap() -> No
         assert any(name in item for item in verdict.stage_2["failing_criteria"])
 
 
+def test_a_sign_reversal_is_judged_against_stage_1_on_the_same_six_origins() -> None:
+    """R27: the full panel's ΔU is +6 bp in both cases; the setting is compared with Stage 1 on
+    its own six origins, in either direction the full-panel comparison would get wrong."""
+    negative = _replay(-1 * BP, banks=[_bank(-1 * BP)] * 5)
+    settings = _settings()
+    settings["budget-x2"] = negative
+    # Stage 1 is negative on the six origins too: no reversal (the full panel would say one)
+    same = _decide(
+        sensitivities={"tsp": _settings(), "example": settings},
+        baselines={"tsp": _replay(), "example": negative},
+    )
+    found = _disclosure(same, "example", "budget-x2")
+    assert found.sign_reversal is False and found.baseline == -1 * BP
+    assert "replay-return sign reversal" not in found.reasons
+    # Stage 1 is negative on the six origins, the setting positive: a reversal (the full panel
+    # would see none)
+    flipped = _decide(baselines={"tsp": _replay(), "example": negative})
+    found = _disclosure(flipped, "example", "budget-x2")
+    assert found.sign_reversal is True and found.blocking
+    assert found.record()["baseline_u"] == -1 * BP
+    assert flipped.stage_2["run"] is False
+    assert any("budget-x2" in item for item in flipped.stage_2["failing_criteria"])
+    # without the Stage 1 baseline a reversal cannot be ruled out: unverified, it blocks
+    unknown = _decide(baselines={"tsp": _replay(), "example": None})
+    found = _disclosure(unknown, "example", "budget-x2")
+    assert found.blocking and any("baseline unavailable" in r for r in found.reasons)
+    assert not _disclosure(unknown, "example", "cap-0bp").blocking  # R26
+    assert unknown.stage_2["run"] is False
+
+
 def test_one_failing_menu_fails_the_aggregate_even_when_the_50_50_mean_looks_favorable() -> None:
     """TSP +20 bp, Example +2 bp: the 50/50 aggregate is 11 bp, yet Example fails."""
     rows = []
@@ -806,7 +850,9 @@ def test_one_failing_menu_fails_the_aggregate_even_when_the_50_50_mean_looks_fav
         menu: _menu(menu, replay=evidence.replay_contrast(grid, menu, RD, R, P), stability=flat)
         for menu in ("tsp", "example")
     }
-    verdict = evidence.decide(VALID, menus, {menu: _settings() for menu in menus})
+    verdict = evidence.decide(
+        VALID, menus, {menu: _settings() for menu in menus}, {menu: _replay() for menu in menus}
+    )
     assert verdict.menus["tsp"].pcme
     assert verdict.menus["example"].conditional == (
         "did not meet observed conditional screening criteria"
@@ -1608,3 +1654,93 @@ def test_the_manifest_and_the_report_count_failures_alike(
     }
     for name, value in hand.items():
         assert recorded[name] == counted[name] == value, name
+
+
+def _uncertainty_tables() -> dict[str, Any]:
+    """A summary skeleton whose every estimate names where it sits (`tag`)."""
+
+    def table(tag: str) -> dict[str, Any]:
+        menus = ("tsp", "example")
+        return {
+            "by_menu": {m: {"tag": f"{tag}/{m}"} for m in menus},
+            "by_cell": {m: {c: {"tag": f"{tag}/{m}/{c}"} for c in CELLS} for m in menus},
+        }
+
+    return {
+        "primary": {
+            "replay": {f: table(f"replay.{f}") for f in ("bad", "typical", "good", "utility")},
+            "realized": {
+                f: table(f"realized.{f}") for f in ("annual_return", "loss", "max_drawdown")
+            },
+        },
+        "realized": {"quantile_contrasts_rd_minus_r": {"typical": table("median")}},
+    }
+
+
+@pytest.mark.parametrize(
+    ("key", "location", "tag", "said"),
+    [
+        ("replay.bad", "menu", "replay.bad/example", "R+D minus R paired replay bad"),
+        ("replay.typical", "menu", "replay.typical/example", "R+D minus R paired replay typical"),
+        ("replay.good", "menu", "replay.good/example", "R+D minus R paired replay good"),
+        ("replay.cell_u", "x50", "replay.utility/example/x50", "R+D minus R paired replay utility"),
+        ("harm.u", "menu", "replay.utility/example", "R+D minus R paired replay utility"),
+        (
+            "guard.mean_loss",
+            "x25",
+            "realized.annual_return/example/x25",
+            "R+D minus R paired realized annual_return",
+        ),
+        (
+            "guard.loss_frequency",
+            "x100",
+            "realized.loss/example/x100",
+            "R+D minus R paired realized loss",
+        ),
+        (
+            "guard.drawdown",
+            "x50",
+            "realized.max_drawdown/example/x50",
+            "R+D minus R paired realized max_drawdown (improvement: R minus R+D)",
+        ),
+        (
+            "guard.median_loss",
+            "x25",
+            "median/example/x25",
+            "R+D minus R median annual return across origins",
+        ),
+    ],
+)
+def test_each_material_harm_key_carries_the_uncertainty_of_its_own_figure(
+    key: str, location: str, tag: str, said: str
+) -> None:
+    """Fable Minor 4: every key `_harm_record` maps finds its table entry at its location."""
+    criterion = evidence.Criterion("example", "dimension", key, location, "test", 0.1, 0.0, False)
+    record = report._harm_record(criterion, _uncertainty_tables())
+    assert record["uncertainty"] == {"tag": tag}
+    assert record["uncertainty_of"] == said
+    assert (record["key"], record["location"], record["passed"]) == (key, location, False)
+
+
+def test_every_material_harm_key_has_an_uncertainty_test() -> None:
+    tested = {
+        "replay.bad",
+        "replay.typical",
+        "replay.good",
+        "replay.cell_u",
+        "harm.u",
+        "guard.mean_loss",
+        "guard.loss_frequency",
+        "guard.drawdown",
+        "guard.median_loss",
+    }
+    verdict = _decide(
+        example=_menu(
+            "example",
+            replay=_replay(4 * BP, bad=-6 * BP, typical=-11 * BP, good=-21 * BP),
+            realized=_realized(cells=dict.fromkeys(CELLS, RealizedCell(1.0, 1.0, 1.0, 1.0))),
+        )
+    )
+    keys = {c.key for c in verdict.criteria if c.key in evidence._HARM_KEYS}
+    keys |= {c.key for c in verdict.criteria if c.key.startswith("guard.")}
+    assert keys == tested

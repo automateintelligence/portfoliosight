@@ -175,7 +175,12 @@ def render(summary: Mapping[str, Any]) -> str:
     for ref in _references(summary):
         statistics += _contrast_block(f"R vs {ref}", summary["references"][ref], menus)
     share = summary["references"]["equal_weight_within_ceiling_share"]
-    statistics += [f"Equal weight within the cell's ceiling (share of cells): {share}", ""]
+    statistics += [
+        f"Equal weight within the cell's ceiling (share of cells): {share}. An equal-weight "
+        "reference above its ceiling keeps its locked status `infeasible`; its evaluated figures "
+        "here are flagged `reference_infeasible` in outcomes.parquet.",
+        "",
+    ]
     statistics += [
         "## White-line candidates: max-U w_R and the max-mu_s frontier",
         "",
@@ -568,7 +573,9 @@ def _sensitivity_lines(summary: Mapping[str, Any], menus: Sequence[str]) -> list
         "## Sensitivities (side by side; none is a headline)",
         "",
         f"Six origins {', '.join(s['origins'])}; {s['seed']}. Each setting is assessed with "
-        "the replay criteria on these origins; a disclosure blocks Stage 2 progression.",
+        "the replay criteria on these origins, its sign against the Stage 1 row (Stage 1 on the "
+        "same six origins, R27); a disclosure blocks Stage 2 progression, never the 0 bp "
+        "diagnostic control (R26).",
         "",
     ]
     rows = []
