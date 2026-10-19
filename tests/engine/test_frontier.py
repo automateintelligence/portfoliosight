@@ -153,14 +153,14 @@ def test_solver_settings_and_the_retry_ladder():
     }
     assert optimize.RETRY_OPTIONS[0] == {} and len(optimize.RETRY_OPTIONS) == 3
     flaky = _FlakyProblem([cp.SolverError("numerical trouble"), "optimal_inaccurate", "optimal"])
-    w = optimize._solve(flaky, _Value(), "a test program")
+    w = optimize.solve_with_retries(flaky, _Value(), "a test program")
     assert w.tolist() == [0.25, 0.75] and len(flaky.calls) == 3
     for call, extra in zip(flaky.calls, optimize.RETRY_OPTIONS, strict=True):
         base = {"solver": cp.CLARABEL, "warm_start": False}
         assert call == {**base, **optimize.SOLVER_OPTIONS, **extra}
     never = _FlakyProblem([cp.SolverError("x"), "optimal_inaccurate", "user_limit"])
     with pytest.raises(SolveError, match="a test program: no optimal solution .* user_limit"):
-        optimize._solve(never, _Value(), "a test program")
+        optimize.solve_with_retries(never, _Value(), "a test program")
     assert len(never.calls) == 3
 
 
