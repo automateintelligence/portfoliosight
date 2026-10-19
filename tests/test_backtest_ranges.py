@@ -64,6 +64,7 @@ BASE_FIRST = {"TSP-G": "2021-01-04", "TSP-F": "2021-01-04", "X": "2021-01-04", "
 BASE_FIRST["Z"] = "2022-07-11"  # the last fund to start: the inception case
 GROWTH = {"TSP-G": 1e-4, "TSP-F": 2e-4, "X": 3e-4, "Y": 4e-4, "Z": 5e-4, "SGOV": 1.5e-4}
 LONG_D_STAR = date(2026, 10, 16)
+SHORT_D_STAR = date(2025, 6, 30)
 LONG_MENUS = {"tsp": ("TSP-G", "TSP-F"), "example": ("X", "Y")}
 
 TSP = ["TSP-G", "TSP-F", "TSP-C", "TSP-S", "TSP-I"]
@@ -171,11 +172,12 @@ def _base(
     drop: dict[str, list[str]] | None = None,
     add: dict[str, list[str]] | None = None,
     sgov_first: str | None = None,
+    first: dict[str, str] | None = None,
 ) -> dict[str, pd.DataFrame]:
-    drop, add = drop or {}, add or {}
+    drop, add, starts = drop or {}, add or {}, {**BASE_FIRST, **(first or {})}
     records = {
-        fund: _fund(first, last, GROWTH[fund], drop.get(fund, ()), add.get(fund, ()))
-        for fund, first in BASE_FIRST.items()
+        fund: _fund(start, last, GROWTH[fund], drop.get(fund, ()), add.get(fund, ()))
+        for fund, start in starts.items()
     }
     if sgov_first is not None:
         records["SGOV"] = _fund(sgov_first, last, GROWTH["SGOV"])
@@ -197,6 +199,11 @@ def _long(drop_x: Iterable[str] = ()) -> dict[str, pd.DataFrame]:
         fund: _fund("2015-01-02", LONG_D_STAR, GROWTH[fund], drop_x if fund == "X" else ())
         for fund in ("TSP-G", "TSP-F", "X", "Y")
     }
+
+
+def _short() -> dict[str, pd.DataFrame]:
+    """Every base fund from 2024-01-02 (2024 has 252 sessions) to 2025-06-30."""
+    return {fund: _fund("2024-01-02", SHORT_D_STAR, GROWTH[fund]) for fund in BASE_FIRST}
 
 
 @pytest.fixture(scope="module")
@@ -226,33 +233,41 @@ def _month_range(first: str, last: str) -> list[str]:
 
 def test_every_month_is_present_with_its_status(base: harness.Ledger) -> None:
     months = [row.month for row in base.rows]
-    assert months == _month_range("2021-01", "2026-09")  # 69 months, none dropped
+    # From the boundary month (Z's first price, 2022-07-11) to the last month-end on or before
+    # D*: 51 months, none dropped.
+    assert months == _month_range("2022-07", "2026-09")
     statuses = {row.month: row.status for row in base.rows}
     expected = {
-        **dict.fromkeys(_month_range("2021-01", "2022-06"), PREHISTORY),
         **dict.fromkeys(_month_range("2022-07", "2023-06"), TRAINING_INELIGIBLE),
         **dict.fromkeys(_month_range("2023-07", "2025-09"), MATURE),
         **dict.fromkeys(_month_range("2025-10", "2026-09"), IMMATURE),
     }
     assert statuses == expected
     for row in base.rows:  # every excluded month carries a named reason
-        if row.status in (PREHISTORY, ORIGIN_PRICE_MISSING):
+        if row.status == ORIGIN_PRICE_MISSING:
             assert row.issues
         if row.status == TRAINING_INELIGIBLE:
             assert any(menu.issues and not menu.training_eligible for menu in row.menus)
 
 
-def test_prehistory_boundary_is_the_last_fund_to_start(base: harness.Ledger) -> None:
+def test_prehistory_is_recorded_once_as_the_boundary(base: harness.Ledger) -> None:
     assert (base.boundary_month, base.boundary_fund, base.boundary_date) == (
         "2022-07",
         "Z",
         _d("2022-07-11"),
     )
-    june = base.row("2022-06")
-    assert _codes(june.issues) == [(PREHISTORY, "Z", _d("2022-07-11"))]
-    # Prehistory months still carry their per-menu facts: the TSP menu is descriptive there.
-    assert june.menu("tsp").training_eligible
-    assert not june.menu("example").training_eligible
+    assert _codes([base.boundary]) == [(PREHISTORY, "Z", _d("2022-07-11"))]
+    assert base.rows[0].month == "2022-07"
+    assert PREHISTORY not in {row.status for row in base.rows}
+    with pytest.raises(KeyError):
+        base.row("2022-06")
+    cov = harness.coverage(base)
+    assert (cov.boundary_month, cov.boundary_fund, cov.boundary_date, cov.boundary_reason) == (
+        "2022-07",
+        "Z",
+        _d("2022-07-11"),
+        PREHISTORY,
+    )
 
 
 def test_inception_needs_the_fund_at_the_window_start_without_slack(base: harness.Ledger) -> None:
@@ -261,7 +276,7 @@ def test_inception_needs_the_fund_at_the_window_start_without_slack(base: harnes
     assert june.origin == _d("2023-06-30")
     assert example.window_start == _d("2022-06-30")
     assert example.union_rows >= 252 and example.complete_rows >= 227
-    assert _codes(example.issues) == [(FUND_AFTER_START, "Z", _d("2022-07-12"))]
+    assert _codes(example.issues) == [(FUND_AFTER_START, "Z", _d("2022-07-11"))]
     # Production's 10% inception slack would admit Z here (its first return is 7 rows in).
     truncated = {f: _base()[f].loc[lambda r: r["date"] <= "2023-06-30"] for f in MENUS["example"]}
     assert select_window(build_returns(truncated), "1y", _d("2023-06-30")).funds == ["X", "Y", "Z"]
@@ -270,9 +285,21 @@ def test_inception_needs_the_fund_at_the_window_start_without_slack(base: harnes
     assert july.training_eligible and july.issues == ()
 
 
-def test_month_end_on_a_holiday_takes_the_last_session(base: harness.Ledger) -> None:
+def test_a_fund_priced_on_the_window_start_existed_there() -> None:
+    # Z's first price is 2022-07-29, the first date of the July 2023 window: it existed at the
+    # window start, though its first return is the next row.
+    july = _ledger(_base(first={"Z": "2022-07-29"})).row("2023-07")
+    example = july.menu("example")
+    assert (example.window_start, example.complete_rows) == (_d("2022-07-29"), 251)
+    assert example.training_eligible and july.status == MATURE
+
+
+def test_month_end_on_a_holiday_takes_the_last_session(
+    base: harness.Ledger, long5y: harness.Ledger
+) -> None:
     assert base.row("2024-03").origin == _d("2024-03-28")  # Good Friday 2024-03-29
-    assert base.row("2021-05").origin == _d("2021-05-28")  # Memorial Day 2021-05-31
+    assert long5y.row("2018-03").origin == _d("2018-03-29")  # Good Friday 2018-03-30
+    assert long5y.row("2021-05").origin == _d("2021-05-28")  # Memorial Day 2021-05-31
     assert base.row("2022-12").origin == _d("2022-12-30")
     assert base.row("2026-09").origin == _d("2026-09-30")
 
@@ -332,7 +359,7 @@ def test_greedy_disjoint_intervals_and_exact_overlaps(base: harness.Ledger) -> N
 def test_year_end_cohorts_are_not_automatically_disjoint(base: harness.Ledger) -> None:
     year_ends = harness.select_origins(base, "year-end")
     months = [row.month for row in year_ends.rows]
-    assert months == ["2021-12", "2022-12", "2023-12", "2024-12", "2025-12"]
+    assert months == ["2022-12", "2023-12", "2024-12", "2025-12"]
     assert year_ends.row("2025-12").status == IMMATURE
     # 2023-12-29's horizon ends 2024-12-31, so the next year-end origin is not strictly later:
     # the two cohorts share no return date, but the later one starts from the earlier one's last
@@ -346,9 +373,12 @@ def test_year_end_cohorts_are_not_automatically_disjoint(base: harness.Ledger) -
 
 
 def test_risk_free_source_follows_sgov_then_tsp_g_then_fallback(base: harness.Ledger) -> None:
-    december = base.row("2021-12")  # 2021-12-31 is TSP-G's 251st return day
+    # Base TSP-G starts 2021-01-04 and has 252 returns by 2022-01-03, before the first month.
+    assert {row.risk_free_source for row in base.rows} == {"TSP-G"}
+    short = _ledger(_short(), d_star=SHORT_D_STAR)
+    december = short.row("2024-12")  # 2024-12-31 is TSP-G's 251st return day
     assert (december.risk_free_source, december.risk_free_rate) == ("fallback", 0.04)
-    january = base.row("2022-01")
+    january = short.row("2025-01")
     assert january.risk_free_source == "TSP-G"
     np.testing.assert_allclose(january.risk_free_rate, (1 + GROWTH["TSP-G"]) ** 252 - 1, rtol=1e-12)
     with_sgov = _ledger(_base(sgov_first="2023-01-30"))  # 252 returns by 2024-01-31, 231 before
@@ -510,33 +540,27 @@ def test_undercovered_window_is_rejected_at_ninety_percent() -> None:
     assert rejected.menu("tsp").training_eligible  # the other menu alone never qualifies
 
 
-def test_short_union_calendar_and_late_existence() -> None:
-    records = {fund: _fund("2024-01-02", "2025-06-30", GROWTH[fund]) for fund in BASE_FIRST}
-    ledger = _ledger(records, d_star=date(2025, 6, 30))
+def test_short_union_calendar_names_only_its_own_cause() -> None:
+    ledger = _ledger(_short(), d_star=SHORT_D_STAR)
     assert [row.month for row in ledger.rows] == _month_range("2024-01", "2025-06")
     october = ledger.row("2024-10").menu("tsp")  # 211 rows: 210 complete, under 227
     assert (october.union_rows, october.complete_rows) == (211, 210)
     assert [code for code, _, _ in _codes(october.issues)] == [
         UNION_ROWS_SHORT,
-        FUND_AFTER_START,
-        FUND_AFTER_START,
         COMPLETE_ROWS_SHORT,
     ]
     november = ledger.row("2024-11").menu("tsp")  # 231 rows: 230 complete, enough
     assert (november.union_rows, november.complete_rows) == (231, 230)
-    assert [code for code, _, _ in _codes(november.issues)] == [
-        UNION_ROWS_SHORT,
-        FUND_AFTER_START,
-        FUND_AFTER_START,
-    ]
-    december = ledger.row("2024-12").menu("tsp")  # 252 union rows, but no return on row 0
-    assert december.union_rows == 252 and december.complete_rows == 251
-    assert _codes(december.issues) == [
-        (FUND_AFTER_START, "TSP-G", _d("2024-01-03")),
-        (FUND_AFTER_START, "TSP-F", _d("2024-01-03")),
-    ]
-    assert ledger.row("2025-01").menu("tsp").training_eligible
-    assert ledger.row("2025-01").status == IMMATURE
+    assert [code for code, _, _ in _codes(november.issues)] == [UNION_ROWS_SHORT]
+    # 252 union rows; every fund's first price, 2024-01-02, is the window's first date.
+    december = ledger.row("2024-12").menu("tsp")
+    assert (december.union_rows, december.window_start, december.complete_rows) == (
+        252,
+        _d("2024-01-02"),
+        251,
+    )
+    assert december.training_eligible and december.issues == ()
+    assert ledger.row("2024-12").status == IMMATURE  # its 252nd session is after D*
 
 
 def test_prices_after_an_origin_never_change_its_training_facts(base: harness.Ledger) -> None:
@@ -574,7 +598,8 @@ def test_prices_after_an_origin_never_change_its_training_facts(base: harness.Le
 
 def test_five_year_window_thresholds(long5y: harness.Ledger) -> None:
     december = long5y.row("2019-12").menu("example")
-    assert december.union_rows == 1258 and UNION_ROWS_SHORT in [i.code for i in december.issues]
+    assert december.union_rows == 1258 and december.complete_rows == 1257
+    assert _codes(december.issues) == [(UNION_ROWS_SHORT, None, None)]
     january = long5y.row("2020-01").menu("example")
     assert (january.union_rows, january.window_rows, january.complete_rows) == (1279, 1260, 1260)
     assert january.training_eligible
@@ -614,9 +639,8 @@ def test_validation_origins_are_derived_subsets(long5y: harness.Ledger) -> None:
 
 def test_coverage_reports_every_gate(base: harness.Ledger) -> None:
     cov = harness.coverage(base)
-    assert (cov.months, cov.scheduled, cov.mature) == (69, 39, 27)
+    assert (cov.months, cov.scheduled, cov.mature) == (51, 39, 27)
     assert cov.counts == {
-        PREHISTORY: 18,
         ORIGIN_PRICE_MISSING: 0,
         TRAINING_INELIGIBLE: 12,
         IMMATURE: 12,
@@ -647,7 +671,8 @@ def test_coverage_gates_met_and_the_resource_ceiling(long5y: harness.Ledger) -> 
     assert [cov.menu(m).disjoint for m in LONG_MENUS] == [6, 6]
     assert all(gate.met for gate in cov.gates) and cov.met is True
     wide = harness.coverage(_ledger(_long(), d_star=LONG_D_STAR, lookback="1y", menus=LONG_MENUS))
-    assert (wide.scheduled, wide.mature) == (129, 117)
+    # At 1y the 2015-12-31 window starts on the first price (2015 has 252 sessions).
+    assert (wide.scheduled, wide.mature) == (130, 118)
     assert wide.gate("scheduled_origins").met is False and wide.met is False
     subset = harness.coverage(harness.validation_origins(long5y, "year-end"))
     assert subset.months == 10 and subset.met is None
@@ -657,12 +682,18 @@ def test_coverage_gates_met_and_the_resource_ceiling(long5y: harness.Ledger) -> 
 def test_ledger_frame_has_the_documented_schema(base: harness.Ledger) -> None:
     frame = harness.ledger_frame(base)
     assert list(frame.columns) == LEDGER_COLUMNS
-    assert len(frame) == 69 * 2
+    assert len(frame) == 51 * 2 and frame["month"].iloc[0] == "2022-07"
     row = frame[(frame["month"] == "2024-03") & (frame["menu"] == "example")].iloc[0]
     assert row["origin"] == pd.Timestamp("2024-03-28") and row["status"] == MATURE
     assert row["funds"] == "X,Y,Z" and row["horizon_end"] == pd.Timestamp("2025-04-01")
-    prehistory = frame[frame["month"] == "2021-01"].iloc[0]
-    assert json.loads(prehistory["month_issues"])[0]["code"] == PREHISTORY
+    june = frame[(frame["month"] == "2023-06") & (frame["menu"] == "example")].iloc[0]
+    assert json.loads(june["month_issues"]) == []
+    assert json.loads(june["menu_issues"])[0] == {
+        "code": FUND_AFTER_START,
+        "fund": "Z",
+        "date": "2022-07-11",
+        "note": "first price 2022-07-11, after the window's first date 2022-06-30",
+    }
     assert pd.isna(frame[frame["month"] == "2026-09"].iloc[0]["horizon_end"])
 
 
@@ -684,8 +715,8 @@ def test_inputs_are_validated() -> None:
     with pytest.raises(ValueError, match="no rows"):
         _ledger({**records, "X": records["X"].iloc[:0]})
     sessions = _xnys()
-    gap = pd.DatetimeIndex(sessions[(sessions < "2021-02-01") | (sessions > "2021-02-28")])
-    with pytest.raises(ValueError, match="no session in 2021-02"):
+    gap = pd.DatetimeIndex(sessions[(sessions < "2022-08-01") | (sessions > "2022-08-31")])
+    with pytest.raises(ValueError, match="no session in 2022-08"):
         harness.build_ledger(records, gap, BASE_D_STAR, MENUS, "1y")
     with pytest.raises(ValueError, match="strictly increasing"):
         harness.build_ledger(records, sessions[::-1], BASE_D_STAR, MENUS, "1y")
@@ -794,7 +825,9 @@ def long_snapshot(tmp_path_factory: pytest.TempPathFactory, freeze: ModuleType) 
     return _snapshot(tmp_path_factory.mktemp("long"), freeze, records, LONG_D_STAR)
 
 
-def test_cli_ledger_writes_the_table(cli: ModuleType, snapshot: Path, tmp_path: Path) -> None:
+def test_cli_ledger_writes_the_table(
+    cli: ModuleType, snapshot: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     out = tmp_path / "out" / "origins.parquet"
     assert (
         cli.main(["ledger", "--store-dir", str(snapshot), "--lookbacks", "1y", "--out", str(out)])
@@ -802,9 +835,13 @@ def test_cli_ledger_writes_the_table(cli: ModuleType, snapshot: Path, tmp_path: 
     )
     frame = pd.read_parquet(out)
     assert list(frame.columns) == LEDGER_COLUMNS
-    assert sorted(set(frame["menu"])) == ["example", "tsp"] and len(frame) == 69 * 2
+    assert sorted(set(frame["menu"])) == ["example", "tsp"] and len(frame) == 51 * 2
     statuses = frame.loc[frame["menu"] == "tsp", "status"].value_counts().to_dict()
-    assert statuses == {PREHISTORY: 18, TRAINING_INELIGIBLE: 12, MATURE: 27, IMMATURE: 12}
+    assert statuses == {TRAINING_INELIGIBLE: 12, MATURE: 27, IMMATURE: 12}
+    assert (
+        f"first month 2022-07: VWOB first priced 2022-07-11; earlier months are {PREHISTORY}"
+        in (capsys.readouterr().out.splitlines())
+    )
     sgov = frame[(frame["month"] == "2024-01") & (frame["menu"] == "tsp")].iloc[0]
     assert sgov["risk_free_source"] == "SGOV"
     assert frame[frame["month"] == "2023-12"].iloc[0]["risk_free_source"] == "TSP-G"
@@ -817,6 +854,11 @@ def test_cli_coverage_prints_and_writes_the_gates(
     args = ["coverage", "--store-dir", str(snapshot), "--lookbacks", "1y"]
     assert cli.main([*args, "--out", str(out)]) == 0
     printed = capsys.readouterr().out.splitlines()
+    assert (
+        f"first month 2022-07: VWOB first priced 2022-07-11; earlier months are {PREHISTORY}"
+        in (printed)
+    )
+    assert "months: 51 (origin_price_missing 0, training_ineligible 12, " in " ".join(printed)
     assert "scheduled common training-eligible origins: 39 (<= 120: met)" in printed
     assert "mature common training-eligible origins: 27 (>= 60: NOT met)" in printed
     assert "tsp complete outcomes: 27 of 27 = 100.0% (>= 95%: met)" in printed
@@ -825,11 +867,17 @@ def test_cli_coverage_prints_and_writes_the_gates(
     report = json.loads(out.read_text(encoding="utf-8"))
     assert [entry["lookback"] for entry in report] == ["1y"]
     assert report[0]["mature"] == 27 and report[0]["met"] is False
-    # A narrower fixed menu is its own ledger: the TSP funds start 2021-01-04, so no prehistory.
+    assert (report[0]["boundary_month"], report[0]["boundary_reason"]) == ("2022-07", PREHISTORY)
+    # A narrower fixed menu is its own ledger: the TSP funds start 2021-01-04, and 2021 has 252
+    # sessions, so the 1y window of 2021-12-31 starts on the first price.
     assert cli.main([*args, "--menus", "tsp", "--lookbacks", "5y,1y"]) == 0
     printed = capsys.readouterr().out.splitlines()
-    assert "scheduled common training-eligible origins: 57 (<= 120: met)" in printed
-    assert "mature common training-eligible origins: 45 (>= 60: NOT met)" in printed
+    assert (
+        f"first month 2021-01: TSP-G first priced 2021-01-04; earlier months are {PREHISTORY}"
+        in (printed)
+    )
+    assert "scheduled common training-eligible origins: 58 (<= 120: met)" in printed
+    assert "mature common training-eligible origins: 46 (>= 60: NOT met)" in printed
     assert "tsp disjoint intervals: 4 (>= 5: NOT met)" in printed
     assert not any(line.startswith("example") for line in printed)
 
@@ -993,7 +1041,7 @@ def test_harness_runs_with_store_provider_and_qse_routes_blocked(
     ]
     report = _run_blocked(argv, out, control=False)
     assert report == {"codes": [0, 0], "attempts": []}
-    assert len(pd.read_parquet(out / "o.parquet")) == 69 * 2
+    assert len(pd.read_parquet(out / "o.parquet")) == 51 * 2
     assert json.loads((out / "c.json").read_text(encoding="utf-8"))[0]["mature"] == 27
     control = _run_blocked([], out, control=True)
     assert [attempt[0] for attempt in control["attempts"]] == [

@@ -7,14 +7,14 @@ named reason for everything it excludes. Nothing is filled in, backdated or drop
 shrinks to a subset of its funds. `coverage` reads a ledger and reports the protocol 4 evidence
 gate; `read_snapshot` loads the inputs from a frozen research snapshot after verifying it.
 
-Months. One row per month from the month of the earliest first price among the fixed-menu funds
-(the funds of every menu passed) through the last month whose calendar month-end is on or before
-D*. The first month that contains the latest first price of a fixed-menu fund is the boundary;
-earlier months are kept with the status `prehistory_full_fixed_menu_unavailable`. A month's
-origin is its last XNYS session.
+Months. One row per month from the boundary month, the month that contains the latest first
+price among the fixed-menu funds (the funds of every menu passed), through the last month whose
+calendar month-end is on or before D*. Earlier months are structurally ineligible for the full
+fixed menu: the ledger records that once, as the boundary month, the fund that sets it, its first
+price date and the reason `prehistory_full_fixed_menu_unavailable` (`Ledger.boundary`), not as
+rows. A month's origin is its last XNYS session.
 
 Status of a month, the first that applies:
-  prehistory_full_fixed_menu_unavailable  before the boundary month
   origin_price_missing       a fixed-menu fund has no finite, positive total-return value at the
                              origin (a coverage failure, listed by fund and date)
   training_ineligible        some menu fails its training window (reasons on that menu)
@@ -27,9 +27,10 @@ Training window of a menu. Its returns are built with the production `build_retu
 records dated on or before the origin; the window is the production `select_window` window (the
 last `LOOKBACK_ROWS[lookback]` union-calendar rows ending at the origin, 1,260 for `5y`) and its
 complete-case rows over every menu fund. A menu is training-eligible when the union calendar has
-at least the window's rows on or before the origin, every fund's first return falls on or before
-the window's first row (production's inclusion rule without its 10% inception slack), and the
-window has complete rows for at least 90% of its length, rounded up (1,134 of 1,260).
+at least the window's rows on or before the origin, every fund has a price dated on or before the
+window's first date (no 10% inception slack; checked only once the union calendar is long
+enough, since a short calendar is already named as the cause), and the window has complete rows
+for at least 90% of its length, rounded up (1,134 of 1,260).
 
 Realized horizon of a menu, for administratively mature months: the next 252 dates of the menu's
 frozen union price calendar (every record date of its funds) after the origin. It is complete when
@@ -37,9 +38,8 @@ all 252 dates exist, the last is on or before D*, and every fund has a finite, p
 total-return value on the origin (the predecessor price) and on each of them; no value dated
 after D* is consulted. Otherwise the outcome is `mature_horizon_missing`, with the reason, and per
 fund the first date and count of its gaps. Horizons are evaluated for every mature month,
-whatever its status, so that the per-menu
-facts of prehistory and training-ineligible months stay descriptive; only `mature` months enter
-the realized denominator.
+whatever its status, so that the per-menu facts of training-ineligible months stay descriptive;
+only `mature` months enter the realized denominator.
 
 Disjoint intervals of a menu are chosen greedily in origin order among the `mature` months whose
 outcome is complete in that menu: an origin is retained only when it is strictly later than the
@@ -85,13 +85,14 @@ COMPLETE_SHARE = (9, 10)  # complete rows needed, as a share of the window's len
 FALLBACK_SOURCE = "fallback"
 DAY = timedelta(days=1)
 
-# Month statuses.
+# Why the months before the boundary month are not in the ledger (recorded once, not per month).
 PREHISTORY = "prehistory_full_fixed_menu_unavailable"
+# Month statuses.
 ORIGIN_PRICE_MISSING = "origin_price_missing"
 TRAINING_INELIGIBLE = "training_ineligible"
 IMMATURE = "administratively_immature"
 MATURE = "mature"
-STATUSES = (PREHISTORY, ORIGIN_PRICE_MISSING, TRAINING_INELIGIBLE, IMMATURE, MATURE)
+STATUSES = (ORIGIN_PRICE_MISSING, TRAINING_INELIGIBLE, IMMATURE, MATURE)
 # Menu outcomes (and IMMATURE).
 COMPLETE = "complete"
 HORIZON_MISSING = "mature_horizon_missing"
@@ -158,7 +159,7 @@ class OriginRow:
     mature: bool
     risk_free_source: str
     risk_free_rate: float
-    issues: tuple[Issue, ...]  # the month's own reasons: prehistory, missing origin prices
+    issues: tuple[Issue, ...]  # the month's own reasons: missing origin prices
     menus: tuple[MenuOrigin, ...]
 
     @property
@@ -184,12 +185,23 @@ class Ledger:
     lookback: str
     window_rows: int
     menus: tuple[tuple[str, tuple[str, ...]], ...]
-    boundary_month: str
-    boundary_fund: str
-    boundary_date: date
+    boundary_month: str  # the first month: it holds the latest first price of a fixed-menu fund
+    boundary_fund: str  # the fund with that price
+    boundary_date: date  # its first price date
     origins: str
     rows: tuple[OriginRow, ...]
     calendars: dict[str, pd.DatetimeIndex] = field(default_factory=dict, repr=False, compare=False)
+
+    @property
+    def boundary(self) -> Issue:
+        """Why no month before ``boundary_month`` is in the ledger, recorded once."""
+        return Issue(
+            PREHISTORY,
+            self.boundary_fund,
+            self.boundary_date,
+            f"{self.boundary_fund} is the last fixed-menu fund to start ({self.boundary_date}); "
+            f"the months before {self.boundary_month} are structurally ineligible",
+        )
 
     def row(self, month: str) -> OriginRow:
         for row in self.rows:
@@ -223,6 +235,10 @@ class Coverage:
     origins: str
     d_star: date
     fixed_menu: tuple[str, ...]
+    boundary_month: str
+    boundary_fund: str
+    boundary_date: date
+    boundary_reason: str  # PREHISTORY: why earlier months are not in the ledger
     months: int
     counts: dict[str, int]
     scheduled: int  # common training-eligible origins, immature ones included
@@ -334,16 +350,9 @@ def build_ledger(
     last = _month(d_star if after_d_star.month != d_star.month else d_star.replace(day=1) - DAY)
     month_ends = {_month(stamp.date()): stamp for stamp in map(_stamp, calendar)}
     prices = {name: _MenuPrices.of(funds, records) for name, funds in menu_items}
-    prehistory = Issue(
-        PREHISTORY,
-        boundary_fund,
-        latest,
-        f"{boundary_fund} is the last fixed-menu fund to start ({latest}); "
-        f"the first full-menu month is {boundary}",
-    )
 
     rows = []
-    for month in _months(_month(min(first.values())), last):
+    for month in _months(boundary, last):
         if month not in month_ends:
             raise ValueError(f"the XNYS session list has no session in {month}")
         stamp = month_ends[month]
@@ -359,9 +368,7 @@ def build_ledger(
             )
             priced = prices[name].at(stamp)
             unpriced += [fund for fund, ok in zip(funds, priced, strict=True) if not ok]
-        if month < boundary:
-            status, issues = PREHISTORY, (prehistory,)
-        elif unpriced:
+        if unpriced:
             status = ORIGIN_PRICE_MISSING
             issues = tuple(
                 Issue(ORIGIN_PRICE_MISSING, fund, stamp.date(), "no total-return value")
@@ -488,11 +495,11 @@ def _menu_origin(
     d_stamp: pd.Timestamp,
 ) -> MenuOrigin:
     origin = stamp.date()
-    returns = build_returns({fund: _through(records[fund], dates[fund], stamp) for fund in funds})
+    truncated = {fund: _through(records[fund], dates[fund], stamp) for fund in funds}
+    returns = build_returns(truncated)
     length = LOOKBACK_ROWS[lookback]
     window_start = select_window(returns, lookback, origin).start
     union_rows = len(returns)
-    start_row = union_rows - length
     complete = 0
     if window_start is not None:
         complete = len(window_sample(returns, list(funds), window_start, origin))
@@ -502,16 +509,17 @@ def _menu_origin(
     if union_rows < length:
         note = f"{union_rows} union-calendar rows on or before the origin, {length} needed"
         issues.append(Issue(UNION_ROWS_SHORT, note=note))
-    for fund in funds:
-        present = returns[fund].notna().to_numpy()
-        if not present.any():
-            issues.append(Issue(FUND_AFTER_START, fund, None, "no return on or before the origin"))
-            continue
-        first_row = int(present.argmax())
-        if first_row > start_row:
-            day = _stamp(returns.index[first_row]).date()
-            note = f"first return {day}, after the window's first row {window_start}"
-            issues.append(Issue(FUND_AFTER_START, fund, day, note))
+    elif window_start is not None:  # every fund must have a price on or before the first date
+        for fund in funds:
+            record = truncated[fund]
+            if record.empty:
+                note = "no price on or before the origin"
+                issues.append(Issue(FUND_AFTER_START, fund, None, note))
+                continue
+            day = _stamp(record["date"].iloc[0]).date()
+            if day > window_start:
+                note = f"first price {day}, after the window's first date {window_start}"
+                issues.append(Issue(FUND_AFTER_START, fund, day, note))
     if complete < needed:
         note = f"{complete} complete rows in the window, {needed} needed"
         issues.append(Issue(COMPLETE_ROWS_SHORT, note=note))
@@ -727,6 +735,10 @@ def coverage(ledger: Ledger) -> Coverage:
         origins=ledger.origins,
         d_star=ledger.d_star,
         fixed_menu=tuple(name for name, _ in ledger.menus),
+        boundary_month=ledger.boundary_month,
+        boundary_fund=ledger.boundary_fund,
+        boundary_date=ledger.boundary_date,
+        boundary_reason=ledger.boundary.code,
         months=len(ledger.rows),
         counts=counts,
         scheduled=scheduled,

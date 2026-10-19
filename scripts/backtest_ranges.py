@@ -14,7 +14,9 @@ nothing else (no store, provider, mirror or lake) is opened. The ledger logic li
 `ledger` writes the origins ledger, one row per month and menu, to `--out` (`.parquet` or
 `.csv`). `coverage` prints the protocol 4 evidence gate (mature common training-eligible
 origins, complete outcomes and disjoint intervals per menu, unexplained missingness, and the
-120-origin panel ceiling) and writes it as JSON to `--out` when given. `--menus` names the
+120-origin panel ceiling) and writes it as JSON to `--out` when given. Both print the boundary:
+the first month, the fund whose first price sets it, and the reason earlier months are not in
+the ledger (`prehistory_full_fixed_menu_unavailable`). `--menus` names the
 snapshot menus that together form the fixed menu (default: all of them, the protocol's ledger);
 `--lookbacks` takes production lookback ids (`5y` is the protocol's); `--origins quarter-end` and
 `year-end` are the spec 10 subsets of the monthly ledger (2015-12 through 2025-09, and 2024-12),
@@ -31,6 +33,7 @@ import argparse
 import json
 import sys
 from dataclasses import asdict
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -86,6 +89,13 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _boundary_line(month: str, fund: str, first: date) -> str:
+    return (
+        f"first month {month}: {fund} first priced {first.isoformat()}; "
+        f"earlier months are {harness.PREHISTORY}"
+    )
+
+
 def _verdict(met: bool | None) -> str:
     return {True: "met", False: "NOT met", None: "n/a, defined on the monthly ledger"}[met]
 
@@ -96,6 +106,7 @@ def coverage_lines(snapshot: str, report: harness.Coverage) -> list[str]:
     lines = [
         f"{snapshot}: lookback {report.lookback}, {report.origins} origins, fixed menu "
         f"{'+'.join(report.fixed_menu)}, D* {report.d_star.isoformat()}",
+        _boundary_line(report.boundary_month, report.boundary_fund, report.boundary_date),
         f"months: {report.months} ({counts})",
     ]
     for label, name in (
@@ -173,6 +184,10 @@ def main(argv: list[str] | None = None) -> int:
             frame.to_parquet(out, index=False)
         else:
             frame.to_csv(out, index=False)
+        boundary = ledgers[0]  # the boundary depends on the fixed menu, not on the lookback
+        print(
+            _boundary_line(boundary.boundary_month, boundary.boundary_fund, boundary.boundary_date)
+        )
         print(f"{len(frame)} rows written to {out}")
         return 0
 
