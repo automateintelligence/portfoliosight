@@ -356,7 +356,9 @@ def test_the_manifest_records_provenance_and_claims_no_review(
     }  # fmt: skip
     assert manifest["preference"]["u_allowances_evaluated"] == [0.00025, 0.0, 0.0005, 0.001]
     assert manifest["search"]["independent_bank_seeds"] == list(TEST_SEEDS)
-    assert manifest["limits"]["cpu_hours"] == 120.0 and not manifest["limits"]["cpu_hours_amendment"]
+    assert (
+        manifest["limits"]["cpu_hours"] == 120.0 and not manifest["limits"]["cpu_hours_amendment"]
+    )
     assert (
         manifest["limits"]["arm_seconds"] == 300.0 and manifest["limits"]["rss_bytes"] == 4 * 2**30
     )
