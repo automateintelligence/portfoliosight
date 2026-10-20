@@ -358,7 +358,7 @@ def test_the_manifest_records_provenance_and_claims_no_review(
     assert manifest["search"]["independent_bank_seeds"] == list(TEST_SEEDS)
     assert manifest["limits"]["cpu_hours"] == 36.0 and not manifest["limits"]["cpu_hours_amendment"]
     assert (
-        manifest["limits"]["arm_seconds"] == 120.0 and manifest["limits"]["rss_bytes"] == 4 * 2**30
+        manifest["limits"]["arm_seconds"] == 300.0 and manifest["limits"]["rss_bytes"] == 4 * 2**30
     )
     assert manifest["menus"] == {
         "tsp": {"funds": list(MENUS["tsp"]), "cap": 0.6},
@@ -820,14 +820,14 @@ def test_an_aggregate_breach_stops_the_run_and_keeps_partial_artifacts(
 def test_an_arm_past_its_ceiling_stops_the_run(tmp_path: Path) -> None:
     records = make_records()
     settings = make_settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
-    ticks = iter(range(0, 10**9, 200))
+    ticks = iter(range(0, 10**9, 400))
     result = run_experiment(
         tmp_path, records, settings=settings, run_id="arm", clock=lambda: float(next(ticks))
     )
     cells = _stopped(result, "arm_seconds")
     assert list(cells["cell_status"]) == ["resource_breach"] + ["unattempted"] * 5
-    assert result.breach is not None and result.breach.value == 200.0
-    arm = _breached_arm(result, cells, "measured 200.0 s > 120.0 s")
+    assert result.breach is not None and result.breach.value == 400.0
+    arm = _breached_arm(result, cells, "measured 400.0 s > 300.0 s")
     # measured after the arm finished: every start and its native selection are kept
     assert arm["calls"] > 0 and arm["native_selection"] is not None
     starts = _rows(result.directory, "search.parquet")
