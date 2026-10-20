@@ -357,10 +357,10 @@ def test_the_manifest_records_provenance_and_claims_no_review(
     assert manifest["preference"]["u_allowances_evaluated"] == [0.00025, 0.0, 0.0005, 0.001]
     assert manifest["search"]["independent_bank_seeds"] == list(TEST_SEEDS)
     assert (
-        manifest["limits"]["cpu_hours"] == 120.0 and not manifest["limits"]["cpu_hours_amendment"]
+        manifest["limits"]["cpu_hours"] == 240.0 and not manifest["limits"]["cpu_hours_amendment"]
     )
     assert (
-        manifest["limits"]["arm_seconds"] == 300.0 and manifest["limits"]["rss_bytes"] == 4 * 2**30
+        manifest["limits"]["arm_seconds"] == 600.0 and manifest["limits"]["rss_bytes"] == 4 * 2**30
     )
     assert manifest["menus"] == {
         "tsp": {"funds": list(MENUS["tsp"]), "cap": 0.6},
@@ -804,7 +804,7 @@ def _stopped(result: experiment.RunResult, rule: str, evaluated: bool = False) -
     ("usage", "rule"),
     [
         (Usage(1.0, 2**20, 5 * 2**30), "aggregate_peak_rss"),
-        (Usage(432_001.0, 2**20, 2**20), "cpu_hours"),
+        (Usage(864_001.0, 2**20, 2**20), "cpu_hours"),
     ],
 )
 def test_an_aggregate_breach_stops_the_run_and_keeps_partial_artifacts(
@@ -822,14 +822,14 @@ def test_an_aggregate_breach_stops_the_run_and_keeps_partial_artifacts(
 def test_an_arm_past_its_ceiling_stops_the_run(tmp_path: Path) -> None:
     records = make_records()
     settings = make_settings(records, months=("2024-08", "2024-08"), seeds=(PRIMARY,))
-    ticks = iter(range(0, 10**9, 400))
+    ticks = iter(range(0, 10**9, 800))
     result = run_experiment(
         tmp_path, records, settings=settings, run_id="arm", clock=lambda: float(next(ticks))
     )
     cells = _stopped(result, "arm_seconds")
     assert list(cells["cell_status"]) == ["resource_breach"] + ["unattempted"] * 5
-    assert result.breach is not None and result.breach.value == 400.0
-    arm = _breached_arm(result, cells, "measured 400.0 s > 300.0 s")
+    assert result.breach is not None and result.breach.value == 800.0
+    arm = _breached_arm(result, cells, "measured 800.0 s > 600.0 s")
     # measured after the arm finished: every start and its native selection are kept
     assert arm["calls"] > 0 and arm["native_selection"] is not None
     starts = _rows(result.directory, "search.parquet")
@@ -1244,7 +1244,7 @@ def test_an_estimate_that_crosses_a_ceiling_records_it_and_refuses(tmp_path: Pat
         experiment.estimate(
             make_inputs(records, tmp_path), PROVENANCE, tmp_path / "out",
             settings=make_settings(records), limits=Limits(workers=0), estimate_id="hot",
-            meter=_Meter(Usage(432_001.0, 2**20, 2**20), calls=1),
+            meter=_Meter(Usage(864_001.0, 2**20, 2**20), calls=1),
         )  # fmt: skip
     directory = tmp_path / "out" / PREFIX / "estimates" / "hot"
     body = json.loads((directory / "estimate.json").read_text())
@@ -1265,7 +1265,7 @@ def test_estimate_projects_from_a_sample_and_is_not_a_run(tmp_path: Path) -> Non
     assert projection.sample_cells == 6  # three sensitivity origins x two menus x x50 x primary
     assert projection.stage_1_cells == {"tsp": 18, "example": 18}
     assert projection.total_cpu_hours == pytest.approx(sum(projection.parts.values()) / 3600)
-    assert projection.fits and projection.cpu_hours_ceiling == 120.0
+    assert projection.fits and projection.cpu_hours_ceiling == 240.0
     body = json.loads((projection.directory / "estimate.json").read_text())
     assert body["not_a_run"] is True and body["sample"][0].startswith('["')
     lines = [
