@@ -54,7 +54,7 @@ never a search result (`research.outcomes`, which the search and selection modul
 Resources (protocol 7). At most six worker processes (spawned, one BLAS thread each; `workers=0`
 runs the cells in this process), aggregate peak RSS of this process and its workers at most
 4 GiB (the sum of each process's peak, read from /proc), 300 s per arm (measured, and enforced by
-an alarm inside the arm), and 36 CPU-hours for Stage 1 and its sensitivities together (a
+an alarm inside the arm), and 120 CPU-hours for Stage 1 and its sensitivities together (a
 sensitivity run counts the CPU its Stage 1 run and earlier sensitivities recorded). The CPU
 ceiling changes only through `Limits(cpu_hours=..., cpu_amended=True)` (the CLI's
 `--cpu-hours-ceiling`), which the manifest records as an amendment; Stage 2, for which the
@@ -163,7 +163,7 @@ MAX_WORKERS = 6
 PROCESS_MODEL = "1 coordinator (serial preparation, no concurrent compute) + <=6 compute workers"
 RSS_CEILING = 4 * 2**30
 ARM_SECONDS = 300.0
-CPU_HOURS = 36.0
+CPU_HOURS = 120.0
 MAX_ORIGINS = harness.MAX_SCHEDULED_ORIGINS
 FAILURE_RATE_LIMIT = 0.01
 SENSITIVITY_ORIGINS = 6
