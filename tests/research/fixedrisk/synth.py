@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -49,10 +50,23 @@ def build_run(
     engines: tuple[str, ...] = ("replay", "garch"),
     menu: str = "m1",
     seed: int = 0,
+    with_parent: bool = False,
+    complete_until: int = 16,
+    disjoint: int = 20,
 ) -> list[str]:
-    """Write <root>/<menu>-<engine>/tasks/*.parquet; return the ledger months."""
+    """Write <root>/<menu>-<engine>/tasks/ in the driver's layout; return the ledger months.
+
+    `with_parent` also writes a parent manifest naming exactly these jobs (its frozen CSCV masks
+    on the months up to `complete_until`, `disjoint` published intervals), complete job manifests,
+    and stamps every task file with its digest."""
     months = month_labels(n_months)
     rng = np.random.default_rng(seed)
+    parent = (
+        synth_parent(months, engines, menu, complete_until=complete_until, disjoint=disjoint)
+        if with_parent
+        else None
+    )
+    digest = parent["digest"] if parent else ""
     for engine in engines:
         sel, anc, ev = [], [], []
         for mi, month in enumerate(months):
@@ -76,6 +90,8 @@ def build_run(
                         M_MDP=1.5,
                         collapsed=bool(mi == 0 and ri == 0),
                         status=C.OK,
+                        engine=engine,
+                        grid="main",
                     )
                 )
                 for cell in C.CELLS:
@@ -126,8 +142,8 @@ def build_run(
                                     **{**sel_args, "pooled": False},
                                 )
                             )
-                            if mi % 4 == 0:
-                                for s in C.STABILITY_SEEDS:
+                            if mi % 4 == 0:  # the primary seed's native-only run and four more
+                                for s in (C.PRIMARY_SEED, *C.STABILITY_SEEDS):
                                     sel.append(
                                         _row(
                                             sel_id=f"{engine}|stab|{month}|{rf}|{cell}|{s}",
@@ -209,6 +225,8 @@ def build_run(
                     M_MDP=1.5,
                     collapsed=srf == 0.05,
                     status=C.OK,
+                    engine=engine,
+                    grid="showcase",
                 )
             )
             sel.append(
@@ -250,14 +268,77 @@ def build_run(
                         es_25=row["es_25"],
                     )
                 )
-        d = root / f"{menu}-{engine}" / "tasks"
-        d.mkdir(parents=True, exist_ok=True)
-        half = len(sel) // 2
-        pd.DataFrame(sel[:half]).to_parquet(d / "part-0.parquet")
-        pd.DataFrame(sel[half:]).to_parquet(d / "part-1.parquet")
-        pd.DataFrame(anc).to_parquet(d / "anchors-0.parquet")
-        pd.DataFrame(ev).to_parquet(d / "evaluated-0.parquet")
+        write_job(root / f"{menu}-{engine}", sel, anc, ev, digest)
+        if parent:
+            job = {
+                "parent_digest": digest,
+                "status": "complete",
+                "tasks_done": len(months),
+                "tasks_total": len(months),
+                "tasks_failed": 0,
+                "breach": None,
+            }
+            (root / f"{menu}-{engine}" / "job.json").write_text(json.dumps(job))
+    if parent:
+        (root / "parent.json").write_text(json.dumps(parent))
     return months
+
+
+def frozen_cscv(months: list[str], complete_until: int) -> dict:
+    """The parent's CSCV record over the months with a complete realized year (origin + 365 d)."""
+    from portfoliosight.research.fixedrisk import cscv
+
+    done = months[: complete_until + 1]
+    origins = [origin_of(m) for m in done]
+    return cscv.frozen_record(done, origins, [o + pd.Timedelta(days=365) for o in origins])
+
+
+def synth_parent(
+    months: list[str], engines, menu: str = "m1", *, complete_until: int = 16, disjoint: int = 20
+) -> dict:
+    from portfoliosight.research.fixedrisk import manifest
+
+    body = {
+        "kind": "fixed_risk_parent",
+        "snapshot": {"manifest_sha256": "5" * 64},
+        "jobs": {
+            f"{menu}-{e}": {"menu": menu, "engine": e, "host": "local", "cpu_hours_budget": 1.0}
+            for e in engines
+        },
+        "menus": {
+            menu: {
+                "schedule": list(months),
+                "cscv": frozen_cscv(months, complete_until),
+                "disjoint_intervals": [{"month": m} for m in months[:disjoint]],
+            }
+        },
+    }
+    return {**body, "digest": manifest.body_digest(body)}
+
+
+def write_job(
+    job: Path, sel: list[dict], anc: list[dict], ev: list[dict], digest: str = ""
+) -> None:
+    """The driver's layout: one task per month, `tasks/<task>.parquet` (selections, the marker),
+    `tasks/anchors/<task>.parquet`, `tasks/evaluated/<task>.parquet`, each with the digest."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    month_of = {row["sel_id"]: row["month"] for row in sel}
+    for month in sorted({row["month"] for row in sel}):
+        base = f"{job.name}_{month}"
+        parts = {
+            job / "tasks" / f"{base}.parquet": [r for r in sel if r["month"] == month],
+            job / "tasks" / "anchors" / f"{base}.parquet": [r for r in anc if r["month"] == month],
+            job / "tasks" / "evaluated" / f"{base}.parquet": [
+                r for r in ev if month_of[r["sel_id"]] == month
+            ],
+        }
+        for path, rows in parts.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            table = pa.Table.from_pandas(pd.DataFrame(rows), preserve_index=False)
+            table = table.replace_schema_metadata({b"parent_digest": digest.encode()})
+            pq.write_table(table, path)
 
 
 def synth_horizon(n_months: int = 30, complete_until: int = 16):

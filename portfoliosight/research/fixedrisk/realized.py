@@ -205,10 +205,12 @@ def realized_table(
     """One row per `sel_id` with the realized figures of every convention (see module docstring).
 
     `selections` needs sel_id, menu, month, origin and weights (holding order of the horizon).
-    Rows whose horizon is missing or shorter than `horizon_days` have complete == False and NaN.
+    Rows whose horizon is missing or shorter than `horizon_days`, and rows without a locked mix
+    (empty weights: a labelled outcome), have complete == False and NaN.
     """
     frame = _empty(pd.Index(selections["sel_id"].to_numpy(), name="sel_id"))
-    for (menu, month), group in selections.groupby(["menu", "month"], sort=True):
+    has_mix = selections["weights"].map(lambda w: w is not None and len(w) > 0).astype(bool)
+    for (menu, month), group in selections[has_mix].groupby(["menu", "month"], sort=True):
         hz = horizon(str(menu), str(month))
         if hz is None or len(hz[0]) < horizon_days:
             continue

@@ -1,7 +1,11 @@
 """Statistics of the fixed-risk experiment (protocol v2 section 6), from the run's three tables.
 
-`load_run` reads `<run_dir>/<job>/tasks/*.parquet`; `Study` holds the tables plus the realized
-figures of `realized.realized_table` and computes each criterion for one `(menu, engine)`. Every
+`load_run` reads the driver's three locations per job: `<job>/tasks/<task>.parquet` (selections,
+the task's completion marker), `<job>/tasks/anchors/<task>.parquet` and
+`<job>/tasks/evaluated/<task>.parquet`. `Study` holds the tables plus the realized figures of
+`realized.realized_table` and computes each criterion for one `(menu, engine)`. Rows without a
+locked mix (status not in `contracts.USABLE`: search_failed, not_found, collapsed, anchor_failed,
+garch_fit_failed) are excluded from every statistic and counted (`exclusions`, `labels`). Every
 paired statistic uses the v1 circular moving-block bootstrap over the monthly origin index
 (block 24, 2,000 resamples, seed 20261201, identical blocks for every arm, cell and menu).
 """
@@ -10,7 +14,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -65,43 +69,84 @@ class RunTables:
     anchors: pd.DataFrame
     evaluated: pd.DataFrame
     jobs: list[str]
+    skipped: list[str] = field(default_factory=list)  # task files of another parent digest
 
 
-def load_run(run_dir: str | Path) -> RunTables:
+TASK_DIGEST_KEY = b"parent_digest"
+
+
+def _task_digest(path: Path) -> str | None:
+    import pyarrow.parquet as pq
+
+    meta = pq.read_schema(path).metadata or {}
+    value = meta.get(TASK_DIGEST_KEY)
+    return value.decode() if value is not None else None
+
+
+def load_run(
+    run_dir: str | Path, *, digest: str | None = None, jobs: Sequence[str] | None = None
+) -> RunTables:
     """Concatenate every job's task files into the three logical tables.
 
-    A file is classified by its columns (selections carry `sel_id` and `weights`; anchors `w_F`;
-    evaluated `test_seed`), so the file naming of the writer does not matter.
+    A task counts only when its selections file `<job>/tasks/<task>.parquet` exists (the driver
+    writes it last); its anchors and evaluated tables are read from `tasks/anchors/` and
+    `tasks/evaluated/` under the same name. With `digest`, a task whose selections file carries
+    another parent digest is skipped and listed in `skipped`; `jobs` limits the job directories.
     """
     root = Path(run_dir)
     parts: dict[str, list[pd.DataFrame]] = {"selections": [], "anchors": [], "evaluated": []}
-    jobs: list[str] = []
+    found: list[str] = []
+    skipped: list[str] = []
+    wanted = None if jobs is None else set(jobs)
+    columns = {"selections": {"sel_id", "weights"}, "anchors": {"w_F"}, "evaluated": {"test_seed"}}
     for job in sorted(p for p in root.iterdir() if (p / "tasks").is_dir()):
-        files = sorted((job / "tasks").glob("*.parquet"))
-        if not files:
+        if wanted is not None and job.name not in wanted:
             continue
-        jobs.append(job.name)
-        for file in files:
-            frame = pd.read_parquet(file)
-            cols = set(frame.columns)
-            if {"sel_id", "weights"} <= cols:
-                parts["selections"].append(frame)
-            elif "w_F" in cols:
-                parts["anchors"].append(frame)
-            elif "test_seed" in cols:
-                parts["evaluated"].append(frame)
-            else:
-                raise ValueError(f"{file}: columns match none of the three run tables")
+        tasks = job / "tasks"
+        markers = sorted(tasks.glob("*.parquet"))
+        if not markers:
+            continue
+        kept = 0
+        for marker in markers:
+            if digest is not None and _task_digest(marker) != digest:
+                skipped.append(str(marker.relative_to(root)))
+                continue
+            files = {
+                "selections": marker,
+                "anchors": tasks / "anchors" / marker.name,
+                "evaluated": tasks / "evaluated" / marker.name,
+            }
+            for name, path in files.items():
+                if not path.is_file():
+                    raise ValueError(f"{marker}: its {name} table {path} is missing")
+                frame = pd.read_parquet(path)
+                if not columns[name] <= set(frame.columns) and not (
+                    name != "selections" and frame.empty
+                ):
+                    raise ValueError(f"{path}: columns match none of the three run tables")
+                parts[name].append(frame)
+            kept += 1
+        if kept:
+            found.append(job.name)
     if not parts["selections"]:
         raise ValueError(f"{root}: no selections found under <job>/tasks/*.parquet")
     tables = {
-        k: (pd.concat(v, ignore_index=True) if v else pd.DataFrame()) for k, v in parts.items()
+        k: (pd.concat([f for f in v if len(f)] or v, ignore_index=True) if v else pd.DataFrame())
+        for k, v in parts.items()
     }
     sel = tables["selections"]
     dup = sel["sel_id"].duplicated()
     if dup.any():
         raise ValueError(f"{int(dup.sum())} duplicated sel_id values across task files")
-    return RunTables(_norm(sel), _norm(tables["anchors"]), tables["evaluated"], jobs)
+    return RunTables(_norm(sel), _norm(tables["anchors"]), tables["evaluated"], found, skipped)
+
+
+def usable_rows(frame: pd.DataFrame) -> pd.Series:
+    """Rows that carry a locked mix: a usable label and non-empty weights."""
+    if frame.empty:
+        return pd.Series(dtype=bool)
+    has_mix = frame["weights"].map(lambda w: w is not None and len(w) > 0)
+    return frame["status"].isin(C.USABLE) & has_mix
 
 
 def _norm(frame: pd.DataFrame) -> pd.DataFrame:
@@ -151,6 +196,14 @@ def disjoint_origins(origins: Sequence[Any], ends: Sequence[Any]) -> list[int]:
     return kept
 
 
+def _interval_month(interval: Any) -> str:
+    """The origin month of a published interval: `data.Interval`, a manifest dict or a tuple."""
+    if isinstance(interval, Mapping):
+        return str(interval["month"])
+    month = getattr(interval, "month", None)
+    return str(month if month is not None else interval[0])
+
+
 def _quantiles(values: np.ndarray, qs: Sequence[float]) -> list[float | None]:
     v = values[np.isfinite(values)]
     return [float(np.percentile(v, q)) for q in qs] if len(v) else [None] * len(qs)
@@ -169,10 +222,12 @@ class Study:
         *,
         primary_seed: int = C.PRIMARY_SEED,
         disjoint: Mapping[str, Sequence[Any]] | None = None,
+        cscv_frozen: Mapping[str, Mapping[str, Any]] | None = None,
         blocks: Sequence[int] = evidence.BLOCKS,
         resamples: int = evidence.RESAMPLES,
     ) -> None:
-        sel = tables.selections
+        sel = tables.selections.copy()
+        sel["usable"] = usable_rows(sel).to_numpy(dtype=bool) if len(sel) else []
         if realized is not None:
             sel = sel.merge(realized, on="sel_id", how="left", validate="one_to_one")
         else:
@@ -186,6 +241,7 @@ class Study:
         self.blocks = tuple(blocks)
         self.resamples = resamples
         self._disjoint = dict(disjoint) if disjoint else None
+        self._cscv = dict(cscv_frozen) if cscv_frozen else {}
         self._boots: dict[tuple[int, bool], evidence.Bootstrap] = {}
         ev = tables.evaluated
         self.test_seeds = sorted(ev["test_seed"].unique()) if len(ev) else []
@@ -231,9 +287,13 @@ class Study:
         tau: float | None = C.TAU_R,
         seed: int | None = ...,  # type: ignore[assignment]
         keys: Sequence[str] = SELECTION_KEYS,
+        usable: bool | None = True,
     ) -> pd.DataFrame:
+        """Rows of one (menu, engine); by default only rows with a locked mix (`usable`)."""
         s = self.sel
         m = (s["menu"] == menu) & (s["engine"] == engine)
+        if usable is not None:
+            m &= s["usable"].astype(bool) == usable
         if kind is not None:
             kinds = [kind] if isinstance(kind, str) else list(kind)
             m &= s["kind"].isin(kinds)
@@ -261,7 +321,7 @@ class Study:
     def disjoint_months(self, menu: str) -> list[str]:
         """Origin months of the disjoint annual intervals (published intervals if given)."""
         if self._disjoint and menu in self._disjoint:
-            return [str(t[0]) for t in self._disjoint[menu]]
+            return [_interval_month(t) for t in self._disjoint[menu]]
         led = self.ledger(menu)
         idx = disjoint_origins(list(led["origin"]), list(led["horizon_end"]))
         return [led["month"].iloc[i] for i in idx]
@@ -718,32 +778,27 @@ class Study:
     # ---------------------------------------------------------------------------- stability
 
     def stability(self, menu: str, engine: str) -> dict[str, Any]:
-        """Native U1 on the primary and four stability banks: v1's Bad SD and pairwise L1 rules."""
+        """Native U1 on the primary and four stability banks: v1's Bad SD and pairwise L1 rules.
+
+        Only the stability procedure's own rows enter (kind "stability", native, arm U1: the
+        primary seed's native-only search and the four stability seeds), each with the Bad of its
+        own bank; an origin enters a (cell, r) only when all five banks have a locked mix there.
+        """
         s = self.sel
         base = (s["menu"] == menu) & (s["engine"] == engine) & (s["arm"] == "U1")
         base &= np.isclose(s["tau_r"].astype(float), C.TAU_R)
-        primary = s[
-            base
-            & (s["kind"] == "main")
-            & (s["seed"] == self.primary_seed)
-            & ~s["pooled"].astype(bool)
-        ]
-        others = s[base & (s["kind"] == "stability")]
-        rows = pd.concat([primary, others], ignore_index=True)
-        rows = rows.sort_values("pooled").drop_duplicates(["month", "rf", "cell", "seed"])
-        if "u1" in self.evw and not self.evw["u1"].empty:
-            rows["bad_eval"] = rows["sel_id"].map(self.evw["bad"].mean(axis=1))
-        else:
-            rows["bad_eval"] = np.nan
-        rows["bad_used"] = rows["bad_eval"].fillna(rows["bad"])
+        base &= (s["kind"] == "stability") & ~s["pooled"].astype(bool)
+        rows = s[base & s["usable"].astype(bool)]
+        rows = rows.drop_duplicates(["month", "rf", "cell", "seed"])
         seeds = {self.primary_seed, *C.STABILITY_SEEDS}
         out_rows = []
         for cell in C.CELLS:
             for rf in RFS:
                 sub = rows[(rows["cell"] == cell) & (rows["rf"] == rf)]
-                l1s, share_ok, used = [], [], 0
+                l1s, share_ok, used, short = [], [], 0, 0
                 for _, g in sub.groupby("month"):
                     if set(g["seed"]) != seeds or len(g) != len(seeds):
+                        short += 1
                         continue
                     used += 1
                     w = [np.asarray(x, dtype=float) for x in g["weights"]]
@@ -751,7 +806,7 @@ class Study:
                         for j in range(i + 1, len(w)):
                             l1s.append(float(np.abs(w[i] - w[j]).sum()))
                     sigma = float(g.loc[g["seed"] == self.primary_seed, "sigma"].iloc[0])
-                    sd = float(np.std(g["bad_used"].to_numpy(dtype=float), ddof=1))
+                    sd = float(np.std(g["bad"].to_numpy(dtype=float), ddof=1))
                     share_ok.append(sd <= BAD_SD_FACTOR * sigma)
                 if not used:
                     continue
@@ -762,6 +817,7 @@ class Study:
                         "cell": cell,
                         "rf": rf,
                         "origins": used,
+                        "origins_short": short,
                         "median_l1": med,
                         "p90_l1": p90,
                         "bad_sd_share": share,
@@ -838,6 +894,18 @@ class Study:
             out["showcase_surfaces"] = int(show["month"].nunique())
         out["solvers"] = {str(k): int(v) for k, v in s["solver"].value_counts().items()}
         return out
+
+    def exclusions(self, menu: str, engine: str) -> list[dict[str, Any]]:
+        """Rows without a locked mix, excluded from every statistic: count per kind and status."""
+        s = self.sel[
+            (self.sel["menu"] == menu)
+            & (self.sel["engine"] == engine)
+            & ~self.sel["usable"].astype(bool)
+        ]
+        if s.empty:
+            return []
+        g = s.groupby(["kind", "status"]).size().reset_index(name="count")
+        return g.sort_values(["kind", "status"]).to_dict("records")
 
     def labels(self, menu: str, engine: str) -> list[dict[str, Any]]:
         """Counts of non-ok statuses per cell and risk level (never called infeasible)."""
@@ -925,20 +993,52 @@ class Study:
 
     # ----------------------------------------------------------------------- CSCV and DSR
 
-    def cscv_inputs(self, menu: str, engine: str) -> tuple[np.ndarray, list[str], dict[str, Any]]:
-        """(returns A x K x C, eligible months, counts) for the four triples' common mask."""
-        led = self.ledger(menu)
-        months = list(led["month"])
+    def collapsed_columns(self, menu: str, engine: str) -> set[tuple[str, float]]:
+        """(month, rf) of the main grid's collapsed columns, from the anchors table."""
+        a = self.anchors
+        if a.empty:
+            return set()
+        m = (a["menu"] == menu) & np.isclose(a["tau_r"].astype(float), C.TAU_R)
+        m &= a["lookback"] == C.LOOKBACK
+        if "engine" in a:
+            m &= a["engine"] == engine
+        if "grid" in a:
+            m &= a["grid"] == "main"
+        hit = a[m & a["collapsed"].astype(bool)]
+        return {(str(month), float(rf)) for month, rf in zip(hit["month"], hit["rf"], strict=True)}
+
+    def cscv_inputs(
+        self, menu: str, engine: str, months: Sequence[str] | None = None
+    ) -> tuple[np.ndarray, list[str], dict[str, Any]]:
+        """(returns A x K x C, eligible months, counts) for the four triples' common mask.
+
+        `months` are the frozen masks' eligible origins (default: the realized ledger). A row
+        enters only when all four triples have an `ok` locked mix with a realized return there;
+        collapsed columns are excluded whole (every cell, free included), labelled cells and
+        missing triples are excluded, and each exclusion is counted.
+        """
+        months = list(self.ledger(menu)["month"]) if months is None else list(months)
         idx = {m: i for i, m in enumerate(months)}
         pairs = [(rf, c) for rf in RFS for c in C.CELLS]
         arms = ("U1", "U2", "U3", "U4")
         x = np.full((4, len(months), len(pairs)), np.nan)
-        counts = {"excluded_labelled": 0, "excluded_incomplete": 0, "rows": 0}
-        picks = [self.pick(menu, engine, kind="main", arm=a, pooled=True) for a in arms]
+        counts = {
+            "excluded_labelled": 0,
+            "excluded_incomplete": 0,
+            "excluded_collapsed": 0,
+            "rows": 0,
+        }
+        collapsed = self.collapsed_columns(menu, engine)
+        picks = [
+            self.pick(menu, engine, kind="main", arm=a, pooled=True, usable=None) for a in arms
+        ]
         keyed = [p.set_index(["month", "rf", "cell"]) for p in picks]
         every = set().union(*[set(k.index) for k in keyed])
-        for key in every:
+        for key in sorted(every):
             month, rf, cell = key
+            if (month, float(rf)) in collapsed:
+                counts["excluded_collapsed"] += 1
+                continue
             if month not in idx:
                 counts["excluded_incomplete"] += 1
                 continue
@@ -955,12 +1055,15 @@ class Study:
             counts["rows"] += 1
         return x, months, counts
 
-    def cscv(self, menu: str, engine: str, masks: cscv.CscvMasks | None = None) -> dict[str, Any]:
-        led = self.ledger(menu)
-        if len(led) < cscv.BLOCKS:
-            return {"available": False, "reason": f"{len(led)} eligible origins"}
-        masks = masks or cscv.cscv_masks(led["origin"].to_numpy(), led["horizon_end"].to_numpy())
-        x, _, counts = self.cscv_inputs(menu, engine)
+    def cscv(self, menu: str, engine: str) -> dict[str, Any]:
+        """The purged CSCV adaptation on the masks frozen in the parent manifest (never rebuilt)."""
+        frozen = self._cscv.get(menu)
+        if frozen is None:
+            return {"available": False, "reason": "no frozen CSCV masks in the parent manifest"}
+        if frozen.get("unavailable"):
+            return {"available": False, "reason": frozen["unavailable"]}
+        masks = cscv.CscvMasks.from_manifest(dict(frozen))
+        x, _, counts = self.cscv_inputs(menu, engine, frozen["months"])
         result = cscv.cscv_run(masks, x)
         disjoint_train = [
             len(disjoint_origins(list(masks.origins[s.train]), list(masks.ends[s.train])))

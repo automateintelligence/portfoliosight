@@ -1,10 +1,16 @@
+import json
+import shutil
+from datetime import date
+
+import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import pytest
 
 from portfoliosight.research.fixedrisk import contracts as C
 from portfoliosight.research.fixedrisk import measures as M
 
-from .synth import build_run, fake_realized
+from .synth import build_run, fake_realized, frozen_cscv, synth_horizon
 
 PUBLISHED = {"m1": [(f"2010-{i:02d}", None, None) for i in range(1, 21)]}
 
@@ -23,24 +29,73 @@ def study(run):
     return M.Study(tables, fake_realized(tables.selections), disjoint=PUBLISHED)
 
 
-def test_load_run_classifies_tables_by_columns(run):
-    _, _, t = run
+def test_load_run_reads_the_driver_layout(run):
+    root, months, t = run
     assert t.jobs == ["m1-garch", "m1-replay"]
     assert {"sel_id", "weights", "rf"} <= set(t.selections.columns)
     assert "w_MDP" in t.anchors and "test_seed" in t.evaluated
     assert t.selections["sel_id"].is_unique
+    # the anchors and evaluated tables come from tasks/anchors/ and tasks/evaluated/
+    assert (root / "m1-replay" / "tasks" / "anchors" / f"m1-replay_{months[0]}.parquet").is_file()
+    assert t.anchors["month"].nunique() == 30 and len(t.evaluated) > 0
+    assert set(t.evaluated["sel_id"]) <= set(t.selections["sel_id"])
 
 
-def test_load_run_rejects_duplicates_and_unknown_files(tmp_path):
+def test_load_run_rejects_duplicates_missing_tables_and_unknown_files(tmp_path):
     build_run(tmp_path, n_months=10, engines=("replay",))
     tasks = tmp_path / "m1-replay" / "tasks"
-    pd.read_parquet(tasks / "part-0.parquet").to_parquet(tasks / "part-9.parquet")
+    first = sorted(tasks.glob("*.parquet"))[0].name
+    for sub in ("", "anchors", "evaluated"):
+        shutil.copy(tasks / sub / first, tasks / sub / "copy.parquet")
     with pytest.raises(ValueError, match="duplicated sel_id"):
         M.load_run(tmp_path)
-    (tasks / "part-9.parquet").unlink()
+    (tasks / "anchors" / "copy.parquet").unlink()
+    with pytest.raises(ValueError, match="anchors table .* is missing"):
+        M.load_run(tmp_path)
+    for sub in ("", "evaluated"):
+        (tasks / sub / "copy.parquet").unlink()
     pd.DataFrame({"x": [1]}).to_parquet(tasks / "junk.parquet")
+    for sub in ("anchors", "evaluated"):
+        pd.DataFrame().to_parquet(tasks / sub / "junk.parquet")
     with pytest.raises(ValueError, match="match none"):
         M.load_run(tmp_path)
+
+
+def test_load_run_keeps_only_the_parents_digest_and_jobs(tmp_path):
+    build_run(tmp_path, n_months=6, with_parent=True)
+    digest = json.loads((tmp_path / "parent.json").read_text())["digest"]
+    whole = M.load_run(tmp_path, digest=digest)
+    assert whole.skipped == [] and whole.jobs == ["m1-garch", "m1-replay"]
+    stale = tmp_path / "m1-replay" / "tasks" / "m1-replay_2010-03.parquet"
+    table = pq.read_table(stale)
+    pq.write_table(table.replace_schema_metadata({b"parent_digest": b"old"}), stale)
+    t = M.load_run(tmp_path, digest=digest, jobs=["m1-replay"])
+    assert t.jobs == ["m1-replay"] and t.skipped == ["m1-replay/tasks/m1-replay_2010-03.parquet"]
+    assert "2010-03" not in set(t.selections["month"]) and set(t.selections["engine"]) == {"replay"}
+
+
+def test_rows_without_a_mix_are_excluded_and_counted(tmp_path):
+    build_run(tmp_path, n_months=30, engines=("replay",))
+    t = M.load_run(tmp_path)
+    sel = t.selections
+    hit = (sel["kind"] == "main") & (sel["cell"] == "free") & (sel["arm"] == "U1")
+    hit &= sel["month"].isin(["2010-01", "2010-02"])
+    sel.loc[hit, "status"] = C.NOT_FOUND
+    sel.loc[hit, "weights"] = pd.Series([[]] * int(hit.sum()), index=sel.index[hit], dtype=object)
+    lone = sel.index[(sel["kind"] == "main") & (sel["cell"] == "d25")][0]
+    sel.loc[lone, "status"] = C.INSUFFICIENT_STARTS  # still a locked mix: kept
+    s = M.Study(t, fake_realized(sel), disjoint=PUBLISHED)
+    u1 = s.pick("m1", "replay", kind="main", arm="U1", cell="free", pooled=True)
+    assert len(u1) == 30 * 6 - 12 and not set(u1["status"]) - set(C.USABLE)
+    assert s.exclusions("m1", "replay") == [
+        {"kind": "main", "status": C.NOT_FOUND, "count": int(hit.sum())}
+    ]
+    assert s.white_line("m1", "replay")["vs_F"]["pairs"] == 30 * 6 - 12
+    # realized figures are computed only for rows with a mix
+    from portfoliosight.research.fixedrisk import realized as R
+
+    real = R.realized_table(sel, synth_horizon(30, 16))
+    assert not real.set_index("sel_id").loc[sel.loc[hit, "sel_id"], "complete"].any()
 
 
 def test_white_line_supported_when_everything_clears(study):
@@ -189,32 +244,35 @@ def test_stability_rules(run):
     rows = s.stability("m1", "replay")["rows"]
     assert len(rows) == 24 and all(r["origins"] == 8 for r in rows)
     assert not any(r["pass"] for r in rows)  # random weights: L1 is far above .20
-    # identical weights and identical Bad across the five banks pass v1's rules
+    # identical weights and identical own-bank Bad across the five stability banks pass v1's rules
     sel = s.sel
-    nat = sel[
-        (sel.kind == "main")
-        & (sel.arm == "U1")
-        & ~sel.pooled.astype(bool)
-        & (sel.engine == "replay")
-    ]
+    stab = (sel["kind"] == "stability") & (sel["engine"] == "replay")
     key = ["month", "rf", "cell"]
-    wmap = nat.set_index(key)["weights"]
-    stab = sel["kind"] == "stability"
-    new = [
-        wmap[(m, r, c)]
-        for m, r, c in zip(
-            sel.loc[stab, "month"], sel.loc[stab, "rf"], sel.loc[stab, "cell"], strict=True
-        )
-    ]
-    sel.loc[stab, "weights"] = pd.Series(new, index=sel.index[stab], dtype=object)
-    bmap = s.evw["bad"].mean(axis=1)
-    nat_bad = nat.set_index(key)["sel_id"].map(bmap)
-    for i in sel.index[stab & (sel.engine == "replay")]:
-        s.evw["bad"].loc[sel.at[i, "sel_id"]] = nat_bad[
-            (sel.at[i, "month"], sel.at[i, "rf"], sel.at[i, "cell"])
-        ]
+    primary = sel[stab & (sel["seed"] == C.PRIMARY_SEED)].set_index(key)
+    keys = list(
+        zip(sel.loc[stab, "month"], sel.loc[stab, "rf"], sel.loc[stab, "cell"], strict=True)
+    )
+    sel.loc[stab, "weights"] = pd.Series(
+        [primary.at[k, "weights"] for k in keys], index=sel.index[stab], dtype=object
+    )
+    sel.loc[stab, "bad"] = [primary.at[k, "bad"] for k in keys]
     rows = s.stability("m1", "replay")["rows"]
     assert all(r["median_l1"] == 0 and r["pass"] for r in rows)
+    # only the stability procedure's own rows and Bad enter: main rows and test banks do not
+    main = (sel["kind"] == "main") & (sel["engine"] == "replay")
+    sel.loc[main, "weights"] = pd.Series(
+        [[1.0, 0.0, 0.0]] * int(main.sum()), index=sel.index[main], dtype=object
+    )
+    s.evw["bad"].loc[:, :] = np.random.default_rng(1).normal(0, 1, s.evw["bad"].shape)
+    assert all(r["pass"] for r in s.stability("m1", "replay")["rows"])
+    # a stability bank's own Bad is what the SD rule reads
+    sel.loc[stab & (sel["seed"] == C.STABILITY_SEEDS[0]), "bad"] -= 1.0
+    assert not any(r["pass"] for r in s.stability("m1", "replay")["rows"])
+    # an origin without all five banks' locked mixes is counted, not used
+    gone = stab & (sel["seed"] == C.STABILITY_SEEDS[1]) & (sel["month"] == "2010-01")
+    sel.loc[gone, "usable"] = False
+    first = s.stability("m1", "replay")["rows"][0]
+    assert first["origins"] == 7 and first["origins_short"] == 1
 
 
 def test_collapsed_and_cost(study):
@@ -270,7 +328,13 @@ def test_cscv_and_dsr_through_study(tmp_path):
     months = build_run(tmp_path, n_months=60, engines=("replay",))
     assert len(months) == 60
     t = M.load_run(tmp_path)
-    s = M.Study(t, fake_realized(t.selections, complete_until=48, n_months=60, noise=0.004))
+    real = fake_realized(t.selections, complete_until=48, n_months=60, noise=0.004)
+    assert M.Study(t, real).cscv("m1", "replay") == {
+        "available": False,
+        "reason": "no frozen CSCV masks in the parent manifest",
+    }
+    frozen = frozen_cscv(months, 48)
+    s = M.Study(t, real, cscv_frozen={"m1": frozen})
     c = s.cscv("m1", "replay")
     assert c["available"] and c["splits"] == 70 and c["evaluable"] == 0 and c["pbo"] is None
     assert "not computable" in c["note"] and c["counts"]["rows"] > 0
@@ -279,3 +343,34 @@ def test_cscv_and_dsr_through_study(tmp_path):
     assert d["dsr"] is None or 0 <= d["dsr"] <= 1
     x, names, mons = s.dsr_series("m1", "replay")
     assert x.shape == (4, 20) and names[0] == "U1/free" and len(mons) == 4
+
+
+def test_cscv_uses_the_frozen_masks_and_drops_collapsed_columns_whole(tmp_path):
+    months = build_run(tmp_path, n_months=60, engines=("replay",))
+    t = M.load_run(tmp_path)
+    real = fake_realized(t.selections, complete_until=48, n_months=60, noise=0.004)
+    frozen = frozen_cscv(months, 48)
+    s = M.Study(t, real, cscv_frozen={"m1": frozen})
+    x, used, counts = s.cscv_inputs("m1", "replay", frozen["months"])
+    assert used == months[:49] and x.shape == (4, 49, 24)
+    # the synthetic run's (2010-01, r = 0.10) column is collapsed: its 4 cells, free included, go
+    assert s.collapsed_columns("m1", "replay") == {("2010-01", M.RFS[0])}
+    assert counts["excluded_collapsed"] == 4 and np.isnan(x[:, 0, 0:4]).all()
+    assert counts["rows"] == 49 * 24 - 4
+    # the masks are the frozen ones, read unchanged (a mask with one split decides "splits")
+    one = {**frozen, "splits": frozen["splits"][:1]}
+    assert M.Study(t, real, cscv_frozen={"m1": one}).cscv("m1", "replay")["splits"] == 1
+    short = {"months": months[:5], "unavailable": "5 eligible origins cannot fill 8 blocks"}
+    assert M.Study(t, real, cscv_frozen={"m1": short}).cscv("m1", "replay") == {
+        "available": False,
+        "reason": short["unavailable"],
+    }
+
+
+def test_disjoint_months_accept_intervals_and_manifest_records():
+    from portfoliosight.research.fixedrisk.data import Interval
+
+    d = date(2010, 1, 29)
+    assert M._interval_month(Interval("2010-01", d, d, d)) == "2010-01"
+    assert M._interval_month({"month": "2010-02", "origin": "2010-02-26"}) == "2010-02"
+    assert M._interval_month(("2010-03", None, None)) == "2010-03"
