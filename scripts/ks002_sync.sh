@@ -25,7 +25,7 @@ excludes=(
   --exclude '.venv/' --exclude 'venv/' --exclude '__pycache__/' --exclude '*.pyc'
   --exclude '.pytest_cache/' --exclude '.ruff_cache/' --exclude '.mypy_cache/' --exclude '.pyright/'
   --exclude 'node_modules/' --exclude '.worktrees/' --exclude 'web/' --exclude '*.egg-info/'
-  --exclude 'graphify-out/cache/' --exclude '.git/'
+  --exclude 'graphify-out/cache/' --exclude '.git/' --exclude '.omx/' --exclude 'runs/'
 )
 
 push_repo() {
