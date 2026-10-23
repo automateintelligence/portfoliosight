@@ -40,6 +40,10 @@ method are in `docs/reviews/`.
   - Vanguard-only: a moderate allocation mix using Vanguard ETFs and/or mutual funds.
   - Fidelity-only: a moderate allocation mix using Fidelity ETFs and/or mutual funds.
   Select the funds and starting allocation percentages when designing each menu.
+- A third ready-made menu: the long-history research menu from the fixed-risk optimization
+  experiment (`research2003`: 11 funds capped at 40% and 8 large US stocks capped at 10%, history
+  back to 2003), added beside the Example Portfolio and TSP once the experiment's results report
+  is written (issue #187).
 - Tester access: a SecuritySight-style login (authorized email domains, one-time code, 30-day
   session) replaces the private-preview link when testers are invited.
 - Paid tier: more than 30 funds per portfolio, and tickers outside the served universe fetched on
