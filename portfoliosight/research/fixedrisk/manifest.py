@@ -156,6 +156,94 @@ def place(
 # ------------------------------------------------------------------------- parent manifest
 
 
+def run_settings() -> dict[str, Any]:
+    """The experiment settings of the running code (recorded in, and checked against, a parent)."""
+    return {
+        "paths": C.PATHS,
+        "horizon": C.HORIZON,
+        "lookback": C.LOOKBACK,
+        "sensitivity_lookback": C.SENSITIVITY_LOOKBACK,
+        "risk_fractions": list(C.RISK_FRACTIONS),
+        "cells": list(C.CELLS),
+        "arms": {name: list(triple) for name, triple in C.ARMS.items()},
+        "arm_order": list(C.ARM_ORDER),
+        "tau_r": C.TAU_R,
+        "tau_r_sensitivity": C.TAU_R_SENSITIVITY,
+        "tau_d": C.TAU_D,
+        "starts": C.STARTS,
+        "sobol_points": C.SOBOL_POINTS,
+        "showcase_columns": 48,
+        "showcase_d_grid": [round(0.05 * k, 2) for k in range(1, 20)],
+    }
+
+
+def run_seeds() -> dict[str, Any]:
+    return {
+        "primary": C.PRIMARY_SEED,
+        "stability": list(C.STABILITY_SEEDS),
+        "test": list(C.TEST_SEEDS),
+        "stability_stride": C.STABILITY_STRIDE,
+    }
+
+
+def run_ceilings() -> dict[str, Any]:
+    return {
+        "workers_per_host": WORKERS,
+        "rss_bytes_per_host": RSS_CEILING,
+        "arm_seconds": ARM_SECONDS,
+        "cpu_hours_total": CPU_HOURS,
+        "one_job_at_a_time_per_host": True,
+        "stop_on_breach": True,
+    }
+
+
+def code_head(repo: Path = REPO) -> str:
+    """The running code's commit: `git rev-parse HEAD`, else the `GIT_HEAD` file that
+    `scripts/ks002_sync.sh push` writes beside a copied worktree (no git objects there)."""
+    head = git_head(repo)
+    if head != "unknown":
+        return head
+    path = repo / "GIT_HEAD"
+    return path.read_text().strip() if path.is_file() else "unknown"
+
+
+def code_mismatches(
+    parent: Mapping[str, Any], *, hooks: str | None = None, repo: Path = REPO
+) -> list[str]:
+    """Why the running code is not the code the parent manifest records (empty when it is):
+    git HEAD, protocol revision, settings, seeds, ceilings, hooks and the engines' solvers."""
+    problems = []
+    head, recorded = code_head(repo), parent.get("git_head")
+    if head == "unknown" or head != recorded:
+        problems.append(f"code is at commit {head}, the parent manifest records {recorded}")
+    if parent["protocol"]["revision"] != C.PROTOCOL_REVISION:
+        problems.append(
+            f"protocol revision {C.PROTOCOL_REVISION} in the code, "
+            f"{parent['protocol']['revision']} in the parent"
+        )
+    for name, current in (
+        ("settings", run_settings()),
+        ("seeds", run_seeds()),
+        ("ceilings", run_ceilings()),
+    ):
+        if parent.get(name) != current:
+            changed = sorted(
+                k
+                for k in set(current) | set(parent.get(name) or {})
+                if current.get(k) != (parent.get(name) or {}).get(k)
+            )
+            problems.append(f"{name} differ from the parent's: {changed}")
+    if hooks and hooks != parent.get("hooks"):
+        problems.append(f"hooks {hooks!r} differ from the parent's {parent.get('hooks')!r}")
+    if not (hooks or parent.get("hooks")):
+        from portfoliosight.research.fixedrisk.optimizer import SOLVERS
+
+        for engine, entry in parent["engines"].items():
+            if entry["solver"] not in SOLVERS:
+                problems.append(f"{engine} solver {entry['solver']!r} is not one of {SOLVERS}")
+    return problems
+
+
 def menu_facts(inputs: data.ResearchInputs, menu: C.MenuSpec) -> dict[str, Any]:
     months = data.schedule(inputs, menu)
     intervals = data.disjoint_intervals(inputs, menu)
@@ -219,29 +307,8 @@ def build_parent(
         },
         "menus": {menu.name: menu_facts(inputs, menu) for menu in inputs.menus},
         "engines": {engine: {"solver": solvers[engine]} for engine in C.ENGINES},
-        "settings": {
-            "paths": C.PATHS,
-            "horizon": C.HORIZON,
-            "lookback": C.LOOKBACK,
-            "sensitivity_lookback": C.SENSITIVITY_LOOKBACK,
-            "risk_fractions": list(C.RISK_FRACTIONS),
-            "cells": list(C.CELLS),
-            "arms": {name: list(triple) for name, triple in C.ARMS.items()},
-            "arm_order": list(C.ARM_ORDER),
-            "tau_r": C.TAU_R,
-            "tau_r_sensitivity": C.TAU_R_SENSITIVITY,
-            "tau_d": C.TAU_D,
-            "starts": C.STARTS,
-            "sobol_points": C.SOBOL_POINTS,
-            "showcase_columns": 48,
-            "showcase_d_grid": [round(0.05 * k, 2) for k in range(1, 20)],
-        },
-        "seeds": {
-            "primary": C.PRIMARY_SEED,
-            "stability": list(C.STABILITY_SEEDS),
-            "test": list(C.TEST_SEEDS),
-            "stability_stride": C.STABILITY_STRIDE,
-        },
+        "settings": run_settings(),
+        "seeds": run_seeds(),
         "jobs": {
             key: {
                 "menu": key.rsplit("_", 1)[0],
@@ -253,14 +320,7 @@ def build_parent(
             for key in keys
         },
         "projection_source": projection_source,
-        "ceilings": {
-            "workers_per_host": WORKERS,
-            "rss_bytes_per_host": RSS_CEILING,
-            "arm_seconds": ARM_SECONDS,
-            "cpu_hours_total": CPU_HOURS,
-            "one_job_at_a_time_per_host": True,
-            "stop_on_breach": True,
-        },
+        "ceilings": run_ceilings(),
         "placement": dict(placement),
         "hooks": hooks,
         "git_head": git_head(repo),

@@ -16,6 +16,11 @@ Every scheduled (r, cell, arm) outcome is one selections row: outcomes without a
 optimizer's `unselected` rows, and every search on a bank whose GARCH fit failed) have status =
 their label, empty weights and NaN figures, so the measurements can count and exclude them.
 
+A task runs under a wall alarm of the per-arm ceiling (600 s) times its arm-cells; a task that
+rings it, or holds a selection slower than 600 s, writes `<job>/breaches/<base>.json` and no task
+file, so it is never marked done, and the job stops. The cumulative CPU is checkpointed atomically
+to `<job>/usage.json` at least every 60 s of monitoring and after each task.
+
 Output per task, written atomically and last-file-wins (`selections` is written last, so a task is
 complete only when `tasks/<menu>_<month>_<engine>.parquet` exists with the run's parent digest in
 its schema metadata): `tasks/<base>.parquet` (selections), `tasks/anchors/<base>.parquet`,
@@ -631,24 +636,82 @@ def build_state(init: WorkerInit) -> WorkerState:
     return WorkerState(inputs, load_hooks(init.hooks, init.solvers))
 
 
-def execute(state: WorkerState, payload: tuple[TaskSpec, str, str]) -> dict[str, Any]:
-    """Run and write one task; never raises (a failure is reported in the summary)."""
-    spec, tasks_dir, digest = payload
+def task_arm_cells(spec: TaskSpec) -> int:
+    """The (r, cell, arm) searches a task schedules; its wall alarm is `arm_seconds` times this."""
+    rf, cells, arms = len(C.RISK_FRACTIONS), len(C.CELLS), len(C.ARM_ORDER)
+    main = rf * cells * arms
+    count = main
+    if spec.stability:
+        count += (1 + len(C.STABILITY_SEEDS)) * rf * cells
+    if spec.showcase:
+        count += SHOWCASE_COLUMNS * len(SHOWCASE_D) + main + rf * len(ENDPOINT_D)
+    if spec.lookback5:
+        count += main
+    return count
+
+
+def breach_path(tasks_dir: Path, spec: TaskSpec) -> Path:
+    return tasks_dir.parent / "breaches" / f"{spec.base}.json"
+
+
+def _write_json(path: Path, body: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(body, indent=2, sort_keys=True, default=str) + "\n")
+    os.replace(tmp, path)
+
+
+def execute(state: WorkerState, payload: tuple[Any, ...]) -> dict[str, Any]:
+    """Run and write one task; never raises (a failure is reported in the summary).
+
+    `payload` is `(spec, tasks_dir, digest[, arm_seconds])`. The task runs under a wall alarm of
+    `arm_seconds` x `task_arm_cells(spec)`; when the alarm rings, or a finished task holds a
+    selection slower than `arm_seconds`, the breach is written to `<job>/breaches/<task>.json`,
+    the summary carries it and no task file is written, so the task is not done.
+    """
+    spec, tasks_dir, digest, *rest = payload
+    arm_seconds = float(rest[0]) if rest else math.inf
     started, cpu = time.perf_counter(), time.process_time()
     summary: dict[str, Any] = {"task": spec.base, "pid": os.getpid(), "ok": False}
+    ceiling = arm_seconds * task_arm_cells(spec)
+    breach: dict[str, Any] | None = None
     try:
-        out = run_task(state.inputs, spec, state.hooks)
-        write_task(Path(tasks_dir), spec, out, digest)
-        slowest = max((row["seconds"] for row in out.selections), default=0.0)
-        summary.update(
-            ok=True,
-            selections=len(out.selections),
-            labels=_label_counts(out.selections),
-            fit_failures=out.fit_failures,
-            evaluated=len(out.evaluated),
-            max_selection_seconds=slowest,
-            phases=out.phases,
-        )
+        try:
+            with runner.arm_alarm(ceiling):
+                out = run_task(state.inputs, spec, state.hooks)
+        except runner.ArmTimeLimit:
+            breach = {
+                "rule": "arm_seconds",
+                "limit": ceiling,
+                "value": time.perf_counter() - started,
+                "detail": f"task wall alarm: {task_arm_cells(spec)} arm-cells x {arm_seconds} s",
+            }
+        else:
+            slowest = max(out.selections, key=lambda row: row["seconds"], default=None)
+            seconds = 0.0 if slowest is None else float(slowest["seconds"])
+            if seconds > arm_seconds:
+                breach = {
+                    "rule": "arm_seconds",
+                    "limit": arm_seconds,
+                    "value": seconds,
+                    "detail": f"selection {slowest['sel_id']}" if slowest else "",
+                }
+            else:
+                write_task(Path(tasks_dir), spec, out, digest)
+                summary.update(
+                    ok=True,
+                    selections=len(out.selections),
+                    labels=_label_counts(out.selections),
+                    fit_failures=out.fit_failures,
+                    evaluated=len(out.evaluated),
+                    max_selection_seconds=seconds,
+                    phases=out.phases,
+                )
+        if breach is not None:
+            breach["task"] = spec.base
+            breach["utc"] = runner.utc()
+            _write_json(breach_path(Path(tasks_dir), spec), {**breach, "parent_digest": digest})
+            summary["breach"] = breach
     except BaseException:
         summary["error"] = traceback.format_exc()
     summary["seconds"] = time.perf_counter() - started
@@ -847,6 +910,39 @@ def _read_usage(directory: Path) -> float:
     return float(json.loads(path.read_text())["cpu_seconds"]) if path.is_file() else 0.0
 
 
+def write_usage(directory: Path, cpu_seconds: float) -> None:
+    """The job's cumulative CPU seconds (earlier attempts included), written atomically."""
+    _write_json(directory / "usage.json", {"cpu_seconds": cpu_seconds, "utc": runner.utc()})
+
+
+CHECKPOINT_SECONDS = 60.0
+
+
+class CheckpointMonitor(runner.Monitor):
+    """`runner.Monitor` that also calls `on_checkpoint()` at most every `every` seconds of its
+    checks (the first check included), so the cumulative CPU reaches disk while tasks run."""
+
+    def __init__(
+        self,
+        *args: Any,
+        on_checkpoint: Callable[[], None],
+        every: float = CHECKPOINT_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.on_checkpoint, self.every, self.clock = on_checkpoint, every, clock
+        self._last = -math.inf
+
+    def check(self, pids: Sequence[int]) -> runner.Breach | None:
+        breach = super().check(pids)
+        now = self.clock()
+        if now - self._last >= self.every:
+            self._last = now
+            self.on_checkpoint()
+        return breach
+
+
 def run_job(
     run_dir: Path,
     menu: str,
@@ -861,9 +957,22 @@ def run_job(
     meter: runner.Meter | None = None,
     limits: dict[str, float] | None = None,
     poll: float = 1.0,
+    checkpoint_seconds: float = CHECKPOINT_SECONDS,
 ) -> JobResult:
-    """Run (or resume) the job (menu, engine) of the run in ``run_dir``; see the module doc."""
+    """Run (or resume) the job (menu, engine) of the run in ``run_dir``; see the module doc.
+
+    Before any cached task is accepted or a worker starts, the running code must be the code the
+    parent manifest records (`manifest.code_mismatches`: git HEAD, settings, seeds, ceilings,
+    hooks, solvers); otherwise the job is refused with the reasons.
+    """
     parent = manifest.read_parent(run_dir)
+    problems = manifest.code_mismatches(parent, hooks=hooks)
+    if problems:
+        raise RuntimeError(
+            f"refusing to run or resume {run_dir}: the running code is not the code its parent "
+            "manifest records (" + "; ".join(problems) + "). Check out that commit (and sync it "
+            "to this host), or write a new parent manifest in a new run directory."
+        )
     key = manifest.job_key(menu, engine)
     job = parent["jobs"].get(key)
     if job is None:
@@ -876,8 +985,8 @@ def run_job(
     snapshot = snapshot_dir or parent["snapshot"]["path"]
     solvers = {e: parent["engines"][e]["solver"] for e in C.ENGINES}
     limit = {
-        "rss_bytes": manifest.RSS_CEILING,
-        "arm_seconds": manifest.ARM_SECONDS,
+        "rss_bytes": parent["ceilings"]["rss_bytes_per_host"],
+        "arm_seconds": parent["ceilings"]["arm_seconds"],
         "cpu_hours": job["cpu_hours_budget"],
         **(limits or {}),
     }
@@ -905,7 +1014,7 @@ def run_job(
             tmp = directory / "job.json.tmp"
             tmp.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n")
             os.replace(tmp, directory / "job.json")
-            (directory / "usage.json").write_text(json.dumps({"cpu_seconds": state["cpu"]}))
+            write_usage(directory, state["cpu"])
 
         write_manifest("running")
         log.line(
@@ -913,11 +1022,19 @@ def run_job(
             f"{len(pending)} to run, cpu budget {limit['cpu_hours']:.2f} h, workers {workers}"
         )
         usage_meter = meter or runner.ProcMeter()
-        monitor = runner.Monitor(
-            int(limit["rss_bytes"]), float(limit["cpu_hours"]), usage_meter, cpu_before=before
-        )
+
+        def checkpoint() -> None:
+            state["cpu"] = before + monitor.cpu_seconds
+            write_usage(directory, state["cpu"])
+
+        monitor = CheckpointMonitor(
+            int(limit["rss_bytes"]), float(limit["cpu_hours"]), usage_meter, cpu_before=before,
+            on_checkpoint=checkpoint, every=checkpoint_seconds,
+        )  # fmt: skip
         pool = (pool_factory or _default_pool)(workers, init)
-        payloads = [(i, (t, str(tasks_dir), digest)) for i, t in pending]
+        payloads = [
+            (i, (t, str(tasks_dir), digest, float(limit["arm_seconds"]))) for i, t in pending
+        ]
         breach: runner.Breach | None = None
 
         def handle(index: int, summary: dict[str, Any]) -> runner.Breach | None:
@@ -937,13 +1054,12 @@ def run_job(
             for item in summary.get("fit_failures") or []:
                 log.line(f"task {summary['task']} garch_fit_failed: {json.dumps(item)}")
             write_manifest("running")
-            if summary.get("ok") and summary["max_selection_seconds"] > limit["arm_seconds"]:
+            found = summary.get("breach")
+            if found:  # recorded by the worker; the task wrote no files and is not done
                 return runner.Breach(
-                    "arm_seconds",
-                    limit["arm_seconds"],
-                    summary["max_selection_seconds"],
-                    summary["task"],
-                )
+                    found["rule"], found["limit"], found["value"],
+                    f"{summary['task']}: {found['detail']}",
+                )  # fmt: skip
             return None
 
         try:

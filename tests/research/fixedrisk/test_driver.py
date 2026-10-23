@@ -462,16 +462,97 @@ def test_memory_breach_stops_the_job(inputs: data.ResearchInputs, tmp_path: Path
     assert result.breach["rule"] == "aggregate_peak_rss" and result.status == "incomplete"
 
 
-def test_arm_seconds_breach_stops_after_the_task_and_keeps_its_files(
+def test_a_slow_selection_is_a_breach_and_its_task_is_not_done(
     inputs: data.ResearchInputs, tmp_path: Path
 ) -> None:
-    make_parent(inputs, tmp_path)
+    parent = make_parent(inputs, tmp_path)
     result = run(tmp_path, limits={"arm_seconds": 0.005})  # the fake's selections take 0.01 s
     assert result.breach["rule"] == "arm_seconds" and result.status == "incomplete"
-    assert (
-        result.tasks_done == 1
-        and len(list((tmp_path / "tsp_replay" / "tasks").glob("*.parquet"))) == 1
-    )
+    assert result.tasks_done == 0 and "selection tsp|" in result.breach["detail"]
+    job = tmp_path / "tsp_replay"
+    assert not list((job / "tasks").rglob("*.parquet"))  # no marker, no partial tables
+    spec = driver.job_tasks(parent, "tsp", "replay")[0]
+    record = json.loads(driver.breach_path(job / "tasks", spec).read_text())
+    assert record["rule"] == "arm_seconds" and record["value"] == pytest.approx(0.01)
+    assert record["parent_digest"] == parent["digest"]
+    again = run(tmp_path)  # the default ceiling: the breached task runs again and completes
+    assert again.status == "complete" and again.tasks_done == again.tasks_total
+
+
+def test_the_task_wall_alarm_stops_a_running_task(
+    inputs: data.ResearchInputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = make_parent(inputs, tmp_path)
+    spec = driver.job_tasks(parent, "tsp", "replay")[0]
+    cells = driver.task_arm_cells(spec)
+    assert cells == 120 + 120 + (48 * 19 + 120 + 12)  # main, stability, showcase and its sens.
+    monkeypatch.setattr(fakes, "SLEEP", 0.05)  # each search sleeps; the alarm is 0.12 s here
+    result = run(tmp_path, limits={"arm_seconds": 0.12 / cells})
+    assert result.breach["rule"] == "arm_seconds" and "task wall alarm" in result.breach["detail"]
+    assert result.tasks_done == 0
+    job = tmp_path / "tsp_replay"
+    assert not list((job / "tasks").rglob("*.parquet"))
+    record = json.loads(driver.breach_path(job / "tasks", spec).read_text())
+    assert record["limit"] == pytest.approx(0.12) and record["value"] >= 0.12
+    assert "BREACH" in (job / "progress.log").read_text()
+
+
+def test_cumulative_cpu_is_checkpointed_atomically_while_tasks_run(tmp_path: Path) -> None:
+    now = [0.0]
+    written = []
+    monitor = driver.CheckpointMonitor(
+        2**40, 100.0, FixedMeter(cpu=5.0), on_checkpoint=lambda: written.append(now[0]),
+        every=60.0, clock=lambda: now[0],
+    )  # fmt: skip
+    for t in (0.0, 30.0, 59.9, 60.0, 61.0, 125.0):
+        now[0] = t
+        assert monitor.check([]) is None
+    assert written == [0.0, 60.0, 125.0] and monitor.cpu_seconds == 5.0
+    driver.write_usage(tmp_path, 123.5)
+    assert json.loads((tmp_path / "usage.json").read_text())["cpu_seconds"] == 123.5
+    assert not list(tmp_path.glob(".*tmp"))
+
+
+def test_usage_reaches_disk_during_the_job(inputs: data.ResearchInputs, tmp_path: Path) -> None:
+    make_parent(inputs, tmp_path)
+    seen = []
+
+    class Watching(FixedMeter):
+        def usage(self, pids):
+            path = tmp_path / "tsp_replay" / "usage.json"
+            seen.append(json.loads(path.read_text())["cpu_seconds"] if path.is_file() else None)
+            return super().usage(pids)
+
+    result = run(tmp_path, meter=Watching(cpu=42.0), checkpoint_seconds=0.0)
+    assert result.status == "complete"
+    assert 42.0 in seen[1:-1]  # written by the monitor before the last task finished
+    assert json.loads((tmp_path / "tsp_replay" / "usage.json").read_text())["cpu_seconds"] == 42.0
+
+
+def test_resume_refuses_code_that_differs_from_the_parent(
+    inputs: data.ResearchInputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = make_parent(inputs, tmp_path)
+    assert manifest.code_mismatches(parent, hooks=HOOKS) == []
+    run(tmp_path)
+    calls = len(fakes.CALLS)
+    monkeypatch.setattr(manifest, "code_head", lambda repo=manifest.REPO: "f" * 40)
+    with pytest.raises(RuntimeError, match="refusing to run or resume.*commit f{40}"):
+        run(tmp_path)
+    monkeypatch.undo()
+    monkeypatch.setattr(C, "STARTS", 4)
+    with pytest.raises(RuntimeError, match=r"settings differ from the parent's: \['starts'\]"):
+        run(tmp_path)
+    monkeypatch.undo()
+    with pytest.raises(RuntimeError, match="hooks 'other' differ"):
+        driver.run_job(tmp_path, "tsp", "replay", workers=0, hooks="other", snapshot_dir="/snap")
+    assert len(fakes.CALLS) == calls  # nothing ran
+
+
+def test_code_head_falls_back_to_the_synced_git_head_file(tmp_path: Path) -> None:
+    assert manifest.code_head(tmp_path) == "unknown"
+    (tmp_path / "GIT_HEAD").write_text("abc123\n")
+    assert manifest.code_head(tmp_path) == "abc123"
 
 
 def test_cpu_of_earlier_attempts_counts_against_the_budget(
