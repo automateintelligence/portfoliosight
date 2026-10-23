@@ -2,15 +2,24 @@
 """The fixed-risk experiment report (protocol v2 sections 5-7a) as Markdown, from a run directory.
 
     python -m portfoliosight.research.fixedrisk.report --run-dir R --snapshot S --out docs/research/X.md
+        [--allow-partial]
 
 Descriptive figures are tables; there is no plotting. Piece 2's `data` module is imported inside
 `main()` only, so the rest of this module runs on arrays and callables.
+
+Before any conclusion is computed the run is checked against its parent manifest (`check_run`):
+every expected job present, complete, of the parent's digest, with all its task files, and no
+unexpected job. A run that fails a check is refused; `--allow-partial` instead writes a clearly
+labelled interim report from the expected jobs' task files of the parent's digest. The CSCV masks
+and the disjoint intervals are the ones frozen in the parent manifest.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import math
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -337,8 +346,9 @@ def _cscv(c: dict[str, Any]) -> str:
         f"Splits evaluable: {c['evaluable']} of {c['splits']} ({c['dropped']} dropped"
         + (f": {'; '.join(c['dropped_reasons'])}" if c["dropped_reasons"] else "")
         + f"); (r, cell) pairs in the common mask: {c['pairs']}; rows used {c['counts']['rows']}, "
-        f"excluded for labels {c['counts']['excluded_labelled']}, for missing triples "
-        f"{c['counts']['excluded_incomplete']}.",
+        f"excluded for labels {c['counts']['excluded_labelled']}, for collapsed columns "
+        f"{c['counts'].get('excluded_collapsed', 0)}, for missing triples "
+        f"{c['counts']['excluded_incomplete']}. Masks: frozen in the parent manifest.",
         f"PBO: {_pct(c['pbo']) if c['pbo'] is not None else c['note']}. "
         f"Training side {c['origins_train'][0]}-{c['origins_train'][1]} origins "
         f"(median {c['disjoint_train_median']:.0f} disjoint years), test side "
@@ -482,14 +492,30 @@ def _collapsed(col: dict[str, Any]) -> str:
     )
 
 
+def _exclusions(rows: list[dict[str, Any]]) -> str:
+    return table(["Kind", "Status", "Rows"], [[r["kind"], r["status"], r["count"]] for r in rows])
+
+
 def build_report(
     study: M.Study,
     *,
     title: str = "Fixed-risk optimization experiment report",
     jobs: Sequence[str] | None = None,
+    interim: Sequence[str] | None = None,
 ) -> str:
+    """The Markdown report. `interim` lists why the run is not complete; when given, the report is
+    labelled an interim report throughout and states that its figures are not conclusions."""
     jobs = list(jobs if jobs is not None else study.jobs)
+    if interim is not None:
+        title = f"INTERIM (partial run, not a result): {title}"
     out = [f"# {title}\n", f"Protocol: `{C.PROTOCOL_PATH}` revision {C.PROTOCOL_REVISION}.\n"]
+    if interim is not None:
+        out.append(
+            "**This is an interim report of an incomplete or inconsistent run. No label, interval "
+            "or count below is a conclusion of the experiment.** The run failed these checks:\n"
+        )
+        out.extend(f"- {problem}" for problem in interim)
+        out.append("")
     out.append("## Run\n")
     out.append(f"Jobs found: {len(jobs)} ({', '.join(jobs)}).")
     if len(jobs) != EXPECTED_JOBS:
@@ -526,6 +552,8 @@ def build_report(
             out.append("\n#### Selection bias: deflated Sharpe ratio (diagnostic, not a gate)\n")
             out.append(_dsr(study.deflated_sharpe(menu, engine)))
             labels = study.labels(menu, engine)
+            out.append("\n#### Rows without a locked mix (excluded from every statistic above)\n")
+            out.append(_exclusions(study.exclusions(menu, engine)))
             out.append("\n#### Cell labels (non-ok; none is called infeasible)\n")
             out.append(
                 table(
@@ -584,14 +612,16 @@ def _panel_span(records: Mapping[str, pd.DataFrame], holdings: Sequence[str]):
 
 
 def make_callables(inputs: Any, data: Any):
-    """(horizon, span, spy_tr, cpi, dgs10, disjoint) from piece 2's `load_inputs` object."""
+    """(horizon, span, spy_tr, cpi, dgs10) from piece 2's `load_inputs` object."""
 
     def horizon(menu: str, month: str):
         try:
-            days, values, holdings = data.horizon_returns(inputs, menu, month)
+            hz = data.horizon_returns(inputs, menu, month)
         except (ValueError, KeyError, LookupError):
             return None
-        return days, np.asarray(values, dtype=float), holdings
+        if hz.returns is None or not hz.days:  # the ledger has no complete realized year
+            return None
+        return list(hz.days), np.asarray(hz.returns, dtype=float), tuple(hz.funds)
 
     panels: dict[str, pd.DataFrame] = {}
 
@@ -612,6 +642,73 @@ def make_callables(inputs: Any, data: Any):
     return horizon, span, spy_tr, inputs.cpi, inputs.dgs10
 
 
+# ------------------------------------------------------------------------------ run checks
+
+
+class RunNotReady(RuntimeError):
+    """The run directory fails `check_run`; `problems` says how."""
+
+    def __init__(self, problems: Sequence[str]) -> None:
+        super().__init__("; ".join(problems))
+        self.problems = list(problems)
+
+
+def read_parent(run_dir: str | Path) -> dict[str, Any] | None:
+    from portfoliosight.research.fixedrisk import manifest
+
+    path = Path(run_dir) / "parent.json"
+    return manifest.read_parent(Path(run_dir)) if path.is_file() else None
+
+
+def check_run(run_dir: str | Path, parent: Mapping[str, Any] | None) -> list[str]:
+    """Why the run directory is not a complete run of its parent manifest (empty when it is):
+    missing, incomplete or foreign-digest jobs, missing task files, unexpected job directories."""
+    root = Path(run_dir)
+    if parent is None:
+        return [f"{root} has no parent manifest (parent.json); nothing can be checked"]
+    digest = parent["digest"]
+    expected = dict(parent["jobs"])
+    problems = []
+    present = sorted(
+        p.name
+        for p in root.iterdir()
+        if p.is_dir() and ((p / "tasks").is_dir() or (p / "job.json").is_file())
+    )
+    for name in present:
+        if name not in expected:
+            problems.append(f"unexpected job directory {name} (not a job of the parent manifest)")
+    for key, job in sorted(expected.items()):
+        directory = root / key
+        info_path = directory / "job.json"
+        if not info_path.is_file():
+            problems.append(f"job {key} has not run (no job manifest)")
+            continue
+        info = json.loads(info_path.read_text())
+        if info.get("parent_digest") != digest:
+            problems.append(
+                f"job {key} ran under another parent digest {info.get('parent_digest')}"
+            )
+            continue
+        if info.get("status") != "complete":
+            breach = info.get("breach")
+            problems.append(
+                f"job {key} is {info.get('status')} ({info.get('tasks_done')}/"
+                f"{info.get('tasks_total')} tasks, {info.get('tasks_failed')} failed"
+                + (f", breach {breach.get('rule')}" if breach else "")
+                + ")"
+            )
+        schedule = parent["menus"][job["menu"]]["schedule"]
+        markers = sorted((directory / "tasks").glob("*.parquet"))
+        own = [m for m in markers if M._task_digest(m) == digest]
+        if len(own) != len(schedule):
+            problems.append(f"job {key} has {len(own)} of {len(schedule)} task files")
+        if len(own) != len(markers):
+            problems.append(
+                f"job {key} has {len(markers) - len(own)} task files of another parent digest"
+            )
+    return problems
+
+
 def run_report(
     run_dir: str | Path,
     *,
@@ -622,14 +719,35 @@ def run_report(
     dgs10: pd.Series | None,
     disjoint: Mapping[str, Sequence[Any]] | None = None,
     study_options: Mapping[str, Any] | None = None,
+    parent: Mapping[str, Any] | None = None,
+    allow_partial: bool = False,
     **kwargs: Any,
 ) -> str:
-    tables = M.load_run(run_dir)
+    """Check the run against its parent manifest, then build the report.
+
+    A run failing `check_run` raises `RunNotReady` unless `allow_partial`, which builds an interim
+    report from the expected jobs' task files of the parent's digest. The parent's frozen CSCV
+    masks and disjoint intervals are used (`disjoint` overrides the latter).
+    """
+    parent = parent if parent is not None else read_parent(run_dir)
+    problems = check_run(run_dir, parent)
+    if problems and not allow_partial:
+        raise RunNotReady(problems)
+    if parent is not None:
+        tables = M.load_run(run_dir, digest=parent["digest"], jobs=sorted(parent["jobs"]))
+        menus = parent["menus"]
+        frozen = {m: facts["cscv"] for m, facts in menus.items() if "cscv" in facts}
+        if disjoint is None:
+            disjoint = {m: facts["disjoint_intervals"] for m, facts in menus.items()}
+    else:
+        tables, frozen = M.load_run(run_dir), {}
     realized = R.realized_table(
         tables.selections, horizon, span=span, cpi=cpi, spy_tr=spy_tr, dgs10=dgs10
     )
-    study = M.Study(tables, realized, disjoint=disjoint, **(study_options or {}))
-    return build_report(study, **kwargs)
+    study = M.Study(
+        tables, realized, disjoint=disjoint, cscv_frozen=frozen, **(study_options or {})
+    )
+    return build_report(study, interim=problems if problems else None, **kwargs)
 
 
 def main(argv: Sequence[str] | None = None, study_options: Mapping[str, Any] | None = None) -> int:
@@ -637,15 +755,33 @@ def main(argv: Sequence[str] | None = None, study_options: Mapping[str, Any] | N
     parser.add_argument("--run-dir", required=True, type=Path)
     parser.add_argument("--snapshot", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="write a labelled interim report when the run is incomplete or inconsistent",
+    )
     args = parser.parse_args(argv)
+    parent = read_parent(args.run_dir)
+    problems = check_run(args.run_dir, parent)
+    if problems and not args.allow_partial:
+        print("refusing to report on an incomplete or inconsistent run:", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        print("(--allow-partial writes a labelled interim report)", file=sys.stderr)
+        return 2
     import importlib
 
     data = importlib.import_module("portfoliosight.research.fixedrisk.data")  # lazily, by name
 
     inputs = data.load_inputs(args.snapshot)
+    if parent is not None and inputs.manifest_sha256 != parent["snapshot"]["manifest_sha256"]:
+        print(
+            f"snapshot {args.snapshot} has digest {inputs.manifest_sha256}, the parent manifest "
+            f"names {parent['snapshot']['manifest_sha256']}",
+            file=sys.stderr,
+        )
+        return 2
     horizon, span, spy_tr, cpi, dgs10 = make_callables(inputs, data)
-    menus = M.load_run(args.run_dir).selections["menu"].unique()
-    disjoint = {m: data.disjoint_intervals(inputs, m) for m in menus}
     text = run_report(
         args.run_dir,
         horizon=horizon,
@@ -653,8 +789,9 @@ def main(argv: Sequence[str] | None = None, study_options: Mapping[str, Any] | N
         cpi=cpi,
         spy_tr=spy_tr,
         dgs10=dgs10,
-        disjoint=disjoint,
         study_options=study_options,
+        parent=parent,
+        allow_partial=args.allow_partial,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(text)
