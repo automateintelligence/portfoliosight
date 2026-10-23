@@ -74,6 +74,7 @@ class AgreementRow:
     solver: str
     value: float  # exact objective of the native answer; -inf when none was found
     seconds: float
+    error: str = ""  # why the case produced no answer at all (e.g. its bank could not be built)
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,8 @@ class AgreementReport:
     accepted: dict[str, bool]
     median_seconds: dict[str, float]
     chosen: str
+    reference_failed: tuple[tuple[int, str], ...] = ()  # (case, objective): COBYLA-768 found none
+    missing: int = 0  # expected pairs without any row (each a failed pair for every solver)
 
 
 def solve_case(
@@ -129,18 +132,34 @@ def solve_case(
     return out
 
 
-def agreement_decision(rows: Sequence[AgreementRow]) -> AgreementReport:
-    """The §4 rule applied to a table of rows (one per case, objective and solver)."""
+def agreement_decision(
+    rows: Sequence[AgreementRow], expected_pairs: int | None = None
+) -> AgreementReport:
+    """The §4 rule applied to a table of rows (one per case, objective and solver).
+
+    A pair passes for a solver only when both its value and COBYLA-768's are finite and the
+    solver's is within 2.5 bp of, or above, COBYLA-768's. A pair where COBYLA-768 found nothing is
+    a failed pair for every other solver and is listed in `reference_failed`. The denominator is
+    `expected_pairs` (the predeclared 60) when given, so a case that produced no rows at all still
+    counts as failed; otherwise it is the number of pairs present.
+    """
     table: dict[tuple[int, str], dict[str, AgreementRow]] = {}
     for row in rows:
         table.setdefault((row.case, row.objective), {})[row.solver] = row
-    pairs = len(table)
+    if expected_pairs is not None and expected_pairs < len(table):
+        raise ValueError(f"{len(table)} pairs present, more than the {expected_pairs} expected")
+    pairs = len(table) if expected_pairs is None else expected_pairs
     needed = math.ceil(PASS_SHARE * pairs - 1e-9)
     passes: dict[str, int] = dict.fromkeys(("exact_grad", "kernel_grad", "cobyla128"), 0)
-    for pair in table.values():
-        ref = pair["cobyla768"].value
+    reference_failed = []
+    for key, pair in sorted(table.items()):
+        ref = pair["cobyla768"].value if "cobyla768" in pair else -math.inf
+        if not math.isfinite(ref):
+            reference_failed.append(key)
+            continue
         for solver in passes:
-            if solver in pair and pair[solver].value >= ref - AGREEMENT_TOL:
+            value = pair[solver].value if solver in pair else -math.inf
+            if math.isfinite(value) and value >= ref - AGREEMENT_TOL:
                 passes[solver] += 1
     accepted = {s: passes[s] >= needed for s in passes}
     median_seconds = {
@@ -163,7 +182,26 @@ def agreement_decision(rows: Sequence[AgreementRow]) -> AgreementReport:
         accepted=accepted,
         median_seconds=median_seconds,
         chosen=chosen,
+        reference_failed=tuple(reference_failed),
+        missing=pairs - len(table),
     )
+
+
+def failed_case_rows(
+    case: int,
+    menu: str,
+    r_fraction: float,
+    cell: str,
+    error: str,
+    objectives: tuple[str, ...] = AGREEMENT_OBJECTIVES,
+) -> list[AgreementRow]:
+    """The rows of a case that could not be solved at all (its bank failed): -inf for every solver
+    and objective, so each of its pairs is a failed pair for every solver."""
+    return [
+        AgreementRow(case, menu, r_fraction, cell, objective, solver, -math.inf, 0.0, error)
+        for solver in SOLVERS
+        for objective in objectives
+    ]
 
 
 def agreement_check(
@@ -199,7 +237,7 @@ def agreement_check(
                         seconds,
                     )
                 )
-    return agreement_decision(rows)
+    return agreement_decision(rows, expected_pairs=len(cases) * len(objectives))
 
 
 # --------------------------------------------------------------------------- finite differences

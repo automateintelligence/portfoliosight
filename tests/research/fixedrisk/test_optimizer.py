@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import replace
 
@@ -13,6 +14,7 @@ from portfoliosight.research.fixedrisk.agreement import (
     AgreementRow,
     agreement_check,
     agreement_decision,
+    failed_case_rows,
 )
 from portfoliosight.research.fixedrisk.anchors import geometry, origin_anchors
 from portfoliosight.research.fixedrisk.banks import replay_bank
@@ -206,6 +208,34 @@ def test_agreement_rule():
         rows({"exact_grad": worst, "kernel_grad": worst, "cobyla768": ref, "cobyla128": worst})
     )
     assert report.chosen == "cobyla768"
+
+
+def test_agreement_requires_finite_objectives_and_keeps_the_60_pair_denominator():
+    def rows(case: int, values: dict[str, float]) -> list[AgreementRow]:
+        return [
+            AgreementRow(case, "m", 0.4, "d50", objective, solver, value, 1.0)
+            for solver, value in values.items()
+            for objective in ("U1", "B")
+        ]
+
+    good = {"exact_grad": 0.01, "kernel_grad": 0.01, "cobyla768": 0.01, "cobyla128": 0.01}
+    table = [row for case in range(28) for row in rows(case, good)]  # 56 passing pairs
+    # case 28: COBYLA-768 found nothing (-inf); everyone else's -inf (or a finite value) must fail
+    table += rows(28, {"exact_grad": -math.inf, "kernel_grad": 0.02, "cobyla768": -math.inf,
+                       "cobyla128": -math.inf})  # fmt: skip
+    # case 29: the bank could not be built: no answer from any solver
+    table += failed_case_rows(29, "m", 0.4, "d25", "GARCH fit failed for GE")
+    report = agreement_decision(table, expected_pairs=60)
+    assert report.pairs == 60 and report.needed == 57 and report.missing == 0
+    assert report.passes == {"exact_grad": 56, "kernel_grad": 56, "cobyla128": 56}
+    assert not any(report.accepted.values()) and report.chosen == "cobyla768"
+    assert report.reference_failed == ((28, "B"), (28, "U1"), (29, "B"), (29, "U1"))
+    assert {r.error for r in table if r.case == 29} == {"GARCH fit failed for GE"}
+    # a case that left no rows at all still counts in the fixed denominator
+    partial = agreement_decision([r for r in table if r.case != 29], expected_pairs=60)
+    assert partial.pairs == 60 and partial.missing == 2 and partial.passes["exact_grad"] == 56
+    with pytest.raises(ValueError):
+        agreement_decision(table, expected_pairs=10)
 
 
 def test_agreement_check_runs_four_solvers(ctx, bank, anchors):
