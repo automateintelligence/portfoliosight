@@ -1,9 +1,9 @@
 # Fixed-risk optimization experiment protocol (v2) — DRAFT for independent review
 
-Status: draft, revision 4, 2026-10-23. Owner decisions of 2026-10-22 (three rounds), the owner's
+Status: draft, revision 5, 2026-10-23. Owner decisions of 2026-10-22/23 (five rounds), the owner's
 Codex review of revision 2 (seven findings, three interpretation notes, two ADR findings) and of
-revision 3 (eight findings) applied; see §10 rounds 3–4. Not hash-locked. Open before the lock: the
-TIP → VIPSX confirmation (§3a) and the six-origin measurement (§8).
+revision 3 (eight findings) applied; see §10. Not hash-locked. Open before the lock: the third Codex
+pass (this revision) and the six-origin measurement (§8).
 
 Supersedes the selection geometry of the
 [return-optimization experiment protocol](2026-10-18-return-optimization-experiment-protocol.md) (v1)
@@ -51,7 +51,7 @@ Secondary:
    ΔBad, ΔES and drawdown beside ΔU wherever `U` is compared **[Codex, 2026-10-22]**. If the free
    cell concentrates the way v1's `w_R` did, the report says so and the interior cells show what a
    minimum-diversification band costs.
-2. Which U weights hold up out of sample? Five predeclared weight triples run as arms (§2) and are
+2. Which U weights hold up out of sample? Four predeclared weight triples run as arms (§2) and are
    compared under combinatorially symmetric cross-validation (§7). Max-`Bad` runs as a sixth arm:
    the mix that maximizes the 2.5th percentile year at this risk (not "the safest" in any wider
    sense; its drawdown and ES are measured, not assumed).
@@ -108,13 +108,15 @@ w_MDP(r)  = argmax_{w ∈ F(r)} M(w)                                    (most di
 M(r, d)   = M(w_F(r)) + d · (M(w_MDP(r)) − M(w_F(r)))
 F(r, d)   = { w ∈ F(r) : |M(w) − M(r, d)| ≤ τ_d · (M(w_MDP(r)) − M(w_F(r))) }
 d(w)      = (M(w) − M(w_F(r))) / (M(w_MDP(r)) − M(w_F(r)))
-Arms      U_k: argmax_{w ∈ F(r,d)} U_k(w), k = 1..5 (triples below);   B: argmax_{w ∈ F(r,d)} Bad(w)
+Arms      U_k: argmax_{w ∈ F(r,d)} U_k(w), k = 1..4 (triples below);   B: argmax_{w ∈ F(r,d)} Bad(w)
 Free cell every arm's argmax over F(r) itself (no d band); the winner's d(w) is reported as d*
 ```
 
-Arms **[owner, 2026-10-22]**: the five U weight triples `(.60,.30,.10)` (primary, `U_1`),
-`(.70,.20,.10)`, `(.50,.35,.15)`, `(.80,.15,.05)`, `(.40,.40,.20)`, and max-`Bad`. Max-Typical and
-max-Good are dropped (Typical at a fixed risk tracks the frontier; Good rewards concentration).
+Arms **[owner, 2026-10-22; reduced to five arms 2026-10-23]**: the four U weight triples
+`(.60,.30,.10)` (primary, `U_1`), `(.70,.20,.10)`, `(.50,.35,.15)`, `(.40,.40,.20)`, and max-`Bad`.
+The `(.80,.15,.05)` triple of revisions 2–4 is dropped: at 80% on the bad year it behaves like
+max-`Bad`, which stays. Max-Typical and max-Good are dropped (Typical at a fixed risk tracks the
+frontier; Good rewards concentration).
 MDP, minimum variance and equal weight are no longer evaluated as reference arms; the two
 comparators are `w_F(r)` and the shrunk-μ frontier `w_F̃(r)` of §5.
 
@@ -160,7 +162,7 @@ the share of free-cell winners outside `[0, 1]` per menu and `r`.
   `r ∈ {X(a) : a ∈ {.10, .25, .40, .55, .70, .85}}`, `X(a) = σ_min + a·(σ(w_top) − σ_min)` as v1
   §3, used as fixed risks. The extreme `a = 1` is omitted: its band holds only the max-return corner.
 - Diversification cells: the free cell and `d ∈ {0.25, 0.50, 0.75}`; `d = 0` and `d = 1` are the
-  anchors. Four searched cells per `(menu, origin, r)`, six arms each.
+  anchors. Four searched cells per `(menu, origin, r)`, five arms each.
 - **Showcase surfaces**: at six origins per menu (v1's sensitivity rule, indices
   `floor(j·(K−1)/5)`, j = 0..5), the full product surface: 48 risk columns × 19 interior slider
   positions, primary arm only. These measure the production precompute and give the UI work a
@@ -172,7 +174,10 @@ the share of free-cell winners outside `[0, 1]` per menu and `r`.
   silent substitution of replay. Each engine has its own 2,000 × 252 bank per
   `(menu, origin, engine, replicate)` with v1's seeds.
 - Optimizer replicates: primary seed `20261013` for every primary statistic; seeds `20261014..17`
-  for the stability diagnostics of the `U_1` arm only.
+  for the stability diagnostics of the `U_1` arm only, run on **every fourth scheduled origin**
+  (indices `0, 4, 8, …`; ≈ 62 per menu) **[owner, 2026-10-23]**: five banks per cell there, the
+  same across-seed Bad SD and L1 rules as v1, a quarter of the cost of every origin. Stability is a
+  diagnostic, never a gate.
 - Lookback **[owner, 2026-10-22: 3 years primary]**: 756 union-calendar rows with the 90%
   complete-rows rule; the product's 5-year window runs as a sensitivity at the six showcase origins.
   Reason: a 3-year window puts the 2008 crash inside the realized record (§3a); covariance
@@ -213,7 +218,8 @@ that later did badly (GE, C, PFE, INTC). WMT, the one top-ten name missing, is n
 | VIPSX | US inflation-linked (Vanguard fund, replaces TIP; see below) | 2000-06 |
 | MSFT, XOM, GE, PFE, C, INTC, IBM, JNJ, PG | 2003 US mega-caps | 1995-01 each |
 
-**TIP → VIPSX** **[Codex finding 6; owner to confirm or veto]**: TIP's first price is 2003-12, so
+**TIP → VIPSX** **[Codex finding 6; owner confirmed 2026-10-23, for the whole history, no
+splice]**: TIP's first price is 2003-12, so
 the first 3-year origin would be 2006-12 and only 19 disjoint realized years fit before the data
 end (2026-09); the 20-interval realized-support gate the owner kept (decision D) would be
 unreachable by construction. VIPSX tracks the same asset class from 2000-06. With it the youngest
@@ -237,7 +243,7 @@ Schedules, each menu on its own eligible origins:
 | TSP | 5 | 2003-06 | 2006-06 | ≈ 244 | 20 if the ledger confirms (2006-06 … 2026-06) |
 
 Requires the ledger start to be per menu (harness change, small). Cells per engine:
-research2003 `246 × 6 r × 4` = 5,904; TSP `244 × 6 × 4` = 5,856; six arms each.
+research2003 `246 × 6 r × 4` = 5,904; TSP `244 × 6 × 4` = 5,856; five arms each.
 
 ## 4. Search (replaces v1 §5 steps 3–7)
 
@@ -370,7 +376,7 @@ interior search. Lock before evaluate as v1 step 8; independent banks `20261113.
 ## 5. Measurements (adds to v1 §6)
 
 Per locked selection, under both engines where applicable: training and independent-bank
-`B/T/G/U_1..5/mean/ES_2.5`, `σ`, `M`, `d(w)`, `μ_s'w`, weights, turnover to the previous origin;
+`B/T/G/U_1..4/mean/ES_2.5`, `σ`, `M`, `d(w)`, `μ_s'w`, weights, turnover to the previous origin;
 plus:
 
 - **Comparators**: `w_F(r)` is today's frontier on the product's `μ_s`, which is **already shrunk**:
@@ -416,7 +422,7 @@ over origins.
 |---|---|
 | White line (primary) | free-cell `U_1` arm vs `w_F(r)`: pooled independent-bank mean ΔU ≥ 5 bp with ≥ 4/5 banks positive, with ΔBad, ΔES and the risk difference `σ(w_U) − σ(w_F)` reported beside it and the `τ_r = 0.001` sensitivity of §2 agreeing in sign; realized guardrails of v1 (median and mean annual-return loss ≤ 25 bp, loss frequency +≤ 5 pp, mean drawdown worsening ≤ 1 pp) on the monthly-rebalanced convention; realized support as v1 (≥ 25 bp gain or ≥ 1 pp drawdown improvement with 99% lower bound > 0, ≥ 20 disjoint intervals; the attainable disjoint count is computed from the frozen ledger before the lock and disclosed; if below 20 the criterion is "not attainable", not "failed") **[owner D: v1 thresholds kept; Codex finding 6]**. The same comparison against `w_F̃(r)` is reported beside it, not gated |
 | Where U peaks | distribution of `d*` per `(menu, r)`; share of origins with `d* ≥ 0.25`; reported |
-| Which weights | §7: out-of-sample realized `U_1` of each triple's locked mixes over the 70 symmetric splits; probability of backtest overfitting over the five triples; reported |
+| Which weights | §7: out-of-sample realized `U_1` of each triple's locked mixes over the 70 symmetric splits; probability of backtest overfitting over the four triples; reported |
 | Safest mix | max-`Bad` arm vs `U_1` arm: realized Bad-year outcomes and drawdown; reported |
 | Line shape | sign and 95% interval of the slope of realized Bad, drawdown and return against `d` at each `r`; reported |
 | Engine agreement | share of cells where the two engines select mixes within L1 ≤ .10; paired realized differences; reported |
@@ -431,7 +437,7 @@ Stage 2 / ENB stays governed by D4/D7 and is not triggered by this protocol.
 
 ## 7. Choosing the U weights (de Prado)
 
-The five triples are arms, so each has its own locked mixes at every cell. After the run their
+The four triples are arms, so each has its own locked mixes at every cell. After the run their
 realized outcomes are compared with the **combinatorially symmetric cross-validation (CSCV)** of
 Bailey, Borwein, López de Prado and Zhu (2017), fully specified here **[Codex finding 7]**:
 
@@ -456,10 +462,12 @@ Bailey, Borwein, López de Prado and Zhu (2017), fully specified here **[Codex f
   distinct bad years in 20) stays explicit however many rows pass.
 - *Splits and ranks*: all `C(8, 4) = 70` ways of taking four blocks in sample and four out. On
   each evaluable split the triple with the best in-sample realized `U_1` is chosen (ties broken
-  toward the primary triple, recorded). Its out-of-sample rank `k` among the five is 1 for the
-  worst and 5 for the best out-of-sample `U_1`, ties taking the average rank; the relative rank is
-  `ω = k / 6` and the logit `λ = ln(ω / (1 − ω))`, so `λ < 0` means the in-sample choice ranked
-  below the median out of sample. Every triple's out-of-sample `U_1` is recorded as well.
+  toward the primary triple, recorded). Its out-of-sample rank `k` among the four is 1 for the
+  worst and 4 for the best out-of-sample `U_1`, ties taking the average rank; the relative rank is
+  `ω = k / 5` and the logit `λ = ln(ω / (1 − ω))`, so `λ < 0` means the in-sample choice ranked
+  below the median out of sample. Every triple's out-of-sample `U_1` is recorded as well. With four
+  candidates PBO is coarse (`ω ∈ {.2, .4, .6, .8}`); it is read with the per-triple distributions,
+  not alone.
 - *Outputs*: **PBO** = share of **evaluable** splits with `λ < 0`; it is reported only if at least
   50 of the 70 splits are evaluable, otherwise "PBO not computable" with the count. Also the
   out-of-sample `U_1` distribution per triple over the evaluable splits; the rank of the primary
@@ -474,8 +482,20 @@ tests (block cutting, overlap purging on ledger endpoints, the 70 splits, the lo
 
 ## 8. Resource ceilings and cost projection
 
-Six workers, one BLAS thread each, aggregate RSS ≤ 4 GiB, **600 s per arm, 240 CPU-hours** for both
-engines together (the R33 levels, pre-authorized so an unattended run never stops on a ceiling).
+Six workers per host, one BLAS thread each, aggregate RSS ≤ 4 GiB per host, **600 s per arm, 240
+CPU-hours** for both engines together across hosts (the R33 levels, pre-authorized so an unattended
+run never stops on a ceiling).
+
+**Two hosts** **[owner, 2026-10-23]**: the local machine (12 CPUs, 15 GB) and KS-002 over Tailscale
+(8 cores, 23 GB, one resident container; probed 2026-10-23: load ≈ 1.3, Python 3.12). The unit of
+distribution is one `(menu, engine)` job, selected with the run command's `--menu` and `--engine`
+filters (needed anyway for the staged run); each job writes its own artifacts and manifest, with
+the host name, CPU model and library versions recorded, and the report reads the job directories
+together. Jobs are assigned greedily by projected CPU-hours. KS-002 setup is an rsync of the
+worktree and frozen snapshot and a virtual environment from the locked requirements; results are
+rsynced back. A job never spans hosts: outputs are byte-reproducible on the host that produced them
+and may differ in the last bits between hosts, which the report notes. The experiment does not use
+the product API or its container.
 
 Projection, generated from the §3 schedule **[recomputed per Codex finding 4; revision 2
 undercounted stability and showcase work and omitted Sobol scoring, anchors and sensitivities]**.
@@ -488,29 +508,36 @@ removes is measured (§4 speed items), not assumed.
 
 | Component, per engine | research2003 (20 holdings, 5,904 cells) | TSP (5 funds, 5,856 cells) |
 |---|---|---|
-| Main searches: cells × 6 arms × 3 starts | 106k searches ≈ 26.6 CPU-h | 105k ≈ 5.9 CPU-h |
-| Stability seeds: 4 seeds × cells × 3 starts, `U_1` arm | 71k ≈ 17.7 CPU-h | 70k ≈ 3.9 CPU-h |
+| Main searches: cells × 5 arms × 3 starts | 89k searches ≈ 22.1 CPU-h | 88k ≈ 4.9 CPU-h |
+| Stability seeds: 4 seeds × (every fourth origin, ≈ 1,488 cells) × 3 starts, `U_1` arm | 18k ≈ 4.5 CPU-h | 18k ≈ 1.0 CPU-h |
 | Showcase surfaces: 6 origins × 48 × 19 × 3 starts | 16k ≈ 4.1 CPU-h | 16k ≈ 0.9 CPU-h |
 | Sobol scoring, primary bank: 1,024 exact evaluations per `(origin, r)` column | 1,476 columns ≈ 2.1 CPU-h | 1,464 ≈ 0.8 CPU-h |
-| Sobol rescoring, stability banks: the same geometry rescored on each of the 4 replicate banks **[Codex, revision 3 finding 7]** | ≈ 8.4 CPU-h | ≈ 3.2 CPU-h |
+| Sobol rescoring, stability banks: the stability origins' columns rescored on each of the 4 replicate banks **[Codex, revision 3 finding 7]** | ≈ 372 columns × 4 ≈ 2.1 CPU-h | ≈ 0.8 CPU-h |
 | Anchors: 2 per column × 8 starts | ≈ 2 CPU-h | ≈ 0.5 CPU-h |
 | Sensitivities at showcase origins (`τ_r = 0.001`, 5-year lookback, `d = 0`/`d = 1` band search) | ≈ 1.5 CPU-h | ≈ 0.4 CPU-h |
-| Independent evaluation: 5 banks × 8 selections × cells | ≈ 0.3 CPU-h | ≈ 0.1 CPU-h |
+| Independent evaluation: 5 banks × 7 selections × cells | ≈ 0.3 CPU-h | ≈ 0.1 CPU-h |
 | GARCH fits (per holding and origin, once; GARCH engine only) | ≈ 1.4 CPU-h | ≈ 0.3 CPU-h |
-| **Per engine** | **≈ 63 CPU-h** | **≈ 16 CPU-h** |
+| **Per engine** | **≈ 39 CPU-h (40 with GARCH fits)** | **≈ 9.4 CPU-h (9.7)** |
 
-Both engines: **≈ 158 CPU-h, ≈ 26 h wall on six quiet workers, a little over two nights**. Within
-the 240 CPU-h ceiling; over the 120 CPU-h cut trigger on paper, so cut (1) is expected unless the
-measurement comes in under the assumptions. The workload model in the `experiment estimate`
-command counts every dimension (menu × origin × `r` × cell × arm × start × engine × replicate) from
-the schedule; this table is its hand check, and the measured gate supersedes both. Predeclared cut
-order if the measurement projects more than 120 CPU-h, applied in this order and recorded in the
-report: (1) the stability seeds run on every fourth origin (≈ 62 per menu) instead of every origin,
-saving ≈ 43 CPU-h (searches and Sobol rescoring together); (2) starts per cell drop from three to
-two. Cuts apply to **stages not yet started**; a running stage finishes under the plan it started
-with **[Codex, revision 3 finding 4]**. If the measurement projects more than two nights after both
-cuts, the GPU path is built first (§4). Nothing else in the schedule is cut without a new owner
-decision.
+Both engines: **≈ 98 CPU-h**. On the local six workers alone ≈ 16.5 h wall; with KS-002 taking the
+research2003 GARCH job (≈ 40 CPU-h, ≈ 6.7 h on its six workers) and the local host the other three
+(≈ 58 CPU-h, ≈ 9.7 h), **≈ 10 h wall, one night**. Within the 240 CPU-h ceiling and under the §4
+GPU rule. The workload model in the `experiment estimate` command counts every dimension (menu ×
+origin × `r` × cell × arm × start × engine × replicate × host) from the schedule; this table is its
+hand check, and the measured gate supersedes both. Predeclared cut order if the measurement projects
+more than 120 CPU-h, applied in this order and recorded in the report: (1) starts per cell drop
+from three to two; (2) the stability seeds run on every eighth origin. Cuts apply to **stages not
+yet started**; a running stage finishes under the plan it started with **[Codex, revision 3
+finding 4]**. If the measurement projects more than two nights after both cuts, the GPU path is
+built first (§4). Nothing else in the schedule is cut without a new owner decision.
+
+Reconciliation of the projection across revisions, both engines: revision 2 as written 55 CPU-h
+(arithmetic undercount); the same plan counted correctly 87; 20 holdings instead of 11, 135; Sobol
+rescoring per replicate bank counted, 158; five arms and stability on every fourth origin (owner,
+2026-10-23), 98. Per search the projected cost is ≈ 2.7 s for three starts on the 20-holding menu
+against 17–26 s per cell in v1; the total is larger than v1's 14 CPU-h because the grid is ≈ 100×
+larger (2.5× the origins, 24 cells instead of 2, five arms, two engines, five seeds on the primary
+arm at a quarter of the origins).
 
 ## 9. Development workflow (no Conductor)
 
@@ -528,9 +555,11 @@ decision.
      finite-difference check, the `M`-maximizing anchors, SLSQP under the bands, deduplicated
      starts and cell labels, the agreement check against v1's COBYLA (`research/search.py`,
      `research/selection.py`);
-  2. data: fetch the tickers not in the lake, register `research2003` with its per-holding caps,
-     per-menu ledger start, 3-year lookback, the disjoint-year count from the ledger, CPI series,
-     snapshot re-freeze (`research/harness.py`, `data/`, snapshot tooling);
+  2. data and distribution: fetch the tickers not in the lake, register `research2003` with its
+     per-holding caps, per-menu ledger start, 3-year lookback, the disjoint-year count from the
+     ledger, CPI series, snapshot re-freeze; the `--menu` / `--engine` job filters, host metadata
+     in the manifest, the report's multi-directory read, and the KS-002 rsync-and-venv script
+     (`research/harness.py`, `data/`, snapshot tooling, `scripts/`);
   3. engine: `garch` through `research.evaluate.bank(engine=...)`, fits per holding and origin on
      the origin-cut window only (never the builder's full-lake panel), the cached levelled panel,
      the GARCH gradient terms exposed to piece 1, named convergence failures;
@@ -546,9 +575,11 @@ decision.
   its own and are appended to the manifest (an amendment, not a re-lock of the selection contract).
   Nothing found at the GARCH gate changes the replay stage. The owner's Codex findings on this
   document are folded in before either gate.
-- **Run in two stages**: replay as soon as pieces 1, 2 and 4 pass scoped tests; GARCH when piece 3
-  passes its gate. Sensitivities: the 5-year lookback and the `τ_r = 0.001` check at the six
-  showcase origins only.
+- **Run in two stages, on two hosts**: replay as soon as pieces 1, 2 and 4 pass scoped tests; GARCH
+  when piece 3 passes its gate. Job placement per §8: KS-002 takes the research2003 GARCH job, the
+  local host the other three; if the GARCH gate lands later than the replay stage, KS-002 starts
+  with TSP replay instead and the placement is recomputed. Sensitivities: the 5-year lookback and
+  the `τ_r = 0.001` check at the six showcase origins only.
 - **Not on the path**: phase 3 closure, the v1 branch's phase PR, the 6.4/6.5 engine-validation
   report (the paired engine comparison here is most of it), phases 4 and 5.
 
@@ -626,3 +657,11 @@ Round 4 (the owner's Codex review of revision 3, 2026-10-23; eight findings, all
    every dimension (§8).
 8. Slider endpoints are anchor exceptions by definition, with their `U` gap measured at the
    showcase origins; `d*` outside `[0, 1]` reported as such (§2).
+
+Round 5 (owner, 2026-10-23, after the cost reconciliation):
+
+- **TIP → VIPSX confirmed**, for the whole history; the research menu never holds TIP.
+- **Five arms**: the `(.80,.15,.05)` triple dropped; max-`Bad` kept (§2).
+- **Stability** on every fourth origin with five banks (§3).
+- **Two hosts**: KS-002 over Tailscale takes whole `(menu, engine)` jobs; no API, no container
+  (§8, §9). Projection ≈ 98 CPU-h, ≈ 10 h wall across the two hosts.
