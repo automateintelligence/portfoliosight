@@ -31,7 +31,11 @@ def inputs() -> data.ResearchInputs:
 def reset_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
     fakes.CALLS.clear()
     monkeypatch.setattr(fakes, "FAIL_MONTH", None)
-    monkeypatch.delenv("FAKE_FAIL_MONTH", raising=False)
+    monkeypatch.setattr(fakes, "FIT_FAIL_MONTH", None)
+    monkeypatch.setattr(fakes, "NOT_FOUND_CELL", None)
+    monkeypatch.setattr(fakes, "SLEEP", 0.0)
+    for name in ("FAKE_FAIL_MONTH", "FAKE_FIT_FAIL_MONTH", "FAKE_SLEEP"):
+        monkeypatch.delenv(name, raising=False)
 
 
 def hooks() -> driver.Hooks:
@@ -183,6 +187,74 @@ def test_a_stage_flag_off_skips_the_stage(inputs: data.ResearchInputs) -> None:
     assert len(fakes.CALLS) == 1
     assert {r["kind"] for r in out.selections} == {"main", "comparator"}
     assert {r["engine"] for r in out.selections} == {"garch"}
+
+
+def test_cells_without_a_mix_are_persisted_as_labelled_rows(
+    inputs: data.ResearchInputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(fakes, "NOT_FOUND_CELL", "d75")
+    spec = driver.TaskSpec("tsp", data.schedule(inputs, fakes.BETA)[4], "replay", stability=True)
+    out = driver.run_task(inputs, spec, hooks())
+    missing = [r for r in out.selections if r["status"] == C.NOT_FOUND]
+    assert {r["cell"] for r in missing} == {"d75"}
+    assert sum(r["kind"] == "main" for r in missing) == 6 * 5  # every r and arm of the cell
+    assert sum(r["kind"] == "stability" for r in missing) == 5 * 6  # five banks, arm U1
+    assert all(r["weights"] == [] and np.isnan(r["bad"]) and r["d"] is None for r in missing)
+    evaluated = {r["sel_id"] for r in out.evaluated}
+    assert not evaluated & {r["sel_id"] for r in missing}
+    driver.write_task(tmp_path, spec, out, "d1")
+    table = pq.read_table(driver.task_paths(tmp_path, spec)["selections"]).to_pylist()
+    assert sum(r["status"] == C.NOT_FOUND for r in table) == len(missing)
+
+
+def test_a_garch_fit_failure_becomes_labelled_rows_for_the_whole_task(
+    inputs: data.ResearchInputs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = full_spec(inputs, "garch")
+    monkeypatch.setattr(fakes, "FIT_FAIL_MONTH", spec.month)
+    out = driver.run_task(inputs, spec, hooks())
+    # every 3-year search becomes garch_fit_failed rows; the 5-year bank is fitted separately
+    failed = [r for r in out.selections if r["status"] == C.FIT_FAILED]
+    assert {r["lookback"] for r in failed} == {"3y"}
+    assert all(r["status"] == C.OK for r in out.selections if r["lookback"] == "5y")
+    count = {k: sum(r["kind"] == k for r in failed) for k in {r["kind"] for r in failed}}
+    # pooled rows per cell and arm, the free cell's native rows, and (kind of the call, except
+    # the main grid's "comparator") the F and BS comparators of each column
+    assert count == {
+        "main": 6 * 4 * 5 + 6 * 5,
+        "comparator": 6 * 2,
+        "stability": 5 * 6 * 4,
+        "showcase": 48 * 19 + 48 * 2,
+        "sens_tau": 6 * 4 * 5 + 6 * 5 + 6 * 2,
+        "sens_endpoints": 6 * 2 + 6 * 2,
+    }
+    assert all(r["weights"] == [] for r in failed)
+    assert {r["seed"] for r in failed if r["kind"] == "stability"} == {
+        C.PRIMARY_SEED, *C.STABILITY_SEEDS
+    }  # fmt: skip
+    assert {a["grid"] for a in out.anchors} == {"sens_5y"}
+    assert {r["lookback"] for r in out.selections if r["sel_id"] in
+            {e["sel_id"] for e in out.evaluated}} == {"5y"}  # fmt: skip
+    (reason,) = out.fit_failures
+    assert reason["lookback"] == "3y" and "GarchFitFailed" in reason["error"]
+    assert [c["lookback"] for c in fakes.CALLS] == ["5y"]  # no search ran on the failed bank
+
+
+def test_a_fit_failed_task_is_complete_with_its_rows_logged(
+    inputs: data.ResearchInputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = make_parent(inputs, tmp_path)
+    month = parent["menus"]["tsp"]["schedule"][2]
+    monkeypatch.setattr(fakes, "FIT_FAIL_MONTH", month)
+    result = driver.run_job(
+        tmp_path, "tsp", "garch", workers=0, hooks=HOOKS, snapshot_dir="/snap", poll=0.0
+    )
+    assert result.status == "complete" and result.tasks_failed == 0
+    spec = driver.job_tasks(parent, "tsp", "garch")[2]
+    rows = pq.read_table(driver.task_paths(tmp_path / "tsp_garch" / "tasks", spec)["selections"])
+    assert set(rows.column("status").to_pylist()) == {C.FIT_FAILED}
+    log = (tmp_path / "tsp_garch" / "progress.log").read_text()
+    assert f"task tsp_{month}_garch garch_fit_failed" in log and '"garch_fit_failed":' in log
 
 
 # ------------------------------------------------------------------------------- files

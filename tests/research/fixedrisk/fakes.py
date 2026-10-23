@@ -2,12 +2,16 @@
 
 The module doubles as a `--hooks` module for spawned workers: it defines `make_bank`,
 `search_origin` and `load_inputs(snapshot_dir)`. Calls are recorded in `CALLS` (in-process only);
-`FAIL_MONTH` (or the environment variable `FAKE_FAIL_MONTH`) makes a search raise at that month.
+`FAIL_MONTH` (or the environment variable `FAKE_FAIL_MONTH`) makes a search raise at that month;
+`FIT_FAIL_MONTH` (or `FAKE_FIT_FAIL_MONTH`) makes a GARCH bank raise the real `GarchFitFailed` at
+that month (3-year lookback only); `NOT_FOUND_CELL` reports that cell's arms as `not_found` rows;
+`SLEEP` (or `FAKE_SLEEP`) seconds are spent in each search.
 """
 
 from __future__ import annotations
 
 import os
+import time
 import zlib
 from datetime import date
 
@@ -23,6 +27,9 @@ D_STAR = date(2025, 9, 30)
 PATHS = 300
 CALLS: list[dict] = []
 FAIL_MONTH: str | None = None
+FIT_FAIL_MONTH: str | None = None
+NOT_FOUND_CELL: str | None = None
+SLEEP: float = 0.0
 
 ALPHA = C.MenuSpec("research2003", ("A", "B", "C", "D"), (0.0,) * 4, (0.6,) * 4)
 BETA = C.MenuSpec("tsp", ("X", "Y", "Z"), (0.0,) * 3, (0.8,) * 3)
@@ -50,6 +57,11 @@ class FakeBank:
 
 
 def make_bank(ctx: C.OriginContext, engine: str, seed: int) -> FakeBank:
+    fit_fail = FIT_FAIL_MONTH or os.environ.get("FAKE_FIT_FAIL_MONTH")
+    if engine == "garch" and ctx.month == fit_fail and ctx.lookback == C.LOOKBACK:
+        from portfoliosight.research.fixedrisk.garch_bank import GarchFitFailed
+
+        raise GarchFitFailed(ctx.menu.holdings[0], ctx.origin, "optimizer did not converge")
     return FakeBank(ctx, engine, seed)
 
 
@@ -77,6 +89,7 @@ def search_origin(
     fail = FAIL_MONTH or os.environ.get("FAKE_FAIL_MONTH")
     if fail and ctx.month == fail:
         raise RuntimeError(f"fake failure at {ctx.month}")
+    time.sleep(SLEEP or float(os.environ.get("FAKE_SLEEP", "0")))
     n = len(ctx.menu.holdings)
     result = C.OriginResult(
         menu=ctx.menu.name, origin=ctx.origin, engine=bank.engine, seed=bank.seed
@@ -97,6 +110,15 @@ def search_origin(
         result.anchors.append(anchor)
         for cell in cells:
             for arm in arms:
+                if cell == NOT_FOUND_CELL:
+                    result.unselected.append(
+                        C.unselected(
+                            menu=ctx.menu.name, origin=ctx.origin, engine=bank.engine,
+                            seed=bank.seed, r_fraction=a, r=anchor.r, cell=cell, arm=arm,
+                            pooled=not native_only, status=C.NOT_FOUND, solver=solver, starts=0,
+                        )
+                    )  # fmt: skip
+                    continue
                 w = _rng("S", ctx.menu.name, ctx.month, bank.seed, a, cell, arm).dirichlet(
                     np.ones(n)
                 )

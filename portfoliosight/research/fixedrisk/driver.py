@@ -12,6 +12,10 @@ Task unit: (menu, origin month, engine). In one process a task
  5. evaluates every locked selection (main, comparators, showcase, sensitivities) on the five
     independent test banks of its own training context.
 
+Every scheduled (r, cell, arm) outcome is one selections row: outcomes without a locked mix (the
+optimizer's `unselected` rows, and every search on a bank whose GARCH fit failed) have status =
+their label, empty weights and NaN figures, so the measurements can count and exclude them.
+
 Output per task, written atomically and last-file-wins (`selections` is written last, so a task is
 complete only when `tasks/<menu>_<month>_<engine>.parquet` exists with the run's parent digest in
 its schema metadata): `tasks/<base>.parquet` (selections), `tasks/anchors/<base>.parquet`,
@@ -55,6 +59,7 @@ ENDPOINT_D = (0.0, 1.0)
 EVAL_CHUNK = 256
 KINDS = ("main", "stability", "showcase", "sens_tau", "sens_5y", "sens_endpoints", "comparator")
 DIGEST_KEY = b"parent_digest"
+COMPARATOR_ARMS = ("F", "BS")
 
 SELECTION_SCHEMA = pa.schema(
     [
@@ -217,6 +222,7 @@ class TaskOutput:
     anchors: list[dict[str, Any]] = field(default_factory=list)
     evaluated: list[dict[str, Any]] = field(default_factory=list)
     phases: dict[str, float] = field(default_factory=dict)
+    fit_failures: list[dict[str, Any]] = field(default_factory=list)  # GARCH banks not built
 
 
 def job_tasks(parent: dict[str, Any], menu: str, engine: str) -> list[TaskSpec]:
@@ -326,9 +332,12 @@ class _Collector:
                 self.out.anchors.append(
                     _anchor_row(anchor, ctx=ctx, engine=self.engine, grid=grid, tau_r=tau_r)
                 )
-        for sel, k in [(s, kind) for s in result.selections] + [
-            (s, comparator_kind) for s in result.comparators
-        ]:
+        rows = [(s, kind) for s in result.selections]
+        rows += [(s, comparator_kind) for s in result.comparators]
+        rows += [
+            (s, comparator_kind if s.arm in COMPARATOR_ARMS else kind) for s in result.unselected
+        ]
+        for sel, k in rows:
             ident = self._unique(
                 "|".join(
                     [
@@ -349,7 +358,8 @@ class _Collector:
             self.out.selections.append(
                 _selection_row(sel, kind=k, ctx=ctx, tau_r=tau_r, sel_id=ident)
             )
-            if evaluate and np.isfinite(np.asarray(sel.weights, dtype=float)).all():
+            weights = np.asarray(sel.weights, dtype=float)
+            if evaluate and weights.size and np.isfinite(weights).all():
                 self.to_evaluate.setdefault(ctx.lookback, []).append(
                     (ident, np.asarray(sel.weights, dtype=float))
                 )
@@ -397,13 +407,54 @@ def evaluate_on_test_banks(
     return rows
 
 
+def is_fit_failure(exc: BaseException) -> bool:
+    """A bank that cannot be built because a holding's GARCH fit failed (`garch_fit_failed`)."""
+    return getattr(exc, "label", None) == C.FIT_FAILED
+
+
+def fit_failed_result(
+    ctx: C.OriginContext,
+    engine: C.Engine,
+    seed: int,
+    *,
+    solver: str,
+    arms: tuple[str, ...] = C.ARM_ORDER,
+    risk_fractions: tuple[float, ...] = C.RISK_FRACTIONS,
+    d_grid: tuple[float, ...] | None = None,
+    include_free: bool = True,
+    native_only: bool = False,
+    **_: Any,
+) -> C.OriginResult:
+    """What a search reports when its bank could not be built: one `garch_fit_failed` row per
+    scheduled outcome (`contracts.scheduled_outcomes`), no anchors, no mixes."""
+    grid = (0.25, 0.50, 0.75) if d_grid is None else tuple(d_grid)
+    cells = tuple(C.cell_name(d) for d in grid) + (("free",) if include_free else ())
+    result = C.OriginResult(menu=ctx.menu.name, origin=ctx.origin, engine=engine, seed=seed)
+    for r_fraction, cell, arm, pooled in C.scheduled_outcomes(
+        risk_fractions=tuple(risk_fractions), cells=cells, arms=arms, native_only=native_only
+    ):
+        result.unselected.append(
+            C.unselected(
+                menu=ctx.menu.name, origin=ctx.origin, engine=engine, seed=seed,
+                r_fraction=r_fraction, r=math.nan, cell=cell, arm=arm, pooled=pooled,
+                status=C.FIT_FAILED, solver=solver,
+            )
+        )  # fmt: skip
+    result.labels = {C.FIT_FAILED: len(result.unselected)}
+    return result
+
+
 def run_task(
     inputs: data.ResearchInputs,
     spec: TaskSpec,
     hooks: Hooks,
     clock: Callable[[], float] = time.perf_counter,
 ) -> TaskOutput:
-    """Everything one (menu, month, engine) task computes; see the module docstring."""
+    """Everything one (menu, month, engine) task computes; see the module docstring.
+
+    A bank that cannot be built because a GARCH fit failed turns every search on it into
+    `garch_fit_failed` rows (persisted and counted); the reason is kept in `fit_failures`.
+    """
     engine: C.Engine = spec.engine  # type: ignore[assignment]
     solver = hooks.solvers[engine]
     col = _Collector(spec, engine)
@@ -412,14 +463,30 @@ def run_task(
     def timed(name: str, since: float) -> None:
         phases[name] = phases.get(name, 0.0) + clock() - since
 
+    def bank_for(ctx: C.OriginContext, seed: int) -> C.PathBank | None:
+        try:
+            return hooks.make_bank(ctx, engine, seed)
+        except Exception as exc:
+            if not is_fit_failure(exc):
+                raise
+            col.out.fit_failures.append(
+                {"lookback": ctx.lookback, "seed": seed, "error": f"{type(exc).__name__}: {exc}"}
+            )
+            return None
+
+    def search(ctx: C.OriginContext, bank: C.PathBank | None, seed: int, **kw: Any):
+        if bank is None:
+            return fit_failed_result(ctx, engine, seed, solver=solver, **kw)
+        return hooks.search_origin(ctx, bank, solver=solver, **kw)
+
     t = clock()
     ctx = data.origin_context(inputs, spec.menu, spec.month)
-    bank = hooks.make_bank(ctx, engine, C.PRIMARY_SEED)
+    bank = bank_for(ctx, C.PRIMARY_SEED)
     timed("context_and_bank", t)
 
     # 2. Main grid; anchors=None makes the optimizer compute the origin's anchors once.
     t = clock()
-    main = hooks.search_origin(ctx, bank, anchors=None, solver=solver)
+    main = search(ctx, bank, C.PRIMARY_SEED, anchors=None)
     timed("main", t)
     anchors = main.anchors
     col.add(
@@ -430,14 +497,12 @@ def run_task(
     # 3. Stability: arm U1 native-only on the primary seed and the four stability seeds.
     if spec.stability:
         t = clock()
-        native = hooks.search_origin(ctx, bank, anchors=anchors, native_only=True, solver=solver)
+        native = search(ctx, bank, C.PRIMARY_SEED, anchors=anchors, native_only=True)
         col.add(native, kind="stability", ctx=ctx, tau_r=C.TAU_R, grid=None, evaluate=False,
                 comparator_kind="stability")  # fmt: skip
         for seed in C.STABILITY_SEEDS:
-            other = hooks.make_bank(ctx, engine, seed)
-            result = hooks.search_origin(
-                ctx, other, anchors=anchors, native_only=True, solver=solver
-            )
+            other = bank_for(ctx, seed) if bank is not None else None
+            result = search(ctx, other, seed, anchors=anchors, native_only=True)
             col.add(result, kind="stability", ctx=ctx, tau_r=C.TAU_R, grid=None, evaluate=False,
                     comparator_kind="stability")  # fmt: skip
             del other
@@ -446,21 +511,21 @@ def run_task(
     # 4. Showcase surface and the sensitivities at showcase origins.
     if spec.showcase:
         t = clock()
-        surface = hooks.search_origin(
-            ctx, bank, anchors=None, arms=("U1",), risk_fractions=SHOWCASE_FRACTIONS,
-            d_grid=SHOWCASE_D, include_free=False, solver=solver,
+        surface = search(
+            ctx, bank, C.PRIMARY_SEED, anchors=None, arms=("U1",),
+            risk_fractions=SHOWCASE_FRACTIONS, d_grid=SHOWCASE_D, include_free=False,
         )  # fmt: skip
         col.add(surface, kind="showcase", ctx=ctx, tau_r=C.TAU_R, grid="showcase", evaluate=True,
                 comparator_kind="showcase")  # fmt: skip
         timed("showcase", t)
 
         t = clock()
-        tau = hooks.search_origin(ctx, bank, anchors=None, tau_r=C.TAU_R_SENSITIVITY, solver=solver)
+        tau = search(ctx, bank, C.PRIMARY_SEED, anchors=None, tau_r=C.TAU_R_SENSITIVITY)
         col.add(tau, kind="sens_tau", ctx=ctx, tau_r=C.TAU_R_SENSITIVITY, grid="sens_tau",
                 evaluate=True, comparator_kind="sens_tau")  # fmt: skip
-        ends = hooks.search_origin(
-            ctx, bank, anchors=anchors, arms=("U1",), d_grid=ENDPOINT_D, include_free=False,
-            solver=solver,
+        ends = search(
+            ctx, bank, C.PRIMARY_SEED, anchors=anchors, arms=("U1",), d_grid=ENDPOINT_D,
+            include_free=False,
         )  # fmt: skip
         col.add(ends, kind="sens_endpoints", ctx=ctx, tau_r=C.TAU_R, grid=None, evaluate=True,
                 comparator_kind="sens_endpoints")  # fmt: skip
@@ -470,8 +535,8 @@ def run_task(
     if spec.lookback5:
         t = clock()
         ctx5 = data.origin_context(inputs, spec.menu, spec.month, C.SENSITIVITY_LOOKBACK)
-        bank5 = hooks.make_bank(ctx5, engine, C.PRIMARY_SEED)
-        five = hooks.search_origin(ctx5, bank5, anchors=None, solver=solver)
+        bank5 = bank_for(ctx5, C.PRIMARY_SEED)
+        five = search(ctx5, bank5, C.PRIMARY_SEED, anchors=None)
         col.add(five, kind="sens_5y", ctx=ctx5, tau_r=C.TAU_R, grid="sens_5y", evaluate=True,
                 comparator_kind="sens_5y")  # fmt: skip
         del bank5
@@ -578,6 +643,8 @@ def execute(state: WorkerState, payload: tuple[TaskSpec, str, str]) -> dict[str,
         summary.update(
             ok=True,
             selections=len(out.selections),
+            labels=_label_counts(out.selections),
+            fit_failures=out.fit_failures,
             evaluated=len(out.evaluated),
             max_selection_seconds=slowest,
             phases=out.phases,
@@ -587,6 +654,14 @@ def execute(state: WorkerState, payload: tuple[TaskSpec, str, str]) -> dict[str,
     summary["seconds"] = time.perf_counter() - started
     summary["cpu_seconds"] = time.process_time() - cpu
     return summary
+
+
+def _label_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        if row["status"] != C.OK:
+            counts[row["status"]] = counts.get(row["status"], 0) + 1
+    return counts
 
 
 class InlinePool:
@@ -852,11 +927,15 @@ def run_job(
                 state["failed"] += 1
                 log.failure({"utc": runner.utc(), **summary})
             state["cpu"] = before + monitor.cpu_seconds
+            labels = summary.get("labels") or {}
             log.line(
                 f"task {summary['task']} {'done' if summary.get('ok') else 'FAILED'} "
                 f"{summary['seconds']:.1f}s cpu_total_h={state['cpu'] / 3600.0:.3f} "
                 f"failures={state['failed']} ({state['done']}/{len(tasks)})"
+                + (f" labels={json.dumps(labels, sort_keys=True)}" if labels else "")
             )
+            for item in summary.get("fit_failures") or []:
+                log.line(f"task {summary['task']} garch_fit_failed: {json.dumps(item)}")
             write_manifest("running")
             if summary.get("ok") and summary["max_selection_seconds"] > limit["arm_seconds"]:
                 return runner.Breach(
