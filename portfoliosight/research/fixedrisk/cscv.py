@@ -1,7 +1,8 @@
 """Purged adaptation of combinatorially symmetric cross-validation (protocol v2 section 7).
 
 `cscv_masks` depends only on the frozen ledger (origin dates and horizon endpoints of the eligible
-origins); the driver writes its manifest form before the lock. `cscv_run` scores the four U triples'
+origins); the parent manifest holds its manifest form (`frozen_record`) before any job runs, and the
+report consumes it unchanged. `cscv_run` scores the four U triples'
 realized annual returns on those masks.
 """
 
@@ -145,6 +146,20 @@ def cscv_masks(origins: Sequence[Any], ends: Sequence[Any], *, blocks: int = BLO
             )
         )
     return CscvMasks(o, e, cut, splits)
+
+
+def frozen_record(
+    months: Sequence[str], origins: Sequence[Any], ends: Sequence[Any], *, blocks: int = BLOCKS
+) -> dict[str, Any]:
+    """The parent manifest's CSCV record of one menu: the eligible origin months (origin order) and
+    their masks (`CscvMasks.to_manifest`), or `unavailable` with the reason when too few."""
+    order = sorted(range(len(months)), key=lambda i: (np.datetime64(origins[i], "D"), i))
+    record: dict[str, Any] = {"months": [str(months[i]) for i in order]}
+    if len(order) < blocks:
+        record["unavailable"] = f"{len(order)} eligible origins cannot fill {blocks} blocks"
+        return record
+    masks = cscv_masks([origins[i] for i in order], [ends[i] for i in order], blocks=blocks)
+    return {**record, **masks.to_manifest()}
 
 
 @dataclass

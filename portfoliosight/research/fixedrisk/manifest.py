@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from portfoliosight.research.fixedrisk import contracts as C
-from portfoliosight.research.fixedrisk import data
+from portfoliosight.research.fixedrisk import cscv, data
 from portfoliosight.research.fixedrisk.menus import MENUS
 
 REPO = Path(__file__).resolve().parents[3]
@@ -248,6 +248,8 @@ def menu_facts(inputs: data.ResearchInputs, menu: C.MenuSpec) -> dict[str, Any]:
     months = data.schedule(inputs, menu)
     intervals = data.disjoint_intervals(inputs, menu)
     ledger = inputs.ledger(menu)
+    scheduled = set(months)
+    realized = [i for i in data.realized_intervals(inputs, menu) if i.month in scheduled]
     return {
         "holdings": list(menu.holdings),
         "lower": list(menu.lower),
@@ -271,6 +273,12 @@ def menu_facts(inputs: data.ResearchInputs, menu: C.MenuSpec) -> dict[str, Any]:
             for i in intervals
         ],
         "disjoint_interval_count": len(intervals),
+        # frozen before any job runs; the report reads these masks unchanged (protocol §7)
+        "cscv": cscv.frozen_record(
+            [i.month for i in realized],
+            [i.origin.isoformat() for i in realized],
+            [i.horizon_end.isoformat() for i in realized],
+        ),
     }
 
 

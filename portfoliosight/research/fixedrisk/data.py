@@ -276,6 +276,24 @@ def disjoint_intervals(inputs: ResearchInputs, menu: MenuSpec | str) -> list[Int
     return found
 
 
+def realized_intervals(inputs: ResearchInputs, menu: MenuSpec | str) -> list[Interval]:
+    """Scheduled origins of the 3-year ledger with a complete realized year (ledger outcome
+    `complete`), in origin order: the CSCV adaptation's eligible origins and horizon ends."""
+    name = _name(menu)
+    found = []
+    for row in inputs.ledger(name).rows:
+        entry = row.menu(name)
+        if (
+            row.training_eligible
+            and row.in_realized_panel
+            and entry.outcome == harness.COMPLETE
+            and entry.horizon_start is not None
+            and entry.horizon_end is not None
+        ):
+            found.append(Interval(row.month, row.origin, entry.horizon_start, entry.horizon_end))
+    return found
+
+
 # ------------------------------------------------------------------------------ one origin
 
 

@@ -14,7 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from portfoliosight.research import runner
-from portfoliosight.research.fixedrisk import cli, data, driver, estimate, manifest
+from portfoliosight.research.fixedrisk import cli, cscv, data, driver, estimate, manifest
 from portfoliosight.research.fixedrisk import contracts as C
 from tests.research.fixedrisk import fakes
 
@@ -339,6 +339,15 @@ def test_parent_manifest_contents_and_digest(inputs: data.ResearchInputs, tmp_pa
         facts["origins"] == len(facts["schedule"]) and facts["first_origin"] == facts["schedule"][0]
     )
     assert facts["disjoint_interval_count"] == len(facts["disjoint_intervals"]) >= 1
+    # CSCV masks frozen from the complete ledger: scheduled origins with a complete realized year
+    realized = data.realized_intervals(inputs, fakes.ALPHA)
+    frozen = facts["cscv"]
+    assert frozen["months"] == [i.month for i in realized] and len(realized) >= 8
+    assert set(frozen["months"]) <= set(facts["schedule"])
+    assert frozen["ends"] == [i.horizon_end.isoformat() for i in realized]
+    masks = cscv.CscvMasks.from_manifest(frozen)
+    again = cscv.cscv_masks([i.origin for i in realized], [i.horizon_end for i in realized])
+    assert len(masks.splits) == 70 and masks.to_manifest() == again.to_manifest()
     assert parent["engines"]["garch"]["solver"] == "exact_grad"
     assert parent["git_head"] and parent["ceilings"]["workers_per_host"] == 6
     assert manifest.read_parent(tmp_path)["digest"] == parent["digest"]
