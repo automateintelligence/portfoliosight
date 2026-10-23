@@ -1,9 +1,9 @@
 # Fixed-risk optimization experiment protocol (v2) — DRAFT for independent review
 
-Status: draft, revision 3, 2026-10-22. Owner decisions of 2026-10-22 (two rounds) and the owner's
-Codex review of revision 2 (seven findings, three interpretation notes, two ADR findings) applied;
-see §10 round 3. Not hash-locked. Open before the lock: the owner's menu choice (§3a) and the
-six-origin measurement (§8).
+Status: draft, revision 4, 2026-10-23. Owner decisions of 2026-10-22 (three rounds), the owner's
+Codex review of revision 2 (seven findings, three interpretation notes, two ADR findings) and of
+revision 3 (eight findings) applied; see §10 rounds 3–4. Not hash-locked. Open before the lock: the
+TIP → VIPSX confirmation (§3a) and the six-origin measurement (§8).
 
 Supersedes the selection geometry of the
 [return-optimization experiment protocol](2026-10-18-return-optimization-experiment-protocol.md) (v1)
@@ -144,8 +144,15 @@ objective. "Found" remains the honest label (the objective is sampled; the searc
 certified), now with the agreement check of §4.
 
 Slider semantics served after the product decision **[owner]**: position `d` selects the max-`U`
-mix in `F(r, d)`; the ends are `w_F(r)` and `w_MDP(r)`. The white line is the locus of `w_F(r)`
-(today) or of the free cell's max-`U` mix, as the decision records from the primary result.
+mix in `F(r, d)`; the ends are `w_F(r)` and `w_MDP(r)` **as anchor exceptions**, by definition and
+not by maximization **[Codex, revision 3 finding 8]**: a band around an anchor's measure can hold
+a mix with a higher `U`, since equal diversification does not mean equal weights. At the six
+showcase origins the max-`U` mix of the `d = 0` and `d = 1` bands is also searched and the `U` gap
+to each anchor is reported, so the product decision knows what the exception costs. The white line
+is the locus of `w_F(r)` (today) or of the free cell's max-`U` mix, as the decision records from
+the primary result. `d(w)` is unbounded: the frontier mix is not the least-diversified mix on the
+line, so a free-cell winner can have `d* < 0` (or `> 1`); such values are reported as they are, with
+the share of free-cell winners outside `[0, 1]` per menu and `r`.
 
 ## 3. Grid, origins, menus, engines
 
@@ -242,8 +249,14 @@ ranks. (Revision 2 and ADR 0004 called it "flat between paths"; that was wrong a
 v1's derivative-free search did not use these gradients; v2 does. Two search objectives are
 carried to the agreement check and the better one runs the experiment:
 
-- **Exact-quantile gradient**: `Q_q(w)` is the order statistic at rank `⌈q·P⌉`; its gradient is
-  that path's `∂R_p/∂w` (at a tie, the mean gradient of the tied paths). Cheapest; kinked.
+- **Exact-quantile gradient**: `Q_q(w)` is the evaluator's own estimator, NumPy's linear
+  interpolation (`engine/ranges.py` records `percentile_method: "linear"`): with the years sorted
+  `R_(1) ≤ … ≤ R_(P)`, `j = ⌊q (P − 1)⌋` and `f = q (P − 1) − j`, `Q_q = (1 − f) R_(j+1) + f R_(j+2)`;
+  for `P = 2,000` and `q = 0.025` that is `0.025 R_(50) + 0.975 R_(51)`. Its gradient is the same
+  two-weight combination of the two paths' `∂R_p/∂w` (at a tie, the mean gradient of the tied
+  paths). Two path gradients per quantile; cheapest; kinked. The search objective and the reported
+  figure are the **same estimator** **[Codex, revision 3 finding 1]**; an order-statistic shortcut
+  (`R_(⌈qP⌉)`) is not used anywhere.
 - **Kernel-smoothed quantile**: `Q̃_q(w)` is the Gaussian-kernel-weighted average of the sorted
   years, bandwidth `h = 0.01` in rank fraction (≈ 20 of 2,000 paths), centred on `q` **[choice]**;
   its gradient is the same kernel weighting of the paths' gradients at their current ranks. This
@@ -268,9 +281,15 @@ the search objective is a search device only.
   `k(w) = sqrt(w'(Σ/252)w / w'Σ_R' w)`. Then `∂y_pt/∂w = m + k x_pt + (x_pt'w) ∇k`, with
   `∇k = k · ( Σw / (w'Σw) − Σ_R' w / (w'Σ_R' w) )`. The third term is not optional; dropping it is
   the error Codex found in revision 2.
-- *Absorbed paths* (GARCH; a day at or below −100%, spec §4.3 `RUIN`): the path's year is exactly
-  −1 and its gradient is defined as zero; it keeps rank −1 in every exact quantile and in the
-  kernel average. Replay raises on such a day (unchanged).
+- *Absorbed paths* (GARCH; a day at or below −100%, spec §4.3 `RUIN`): the absorption mask is
+  computed from the proposed mix's daily returns **before** any logarithm or division; the path's
+  year is exactly −1 and its gradient is defined as zero; it keeps rank −1 in every exact quantile
+  and in the kernel average.
+- *Invalid replay proposals*: replay has no absorption; a proposed mix with a non-positive
+  recentred daily growth on any sample day (`_replay_years` raises `ValueError` today) is returned
+  to the optimizer as a named `invalid_proposal` with the constraint violation `min_t g_t` so the
+  line search backs off; it is counted per cell and never silently clipped. The check is
+  candidate-dependent and stays inside the loop (see speed item 3).
 
 **Gradient verification, predeclared**: before either optimizer is accepted, directional
 finite-difference checks on 20 random directions at 10 random feasible mixes per engine and menu,
@@ -297,24 +316,30 @@ feasibility program `min_{w ∈ F(r)} |M(w) − M(r, d)|` from eight starts neve
 `τ_d · span`). None is called "infeasible": the programs are nonconvex and a search proves nothing
 about mixes it did not visit. All three are counted per menu, `r` and `d` and reported.
 
-**Agreement check, predeclared** **[widened per Codex finding 5]**: before the lock, 60 cells are
-drawn by seed from the grid, stratified so that 20 are narrow cells (`d ∈ {0.25, 0.75}`), 30 are
-research2003 and 30 TSP, 30 replay and 30 GARCH. Each is solved on the same banks by (a) the
-exact-quantile gradient optimizer, (b) the kernel-smoothed gradient optimizer, (c) v1's COBYLA at
-768 calls per start and (d) COBYLA at 128 calls per start, for both the `U_1` and the max-`Bad`
-objectives. A gradient optimizer is accepted if its exact objective is within 2.5 bp of, or above,
-(c)'s in at least 95% of cell-objective pairs; if both pass, the cheaper in median wall time runs
-the experiment. If neither passes, (d) runs the experiment only if it meets the same 95% rule
-against (c); otherwise (c) itself runs at the revision-1 cost and the ceilings of §8 govern.
-Agreement is judged on the objective, not on weights: v1 showed the optimum is flat in `w`
-(seed-to-seed L1 up to 0.8 at equal `U`), so differing weights at equal `U` are expected.
+**Agreement check, predeclared, one per engine** **[widened per Codex finding 5; made per engine
+per revision 3 finding 4]**: before each engine's lock (§9), 30 cells of that engine are drawn by
+seed from the grid, stratified so that 10 are narrow cells (`d ∈ {0.25, 0.75}`), 15 are
+research2003 and 15 TSP. Each is solved on the same banks by (a) the exact-quantile gradient
+optimizer, (b) the kernel-smoothed gradient optimizer, (c) v1's COBYLA at 768 calls per start and
+(d) COBYLA at 128 calls per start, for both the `U_1` and the max-`Bad` objectives: **60
+cell-objective pairs per engine** is the denominator. A gradient optimizer is accepted for that
+engine if its exact objective is within 2.5 bp of, or above, (c)'s in at least 57 of the 60 pairs
+(95%); if both pass, the cheaper in median wall time runs that engine. If neither passes, (d) runs
+that engine only if it meets the same 57-of-60 rule against (c); otherwise (c) itself runs at the
+revision-1 cost and the ceilings of §8 govern. The two engines may end with different solvers; the
+report states each. Agreement is judged on the objective, not on weights: v1 showed the optimum is
+flat in `w` (seed-to-seed L1 up to 0.8 at equal `U`), so differing weights at equal `U` are
+expected.
 
 **CPU speed items, in order** **[Codex]**, each measured against the v1 harness on the same cells
 before the lock and recorded in the manifest: (1) the replay gradient through the count matrix
 above; (2) the GARCH levelled panel `R'` computed once per bank and cached (≈ 44 MB for 11 funds,
 ≈ 80 MB for 20, float64) instead of re-exponentiated on every call; (3) the optimizer's hot path
-separated from reporting: inputs validated once, no digests, growth checks or unused summaries
-inside the loop; (4) one exact `B/T/G` evaluation per visited mix feeds every `U_k` and the
+separated from reporting: the immutable inputs (bank, moments, bounds) are validated once, digests
+and unused summary statistics leave the loop, and the **candidate-dependent checks stay**: each
+proposal's daily growth is computed once and reused for the validity check, the compounding and
+the gradient (replay's `invalid_proposal`, GARCH's absorption mask) **[Codex, revision 3 finding
+2]**; (4) one exact `B/T/G` evaluation per visited mix feeds every `U_k` and the
 max-`Bad` objective, and the compact deterministic archive of visited mixes replaces per-call
 persistence. v1's one recorded cell (solver 62.9 s against 6.1 s of bank scoring over 1,151 calls)
 shows the overhead is large; it does not show that all of it disappears, which is why the items are
@@ -334,8 +359,13 @@ measurement projects more than two nights of wall time for the two engines, the 
 before the run; otherwise not.
 
 Union and rescoring per cell as v1 step 7 (every evaluated mix joins the cell's pool with exact
-figures; the arm's selection is the pool's best on its objective inside the cell); lock before
-evaluate as v1 step 8; independent banks `20261113..17` per engine.
+figures; the arm's selection is the pool's best on its objective inside the cell), with one
+addition **[Codex, revision 3 finding 3]**: because every interior cell of a column lies inside
+`F(r)`, every mix visited by any interior cell's search on the same bank also joins the **free
+cell's** pool before the lock, so the free cell's selection is by construction at least as good on
+each arm's objective as every interior winner of its column. The free cell's own-search result is
+kept separately as `free_native` so the report can show how often the pooled peak came from an
+interior search. Lock before evaluate as v1 step 8; independent banks `20261113..17` per engine.
 
 ## 5. Measurements (adds to v1 §6)
 
@@ -391,7 +421,7 @@ over origins.
 | Line shape | sign and 95% interval of the slope of realized Bad, drawdown and return against `d` at each `r`; reported |
 | Engine agreement | share of cells where the two engines select mixes within L1 ≤ .10; paired realized differences; reported |
 | Stability (`U_1` only) | v1's across-seed Bad SD and L1 rules, per cell |
-| Selection bias | deflated Sharpe ratio (Bailey and López de Prado 2014) of the primary realized comparison. Trials are the arm × cell realized-difference series per menu and engine; the expected maximum uses their Sharpe variance and an **effective** trial count, the participation ratio `(Σλ)² / Σλ²` of the eigenvalues of the trials' correlation matrix, because cells of one origin are strongly dependent **[Codex finding 7]**; skew and kurtosis of the realized series enter the DSR as in the paper; reported |
+| Selection bias | deflated Sharpe ratio (Bailey and López de Prado 2014) of the primary realized comparison, **reported as a diagnostic, not a gate**. Trials are the arm × cell realized-difference series per menu and engine. The expected maximum uses their Sharpe variance and an effective trial count, the participation ratio `(Σλ)² / Σλ²` of the eigenvalues of the trials' correlation matrix: a **chosen approximation** for dependence across trials, not the paper's exact correction **[Codex finding 7; revision 3 finding 6]**. Dependence **through time** (overlapping annual returns at monthly origins) is handled by replacing the i.i.d. Sharpe standard error with the block-bootstrap standard error over origins of v1 §6 (block length 12 months); skew and kurtosis of the realized series enter as in the paper. The standard i.i.d. DSR is shown beside it, labelled uncalibrated |
 | Collapsed columns | share of `(menu, origin, r)` with a collapsed line, and on the showcase surfaces the share of the 48 columns; reported for the column-open rule |
 | Cost | the §5 cost figures against the production budget: one 48 × 19 surface for an 11-fund menu, and one risk column on demand; informational, never a validity gate |
 
@@ -410,20 +440,31 @@ Bailey, Borwein, López de Prado and Zhu (2017), fully specified here **[Codex f
   of origins** is `0.6·q_2.5 + 0.3·q_50 + 0.1·q_97.5` of its observations pooled over that set's
   origins and the 24 cells (6 `r` × 4 cells). Cells of one origin are dependent; pooling them is a
   variance-reducing device, not 24 independent draws, and the report says so.
-- *Blocks*: the origin index is cut into `S = 8` contiguous blocks of ≈ 30 origins. Overlap is
-  handled with the ledger's actual horizon endpoints, not calendar-day approximations: an origin is
-  **purged** from a training side whenever its realized year overlaps any origin of the test side,
-  and a one-month **embargo** follows each test block. With a 12-month horizon that removes up to
-  11 origins at each boundary; a side keeps at least 160 observations (≥ 4 observations behind
-  `q_2.5`) or the split is dropped and the drop is counted.
-- *Splits*: all `C(8, 4) = 70` ways of taking four blocks in sample and four out. On each split the
-  triple with the best in-sample realized `U_1` is chosen; its out-of-sample rank among the five
-  (relative rank `ω`, logit `λ = ln(ω / (1 − ω))`) and every triple's out-of-sample `U_1` are
-  recorded.
-- *Outputs*: **PBO** = share of the 70 splits with `λ < 0`; the out-of-sample `U_1` distribution per
-  triple over the splits; the rank of the primary triple; the in-sample vs out-of-sample `U_1`
-  scatter (performance degradation line). All descriptive; they inform the product decision and do
-  not change this run's primary analysis.
+- *Eligible origins*: only origins whose realized year is complete in the frozen ledger (the
+  horizon end at or before the data end) are scored; immature or missing horizons are excluded
+  before any block is formed **[Codex, revision 3 finding 5]**.
+- *Blocks*: the eligible origin index is cut into `S = 8` contiguous blocks of ≈ 29 origins.
+  Overlap is handled with the ledger's actual horizon endpoints, not calendar-day approximations:
+  an origin is **purged** from a training side whenever its realized year overlaps any origin of
+  the test side, and a one-month **embargo** follows each test block. With a 12-month horizon that
+  removes up to 11 origins at each boundary.
+- *Minimum size*: a side must keep at least **160 observation rows** (origin × cell rows, so that
+  ≥ 4 rows sit behind `q_2.5`) **and at least 7 distinct origins per block it contains**; otherwise
+  the split is dropped and counted. Rows from one origin are 24 portfolios on one historical year,
+  not 24 tail events: the report states, for each side, the number of distinct origins and of
+  disjoint realized years beside the row count, and the inherited tail-power limitation (few
+  distinct bad years in 20) stays explicit however many rows pass.
+- *Splits and ranks*: all `C(8, 4) = 70` ways of taking four blocks in sample and four out. On
+  each evaluable split the triple with the best in-sample realized `U_1` is chosen (ties broken
+  toward the primary triple, recorded). Its out-of-sample rank `k` among the five is 1 for the
+  worst and 5 for the best out-of-sample `U_1`, ties taking the average rank; the relative rank is
+  `ω = k / 6` and the logit `λ = ln(ω / (1 − ω))`, so `λ < 0` means the in-sample choice ranked
+  below the median out of sample. Every triple's out-of-sample `U_1` is recorded as well.
+- *Outputs*: **PBO** = share of **evaluable** splits with `λ < 0`; it is reported only if at least
+  50 of the 70 splits are evaluable, otherwise "PBO not computable" with the count. Also the
+  out-of-sample `U_1` distribution per triple over the evaluable splits; the rank of the primary
+  triple; the in-sample vs out-of-sample `U_1` scatter (performance degradation line). All
+  descriptive; they inform the product decision and do not change this run's primary analysis.
 
 Implementation note: the quant-scenario-engine module `qse/experimental/tft/selection/purged_kfold.py`
 is an ordinary contiguous purged k-fold with calendar-day purging; it does not implement CSCV and
@@ -450,19 +491,26 @@ removes is measured (§4 speed items), not assumed.
 | Main searches: cells × 6 arms × 3 starts | 106k searches ≈ 26.6 CPU-h | 105k ≈ 5.9 CPU-h |
 | Stability seeds: 4 seeds × cells × 3 starts, `U_1` arm | 71k ≈ 17.7 CPU-h | 70k ≈ 3.9 CPU-h |
 | Showcase surfaces: 6 origins × 48 × 19 × 3 starts | 16k ≈ 4.1 CPU-h | 16k ≈ 0.9 CPU-h |
-| Sobol scoring: 1,024 exact evaluations per `(origin, r)` column | 1,476 columns ≈ 2.1 CPU-h | 1,464 ≈ 0.8 CPU-h |
+| Sobol scoring, primary bank: 1,024 exact evaluations per `(origin, r)` column | 1,476 columns ≈ 2.1 CPU-h | 1,464 ≈ 0.8 CPU-h |
+| Sobol rescoring, stability banks: the same geometry rescored on each of the 4 replicate banks **[Codex, revision 3 finding 7]** | ≈ 8.4 CPU-h | ≈ 3.2 CPU-h |
 | Anchors: 2 per column × 8 starts | ≈ 2 CPU-h | ≈ 0.5 CPU-h |
-| Sensitivities at showcase origins (`τ_r = 0.001`, 5-year lookback) | ≈ 1.2 CPU-h | ≈ 0.3 CPU-h |
+| Sensitivities at showcase origins (`τ_r = 0.001`, 5-year lookback, `d = 0`/`d = 1` band search) | ≈ 1.5 CPU-h | ≈ 0.4 CPU-h |
 | Independent evaluation: 5 banks × 8 selections × cells | ≈ 0.3 CPU-h | ≈ 0.1 CPU-h |
 | GARCH fits (per holding and origin, once; GARCH engine only) | ≈ 1.4 CPU-h | ≈ 0.3 CPU-h |
-| **Per engine** | **≈ 54 CPU-h** | **≈ 12.4 CPU-h** |
+| **Per engine** | **≈ 63 CPU-h** | **≈ 16 CPU-h** |
 
-Both engines: **≈ 135 CPU-h, ≈ 22 h wall on six quiet workers, two nights**. Within the 240 CPU-h
-ceiling; at the edge of the §4 GPU rule. Predeclared cut order if the measurement projects more than
-120 CPU-h, applied in this order and recorded in the report: (1) the stability seeds run on every
-fourth origin (≈ 62 per menu) instead of every origin, saving ≈ 32 CPU-h; (2) starts per cell drop
-from three to two. If the measurement projects more than two nights after both cuts, the GPU path
-is built first (§4). Nothing else in the schedule is cut without a new owner decision.
+Both engines: **≈ 158 CPU-h, ≈ 26 h wall on six quiet workers, a little over two nights**. Within
+the 240 CPU-h ceiling; over the 120 CPU-h cut trigger on paper, so cut (1) is expected unless the
+measurement comes in under the assumptions. The workload model in the `experiment estimate`
+command counts every dimension (menu × origin × `r` × cell × arm × start × engine × replicate) from
+the schedule; this table is its hand check, and the measured gate supersedes both. Predeclared cut
+order if the measurement projects more than 120 CPU-h, applied in this order and recorded in the
+report: (1) the stability seeds run on every fourth origin (≈ 62 per menu) instead of every origin,
+saving ≈ 43 CPU-h (searches and Sobol rescoring together); (2) starts per cell drop from three to
+two. Cuts apply to **stages not yet started**; a running stage finishes under the plan it started
+with **[Codex, revision 3 finding 4]**. If the measurement projects more than two nights after both
+cuts, the GPU path is built first (§4). Nothing else in the schedule is cut without a new owner
+decision.
 
 ## 9. Development workflow (no Conductor)
 
@@ -491,12 +539,13 @@ is built first (§4). Nothing else in the schedule is cut without a new owner de
      count, CSCV (`research/cscv.py`), cost table, showcase surfaces.
 - **Gates, one per engine** **[Codex finding 4: the combined projection cannot be validated before
   GARCH exists]**: the **replay gate** (day one) is pieces 1 and 2 running the finite-difference
-  check, the replay half of the agreement check and the six-origin measurement on replay; the
-  protocol is hash-locked with the replay figures and the snapshot frozen; the replay stage may
-  start. The **GARCH gate** is piece 3 with piece 1 running the same three checks on GARCH before
-  the GARCH stage starts; its figures are appended to the manifest (an amendment, not a re-lock of
-  the selection contract). The owner's Codex findings on this document are folded in before either
-  gate.
+  check, replay's own 30-cell agreement check (its solver choice is final for replay) and the
+  six-origin measurement on replay; the protocol is hash-locked with the replay figures and the
+  snapshot frozen; the replay stage may start. The **GARCH gate** is piece 3 with piece 1 running
+  the same three checks on GARCH before the GARCH stage starts; GARCH's solver choice and budget are
+  its own and are appended to the manifest (an amendment, not a re-lock of the selection contract).
+  Nothing found at the GARCH gate changes the replay stage. The owner's Codex findings on this
+  document are folded in before either gate.
 - **Run in two stages**: replay as soon as pieces 1, 2 and 4 pass scoped tests; GARCH when piece 3
   passes its gate. Sensitivities: the 5-year lookback and the `τ_r = 0.001` check at the six
   showcase origins only.
@@ -558,3 +607,22 @@ Round 3 (the owner's Codex review of revision 2, and the owner's menu choice):
   engine (§5).
 - **Not adopted**: none of the findings was rejected. The CPU speed items Codex listed are adopted
   as measured items in §4 rather than as assumed savings.
+
+Round 4 (the owner's Codex review of revision 3, 2026-10-23; eight findings, all adopted):
+
+1. The exact quantile is the evaluator's linear-interpolation estimator, in value and gradient
+   (§4); the order-statistic shortcut is gone.
+2. Candidate-dependent checks (replay's non-positive growth, GARCH's absorption mask) stay in the
+   loop on a single growth computation; only duplicate work and unused summaries leave it (§4).
+3. Interior-cell candidates join the free cell's pool, so the reported peak is never below an
+   interior winner; the native free-cell result is kept beside it (§4).
+4. Solver selection, pass denominator (57 of 60) and lock are per engine; cuts apply to unstarted
+   stages only (§4, §8, §9).
+5. CSCV: eligible origins, PBO over evaluable splits with a 50-split minimum, rank orientation and
+   ties, row and distinct-origin minimums, tail-power limitation stated (§7).
+6. DSR is a diagnostic; block-bootstrap Sharpe error over origins for serial dependence; the
+   participation ratio labelled an approximation (§6).
+7. Sobol rescoring per replicate bank counted; totals ≈ 158 CPU-h; the estimate command counts
+   every dimension (§8).
+8. Slider endpoints are anchor exceptions by definition, with their `U` gap measured at the
+   showcase origins; `d*` outside `[0, 1]` reported as such (§2).
