@@ -32,8 +32,9 @@ WORKERS = 6
 RSS_CEILING = 4 * 2**30
 ARM_SECONDS = 600.0
 # Protocol §8 sets 240; raised to cover the measured COBYLA-768 projections of all four jobs
-# (stated override, 2026-10-23: both engines' gates chose COBYLA-768, about 446 CPU-hours x 1.1).
-CPU_HOURS = 490.0
+# (stated override, 2026-10-23: both engines' gates chose COBYLA-768; the measured projections
+# total about 691 CPU-hours, x 1.1).
+CPU_HOURS = 760.0
 DEPENDENCIES = (
     "numpy", "scipy", "pandas", "pyarrow", "cvxpy", "clarabel", "scikit-learn",
     "exchange_calendars", "threadpoolctl", "arch",
