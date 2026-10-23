@@ -293,6 +293,26 @@ def test_named_failure_on_a_degenerate_series(ctx, monkeypatch):
     assert calls == []
 
 
+def test_fit_failure_crosses_process_boundaries():
+    """A worker's GarchFitFailed is unpickled by its parent (ProcessPool result channel)."""
+    import pickle
+    from concurrent.futures import ProcessPoolExecutor
+
+    err = pickle.loads(pickle.dumps(gb.GarchFitFailed("TSP-F", ORIGIN, "did not converge")))
+    assert (err.holding, err.origin, err.reason, err.label) == (
+        "TSP-F", ORIGIN, "did not converge", FIT_FAILED,
+    )  # fmt: skip
+    assert str(err) == f"GARCH fit failed for TSP-F at {ORIGIN.isoformat()}: did not converge"
+    with ProcessPoolExecutor(1) as pool:
+        with pytest.raises(gb.GarchFitFailed) as caught:
+            pool.submit(_raise_fit_failed).result()
+    assert caught.value.holding == "GE" and caught.value.reason == "x"
+
+
+def _raise_fit_failed():
+    raise gb.GarchFitFailed("GE", ORIGIN, "x")
+
+
 def test_near_constant_holding_is_the_production_fallback(ctx):
     rng = np.random.default_rng(4)
     sample = ctx.sample.copy()

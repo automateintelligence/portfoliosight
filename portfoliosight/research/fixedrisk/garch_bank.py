@@ -88,6 +88,10 @@ class GarchFitFailed(RuntimeError):
         self.origin = origin
         self.reason = reason
 
+    def __reduce__(self):
+        # Rebuilt from its three fields, so it crosses process boundaries (worker -> parent).
+        return (type(self), (self.holding, self.origin, self.reason))
+
 
 _FitKey = tuple[str, date, str, str]
 _FIT_CACHE: dict[_FitKey, GarchPanelFit | GarchFitFailed] = {}
