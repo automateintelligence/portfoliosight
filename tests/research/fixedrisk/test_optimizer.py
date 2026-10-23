@@ -19,11 +19,15 @@ from portfoliosight.research.fixedrisk.agreement import (
 from portfoliosight.research.fixedrisk.anchors import geometry, origin_anchors
 from portfoliosight.research.fixedrisk.banks import replay_bank
 from portfoliosight.research.fixedrisk.contracts import (
+    ANCHOR_FAILED,
     ARM_ORDER,
+    COLLAPSED,
     GROWTH_BOUND_FAILED,
+    NOT_FOUND,
     OK,
     TAU_D,
     TAU_R,
+    scheduled_outcomes,
 )
 from portfoliosight.research.fixedrisk.objective import figures
 from portfoliosight.research.fixedrisk.optimizer import search_origin
@@ -249,3 +253,50 @@ def test_agreement_check_runs_four_solvers(ctx, bank, anchors):
     }
     assert all(np.isfinite(r.value) for r in report.rows)
     assert report.chosen in ("exact_grad", "kernel_grad", "cobyla128", "cobyla768")
+
+
+def _keys(out) -> list[tuple[float, str, str, bool]]:
+    rows = out.selections + out.comparators + out.unselected
+    return sorted((s.r_fraction, s.cell, s.arm, s.pooled) for s in rows)
+
+
+def _scheduled(arms, cells, native_only=False):
+    return sorted(
+        scheduled_outcomes(risk_fractions=FRACTION, cells=cells, arms=arms, native_only=native_only)
+    )
+
+
+def test_every_scheduled_outcome_is_reported_once(result):
+    assert _keys(result) == _scheduled(ARM_ORDER, ("d25", "d50", "d75", "free"))
+    assert result.unselected == []
+
+
+def test_cells_without_a_selection_are_unselected_rows(ctx, bank, anchors):
+    # a band no mix reaches (d = 5, far beyond w_MDP): not_found, one row per arm
+    out = search_origin(
+        ctx, bank, anchors=anchors, arms=("U1", "B"), risk_fractions=FRACTION, d_grid=(5.0,),
+        include_free=False,
+    )  # fmt: skip
+    assert out.selections == [] and out.labels == {NOT_FOUND: 2}
+    assert _keys(out) == _scheduled(("U1", "B"), ("d500",))
+    for row in out.unselected:
+        assert row.status == NOT_FOUND and row.weights.size == 0 and math.isnan(row.figures.bad)
+        assert row.r == anchors[0].r and row.d is None and row.seed == bank.seed
+
+    # a collapsed column: its interior cells are reported as collapsed rows, the free cell searched
+    collapsed = [replace(anchors[0], collapsed=True)]
+    out = search_origin(ctx, bank, anchors=collapsed, arms=("U1",), risk_fractions=FRACTION)
+    assert _keys(out) == _scheduled(("U1",), ("d25", "d50", "d75", "free"))
+    assert {(s.cell, s.status) for s in out.unselected} == {
+        (c, COLLAPSED) for c in ("d25", "d50", "d75")
+    }
+    assert {s.cell for s in out.selections} == {"free"}
+
+    # failed anchors: every cell, arm and comparator of the column is an anchor_failed row
+    failed = [replace(anchors[0], status=ANCHOR_FAILED)]
+    out = search_origin(ctx, bank, anchors=failed, arms=("U1", "B"), risk_fractions=FRACTION)
+    assert out.selections == [] and out.comparators == []
+    assert _keys(out) == _scheduled(("U1", "B"), ("d25", "d50", "d75", "free"))
+    assert {s.status for s in out.unselected} == {ANCHOR_FAILED}
+    native = search_origin(ctx, bank, anchors=failed, risk_fractions=FRACTION, native_only=True)
+    assert _keys(native) == _scheduled(("U1",), ("d25", "d50", "d75", "free"), native_only=True)

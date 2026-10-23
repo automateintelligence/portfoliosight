@@ -35,6 +35,7 @@ from portfoliosight.engine.optimize import (
 from portfoliosight.engine.stats import TRADING_DAYS
 
 from .contracts import (
+    ANCHOR_FAILED,
     ANCHOR_STARTS,
     COLLAPSE_SPAN,
     FEASIBILITY_TOL,
@@ -49,7 +50,6 @@ from .contracts import (
     OriginContext,
 )
 
-ANCHOR_FAILED = "anchor_failed"  # no feasible answer for one of the three anchor programs
 GENERATOR_SEED = PRIMARY_SEED + 1_000_000  # v1's candidate generator seed (search.GENERATOR_OFFSET)
 PROJECTION_HALVINGS = 60
 SIMPLEX_STEPS = 80

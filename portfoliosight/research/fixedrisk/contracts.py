@@ -18,6 +18,7 @@ expected returns are annual decimals; daily data have one row per training day.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
@@ -47,6 +48,12 @@ RISK_FRACTIONS = (0.10, 0.25, 0.40, 0.55, 0.70, 0.85)  # X(a) = s_min + a (s(w_t
 Cell = Literal["free", "d25", "d50", "d75"]
 CELLS: tuple[Cell, ...] = ("d25", "d50", "d75", "free")  # run order: interior by d, free last
 CELL_D: dict[str, float | None] = {"d25": 0.25, "d50": 0.50, "d75": 0.75, "free": None}
+
+
+def cell_name(d: float) -> str:
+    """The name of the interior cell at slider position `d` ("d25"; showcase "d05".."d95")."""
+    return f"d{int(round(d * 100)):02d}"
+
 
 # Arms: four U triples (Bad, Typical, Good weights) and max-Bad (protocol §2, owner 2026-10-23).
 ARMS: dict[str, tuple[float, float, float]] = {
@@ -80,6 +87,11 @@ NOT_FOUND = "not_found"
 COLLAPSED = "collapsed"
 GROWTH_BOUND_FAILED = "growth_bound_failed"
 FIT_FAILED = "garch_fit_failed"
+ANCHOR_FAILED = "anchor_failed"  # a column's anchor programs found no answer (anchors.py)
+ARM_SECONDS_EXCEEDED = "arm_seconds_exceeded"  # the driver's per-task wall alarm rang
+# Labels that still carry a locked mix (protocol §4: insufficient starts run with what they have;
+# a growth-bound-failed bank is searched by COBYLA). Every other label is a row without a mix.
+USABLE = (OK, INSUFFICIENT_STARTS, GROWTH_BOUND_FAILED)
 
 # --------------------------------------------------------------------------- menus
 
@@ -170,6 +182,9 @@ class Figures:
         return b * self.bad + t * self.typical + g * self.good
 
 
+NO_FIGURES = Figures(math.nan, math.nan, math.nan, math.nan, math.nan)
+
+
 @dataclass(frozen=True)
 class Anchors:
     """The column's fixed-risk anchors and comparators (protocol §2, §5). Engine-independent."""
@@ -226,9 +241,81 @@ class OriginResult:
     anchors: list[Anchors] = field(default_factory=list)
     selections: list[Selection] = field(default_factory=list)
     comparators: list[Selection] = field(default_factory=list)  # w_F, w_BS as arm "F", "BS"
+    # One row per scheduled outcome without a locked mix (status = its label, see `unselected`):
+    # cells whose search found nothing, collapsed columns' interior cells, failed anchors' cells
+    # and comparators. `selections` + `comparators` + `unselected` cover every scheduled outcome.
+    unselected: list[Selection] = field(default_factory=list)
     labels: dict[str, int] = field(default_factory=dict)  # label -> count
     seconds: float = 0.0
     evaluations: int = 0
+
+
+def unselected(
+    *,
+    menu: str,
+    origin: date,
+    engine: Engine,
+    seed: int,
+    r_fraction: float,
+    r: float,
+    cell: str,
+    arm: str,
+    pooled: bool,
+    status: str,
+    solver: str,
+    starts: int = 0,
+    iterations: int = 0,
+    seconds: float = 0.0,
+) -> Selection:
+    """The row of a scheduled (r, cell, arm) outcome that has no locked mix: empty weights, NaN
+    figures, `status` its label. Statistics exclude such rows and count them."""
+    return Selection(
+        menu=menu,
+        origin=origin,
+        engine=engine,
+        seed=seed,
+        r_fraction=r_fraction,
+        r=r,
+        cell=cell,  # type: ignore[arg-type]
+        arm=arm,
+        pooled=pooled,
+        weights=np.empty(0),
+        sigma=math.nan,
+        measure=math.nan,
+        d=None,
+        figures=NO_FIGURES,
+        status=status,
+        starts=starts,
+        iterations=iterations,
+        seconds=seconds,
+        solver=solver,
+    )
+
+
+def scheduled_outcomes(
+    *,
+    risk_fractions: tuple[float, ...],
+    cells: tuple[str, ...],
+    arms: tuple[str, ...],
+    native_only: bool,
+) -> list[tuple[float, str, str, bool]]:
+    """`(r_fraction, cell, arm, pooled)` of every row a search is scheduled to report, comparators
+    (arms "F", "BS", free cell, native) included: a pooled row per cell and arm, plus the native row
+    in the free cell; native rows only when `native_only` (which runs arm U1 alone)."""
+    out: list[tuple[float, str, str, bool]] = []
+    arms = ("U1",) if native_only else arms
+    for a in risk_fractions:
+        for cell in cells:
+            for arm in arms:
+                if native_only:
+                    out.append((a, cell, arm, False))
+                    continue
+                out.append((a, cell, arm, True))
+                if cell == "free":
+                    out.append((a, cell, arm, False))
+        if not native_only:
+            out += [(a, "free", "F", False), (a, "free", "BS", False)]
+    return out
 
 
 class SearchOrigin(Protocol):
@@ -240,6 +327,8 @@ class SearchOrigin(Protocol):
     TAU_R; the sensitivity passes TAU_R_SENSITIVITY. `solver` is the engine's agreed solver.
     `risk_fractions` defaults to RISK_FRACTIONS; showcase surfaces pass 48 columns.
     `d_grid` overrides the interior cells (showcase: 19 positions d = 0.05..0.95, arm U1 only).
+    Every scheduled outcome (`scheduled_outcomes`) appears once in `selections`, `comparators` or
+    `unselected`.
     """
 
     def __call__(

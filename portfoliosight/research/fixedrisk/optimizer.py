@@ -24,6 +24,9 @@
    pool); the free cell's pool also holds every interior visit of the column (`pooled=True`), and
    its native answer is reported beside it (`pooled=False`). `native_only` runs arm U1 alone and
    reports native answers only (the stability procedure).
+6. Outcomes without a locked mix are reported too, as `unselected` rows whose status is the label
+   (`search_failed`, `not_found`, `collapsed` interior cells, `anchor_failed` cells and
+   comparators), so every scheduled `(r, cell, arm)` row exists once (`scheduled_outcomes`).
 
 No random draw is made here: the Sobol scramble seed is v1's fixed generator seed, so results depend
 only on (menu, origin, engine, seed, r, cell, arm, start) and never on host or worker count.
@@ -40,7 +43,6 @@ import numpy as np
 from scipy.optimize import minimize
 
 from .anchors import (
-    ANCHOR_FAILED,
     ANCHOR_STARTS,
     Geometry,
     band_constraints,
@@ -51,6 +53,7 @@ from .anchors import (
     slsqp,
 )
 from .contracts import (
+    ANCHOR_FAILED,
     ARM_ORDER,
     CELL_D,
     COLLAPSED,
@@ -69,6 +72,8 @@ from .contracts import (
     OriginResult,
     PathBank,
     Selection,
+    cell_name,
+    unselected,
 )
 from .objective import Evaluation, Evaluator, arm_value, batch_quantiles, figures
 
@@ -81,10 +86,6 @@ COBYLA_TOL = 1e-5
 CATOL = 1e-8
 INTERIOR = ("d25", "d50", "d75")
 INTERIOR_D: tuple[float, ...] = tuple(float(CELL_D[c] or 0.0) for c in INTERIOR)
-
-
-def cell_name(d: float) -> str:
-    return f"d{int(round(d * 100)):02d}"
 
 
 @dataclass(frozen=True)
@@ -453,8 +454,12 @@ def _select(
     }
 
 
-def _with_figures(bank: PathBank, rows: list[dict]) -> list[Selection]:
-    """Exact figures of every selected mix from one bank call (per mix if the bank refuses one)."""
+def _with_figures(
+    bank: PathBank, rows: list[dict], refused: list[Selection] | None = None
+) -> list[Selection]:
+    """Exact figures of every selected mix from one bank call (per mix if the bank refuses one).
+
+    A mix the bank refuses has no figures; it goes to `refused` as a `search_failed` row."""
     if not rows:
         return []
     mixes = np.vstack([row["weights"] for row in rows])
@@ -468,7 +473,25 @@ def _with_figures(bank: PathBank, rows: list[dict]) -> list[Selection]:
                 figs.append(figures(bank.years(w[None, :])[:, 0]))
             except ValueError:
                 figs.append(None)
-    return [Selection(**row, figures=f) for row, f in zip(rows, figs, strict=True) if f is not None]
+    out = []
+    for row, f in zip(rows, figs, strict=True):
+        if f is not None:
+            out.append(Selection(**row, figures=f))
+        elif refused is not None:
+            refused.append(_unselected_row(row, SEARCH_FAILED))
+    return out
+
+
+def _unselected_row(row: dict, status: str) -> Selection:
+    keep = ("menu", "origin", "engine", "seed", "r_fraction", "r", "cell", "arm", "pooled")
+    return unselected(
+        **{k: row[k] for k in keep},
+        status=status,
+        solver=row["solver"],
+        starts=row["starts"],
+        iterations=row["iterations"],
+        seconds=row["seconds"],
+    )
 
 
 def search_column(
@@ -537,11 +560,33 @@ def search_origin(
     def count(label: str, n: int = 1) -> None:
         labels[label] = labels.get(label, 0) + n
 
+    def missing(anchor: Anchors, cell: str, arm: str, pooled: bool, status: str, **run) -> None:
+        result.unselected.append(
+            unselected(
+                menu=ctx.menu.name, origin=ctx.origin, engine=bank.engine, seed=bank.seed,
+                r_fraction=anchor.r_fraction, r=anchor.r, cell=cell, arm=arm, pooled=pooled,
+                status=status, solver=run.pop("solver", solver), **run,
+            )
+        )  # fmt: skip
+
+    def shapes(cell: str) -> tuple[bool, ...]:
+        """The rows a (cell, arm) reports: native only, pooled, or pooled and native (free)."""
+        if native_only:
+            return (False,)
+        return (True, False) if cell == "free" else (True,)
+
     for a in risk_fractions:
         anchor = given.get(a) or column_anchors(geo, a, tau_r)
         result.anchors.append(anchor)
         if anchor.status != OK:
             count(ANCHOR_FAILED, len(cell_names) * len(arms))
+            for cell in cell_names:
+                for arm in arms:
+                    for pooled in shapes(cell):
+                        missing(anchor, cell, arm, pooled, ANCHOR_FAILED)
+            if not native_only:
+                for arm in ("F", "BS"):
+                    missing(anchor, "free", arm, False, ANCHOR_FAILED)
             continue
         col, runs = search_column(
             geo,
@@ -554,12 +599,21 @@ def search_origin(
             solver=solver,
             starts=starts,
         )
+        used = col.solver
         if anchor.collapsed:
             count(COLLAPSED, len(grid) * len(arms))
-        used = col.solver
+            for d in grid:
+                for arm in arms:
+                    for pooled in shapes(cell_name(d)):
+                        missing(anchor, cell_name(d), arm, pooled, COLLAPSED, solver=used)
         for run in runs:
             count(run.label)
             if run.native is None:
+                for pooled in shapes(run.cell.name):
+                    missing(
+                        anchor, run.cell.name, run.arm, pooled, run.label, solver=used,
+                        starts=run.starts, iterations=run.iterations, seconds=run.seconds,
+                    )  # fmt: skip
                 continue
             if native_only:
                 pending.append(_select(ctx, bank, anchor, col, run, run.native, False, used))
@@ -581,8 +635,8 @@ def search_origin(
                 run.seconds = anchor.seconds
                 vid = col.visit(w)
                 pending_comparators.append(_select(ctx, bank, anchor, col, run, vid, False, used))
-    result.selections = _with_figures(bank, pending)
-    result.comparators = _with_figures(bank, pending_comparators)
+    result.selections = _with_figures(bank, pending, result.unselected)
+    result.comparators = _with_figures(bank, pending_comparators, result.unselected)
     evaluations += len(pending) + len(pending_comparators)
     result.labels = labels
     result.evaluations = evaluations
