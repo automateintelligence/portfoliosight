@@ -301,7 +301,7 @@ def make_parent(inputs: data.ResearchInputs, run_dir: Path, hooks_name: str | No
 
 def test_budgets_sum_to_the_ceiling_in_proportion() -> None:
     b = manifest.budgets(manifest.PROTOCOL_PROJECTION)
-    assert sum(b.values()) == pytest.approx(240.0)
+    assert sum(b.values()) == pytest.approx(manifest.CPU_HOURS)
     assert b["research2003_garch"] / b["tsp_replay"] == pytest.approx(36.6 / 18.9)
 
 
@@ -331,7 +331,9 @@ def test_parent_manifest_contents_and_digest(inputs: data.ResearchInputs, tmp_pa
     parent = make_parent(inputs, tmp_path)
     assert parent["protocol"]["path"] == C.PROTOCOL_PATH and len(parent["protocol"]["sha256"]) == 64
     assert sorted(parent["jobs"]) == sorted(manifest.expected_job_keys())
-    assert sum(j["cpu_hours_budget"] for j in parent["jobs"].values()) == pytest.approx(240.0)
+    assert sum(j["cpu_hours_budget"] for j in parent["jobs"].values()) == pytest.approx(
+        manifest.CPU_HOURS
+    )
     assert parent["seeds"]["primary"] == 20261013 and parent["seeds"]["test"] == list(C.TEST_SEEDS)
     facts = parent["menus"]["research2003"]
     assert facts["schedule"] == data.schedule(inputs, fakes.ALPHA)
