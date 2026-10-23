@@ -638,7 +638,9 @@ def main(argv: Sequence[str] | None = None, study_options: Mapping[str, Any] | N
     parser.add_argument("--snapshot", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args(argv)
-    from portfoliosight.research.fixedrisk import data  # piece 2; imported lazily
+    import importlib
+
+    data = importlib.import_module("portfoliosight.research.fixedrisk.data")  # lazily, by name
 
     inputs = data.load_inputs(args.snapshot)
     horizon, span, spy_tr, cpi, dgs10 = make_callables(inputs, data)
