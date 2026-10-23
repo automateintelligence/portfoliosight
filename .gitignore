@@ -31,3 +31,4 @@ web/e2e/__gate__/
 # written by scripts/deploy_ks001.sh on the host; the local container run's fixture store
 deploy/.env
 deploy/.local-store/
+.gstack/

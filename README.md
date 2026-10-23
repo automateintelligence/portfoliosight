@@ -3,8 +3,8 @@
 A free, one-screen portfolio tool at `portfoliosight.ai`: pick a fund menu (a 401(k) menu, the
 TSP funds, any served tickers), see its best mixes at each level of risk over a map of how spread
 out each mix is, and move one risk slider and one diversification slider. Educational, historical
-math, not investment advice. The site is in **private preview** until the commercial data license
-is bought. Spec: `docs/specs/2026-10-13-portfoliosight-demo-design.md`. What comes next: `ROADMAP.md`.
+math, not investment advice. The site is in **private preview** for now. 
+Spec: `docs/specs/2026-10-13-portfoliosight-demo-design.md`. What comes next: `ROADMAP.md`.
 
 ## Layout
 
