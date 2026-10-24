@@ -11,14 +11,16 @@ from the full common history, level from the lookback.
    When QSE's status is `fit_failed` or `non_stationary`, the last `RETRY_ROWS` (3 x 252) rows
    are fitted instead; when that is not `garch` either, the holding is held at constant
    volatility with the 10-year window's sample mean and variance (QSE's own fallback of that
-   fit). `near_constant` and `insufficient_history` stay as QSE rules them on the 10-year
-   window. `GarchBank.windows` names the window per holding (`10y`, `3y`, `fallback`),
-   `GarchBank.fit_status` QSE's status of the fit used, `GarchBank.fallbacks` the fallback
-   holdings with both reasons. The result is cached in-process by (holding, origin, first and
-   last day and digest of the 10-year window), so every seed, lookback and menu at the origin
-   reuses it. `GarchFitFailed` is left for unusable input: a non-finite return or a day at or
-   below -100% in the dynamics window or the shock pool span, fewer than two returns, or a
-   varying holding whose shocks are constant on the pool's rows.
+   fit). A 10-year fit QSE rules `near_constant` (e.g. TSP G) or `insufficient_history` is not
+   retried and is held at constant volatility too. Every constant-volatility holding is a
+   fallback (glossary: constant-volatility fallback). `GarchBank.windows` names the window per
+   holding (`10y`, `3y`, `fallback`), `GarchBank.fit_status` QSE's status of the fit used,
+   `GarchBank.fallbacks` the fallback holdings with QSE's reasons (`10y near_constant: ...`,
+   `10y insufficient_history: ...`, or both windows' failures). The result is cached in-process
+   by (holding, origin, first and last day and digest of the 10-year window), so every seed,
+   lookback and menu at the origin reuses it. `GarchFitFailed` is left for unusable input: a
+   non-finite return or a day at or below -100% in the dynamics window or the shock pool span,
+   fewer than two returns, or a varying holding whose shocks are constant on the pool's rows.
 2. Shock pool: every common row of `ctx.history` (all holdings have a return), from the
    youngest holding's first return to the origin, weighted equally. Each holding's column is
    standardized by running its fitted variance recursion forward over its own rows of that span,
@@ -96,7 +98,7 @@ _CONSTANT_RESIDUALS = 1e-12  # QSE residual_pool's rounding floor for a constant
 DYNAMICS_ROWS = 10 * TRADING_DAYS  # the dynamics window: a holding's own last 10 years of rows
 RETRY_ROWS = 3 * TRADING_DAYS  # the retry when the 10-year fit is not `garch`
 RETRY_STATUSES = ("fit_failed", "non_stationary")  # QSE statuses that trigger the 3-year retry
-FALLBACK = "fallback"  # window label: neither window fits, constant volatility (amendment 1)
+FALLBACK = "fallback"  # window label: constant volatility, no GARCH dynamics (amendment 1)
 
 
 class GarchFitFailed(RuntimeError):
@@ -191,9 +193,11 @@ def _dynamics(
     logs = np.log1p(column)
     try:
         ten = fit_garch_t_panel(pd.DataFrame({holding: logs}, index=index))
-        if ten.status[0] not in RETRY_STATUSES:
-            return HoldingFit(ten, "10y", "")
         reason = f"10y {ten.status[0]}: {ten.messages[0]}"
+        if ten.status[0] == "garch":
+            return HoldingFit(ten, "10y", "")
+        if ten.status[0] not in RETRY_STATUSES:  # near_constant, insufficient_history: QSE's rule
+            return HoldingFit(ten, FALLBACK, reason)
         three = fit_garch_t_panel(
             pd.DataFrame({holding: logs[-RETRY_ROWS:]}, index=index[-RETRY_ROWS:])
         )
@@ -341,7 +345,7 @@ class GarchBank:
 
     @property
     def fallbacks(self) -> dict[str, str]:
-        """Holdings that fit on neither window, held at constant volatility: name -> reasons."""
+        """Holdings held at constant volatility (any QSE fallback): name -> QSE's reasons."""
         art = self.artifact
         return {
             fund: message

@@ -430,7 +430,7 @@ def _raise_fit_failed():
     raise gb.GarchFitFailed("GE", ORIGIN, "x")
 
 
-def test_near_constant_holding_is_the_production_fallback(ctx):
+def test_a_near_constant_holding_like_tsp_g_is_a_counted_fallback(ctx, monkeypatch):
     rng = np.random.default_rng(4)
     sample = ctx.sample.copy()
     sample[:, 3] = 1e-4 + rng.normal(0, 1e-5, ROWS)  # a stable-value fund
@@ -438,6 +438,13 @@ def test_near_constant_holding_is_the_production_fallback(ctx):
     gb.clear_fit_cache()
     bank = gb.garch_bank(calm, "garch", SEED)
     assert bank.fit_status["D"] == "near_constant"
+    assert bank.windows == {"A": "10y", "B": "10y", "C": "10y", "D": "fallback"}
+    assert set(bank.fallbacks) == {"D"}
+    assert bank.fallbacks["D"].startswith("10y near_constant: daily std")
+    calls = _failing(monkeypatch, "none")  # QSE's rule stands: no 3-year retry
+    gb.clear_fit_cache()
+    gb.garch_bank(calm, "garch", SEED)
+    assert sorted(calls) == [(h, ROWS) for h in ("A", "B", "C", "D")]
     mixes = _mixes(np.random.default_rng(8), 4, 3)
     assert np.max(np.abs(bank.years(mixes) - _production_years(bank, calm, mixes))) <= 1e-10
 
