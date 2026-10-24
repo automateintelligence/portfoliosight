@@ -25,6 +25,7 @@ from datetime import date
 from typing import Literal, Protocol
 
 import numpy as np
+import pandas as pd
 
 # --------------------------------------------------------------------------- protocol constants
 
@@ -87,6 +88,9 @@ NOT_FOUND = "not_found"
 COLLAPSED = "collapsed"
 GROWTH_BOUND_FAILED = "growth_bound_failed"
 FIT_FAILED = "garch_fit_failed"
+# Not a row status: the task summary's count of holdings whose GARCH fit failed and that the bank
+# holds at constant volatility (protocol amendment 1); their rows keep their own labels.
+FIT_FALLBACK = "garch_fallback"
 ANCHOR_FAILED = "anchor_failed"  # a column's anchor programs found no answer (anchors.py)
 ARM_SECONDS_EXCEEDED = "arm_seconds_exceeded"  # the driver's per-task wall alarm rang
 # Labels that still carry a locked mix (protocol §4: insufficient starts run with what they have;
@@ -128,6 +132,11 @@ class OriginContext:
     sigma: np.ndarray  # N, annual volatilities sqrt(diag(cov))
     risk_free_rate: float
     inputs_sha256: str  # digest of the above (v1 OriginModel.inputs_sha256 rule)
+    # The GARCH fit window (protocol amendment 1): each holding's daily simple returns from its
+    # first price up to and including the origin, on the holdings' own calendar (rows where at
+    # least one has a return), NaN where a holding has none; columns in menu order. Not in
+    # `inputs_sha256`; replay never reads it. `data.origin_context` always sets it.
+    history: pd.DataFrame | None = field(default=None, repr=False, compare=False)
 
 
 class PathBank(Protocol):
@@ -160,8 +169,8 @@ class PathBank(Protocol):
 
 BankFactory = Callable[[OriginContext, Engine, int], PathBank]
 """`make_bank(ctx, engine, seed)`: replay from piece 1's `banks.replay_bank`, GARCH from piece 3's
-`garch_bank.garch_bank`. GARCH fits per holding are cached by (holding, origin, lookback) inside
-piece 3's module so every menu and seed at an origin reuses them."""
+`garch_bank.garch_bank`. GARCH fits per holding are cached by (holding, origin, fit window) inside
+piece 3's module so every menu, seed and lookback at an origin reuses them."""
 
 
 # --------------------------------------------------------------------------- search results

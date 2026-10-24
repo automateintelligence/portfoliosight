@@ -7,8 +7,9 @@ menu has its own boundary month and start (research2003 2006-04, TSP 2006-06 at 
 5-year ledgers serve the lookback sensitivity.
 
 `origin_context` reuses v1 `evaluate.origin_model` for the training side and hands the optimizer
-and the banks the `contracts.OriginContext`; `horizon_returns` gives the realized 252-row horizon
-for the measurements. Nothing here reads a value dated after D*.
+and the banks the `contracts.OriginContext`, with `fit_history`, the GARCH fit window of protocol
+amendment 1 (each holding's whole history up to the origin); `horizon_returns` gives the realized
+252-row horizon for the measurements. Nothing here reads a value dated after D*.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from portfoliosight.data.returns import build_returns
 from portfoliosight.research import evaluate, harness
 from portfoliosight.research.fixedrisk.contracts import (
     LOOKBACK,
@@ -323,7 +325,28 @@ def origin_context(
         sigma=np.sqrt(np.diag(cov)),
         risk_free_rate=float(model.risk_free_rate),
         inputs_sha256=model.inputs_sha256,
+        history=fit_history(inputs.records, spec.holdings, model.origin),
     )
+
+
+def fit_history(
+    records: Mapping[str, pd.DataFrame], holdings: Sequence[str], origin: date
+) -> pd.DataFrame:
+    """The GARCH fit window at `origin` (protocol amendment 1): each holding's daily simple returns
+    from its first price up to and including `origin`.
+
+    The calendar is the holdings' own, as production `shape.shape_panel` builds it: a day on which
+    none of them has a return is not a row, a holding without a return on a day is NaN there.
+    Unlike production it is not capped at ten years. Columns are in `holdings` order.
+    """
+    stamp = harness.to_stamp(origin)
+    cut = {
+        fund: harness.rows_through(records[fund], harness.record_dates(fund, records[fund]), stamp)
+        for fund in holdings
+    }
+    returns = build_returns(cut)
+    frame = returns.loc[returns.index <= stamp, list(holdings)].astype(np.float64)
+    return frame.loc[frame.notna().any(axis=1)]
 
 
 def horizon_returns(inputs: ResearchInputs, menu: MenuSpec | str, month: str) -> evaluate.Horizon:
