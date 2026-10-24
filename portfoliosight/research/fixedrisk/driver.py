@@ -943,11 +943,23 @@ class CheckpointMonitor(runner.Monitor):
         return breach
 
 
+@dataclass(frozen=True)
+class ResumeOverride:
+    """An owner-approved resume of a stopped job, recorded in the job's `overrides.jsonl` and
+    progress log: a CPU budget other than the parent's, and/or commits after the parent's that
+    change only `allowed_paths` (driver plumbing, never the computation)."""
+
+    reason: str
+    cpu_hours: float | None = None
+    allowed_paths: tuple[str, ...] = ()
+
+
 def run_job(
     run_dir: Path,
     menu: str,
     engine: str,
     *,
+    override: ResumeOverride | None = None,
     snapshot_dir: str | None = None,
     workers: int = manifest.WORKERS,
     hooks: str | None = None,
@@ -966,7 +978,8 @@ def run_job(
     hooks, solvers); otherwise the job is refused with the reasons.
     """
     parent = manifest.read_parent(run_dir)
-    problems = manifest.code_mismatches(parent, hooks=hooks)
+    allowed = override.allowed_paths if override else ()
+    problems = manifest.code_mismatches(parent, hooks=hooks, allowed_paths=allowed)
     if problems:
         raise RuntimeError(
             f"refusing to run or resume {run_dir}: the running code is not the code its parent "
@@ -990,6 +1003,8 @@ def run_job(
         "cpu_hours": job["cpu_hours_budget"],
         **(limits or {}),
     }
+    if override and override.cpu_hours is not None:
+        limit["cpu_hours"] = float(override.cpu_hours)
     init = WorkerInit(
         str(snapshot), hooks or parent.get("hooks"), solvers, inputs_loader,
         str(run_dir / "ledger_cache"), parent["snapshot"]["manifest_sha256"],
@@ -1017,6 +1032,20 @@ def run_job(
             write_usage(directory, state["cpu"])
 
         write_manifest("running")
+        if override:
+            record = {
+                "utc": manifest.utc(),
+                "reason": override.reason,
+                "cpu_hours_budget_parent": job["cpu_hours_budget"],
+                "cpu_hours_budget": limit["cpu_hours"],
+                "git_head_parent": parent.get("git_head"),
+                "git_head_run": manifest.code_head(),
+                "changed_paths": manifest.changed_paths(parent.get("git_head") or "HEAD"),
+                "allowed_paths": list(override.allowed_paths),
+            }
+            with (directory / "overrides.jsonl").open("a") as fh:
+                fh.write(json.dumps(record, sort_keys=True) + "\n")
+            log.line(f"OVERRIDE {json.dumps(record, sort_keys=True)}")
         log.line(
             f"job {key} start: {len(tasks)} tasks, {done_before} already done, "
             f"{len(pending)} to run, cpu budget {limit['cpu_hours']:.2f} h, workers {workers}"

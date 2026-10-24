@@ -560,6 +560,26 @@ def test_resume_refuses_code_that_differs_from_the_parent(
     assert len(fakes.CALLS) == calls  # nothing ran
 
 
+def test_an_owner_override_resumes_a_budget_breach_with_plumbing_only_changes(
+    inputs: data.ResearchInputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_parent(inputs, tmp_path)
+    stopped = run(tmp_path, meter=FixedMeter(cpu=10 * 3600.0), limits={"cpu_hours": 1.0})
+    assert stopped.breach["rule"] == "cpu_hours" and stopped.tasks_done == 0
+    monkeypatch.setattr(manifest, "code_head", lambda repo=manifest.REPO: "f" * 40)
+    monkeypatch.setattr(manifest, "changed_paths", lambda rec, repo=manifest.REPO: ["a/cli.py"])
+    with pytest.raises(RuntimeError, match=r"changed outside the allowed paths: \['a/cli.py'\]"):
+        run(tmp_path, override=driver.ResumeOverride("why", 20.0, ("a/driver.py",)))
+    override = driver.ResumeOverride("owner approved", 20.0, ("a/",))
+    resumed = run(tmp_path, meter=FixedMeter(cpu=0.0), override=override)
+    assert resumed.status == "complete" and resumed.breach is None
+    job = tmp_path / "tsp_replay"
+    (record,) = [json.loads(x) for x in (job / "overrides.jsonl").read_text().splitlines()]
+    assert record["reason"] == "owner approved" and record["cpu_hours_budget"] == 20.0
+    assert record["git_head_run"] == "f" * 40 and record["changed_paths"] == ["a/cli.py"]
+    assert "OVERRIDE" in (job / "progress.log").read_text()
+
+
 def test_code_head_falls_back_to_the_synced_git_head_file(tmp_path: Path) -> None:
     assert manifest.code_head(tmp_path) == "unknown"
     (tmp_path / "GIT_HEAD").write_text("abc123\n")

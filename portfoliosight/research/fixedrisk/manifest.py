@@ -210,15 +210,45 @@ def code_head(repo: Path = REPO) -> str:
     return path.read_text().strip() if path.is_file() else "unknown"
 
 
+def changed_paths(recorded: str, repo: Path = REPO) -> list[str] | None:
+    """Repo paths that differ between commit `recorded` and the working tree (committed or not);
+    None when git cannot tell (no git objects, e.g. the KS-002 copy)."""
+    done = subprocess.run(
+        ["git", "-C", str(repo), "diff", "--name-only", recorded],
+        capture_output=True, text=True, timeout=30,
+    )  # fmt: skip
+    if done.returncode != 0:
+        return None
+    return sorted(line for line in done.stdout.splitlines() if line)
+
+
+def _allowed(path: str, allowed: Sequence[str]) -> bool:
+    return any(path == a or (a.endswith("/") and path.startswith(a)) for a in allowed)
+
+
 def code_mismatches(
-    parent: Mapping[str, Any], *, hooks: str | None = None, repo: Path = REPO
+    parent: Mapping[str, Any],
+    *,
+    hooks: str | None = None,
+    repo: Path = REPO,
+    allowed_paths: Sequence[str] = (),
 ) -> list[str]:
     """Why the running code is not the code the parent manifest records (empty when it is):
-    git HEAD, protocol revision, settings, seeds, ceilings, hooks and the engines' solvers."""
+    git HEAD, protocol revision, settings, seeds, ceilings, hooks and the engines' solvers.
+
+    `allowed_paths` (an owner-approved resume override): a HEAD other than the recorded one is
+    accepted when every path changed since the recorded commit is one of these (a path, or a
+    directory ending in "/")."""
     problems = []
     head, recorded = code_head(repo), parent.get("git_head")
     if head == "unknown" or head != recorded:
-        problems.append(f"code is at commit {head}, the parent manifest records {recorded}")
+        changed = changed_paths(recorded, repo) if (allowed_paths and recorded) else None
+        outside = [p for p in changed or [] if not _allowed(p, allowed_paths)]
+        if changed is None or outside:
+            problems.append(
+                f"code is at commit {head}, the parent manifest records {recorded}"
+                + (f"; changed outside the allowed paths: {outside}" if outside else "")
+            )
     if parent["protocol"]["revision"] != C.PROTOCOL_REVISION:
         problems.append(
             f"protocol revision {C.PROTOCOL_REVISION} in the code, "

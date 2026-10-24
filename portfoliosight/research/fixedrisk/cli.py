@@ -111,10 +111,18 @@ def cmd_parent(args: argparse.Namespace) -> int:
 
 def cmd_run(args: argparse.Namespace) -> int:
     _require_blas()
+    override = None
+    if args.cpu_hours_budget is not None or args.allow_changes_in:
+        if not args.override_reason:
+            raise SystemExit("--cpu-hours-budget/--allow-changes-in need --override-reason")
+        override = driver.ResumeOverride(
+            args.override_reason, args.cpu_hours_budget, tuple(args.allow_changes_in or ())
+        )
     result = driver.run_job(
         Path(args.run_dir),
         args.menu,
         args.engine,
+        override=override,
         snapshot_dir=args.snapshot,
         workers=args.workers,
         hooks=args.hooks,
@@ -175,6 +183,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--snapshot", help="snapshot path on this host (digest must match the parent)")
     p.add_argument("--host-label")
     p.add_argument("--hooks")
+    p.add_argument("--cpu-hours-budget", type=float, help="owner-approved override of the budget")
+    p.add_argument(
+        "--allow-changes-in", nargs="*", help="owner-approved: paths that may differ from the "
+        "parent's commit (a path, or a directory ending in /)",
+    )  # fmt: skip
+    p.add_argument("--override-reason", help="required with either override; recorded")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("status", help="progress of every job of a run")
