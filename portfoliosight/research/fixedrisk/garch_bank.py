@@ -1,25 +1,33 @@
 """Piece 3 of the fixed-risk experiment: the GARCH(1,1)-t FHS path bank (protocol §3, §4).
 
 `garch_bank(ctx, "garch", seed)` is the production volatility model (simulation engines spec
-§4.3, §4.5; `engine/shape.py`, `engine/ranges.py`) run on one origin's training window only:
+§4.3, §4.5; `engine/shape.py`, `engine/ranges.py`) run at one origin. Its shape comes from each
+holding's whole history up to the origin, its level from the origin's lookback (protocol
+amendment 1):
 
-1. Fit, once per holding and origin. Each holding's daily log returns `log1p(r)` over the
-   context's training rows (`ctx.sample`, `ctx.days`; nothing after `ctx.origin`) are fitted by
-   QSE's `fit_garch_t_panel`, exactly as the production panel fit fits that column. The fit is
-   cached in-process by (holding, origin, lookback, digest of the holding's dated column), so
-   every seed and every menu whose training rows coincide reuse it. A fit QSE marks `fit_failed`
-   (the optimizer did not converge, invalid or non-finite parameters) raises `GarchFitFailed`;
-   nothing is substituted. QSE's other fallbacks are the production engine's own rules and stay
-   (`near_constant`, e.g. TSP G; `non_stationary`; `insufficient_history`): a fallback holding is
-   simulated at constant volatility and `GarchBank.fit_status` names it.
-2. Pool: the training rows' standardized residuals (the sample has complete rows, so every row is
-   a common row), re-standardized per column (QSE `residual_pool`, at least 126 rows).
+1. Fit, once per holding and origin. Each holding's daily log returns `log1p(r)` from its first
+   price up to and including the origin (`ctx.history`, an expanding window; nothing after
+   `ctx.origin`) are fitted by QSE's `fit_garch_t_panel`, as the production panel fit fits that
+   column on its own rows. The fit is cached in-process by (holding, origin, first and last day,
+   digest of the fitted column), so every seed, lookback and menu at the origin reuses it. A fit
+   QSE cannot complete is held at constant volatility by QSE itself, as in production: status
+   `fit_failed` (the optimizer did not converge, invalid or non-finite parameters) as well as
+   `near_constant` (e.g. TSP G), `non_stationary` and `insufficient_history`. Such a holding is
+   simulated at constant volatility on its own standardized returns, the others keep GARCH, and
+   `GarchBank.fit_status` names every status (`GarchBank.fallbacks` the `fit_failed` ones).
+   `GarchFitFailed` is left for unusable input only: a non-finite return, a day at or below
+   -100% (no log return), fewer than two returns, or a varying holding whose residuals are
+   constant on the pool's rows.
+2. Pool: the standardized residuals of the fit window's common rows (every holding has a return),
+   re-standardized per column (QSE `residual_pool`, at least 126 rows). The lookback's complete
+   rows are among them, so the pool is never shorter than the training sample.
 3. Simulate: production `shape.simulate_panel` with the bank's seed, 2,000 x 252 days.
-4. Level: production `ranges.garch_range_model` takes the pooled moments; step 1 is then applied
-   once to the whole panel, in place, and the levelled panel `R'` is kept on the bank, fund-major
-   (`levelled_t`, N x P*H, float64: both matrix-vector products of the hot path then stream
-   contiguous rows, about 2.3 times faster than the path-major layout). `years` and
-   `years_and_vjp` never exponentiate again.
+4. Level: production `ranges.garch_range_model` takes the pooled moments and the lookback's chart
+   moments (`ctx.mu_s`, `ctx.cov`, from `ctx.sample`); step 1 is then applied once to the whole
+   panel, in place, and the levelled panel `R'` is kept on the bank, fund-major (`levelled_t`,
+   N x P*H, float64: both matrix-vector products of the hot path then stream contiguous rows,
+   about 2.3 times faster than the path-major layout). `years` and `years_and_vjp` never
+   exponentiate again.
 
 Step 2 per mix: `y_pt = m'w + k(w) x_pt'w`, `x = R' - R_bar'`,
 `k = sqrt(w'(Sigma/252)w / w'Sigma_R'w)`.
@@ -27,17 +35,17 @@ Zero-variance branch (protocol §4): `w'Sigma_R'w <= 1e-14` gives `k = 0`. A pat
 below -100% is absorbed: its year is exactly -1 and its gradient zero; the mask is taken from the
 gross days before any division.
 
-Differences from production, both named by the protocol: the fit window is the 3-year training
-window, not up to ten years of each fund's history (§5: not a qualification of the production
-engine); the zero-variance threshold is the protocol's `1e-14` on `w'Sigma_R'w`, where production
-tests `sd(y) = 0` exactly (no feasible mix of either menu comes near either threshold).
+Differences from production, both named by the protocol: the fit window is each holding's whole
+history up to the origin, not capped at ten years (amendment 1; §5: not a qualification of the
+production engine); the zero-variance threshold is the protocol's `1e-14` on `w'Sigma_R'w`, where
+production tests `sd(y) = 0` exactly (no feasible mix of either menu comes near either threshold).
 """
 
 from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 
 import numpy as np
@@ -51,6 +59,7 @@ from portfoliosight.engine.ranges import (
     sample_digest,
 )
 from portfoliosight.engine.shape import (
+    CANONICAL_NAN,
     MIN_POOL_ROWS,
     OUTLIER_Z,
     RETURNS,
@@ -75,10 +84,12 @@ from qse.exceptions import DistributionFitError
 ZERO_VARIANCE = 1e-14  # protocol §4: w' Sigma_R' w at or below this gives k = 0 and grad k = 0
 CHUNK_BYTES = 8 * 2**20  # `years` work buffer: mixes x paths of gross days, cache-sized
 _CONSTANT_RESIDUALS = 1e-12  # QSE residual_pool's rounding floor for a constant column
+FALLBACK = "fit_failed"  # QSE's status of a failed fit, held at constant volatility (amendment 1)
 
 
 class GarchFitFailed(RuntimeError):
-    """A holding's GARCH fit at an origin failed; the driver labels its cells `garch_fit_failed`."""
+    """A holding's input at an origin cannot be fitted; the driver labels its cells
+    `garch_fit_failed`. A fit that merely fails is QSE's constant-volatility fallback instead."""
 
     label = FIT_FAILED
 
@@ -93,7 +104,7 @@ class GarchFitFailed(RuntimeError):
         return (type(self), (self.holding, self.origin, self.reason))
 
 
-_FitKey = tuple[str, date, str, str]
+_FitKey = tuple[str, date, str, str, str]
 _FIT_CACHE: dict[_FitKey, GarchPanelFit | GarchFitFailed] = {}
 
 
@@ -106,20 +117,37 @@ def fit_cache_size() -> int:
     return len(_FIT_CACHE)
 
 
-def holding_fit(ctx: OriginContext, n: int) -> GarchPanelFit:
-    """Holding `n`'s one-column GARCH-t fit on the context's training rows, cached.
+def fit_window(ctx: OriginContext) -> pd.DataFrame:
+    """The context's fit window (`ctx.history`), checked: menu columns, no day after the origin."""
+    history = ctx.history
+    if history is None:
+        raise ValueError("the context carries no fit history (data.origin_context builds it)")
+    if tuple(str(column) for column in history.columns) != tuple(ctx.menu.holdings):
+        raise ValueError("the fit history has one column per holding, in menu order")
+    index = history.index
+    if not isinstance(index, pd.DatetimeIndex) or len(index) < 2:
+        raise ValueError("the fit history is indexed by at least two dates")
+    if not index.is_monotonic_increasing or index[-1] > pd.Timestamp(ctx.origin):
+        raise ValueError("the fit history must be in date order and end on or before the origin")
+    return history
 
-    Raises `GarchFitFailed` when QSE reports `fit_failed`, when a day has no log return, or when
-    the residuals of a varying holding are constant (QSE's pool would refuse them). A failure is
-    cached too, so the other menus and seeds at the origin fail at once.
+
+def holding_fit(ctx: OriginContext, n: int) -> GarchPanelFit:
+    """Holding `n`'s one-column GARCH-t fit on its own rows of the fit window, cached.
+
+    The fit's index is the holding's own days. Raises `GarchFitFailed` for unusable input (a
+    non-finite return, a day at or below -100%, fewer than two returns); the failure is cached
+    too, so the other menus and seeds at the origin fail at once.
     """
     holding = ctx.menu.holdings[n]
-    days = [day.isoformat() for day in ctx.days]
-    column = np.ascontiguousarray(ctx.sample[:, n], dtype=np.float64)
-    key = (holding, ctx.origin, ctx.lookback, sample_digest([holding], days, column[:, None]))
+    own = fit_window(ctx).iloc[:, n].dropna()
+    days = [stamp.date().isoformat() for stamp in pd.DatetimeIndex(own.index)]
+    column = np.ascontiguousarray(own.to_numpy(dtype=np.float64))
+    first, last = (days[0], days[-1]) if days else ("", "")
+    key = (holding, ctx.origin, first, last, sample_digest([holding], days, column[:, None]))
     cached = _FIT_CACHE.get(key)
     if cached is None:
-        cached = _fit(holding, ctx.origin, pd.DatetimeIndex(ctx.days), column)
+        cached = _fit(holding, ctx.origin, pd.DatetimeIndex(own.index), column)
         _FIT_CACHE[key] = cached
     if isinstance(cached, GarchFitFailed):
         raise cached
@@ -130,24 +158,38 @@ def _fit(
     holding: str, origin: date, index: pd.DatetimeIndex, column: np.ndarray
 ) -> GarchPanelFit | GarchFitFailed:
     if not np.isfinite(column).all():
-        return GarchFitFailed(holding, origin, "the training column holds non-finite returns")
+        return GarchFitFailed(holding, origin, "the fit window holds non-finite returns")
     if (column <= -1.0).any():
         return GarchFitFailed(holding, origin, "a daily return at or below -100% has no log return")
     frame = pd.DataFrame({holding: np.log1p(column)}, index=index)
     try:
-        fit = fit_garch_t_panel(frame)
+        return fit_garch_t_panel(frame)  # a failed fit comes back held at constant volatility
     except DistributionFitError as exc:
         return GarchFitFailed(holding, origin, str(exc))
-    if fit.status[0] == "fit_failed":
-        return GarchFitFailed(holding, origin, fit.messages[0] or "fit_failed")
-    z = fit.std_residuals[:, 0]
-    if np.ptp(z) <= _CONSTANT_RESIDUALS and fit.omega[0] > 0.0:
-        return GarchFitFailed(holding, origin, "constant residuals for a varying holding")
-    return fit
+
+
+def _aligned(fit: GarchPanelFit, index: pd.DatetimeIndex) -> GarchPanelFit:
+    """A one-column fit on its own days, spread onto the window's rows (NaN where it has none)."""
+    rows = index.get_indexer(pd.DatetimeIndex(fit.index))
+    if (rows < 0).any():
+        raise ValueError(f"{fit.assets[0]}: a fitted day is not a row of the fit window")
+
+    def spread(values: np.ndarray) -> np.ndarray:
+        out = np.full((len(index), 1), np.nan)
+        out[rows] = values
+        return out
+
+    return replace(
+        fit,
+        index=index,
+        conditional_volatility=spread(fit.conditional_volatility),
+        std_residuals=spread(fit.std_residuals),
+        last_row=rows[np.asarray(fit.last_row)],
+    )
 
 
 def _panel_fit(fits: list[GarchPanelFit]) -> GarchPanelFit:
-    """The one-column fits side by side: what `fit_garch_t_panel` returns for the whole sample."""
+    """The aligned one-column fits side by side: what `fit_garch_t_panel` returns for the window."""
 
     def stack(name: str) -> np.ndarray:
         return np.concatenate([np.asarray(getattr(fit, name)) for fit in fits], axis=-1)
@@ -178,17 +220,24 @@ def _frozen(values) -> np.ndarray:
 
 
 def origin_artifact(ctx: OriginContext) -> GarchArtifact:
-    """The production artifact (`shape.GarchArtifact`) of the context's training window."""
+    """The production artifact (`shape.GarchArtifact`) of the context's fit window."""
     import arch  # QSE's fitter imports it anyway; only its version is read here
 
     holdings = list(ctx.menu.holdings)
-    sample = np.asarray(ctx.sample, dtype=np.float64)
-    if sample.shape != (len(ctx.days), len(holdings)):
-        raise ValueError("the training sample has one row per day and one column per holding")
-    fit = _panel_fit([holding_fit(ctx, n) for n in range(len(holdings))])
-    pool = np.asarray(residual_pool(fit, restandardize=True, min_rows=MIN_POOL_ROWS))
-    days = [day.isoformat() for day in ctx.days]
+    history = fit_window(ctx)
+    index = pd.DatetimeIndex(history.index)
+    fit = _panel_fit([_aligned(holding_fit(ctx, n), index) for n in range(len(holdings))])
     z = fit.std_residuals
+    common = fit.common_rows
+    if common.any():
+        for n, holding in enumerate(holdings):
+            if fit.omega[n] > 0.0 and np.ptp(z[common, n]) <= _CONSTANT_RESIDUALS:
+                reason = "constant residuals on the common rows of a varying holding"
+                raise GarchFitFailed(holding, ctx.origin, reason)
+    pool = np.asarray(residual_pool(fit, restandardize=True, min_rows=MIN_POOL_ROWS))
+    days = [stamp.date().isoformat() for stamp in index]
+    values = history.to_numpy(dtype=np.float64, copy=True)
+    values[np.isnan(values)] = CANONICAL_NAN
     outliers = tuple(
         {"id": holdings[n], "date": days[row], "z": float(z[row, n])}
         for row, n in np.argwhere(np.abs(z) > OUTLIER_Z)
@@ -199,7 +248,7 @@ def origin_artifact(ctx: OriginContext) -> GarchArtifact:
         rows=len(days),
         start=days[0],
         end=days[-1],
-        sample_sha256=sample_digest(holdings, days, sample),
+        sample_sha256=sample_digest(holdings, days, values),
         mu=_frozen(fit.mu),
         omega=_frozen(fit.omega),
         alpha=_frozen(fit.alpha),
@@ -233,7 +282,7 @@ class GarchBank:
     level_cov: np.ndarray  # N x N, pooled (ddof 0) covariance of R'
     mu_s: np.ndarray  # N, annual
     cov: np.ndarray  # N x N, annual
-    fit_status: dict[str, str]  # holding -> QSE status ("garch" or a production fallback)
+    fit_status: dict[str, str]  # holding -> QSE status ("garch" or a constant-vol fallback)
     artifact: GarchArtifact = field(repr=False)
     horizon: int = HORIZON
     engine: Engine = "garch"
@@ -242,6 +291,16 @@ class GarchBank:
     def __post_init__(self) -> None:
         self.paths = self.levelled_t.shape[1] // self.horizon
         self.m = self.mu_s / TRADING_DAYS  # daily chart means
+
+    @property
+    def fallbacks(self) -> dict[str, str]:
+        """Holdings whose fit failed, held at constant volatility (amendment 1): name -> reason."""
+        art = self.artifact
+        return {
+            fund: message
+            for fund, status, message in zip(art.funds, art.status, art.messages, strict=True)
+            if status == FALLBACK
+        }
 
     @property
     def nbytes(self) -> int:
@@ -349,10 +408,11 @@ class GarchBank:
 
 
 def garch_bank(ctx: OriginContext, engine: Engine = "garch", seed: int = PRIMARY_SEED) -> GarchBank:
-    """The GARCH bank of one (menu, origin, seed), from the context's training window only.
+    """The GARCH bank of one (menu, origin, seed): shape from the fit window, level from lookback.
 
-    Raises `GarchFitFailed` when a holding's fit fails, and `ValueError` when the context holds a
-    day after its origin or a levelled return overflows (production `garch_range_model`).
+    Raises `GarchFitFailed` when a holding's input cannot be fitted (a failed fit is held at
+    constant volatility instead), and `ValueError` when the context holds a day after its origin
+    or a levelled return overflows (production `garch_range_model`).
     """
     if engine != "garch":
         raise ValueError(f"garch_bank builds the garch engine, not {engine!r}")
