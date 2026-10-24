@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Copy the fixed-risk experiment to KS-002 and bring job directories back (protocol §8 "Setup").
 #
-#   scripts/ks002_sync.sh push SNAPSHOT_DIR      rsync the worktree and the snapshot, build the venv
+#   scripts/ks002_sync.sh push SNAPSHOT_DIR [--diff-base SHA]
+#                                                rsync the worktree and the snapshot, build the venv;
+#                                                with --diff-base, refuse a dirty tree and also write
+#                                                CHANGED_SINCE_<full SHA> (git diff --name-only SHA
+#                                                HEAD) beside GIT_HEAD, which the resume override
+#                                                reads where the copy has no git objects
 #   scripts/ks002_sync.sh venv SNAPSHOT_NAME     (re)build only the venv from that snapshot's lock
 #   scripts/ks002_sync.sh pull RUN_DIR [JOB...]  rsync job directories (and parent.json) back
 #
@@ -33,6 +38,18 @@ push_repo() {
   "${RSYNC[@]}" "${excludes[@]}" "$REPO/" "$HOST:$DIR/repo/"
   # the freeze/verify scripts read the git HEAD only at freeze time; record it for the run
   git -C "$REPO" rev-parse HEAD | ssh "$HOST" "cat > ~/$DIR/repo/GIT_HEAD"
+  if [ -n "${DIFF_BASE:-}" ]; then
+    git -C "$REPO" diff --name-only "$DIFF_BASE" HEAD | ssh "$HOST" "cat > ~/$DIR/repo/CHANGED_SINCE_$DIFF_BASE"
+  fi
+}
+
+resolve_diff_base() {
+  # A full commit sha (the parent manifest's form), from a clean tree so the list is exact.
+  DIFF_BASE="$(git -C "$REPO" rev-parse --verify "$1^{commit}")"
+  if [ -n "$(git -C "$REPO" status --porcelain)" ]; then
+    echo "refusing --diff-base: the working tree has uncommitted or untracked changes" >&2
+    exit 2
+  fi
 }
 
 push_snapshot() {
@@ -91,7 +108,11 @@ pull() {
 
 case "${1:-}" in
   push)
-    [ "$#" -eq 2 ] || { echo "usage: $0 push SNAPSHOT_DIR" >&2; exit 2; }
+    if [ "$#" -eq 4 ] && [ "$3" = "--diff-base" ]; then
+      resolve_diff_base "$4"
+    elif [ "$#" -ne 2 ]; then
+      echo "usage: $0 push SNAPSHOT_DIR [--diff-base SHA]" >&2; exit 2
+    fi
     push_repo
     push_snapshot "$2"
     make_venv "$(basename "$(cd "$2" && pwd)")"
@@ -106,5 +127,5 @@ case "${1:-}" in
     shift
     pull "$@"
     ;;
-  *) echo "usage: $0 push SNAPSHOT_DIR | venv SNAPSHOT_NAME | pull RUN_DIR [JOB...]" >&2; exit 2 ;;
+  *) echo "usage: $0 push SNAPSHOT_DIR [--diff-base SHA] | venv SNAPSHOT_NAME | pull RUN_DIR [JOB...]" >&2; exit 2 ;;
 esac

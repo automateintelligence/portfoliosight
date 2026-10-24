@@ -211,15 +211,21 @@ def code_head(repo: Path = REPO) -> str:
 
 
 def changed_paths(recorded: str, repo: Path = REPO) -> list[str] | None:
-    """Repo paths that differ between commit `recorded` and the working tree (committed or not);
-    None when git cannot tell (no git objects, e.g. the KS-002 copy)."""
+    """Repo paths that differ between commit `recorded` and the working tree (committed or not).
+
+    Where git cannot tell (no git objects, e.g. the KS-002 copy) it reads the
+    `CHANGED_SINCE_<recorded>` file that `scripts/ks002_sync.sh push --diff-base` writes beside
+    `GIT_HEAD` from a clean tree (one path per line); None when there is no such file either."""
     done = subprocess.run(
         ["git", "-C", str(repo), "diff", "--name-only", recorded],
         capture_output=True, text=True, timeout=30,
     )  # fmt: skip
-    if done.returncode != 0:
-        return None
-    return sorted(line for line in done.stdout.splitlines() if line)
+    if done.returncode == 0:
+        return sorted(line for line in done.stdout.splitlines() if line)
+    path = repo / f"CHANGED_SINCE_{recorded}"
+    if recorded and "/" not in recorded and path.is_file():
+        return sorted(line.strip() for line in path.read_text().splitlines() if line.strip())
+    return None
 
 
 def _allowed(path: str, allowed: Sequence[str]) -> bool:

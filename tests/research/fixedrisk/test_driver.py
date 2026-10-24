@@ -631,6 +631,32 @@ def test_code_head_falls_back_to_the_synced_git_head_file(tmp_path: Path) -> Non
     assert manifest.code_head(tmp_path) == "abc123"
 
 
+def test_changed_paths_fall_back_to_the_synced_list_without_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    copy = tmp_path / "repo"  # a KS-002 copy: no .git, GIT_HEAD and the changed-path list
+    copy.mkdir()
+    recorded = "d" * 40
+    assert manifest.changed_paths(recorded, copy) is None
+    (copy / "GIT_HEAD").write_text("e" * 40 + "\n")
+    (copy / f"CHANGED_SINCE_{recorded}").write_text("b/garch_bank.py\na/data.py\n\n")
+    assert manifest.changed_paths(recorded, copy) == ["a/data.py", "b/garch_bank.py"]
+    assert manifest.changed_paths("c" * 40, copy) is None  # another base: no list
+    parent = {"git_head": recorded}
+    monkeypatch.setattr(manifest, "run_settings", lambda: {})
+    monkeypatch.setattr(manifest, "run_seeds", lambda: {})
+    monkeypatch.setattr(manifest, "run_ceilings", lambda: {})
+    parent |= {"protocol": {"revision": C.PROTOCOL_REVISION}, "settings": {}, "seeds": {},
+               "ceilings": {}, "hooks": HOOKS}  # fmt: skip
+    found = [p for p in manifest.code_mismatches(parent, repo=copy) if "commit" in p]
+    assert found  # no override: a different commit is refused
+    allowed = ("a/data.py", "b/")
+    assert [p for p in manifest.code_mismatches(parent, repo=copy, allowed_paths=allowed)
+            if "commit" in p] == []  # fmt: skip
+    narrow = manifest.code_mismatches(parent, repo=copy, allowed_paths=("a/data.py",))
+    assert any("changed outside the allowed paths: ['b/garch_bank.py']" in p for p in narrow)
+
+
 def test_cpu_of_earlier_attempts_counts_against_the_budget(
     inputs: data.ResearchInputs, tmp_path: Path
 ) -> None:
