@@ -32,6 +32,7 @@ def reset_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
     fakes.CALLS.clear()
     monkeypatch.setattr(fakes, "FAIL_MONTH", None)
     monkeypatch.setattr(fakes, "FIT_FAIL_MONTH", None)
+    monkeypatch.setattr(fakes, "FALLBACK_MONTH", None)
     monkeypatch.setattr(fakes, "NOT_FOUND_CELL", None)
     monkeypatch.setattr(fakes, "SLEEP", 0.0)
     for name in ("FAKE_FAIL_MONTH", "FAKE_FIT_FAIL_MONTH", "FAKE_SLEEP"):
@@ -255,6 +256,45 @@ def test_a_fit_failed_task_is_complete_with_its_rows_logged(
     assert set(rows.column("status").to_pylist()) == {C.FIT_FAILED}
     log = (tmp_path / "tsp_garch" / "progress.log").read_text()
     assert f"task tsp_{month}_garch garch_fit_failed" in log and '"garch_fit_failed":' in log
+
+
+def test_a_garch_fallback_holding_is_counted_once_per_lookback_and_keeps_its_rows(
+    inputs: data.ResearchInputs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = full_spec(inputs, "garch")
+    monkeypatch.setattr(fakes, "FALLBACK_MONTH", spec.month)
+    out = driver.run_task(inputs, spec, hooks())
+    assert out.garch_fallbacks == [
+        {"lookback": lb, "holding": "A", "reason": "optimizer did not converge"}
+        for lb in ("3y", "5y")
+    ]  # one entry per context, not per seed's bank
+    assert out.fit_failures == []
+    assert {r["status"] for r in out.selections} == {C.OK}  # the rows are searched as usual
+    labels = driver._label_counts(out.selections, out.garch_fallbacks)
+    assert labels == {C.FIT_FALLBACK: 2}
+
+
+def test_a_garch_fallback_is_logged_and_in_the_task_file(
+    inputs: data.ResearchInputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = make_parent(inputs, tmp_path)
+    month = parent["menus"]["tsp"]["schedule"][2]
+    monkeypatch.setattr(fakes, "FALLBACK_MONTH", month)
+    result = driver.run_job(
+        tmp_path, "tsp", "garch", workers=0, hooks=HOOKS, snapshot_dir="/snap", poll=0.0
+    )
+    assert result.status == "complete" and result.tasks_failed == 0
+    log = (tmp_path / "tsp_garch" / "progress.log").read_text()
+    assert f'task tsp_{month}_garch garch_fallback: {{"lookback": "3y", "holding": "X"' in log
+    assert '"garch_fallback": 1' in log
+    tasks = tmp_path / "tsp_garch" / "tasks"
+    specs = driver.job_tasks(parent, "tsp", "garch")
+    meta = pq.read_schema(driver.task_paths(tasks, specs[2])["selections"]).metadata
+    assert json.loads(meta[driver.FALLBACKS_KEY]) == [
+        {"lookback": "3y", "holding": "X", "reason": "optimizer did not converge"}
+    ]
+    other = pq.read_schema(driver.task_paths(tasks, specs[1])["selections"]).metadata
+    assert driver.FALLBACKS_KEY not in other
 
 
 # ------------------------------------------------------------------------------- files

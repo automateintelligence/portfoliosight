@@ -15,6 +15,9 @@ Task unit: (menu, origin month, engine). In one process a task
 Every scheduled (r, cell, arm) outcome is one selections row: outcomes without a locked mix (the
 optimizer's `unselected` rows, and every search on a bank whose GARCH fit failed) have status =
 their label, empty weights and NaN figures, so the measurements can count and exclude them.
+A holding whose GARCH fit failed and that the bank holds at constant volatility (protocol
+amendment 1) leaves its rows as they are: the task summary counts it (`garch_fallback`), the
+progress log names it, and the selections file's schema metadata lists it (`garch_fallbacks`).
 
 A task runs under a wall alarm of the per-arm ceiling (600 s) times its arm-cells; a task that
 rings it, or holds a selection slower than 600 s, writes `<job>/breaches/<base>.json` and no task
@@ -64,6 +67,7 @@ ENDPOINT_D = (0.0, 1.0)
 EVAL_CHUNK = 256
 KINDS = ("main", "stability", "showcase", "sens_tau", "sens_5y", "sens_endpoints", "comparator")
 DIGEST_KEY = b"parent_digest"
+FALLBACKS_KEY = b"garch_fallbacks"
 COMPARATOR_ARMS = ("F", "BS")
 
 SELECTION_SCHEMA = pa.schema(
@@ -228,6 +232,8 @@ class TaskOutput:
     evaluated: list[dict[str, Any]] = field(default_factory=list)
     phases: dict[str, float] = field(default_factory=dict)
     fit_failures: list[dict[str, Any]] = field(default_factory=list)  # GARCH banks not built
+    # GARCH holdings held at constant volatility after a failed fit, once per (lookback, holding)
+    garch_fallbacks: list[dict[str, Any]] = field(default_factory=list)
 
 
 def job_tasks(parent: dict[str, Any], menu: str, engine: str) -> list[TaskSpec]:
@@ -449,6 +455,15 @@ def fit_failed_result(
     return result
 
 
+def record_fallbacks(found: list[dict[str, Any]], ctx: C.OriginContext, bank: C.PathBank) -> None:
+    """Add the bank's constant-volatility fallback holdings (`GarchBank.fallbacks`) to `found`,
+    once per (lookback, holding): every seed's bank at a context shares the fit."""
+    seen = {(item["lookback"], item["holding"]) for item in found}
+    for holding, reason in (getattr(bank, "fallbacks", None) or {}).items():
+        if (ctx.lookback, holding) not in seen:
+            found.append({"lookback": ctx.lookback, "holding": holding, "reason": reason})
+
+
 def run_task(
     inputs: data.ResearchInputs,
     spec: TaskSpec,
@@ -458,7 +473,8 @@ def run_task(
     """Everything one (menu, month, engine) task computes; see the module docstring.
 
     A bank that cannot be built because a GARCH fit failed turns every search on it into
-    `garch_fit_failed` rows (persisted and counted); the reason is kept in `fit_failures`.
+    `garch_fit_failed` rows (persisted and counted); the reason is kept in `fit_failures`. A
+    holding held at constant volatility after a failed fit is kept in `garch_fallbacks`.
     """
     engine: C.Engine = spec.engine  # type: ignore[assignment]
     solver = hooks.solvers[engine]
@@ -470,7 +486,7 @@ def run_task(
 
     def bank_for(ctx: C.OriginContext, seed: int) -> C.PathBank | None:
         try:
-            return hooks.make_bank(ctx, engine, seed)
+            built = hooks.make_bank(ctx, engine, seed)
         except Exception as exc:
             if not is_fit_failure(exc):
                 raise
@@ -478,6 +494,8 @@ def run_task(
                 {"lookback": ctx.lookback, "seed": seed, "error": f"{type(exc).__name__}: {exc}"}
             )
             return None
+        record_fallbacks(col.out.garch_fallbacks, ctx, built)
+        return built
 
     def search(ctx: C.OriginContext, bank: C.PathBank | None, seed: int, **kw: Any):
         if bank is None:
@@ -569,9 +587,15 @@ def task_paths(tasks_dir: Path, spec: TaskSpec) -> dict[str, Path]:
     }
 
 
-def _write_table(path: Path, rows: list[dict[str, Any]], schema: pa.Schema, digest: str) -> None:
+def _write_table(
+    path: Path,
+    rows: list[dict[str, Any]],
+    schema: pa.Schema,
+    digest: str,
+    extra: dict[bytes, bytes] | None = None,
+) -> None:
     table = pa.Table.from_pylist(rows, schema=schema)
-    table = table.replace_schema_metadata({DIGEST_KEY: digest.encode()})
+    table = table.replace_schema_metadata({DIGEST_KEY: digest.encode(), **(extra or {})})
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     pq.write_table(table, tmp)
@@ -582,7 +606,11 @@ def write_task(tasks_dir: Path, spec: TaskSpec, out: TaskOutput, digest: str) ->
     paths = task_paths(tasks_dir, spec)
     _write_table(paths["anchors"], out.anchors, ANCHOR_SCHEMA, digest)
     _write_table(paths["evaluated"], out.evaluated, EVALUATED_SCHEMA, digest)
-    _write_table(paths["selections"], out.selections, SELECTION_SCHEMA, digest)  # last: the marker
+    extra = (
+        {FALLBACKS_KEY: json.dumps(out.garch_fallbacks).encode()} if out.garch_fallbacks else None
+    )
+    # last: the marker
+    _write_table(paths["selections"], out.selections, SELECTION_SCHEMA, digest, extra)
 
 
 def task_done(tasks_dir: Path, spec: TaskSpec, digest: str) -> bool:
@@ -701,8 +729,9 @@ def execute(state: WorkerState, payload: tuple[Any, ...]) -> dict[str, Any]:
                 summary.update(
                     ok=True,
                     selections=len(out.selections),
-                    labels=_label_counts(out.selections),
+                    labels=_label_counts(out.selections, out.garch_fallbacks),
                     fit_failures=out.fit_failures,
+                    garch_fallbacks=out.garch_fallbacks,
                     evaluated=len(out.evaluated),
                     max_selection_seconds=seconds,
                     phases=out.phases,
@@ -719,11 +748,15 @@ def execute(state: WorkerState, payload: tuple[Any, ...]) -> dict[str, Any]:
     return summary
 
 
-def _label_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+def _label_counts(
+    rows: list[dict[str, Any]], fallbacks: list[dict[str, Any]] | None = None
+) -> dict[str, int]:
     counts: dict[str, int] = {}
     for row in rows:
         if row["status"] != C.OK:
             counts[row["status"]] = counts.get(row["status"], 0) + 1
+    if fallbacks:  # holdings, not rows: their rows keep their own labels
+        counts[C.FIT_FALLBACK] = len(fallbacks)
     return counts
 
 
@@ -1082,6 +1115,8 @@ def run_job(
             )
             for item in summary.get("fit_failures") or []:
                 log.line(f"task {summary['task']} garch_fit_failed: {json.dumps(item)}")
+            for item in summary.get("garch_fallbacks") or []:
+                log.line(f"task {summary['task']} {C.FIT_FALLBACK}: {json.dumps(item)}")
             write_manifest("running")
             found = summary.get("breach")
             if found:  # recorded by the worker; the task wrote no files and is not done
