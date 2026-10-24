@@ -878,7 +878,17 @@ build's code reviews (at most three, §9) check the implementation against this 
 Made during the run (parent `fr-run-v2b`, commit `ddcfad8`). Replay results are not affected. The
 GARCH jobs run under it.
 
-- **Shape from all history, level from the lookback.** Each fund's GARCH(1,1)-t fit uses all of the
+- **Revised 2026-10-24 (owner, grilling session; ADR 0005, terms in `GLOSSARY.md`).** The first
+  bullet below is superseded. Fitting on all history put persistence at 1 for most research2003
+  funds (53 of 62 origins), because volatility shifts level across decades. The rule is now:
+  - **Dynamics window:** each fund's GARCH is fitted on its last 10 years, or 3 if 10 does not fit,
+    and falls back to constant volatility otherwise.
+  - **Shock pool:** every common day from the youngest fund's first price to the origin, weighted
+    equally, standardized by running the fitted model over the whole pool.
+  - **Level:** from the lookback. The 5-year sensitivity changes only the level.
+
+  The compute cost is negligible.
+- *(Superseded)* **Shape from all history, level from the lookback.** Each fund's GARCH(1,1)-t fit uses all of the
   fund's daily returns from its first price in the snapshot up to the origin (an expanding window),
   not the 3-year training window. The residual pool is the fit window's common rows. The level
   (mean and covariance of the simulated year) still comes from the origin's lookback, as in
