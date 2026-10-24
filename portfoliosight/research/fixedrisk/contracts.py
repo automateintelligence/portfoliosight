@@ -132,10 +132,11 @@ class OriginContext:
     sigma: np.ndarray  # N, annual volatilities sqrt(diag(cov))
     risk_free_rate: float
     inputs_sha256: str  # digest of the above (v1 OriginModel.inputs_sha256 rule)
-    # The GARCH fit window (protocol amendment 1): each holding's daily simple returns from its
-    # first price up to and including the origin, on the holdings' own calendar (rows where at
-    # least one has a return), NaN where a holding has none; columns in menu order. Not in
-    # `inputs_sha256`; replay never reads it. `data.origin_context` always sets it.
+    # Each holding's daily simple returns from its first price up to and including the origin,
+    # on the holdings' own calendar (rows where at least one has a return), NaN where a holding
+    # has none; columns in menu order. The GARCH bank cuts its dynamics windows and shock pool
+    # from it (protocol amendment 1, revised; ADR 0005). Not in `inputs_sha256`; replay never
+    # reads it. `data.origin_context` always sets it.
     history: pd.DataFrame | None = field(default=None, repr=False, compare=False)
 
 
@@ -169,8 +170,8 @@ class PathBank(Protocol):
 
 BankFactory = Callable[[OriginContext, Engine, int], PathBank]
 """`make_bank(ctx, engine, seed)`: replay from piece 1's `banks.replay_bank`, GARCH from piece 3's
-`garch_bank.garch_bank`. GARCH fits per holding are cached by (holding, origin, fit window) inside
-piece 3's module so every menu, seed and lookback at an origin reuses them."""
+`garch_bank.garch_bank`. GARCH fits per holding are cached by (holding, origin, dynamics window)
+inside piece 3's module so every menu, seed and lookback at an origin reuses them."""
 
 
 # --------------------------------------------------------------------------- search results

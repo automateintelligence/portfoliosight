@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from portfoliosight.engine.ranges import garch_range_model, simulated_years
-from portfoliosight.engine.shape import MIN_POOL_ROWS, simulate_panel
+from portfoliosight.engine.shape import simulate_panel
 from portfoliosight.research.fixedrisk import garch_bank as gb
 from portfoliosight.research.fixedrisk.contracts import (
     FIT_FAILED,
@@ -21,7 +21,7 @@ from portfoliosight.research.fixedrisk.contracts import (
     OriginContext,
 )
 from qse.distributions.garch_recursion import simulate_garch11
-from qse.distributions.joint import fit_garch_t_panel, residual_pool
+from qse.distributions.joint import fit_garch_t_panel
 
 SEED = 20261013
 ROWS = 800
@@ -60,7 +60,7 @@ def _ctx(
     corr: np.ndarray | None = None,
     history: pd.DataFrame | None = None,
 ) -> OriginContext:
-    """A context whose fit window is `history`, by default the training rows themselves."""
+    """A context whose history is `history`, by default the training rows themselves."""
     sample = np.asarray(sample, dtype=float)
     if history is None:
         history = _frame(sample, days, holdings)
@@ -145,16 +145,41 @@ def test_bank_shape_and_protocol_fields(bank):
     assert bank.levelled_t.shape == (4, PATHS * HORIZON)
     assert bank.levelled_t.dtype == np.float64 and not bank.levelled_t.flags.writeable
     assert set(bank.fit_status.values()) == {"garch"}
+    assert set(bank.windows.values()) == {"10y"} and bank.fallbacks == {}
 
 
-def test_fit_and_pool_equal_the_production_panel_fit(ctx, bank):
+def _manual_pool(history: pd.DataFrame, art) -> np.ndarray:
+    """The shock pool by hand: each column's recursion over its own rows from the first common
+    row, started at the long-run variance, then the common rows re-standardized (ddof 0)."""
+    common = history.notna().all(axis=1).to_numpy()
+    span = history.iloc[int(np.argmax(common)) :]
+    z = np.full(span.shape, np.nan)
+    for n in range(span.shape[1]):
+        rows = np.flatnonzero(span.iloc[:, n].notna().to_numpy())
+        e = np.log1p(span.iloc[rows, n].to_numpy()) - art.mu[n]
+        w, a, b = art.omega[n], art.alpha[n], art.beta[n]
+        s2 = w / (1.0 - a - b)
+        out = np.empty_like(e)
+        for t in range(len(e)):
+            out[t] = e[t] / np.sqrt(s2) if s2 > 0 else 0.0
+            s2 = w + a * e[t] ** 2 + b * s2
+        z[rows, n] = out
+    pool = z[np.isfinite(z).all(axis=1)]
+    return (pool - pool.mean(axis=0)) / pool.std(axis=0)
+
+
+def _assert_pool(art, history: pd.DataFrame) -> None:
+    assert art.pool is not None
+    np.testing.assert_allclose(art.pool, _manual_pool(history, art), rtol=0, atol=1e-10)
+
+
+def test_fit_equals_the_production_panel_fit_and_the_pool_is_filtered_forward(ctx, bank):
     frame = pd.DataFrame(np.log1p(ctx.sample), columns=pd.Index(ctx.menu.holdings))
-    fit = fit_garch_t_panel(frame)
-    pool = residual_pool(fit, restandardize=True, min_rows=MIN_POOL_ROWS)
+    fit = fit_garch_t_panel(frame)  # fewer than 10 years: the window is every row
     art = bank.artifact
     for name in ("mu", "omega", "alpha", "beta", "nu"):
         np.testing.assert_array_equal(getattr(art, name), getattr(fit, name))
-    np.testing.assert_array_equal(art.pool, pool)
+    _assert_pool(art, ctx.history)
     assert art.pool_rows == ROWS and art.end == ORIGIN.isoformat()
 
 
@@ -258,9 +283,9 @@ def test_fit_cache_is_reused_across_seeds_and_menus(ctx, monkeypatch):
         cov=ctx.cov[np.ix_([2, 0], [2, 0])],
     )
     gb.garch_bank(sub, "garch", SEED)
-    assert len(calls) == 4  # same holdings, same fit window: reused
+    assert len(calls) == 4  # same holdings, same dynamics windows: reused
     gb.garch_bank(replace(ctx, lookback="5y"), "garch", SEED)
-    assert len(calls) == 4  # the fit window does not depend on the lookback
+    assert len(calls) == 4  # the dynamics windows do not depend on the lookback
     later = replace(ctx, origin=ORIGIN + timedelta(days=31))
     gb.garch_bank(later, "garch", SEED)
     assert len(calls) == 8  # a new origin fits again
@@ -291,44 +316,76 @@ def test_no_look_ahead():
         gb.garch_bank(leaky, "garch", SEED)
 
 
-def test_a_real_non_converging_fit_is_held_at_constant_volatility(ctx, monkeypatch):
+def test_a_real_non_converging_10_year_fit_is_retried_on_3_years(ctx, monkeypatch):
     rng = np.random.default_rng(2)
     sample = ctx.sample.copy()
     sample[:, 1] = np.r_[np.zeros(ROWS - 260), rng.normal(0, 0.01, 260)]  # flat, then trading
     bad = _ctx(sample, ctx.days, ctx.menu.holdings)
     gb.clear_fit_cache()
     bank = gb.garch_bank(bad, "garch", SEED)
-    assert bank.fit_status == {"A": "garch", "B": "fit_failed", "C": "garch", "D": "garch"}
-    assert set(bank.fallbacks) == {"B"} and "converge" in bank.fallbacks["B"]
+    assert bank.windows == {"A": "10y", "B": "3y", "C": "10y", "D": "10y"}
+    assert bank.fit_status["B"] == "garch" and bank.fallbacks == {}
+    assert bank.artifact.messages[1].startswith("10y fit_failed")
     calls = []
     monkeypatch.setattr(gb, "fit_garch_t_panel", lambda *a, **k: calls.append(1))
-    assert gb.holding_fit(bad, 1).status == ("fit_failed",)  # cached: no refit
+    assert gb.holding_fit(bad, 1).window == "3y"  # cached: no refit
     assert calls == []
 
 
-def test_a_failed_fit_falls_back_to_constant_volatility(ctx, monkeypatch):
-    """Amendment 1: QSE's `fit_failed` fallback is accepted; the other holdings keep GARCH."""
+def _failing(monkeypatch, holding: str, longer_than: int = 0):
+    """`fit_garch_t_panel` whose optimizer does not converge for `holding` on windows longer than
+    `longer_than` rows (QSE's own `fit_failed` fallback then runs)."""
     from qse.distributions.joint import panel_fit
 
     real = gb.fit_garch_t_panel
+    calls = []
 
-    def no_convergence_for_b(frame, **kwargs):
-        if list(frame.columns) != ["B"]:
+    def fit(frame, **kwargs):
+        calls.append((frame.columns[0], len(frame)))
+        if frame.columns[0] != holding or len(frame) <= longer_than:
             return real(frame, **kwargs)
         with monkeypatch.context() as patch:
             patch.setattr(panel_fit.GarchTFitter, "optimizer_converged", lambda self: False)
             return real(frame, **kwargs)
 
-    monkeypatch.setattr(gb, "fit_garch_t_panel", no_convergence_for_b)
+    monkeypatch.setattr(gb, "fit_garch_t_panel", fit)
+    return calls
+
+
+def test_a_10_year_failure_is_refitted_on_3_years(ctx, monkeypatch):
+    calls = _failing(monkeypatch, "B", longer_than=gb.RETRY_ROWS)
     gb.clear_fit_cache()
     bank = gb.garch_bank(ctx, "garch", SEED)
-    assert bank.fit_status == {"A": "garch", "B": "fit_failed", "C": "garch", "D": "garch"}
-    assert bank.fallbacks == {"B": "optimizer did not converge"}
+    assert bank.windows == {"A": "10y", "B": "3y", "C": "10y", "D": "10y"}
+    assert [c for c in calls if c[0] == "B"] == [("B", ROWS), ("B", gb.RETRY_ROWS)]
+    assert bank.fit_status["B"] == "garch" and bank.fallbacks == {}
+    three = fit_garch_t_panel(pd.DataFrame({"B": np.log1p(ctx.sample[-gb.RETRY_ROWS :, 1])}))
     art = bank.artifact
-    logs = np.log1p(ctx.sample[:, 1])
+    for name in ("mu", "omega", "alpha", "beta", "nu"):
+        assert getattr(art, name)[1] == getattr(three, name)[0]
+    assert art.n_obs[1] == gb.RETRY_ROWS and "10y fit_failed" in art.messages[1]
+    # the pool still spans every common row, filtered with the 3-year parameters
+    assert art.pool_rows == ROWS
+    _assert_pool(art, ctx.history)
+
+
+def test_failing_both_windows_falls_back_to_constant_volatility(ctx, monkeypatch):
+    """Amendment 1 (revised): neither window fits; the other holdings keep GARCH."""
+    _failing(monkeypatch, "B")
+    gb.clear_fit_cache()
+    bank = gb.garch_bank(ctx, "garch", SEED)
+    assert bank.windows == {"A": "10y", "B": "fallback", "C": "10y", "D": "10y"}
+    assert bank.fit_status == {"A": "garch", "B": "fit_failed", "C": "garch", "D": "garch"}
+    assert bank.fallbacks == {
+        "B": "10y fit_failed: optimizer did not converge; 3y fit_failed: optimizer did not converge"
+    }
+    art = bank.artifact
+    logs = np.log1p(ctx.sample[:, 1])  # the 10-year window's sample mean and variance
     assert art.alpha[1] == art.beta[1] == 0.0 and np.isnan(art.nu[1])
+    assert art.mu[1] == pytest.approx(logs.mean(), rel=1e-12)
     assert art.omega[1] == pytest.approx(logs.var(ddof=1), rel=1e-12)
     assert (art.alpha[[0, 2, 3]] > 0.0).all()
+    _assert_pool(art, ctx.history)
     mixes = _mixes(np.random.default_rng(9), 4, 3)
     assert np.max(np.abs(bank.years(mixes) - _production_years(bank, ctx, mixes))) <= 1e-10
 
@@ -404,13 +461,13 @@ def _long_history(extra: int, rng: np.random.Generator, funds: int = 3):
     return returns, days, cut
 
 
-def test_the_fit_uses_all_history_to_the_origin_and_nothing_after(monkeypatch):
+def test_dynamics_window_is_10_years_and_the_pool_spans_the_common_history(monkeypatch):
     rng = np.random.default_rng(31)
     holdings = ("X", "Y", "Z")
-    returns, days, cut = _long_history(1200, rng)
+    returns, days, cut = _long_history(2000, rng)  # 2,800 rows to the origin
     lookback = slice(cut - ROWS, cut)
     history = _frame(returns[:cut], days[:cut], holdings)
-    history.iloc[:300, 2] = np.nan  # Z starts later: it is fitted on its own rows
+    history.iloc[:100, 2] = np.nan  # Z, the youngest, starts later, before the 10-year windows
     ctx = _ctx(returns[lookback], days[lookback], holdings, history=history)
     seen = {}
     real = gb.fit_garch_t_panel
@@ -424,35 +481,37 @@ def test_the_fit_uses_all_history_to_the_origin_and_nothing_after(monkeypatch):
     bank = gb.garch_bank(ctx, "garch", SEED)
     for n, holding in enumerate(holdings):
         frame = seen[holding]
-        first = 300 if holding == "Z" else 0
-        assert frame.index[0] == pd.Timestamp(days[first]) < pd.Timestamp(ctx.days[0])
+        first = cut - gb.DYNAMICS_ROWS  # each holding's own last 10 years
+        assert frame.index[0] == pd.Timestamp(days[first])
         assert frame.index[-1] == pd.Timestamp(ORIGIN)
         np.testing.assert_array_equal(frame.iloc[:, 0], np.log1p(returns[first:cut, n]))
     art = bank.artifact
-    assert art.n_obs == (cut, cut, cut - 300)
-    assert (art.rows, art.start, art.end) == (cut, days[0].isoformat(), ORIGIN.isoformat())
-    assert art.pool_rows == cut - 300  # the common rows: every holding has a return
-    # the production panel fit of the same window gives the same parameters and pool
-    fit = real(np.log1p(history))
-    for name in ("mu", "omega", "alpha", "beta", "nu"):
-        np.testing.assert_array_equal(getattr(art, name), getattr(fit, name))
-    np.testing.assert_array_equal(art.pool, residual_pool(fit, min_rows=MIN_POOL_ROWS))
-    # rows after the origin never reach the fit; a window holding one is refused
+    assert art.n_obs == (gb.DYNAMICS_ROWS,) * 3
+    # the pool: every common row from Z's first return on, older than the dynamics windows
+    assert (art.rows, art.start, art.end) == (cut - 100, days[100].isoformat(), ORIGIN.isoformat())
+    assert art.pool_rows == cut - 100 > gb.DYNAMICS_ROWS
+    _assert_pool(art, history)
+    # a -100% day in the pool span but before X's dynamics window is unusable input too
+    lost = history.copy()
+    lost.iloc[cut - gb.DYNAMICS_ROWS - 5, 0] = -1.0
+    with pytest.raises(gb.GarchFitFailed, match="shock pool span"):
+        gb.garch_bank(replace(ctx, history=lost), "garch", SEED)
+    # rows after the origin never reach the fit; a history holding one is refused
     leaky = replace(ctx, history=_frame(returns[: cut + 1], days[: cut + 1], holdings))
     with pytest.raises(ValueError, match="origin"):
         gb.garch_bank(leaky, "garch", SEED)
-    with pytest.raises(ValueError, match="fit history"):
+    with pytest.raises(ValueError, match="history"):
         gb.garch_bank(replace(ctx, history=None), "garch", SEED)
 
 
-def test_the_level_comes_from_the_lookback_not_the_fit_window():
+def test_the_level_comes_from_the_lookback_not_the_dynamics_window():
     rng = np.random.default_rng(41)
     holdings = ("X", "Y", "Z")
     returns, days, cut = _long_history(1000, rng)
     lookback = slice(cut - ROWS, cut)
     full = _frame(returns[:cut], days[:cut], holdings)
-    short = _ctx(returns[lookback], days[lookback], holdings)  # fit window = the lookback
-    long = replace(short, history=full)  # same lookback and chart moments, longer fit window
+    short = _ctx(returns[lookback], days[lookback], holdings)  # history = the lookback
+    long = replace(short, history=full)  # same lookback and chart moments, longer history
     gb.clear_fit_cache()
     a, b = gb.garch_bank(short, "garch", SEED), gb.garch_bank(long, "garch", SEED)
     assert a.artifact.rows == ROWS and b.artifact.rows == cut
@@ -463,7 +522,7 @@ def test_the_level_comes_from_the_lookback_not_the_fit_window():
         np.testing.assert_array_equal(bank.m, short.mu_s / 252)
     mixes = _mixes(np.random.default_rng(6), 3, 4)
     assert np.max(np.abs(b.years(mixes) - _production_years(b, long, mixes))) <= 1e-10
-    # another lookback on the same fit window: same fit, the new level
+    # another lookback on the same history: same fit and pool, the new level
     later = _ctx(returns[cut - 500 : cut], days[cut - 500 : cut], holdings, history=full)
     c = gb.garch_bank(later, "garch", SEED)
     np.testing.assert_array_equal(c.artifact.alpha, b.artifact.alpha)

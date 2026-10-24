@@ -7,9 +7,10 @@ menu has its own boundary month and start (research2003 2006-04, TSP 2006-06 at 
 5-year ledgers serve the lookback sensitivity.
 
 `origin_context` reuses v1 `evaluate.origin_model` for the training side and hands the optimizer
-and the banks the `contracts.OriginContext`, with `fit_history`, the GARCH fit window of protocol
-amendment 1 (each holding's whole history up to the origin); `horizon_returns` gives the realized
-252-row horizon for the measurements. Nothing here reads a value dated after D*.
+and the banks the `contracts.OriginContext`, with `fit_history` (each holding's whole history up
+to the origin, from which the GARCH bank cuts its dynamics windows and shock pool; protocol
+amendment 1, revised); `horizon_returns` gives the realized 252-row horizon for the measurements.
+Nothing here reads a value dated after D*.
 """
 
 from __future__ import annotations
@@ -332,8 +333,8 @@ def origin_context(
 def fit_history(
     records: Mapping[str, pd.DataFrame], holdings: Sequence[str], origin: date
 ) -> pd.DataFrame:
-    """The GARCH fit window at `origin` (protocol amendment 1): each holding's daily simple returns
-    from its first price up to and including `origin`.
+    """Each holding's daily simple returns from its first price up to and including `origin`: what
+    the GARCH bank cuts its dynamics windows and shock pool from (amendment 1, revised).
 
     The calendar is the holdings' own, as production `shape.shape_panel` builds it: a day on which
     none of them has a return is not a row, a holding without a return on a day is NaN there.
