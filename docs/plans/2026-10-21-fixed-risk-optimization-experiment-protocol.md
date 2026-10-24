@@ -1,6 +1,7 @@
 # Fixed-risk optimization experiment protocol (v2) — DRAFT for independent review
 
-Status: draft, revision 6, 2026-10-23. Owner decisions of 2026-10-22/23 (five rounds) and three
+Status: draft, revision 6, 2026-10-23, with Amendment 1 of 2026-10-24 (§11: GARCH fit window and
+fit-failure fallback). Owner decisions of 2026-10-22/23 (five rounds) and three
 Codex reviews (of revisions 2, 3 and 5) applied; see §10. Not hash-locked. Open before the lock:
 the replay gate of §9 (six-origin measurement on both hosts, finite-difference and agreement
 checks), the corporate-action check and the published disjoint-interval endpoints (§3a).
@@ -184,10 +185,10 @@ undefined and reported as missing.
   positions, primary arm only. These measure the production precompute and give the UI work a
   heatmap over time; they are descriptive.
 - Engines: `replay` (v1 §5 step 1, unchanged) and `garch` (spec §4.3). GARCH is fitted **once per
-  fund and origin** on the training window and shared by every menu, arm and cell at that origin
-  (the per-fund precompute of ADR 0002 applied to the experiment); residual pools come from the
-  training window only; a non-converging fit is a named failure of that fund's cells, never a
-  silent substitution of replay. Each engine has its own 2,000 × 252 bank per
+  fund and origin** and shared by every menu, arm and cell at that origin (the per-fund precompute
+  of ADR 0002 applied to the experiment). *Superseded by Amendment 1 (§11):* the fit window is all
+  of the fund's history up to the origin, not the training window; a fit that fails falls back to
+  constant volatility for that fund, labelled, instead of failing the origin's cells. Each engine has its own 2,000 × 252 bank per
   `(menu, origin, engine, replicate)` with v1's seeds.
 - Optimizer replicates: primary seed `20261013` for every primary statistic; seeds `20261014..17`
   for the stability diagnostics of the `U_1` arm only, run on **every fourth scheduled origin**
@@ -486,9 +487,9 @@ plus:
 - **Forecast calibration uses the daily-rebalanced realized year** because that is the strategy
   the banks simulate; comparing a daily-rebalanced forecast with a monthly-rebalanced outcome would
   mix forecasting error with strategy mismatch **[Codex]**.
-- **This experiment is not a qualification of the production engine** **[Codex]**: GARCH here is
-  fitted on the 3-year training window (§3), where spec §4.3 fits the shape on up to ten years
-  independent of the lookback; and the realized convention above differs from the spec's. The
+- **This experiment is not a qualification of the production engine** **[Codex]**: GARCH here
+  fits the shape on all history up to the origin (Amendment 1, §11), where spec §4.3 caps it at ten
+  years; and the realized convention above differs from the spec's. The
   report labels both differences in its engine section, and the spec's 6.4/6.5 validation stays
   owed.
 - **Multi-year realized**: compounded 3- and 5-year outcomes from the same origin with the locked
@@ -871,3 +872,35 @@ Convergence: this was the third Codex round on the protocol. Its findings were s
 and the new menu, data and host choices of revision 5, not errors in the selection contract, the
 gradients or the estimator, which it confirmed resolved. No fourth protocol round is planned; the
 build's code reviews (at most three, §9) check the implementation against this text.
+
+## 11. Amendment 1 (owner, 2026-10-24): GARCH fit window and fit-failure fallback
+
+Made during the run (parent `fr-run-v2b`, commit `ddcfad8`). Replay results are not affected. The
+GARCH jobs run under it.
+
+- **Shape from all history, level from the lookback.** Each fund's GARCH(1,1)-t fit uses all of the
+  fund's daily returns from its first price in the snapshot up to the origin (an expanding window),
+  not the 3-year training window. The residual pool is the fit window's common rows. The level
+  (mean and covariance of the simulated year) still comes from the origin's lookback, as in
+  production (spec §4.3). The reason: the bank is a range of possibilities, not a forecast. A
+  3-year fit in a calm period has no crisis in its shock pool and estimates thin tails, so it
+  understates the black swans the optimizer must be robust to. Longer samples also converge more
+  often.
+- **Fit-failure fallback.** When a fund's fit fails (the optimizer does not converge, or invalid or
+  non-finite parameters), that fund is simulated at constant volatility on its own standardized
+  returns. This is QSE's and production's existing rule, already applied to near-constant,
+  non-stationary and short-history funds. The other funds keep GARCH. The bank records each fallback
+  fund, the task summary counts them, and the report labels them. An origin is now dropped
+  (`garch_fit_failed`) only for unusable input (non-finite returns, or a day at or below −100%).
+- **What reruns.** TSP GARCH reruns in full. Its first run (3-year fits, 9 origins dropped) is kept
+  aside as superseded. research2003 GARCH runs only under this amendment. Both run in the same
+  parent through the recorded resume override (`overrides.jsonl`: reason, commit, changed paths).
+- **Run overrides already recorded, for the report.**
+  - The CPU-hour total was raised from 240 to 760, because both engines' gates chose COBYLA-768.
+  - research2003 replay was resumed with a 300 CPU-hour budget after its 165 CPU-hour stop. The
+    local VM was throttled, which inflated the CPU time it counted.
+  - Local runs used 10 workers, not the ceiling's 6.
+- **Open question, not decided here.** The lookback itself could be chosen out of sample by a proper
+  scoring rule (log score or CRPS of realized outcomes, with probability-integral-transform and
+  tail-coverage checks, on monthly horizons). That choice would sit inside §7's overfitting check.
+  Blending a recent-window model with a full-history model is the alternative to choosing one.
