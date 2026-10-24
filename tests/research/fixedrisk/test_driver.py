@@ -270,6 +270,7 @@ def test_a_garch_fallback_holding_is_counted_once_per_lookback_and_keeps_its_row
     ]  # one entry per context, not per seed's bank
     assert out.fit_failures == []
     assert {r["status"] for r in out.selections} == {C.OK}  # the rows are searched as usual
+    assert out.garch_windows == {"A": "fallback", "B": "10y", "C": "10y", "D": "10y"}
     labels = driver._label_counts(out.selections, out.garch_fallbacks)
     assert labels == {C.FIT_FALLBACK: 2}
 
@@ -293,8 +294,12 @@ def test_a_garch_fallback_is_logged_and_in_the_task_file(
     assert json.loads(meta[driver.FALLBACKS_KEY]) == [
         {"lookback": "3y", "holding": "X", "reason": "optimizer did not converge"}
     ]
+    assert json.loads(meta[driver.WINDOWS_KEY]) == {"X": "fallback", "Y": "10y", "Z": "10y"}
+    assert f'task tsp_{month}_garch garch_windows: {{"X": "fallback"' in log
     other = pq.read_schema(driver.task_paths(tasks, specs[1])["selections"]).metadata
     assert driver.FALLBACKS_KEY not in other
+    assert json.loads(other[driver.WINDOWS_KEY]) == {"X": "10y", "Y": "10y", "Z": "10y"}
+    assert f"task tsp_{specs[1].month}_garch garch_windows" not in log
 
 
 # ------------------------------------------------------------------------------- files

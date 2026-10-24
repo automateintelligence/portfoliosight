@@ -15,9 +15,11 @@ Task unit: (menu, origin month, engine). In one process a task
 Every scheduled (r, cell, arm) outcome is one selections row: outcomes without a locked mix (the
 optimizer's `unselected` rows, and every search on a bank whose GARCH fit failed) have status =
 their label, empty weights and NaN figures, so the measurements can count and exclude them.
-A holding whose GARCH fit failed and that the bank holds at constant volatility (protocol
-amendment 1) leaves its rows as they are: the task summary counts it (`garch_fallback`), the
-progress log names it, and the selections file's schema metadata lists it (`garch_fallbacks`).
+A holding that fits on neither GARCH dynamics window and that the bank holds at constant
+volatility (protocol amendment 1, revised) leaves its rows as they are: the task summary counts it
+(`garch_fallback`), the progress log names it, and the selections file's schema metadata lists it
+(`garch_fallbacks`). The metadata also names each holding's dynamics window (`garch_windows`:
+10y, 3y or fallback); the progress log repeats it when some holding is not on 10 years.
 
 A task runs under a wall alarm of the per-arm ceiling (600 s) times its arm-cells; a task that
 rings it, or holds a selection slower than 600 s, writes `<job>/breaches/<base>.json` and no task
@@ -68,6 +70,7 @@ EVAL_CHUNK = 256
 KINDS = ("main", "stability", "showcase", "sens_tau", "sens_5y", "sens_endpoints", "comparator")
 DIGEST_KEY = b"parent_digest"
 FALLBACKS_KEY = b"garch_fallbacks"
+WINDOWS_KEY = b"garch_windows"
 COMPARATOR_ARMS = ("F", "BS")
 
 SELECTION_SCHEMA = pa.schema(
@@ -234,6 +237,7 @@ class TaskOutput:
     fit_failures: list[dict[str, Any]] = field(default_factory=list)  # GARCH banks not built
     # GARCH holdings held at constant volatility after a failed fit, once per (lookback, holding)
     garch_fallbacks: list[dict[str, Any]] = field(default_factory=list)
+    garch_windows: dict[str, str] = field(default_factory=dict)  # holding -> dynamics window
 
 
 def job_tasks(parent: dict[str, Any], menu: str, engine: str) -> list[TaskSpec]:
@@ -495,6 +499,8 @@ def run_task(
             )
             return None
         record_fallbacks(col.out.garch_fallbacks, ctx, built)
+        if not col.out.garch_windows:  # the same at every seed and lookback of the origin
+            col.out.garch_windows = dict(getattr(built, "windows", None) or {})
         return built
 
     def search(ctx: C.OriginContext, bank: C.PathBank | None, seed: int, **kw: Any):
@@ -606,9 +612,11 @@ def write_task(tasks_dir: Path, spec: TaskSpec, out: TaskOutput, digest: str) ->
     paths = task_paths(tasks_dir, spec)
     _write_table(paths["anchors"], out.anchors, ANCHOR_SCHEMA, digest)
     _write_table(paths["evaluated"], out.evaluated, EVALUATED_SCHEMA, digest)
-    extra = (
-        {FALLBACKS_KEY: json.dumps(out.garch_fallbacks).encode()} if out.garch_fallbacks else None
-    )
+    extra: dict[bytes, bytes] = {}
+    if out.garch_fallbacks:
+        extra[FALLBACKS_KEY] = json.dumps(out.garch_fallbacks).encode()
+    if out.garch_windows:
+        extra[WINDOWS_KEY] = json.dumps(out.garch_windows).encode()
     # last: the marker
     _write_table(paths["selections"], out.selections, SELECTION_SCHEMA, digest, extra)
 
@@ -732,6 +740,7 @@ def execute(state: WorkerState, payload: tuple[Any, ...]) -> dict[str, Any]:
                     labels=_label_counts(out.selections, out.garch_fallbacks),
                     fit_failures=out.fit_failures,
                     garch_fallbacks=out.garch_fallbacks,
+                    garch_windows=out.garch_windows,
                     evaluated=len(out.evaluated),
                     max_selection_seconds=seconds,
                     phases=out.phases,
@@ -1117,6 +1126,9 @@ def run_job(
                 log.line(f"task {summary['task']} garch_fit_failed: {json.dumps(item)}")
             for item in summary.get("garch_fallbacks") or []:
                 log.line(f"task {summary['task']} {C.FIT_FALLBACK}: {json.dumps(item)}")
+            windows = summary.get("garch_windows") or {}
+            if any(window != "10y" for window in windows.values()):
+                log.line(f"task {summary['task']} garch_windows: {json.dumps(windows)}")
             write_manifest("running")
             found = summary.get("breach")
             if found:  # recorded by the worker; the task wrote no files and is not done

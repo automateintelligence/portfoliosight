@@ -5,7 +5,7 @@ The module doubles as a `--hooks` module for spawned workers: it defines `make_b
 `FAIL_MONTH` (or the environment variable `FAKE_FAIL_MONTH`) makes a search raise at that month;
 `FIT_FAIL_MONTH` (or `FAKE_FIT_FAIL_MONTH`) makes a GARCH bank raise the real `GarchFitFailed` at
 that month (3-year lookback only); `FALLBACK_MONTH` makes a GARCH bank at that month hold its
-first holding at constant volatility after a failed fit (`GarchBank.fallbacks`); `NOT_FOUND_CELL`
+first holding at constant volatility (`GarchBank.fallbacks`, `GarchBank.windows`); `NOT_FOUND_CELL`
 reports that cell's arms as `not_found` rows;
 `SLEEP` (or `FAKE_SLEEP`) seconds are spent in each search.
 """
@@ -53,6 +53,10 @@ class FakeBank:
         self._draws = ctx.mu_hat + ctx.sigma * rng.standard_normal((PATHS, len(ctx.mu_hat)))
         fallback = engine == "garch" and ctx.month == FALLBACK_MONTH
         self.fallbacks = {ctx.menu.holdings[0]: "optimizer did not converge"} if fallback else {}
+        if engine == "garch":
+            self.windows = {
+                h: "fallback" if h in self.fallbacks else "10y" for h in ctx.menu.holdings
+            }
 
     def years(self, mixes: np.ndarray) -> np.ndarray:
         return self._draws @ np.atleast_2d(mixes).T
