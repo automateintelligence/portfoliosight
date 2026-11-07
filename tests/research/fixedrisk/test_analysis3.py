@@ -154,7 +154,8 @@ def test_rank_agreement_is_one_when_orders_agree():
 
 def test_cscv_across_six_arms_uses_k_over_seven():
     months = month_labels(120)
-    origins = [pd.Period(m, freq="M").to_timestamp(how="end").date() for m in months]
+    stamps = pd.period_range(months[0], periods=len(months), freq="M").to_timestamp(how="end")
+    origins = [s.date() for s in stamps]
     ends = [pd.Timestamp(o) + pd.Timedelta(days=20) for o in origins]  # short, non-overlapping
     frozen = cscv.frozen_record(months, origins, [e.date() for e in ends])
     rng = np.random.default_rng(1)

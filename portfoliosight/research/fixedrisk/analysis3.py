@@ -99,15 +99,22 @@ def realized_outcomes(
 # ---------------------------------------------------------------------------------- grids
 
 
-def locked_rows(table: pd.DataFrame, *, kind: str = "main", lookback: str = C.LOOKBACK):
+def _frame(x: Any) -> pd.DataFrame:
+    """`x` as a DataFrame (pandas' stubs widen boolean-indexed frames)."""
+    return x if isinstance(x, pd.DataFrame) else pd.DataFrame(x)
+
+
+def locked_rows(
+    table: pd.DataFrame, *, kind: str = "main", lookback: str = C.LOOKBACK
+) -> pd.DataFrame:
     """Each arm's locked row per (month, r_fraction): arm 1 and arm 6 their program's row, arms
     2-5 the pooled selection; arm 4 at the main lambda."""
-    t = table[(table["kind"] == kind) & (table["lookback"] == lookback)]
+    t = _frame(table.loc[(table["kind"] == kind) & (table["lookback"] == lookback)])
     native_arms = (C.FRONTIER, C.ENB_KNEE, C.APP_FRONTIER)
-    keep = np.where(t["arm"].isin(native_arms), ~t["pooled"].astype(bool), t["pooled"].astype(bool))
-    t = t[keep]
-    lam = t["lam"].astype(float)
-    t = t[(t["arm"] != C.CRASH_PENALTY) | np.isclose(lam.fillna(-1.0), C.LAMBDA)]
+    pooled = t["pooled"].astype(bool).to_numpy()
+    t = _frame(t.loc[np.where(t["arm"].isin(native_arms).to_numpy(), ~pooled, pooled)])
+    lam = t["lam"].astype(float).fillna(-1.0).to_numpy()
+    t = _frame(t.loc[(t["arm"] != C.CRASH_PENALTY).to_numpy() | np.isclose(lam, C.LAMBDA)])
     out = t.copy()
     out["rf"] = out["r_fraction"].astype(float).round(6)
     return out
@@ -206,7 +213,7 @@ def confirmatory_test(
     rows = locked_rows(table)
     months = [str(m) for m in months]
     if eligible is None:
-        done = rows[rows["complete"].fillna(False).astype(bool)]
+        done = _frame(rows.loc[rows["complete"].astype("boolean").fillna(False).to_numpy(bool)])
         eligible = sorted(set(done["month"].astype(str)))
     eligible = [m for m in months if m in set(eligible)]
     mask = np.array([m in set(eligible) for m in months])
@@ -232,7 +239,9 @@ def confirmatory_test(
     ret90 = _estimate(boot, d_ret, 0.90)  # its lower end is the 5th percentile
     rel = _estimate(boot, rho, 0.95)
     a, b = _conditions(dd, ret90, primary)
-    blocked = blocking_cells(rows[rows["month"].isin(eligible)], (comparator, candidate), eligible)
+    blocked = blocking_cells(
+        _frame(rows.loc[rows["month"].isin(eligible)]), (comparator, candidate), eligible
+    )
     label = INCONCLUSIVE if blocked else _label(a, b)
 
     per_level = []
@@ -399,9 +408,10 @@ def ensemble_candidates(pool: pd.DataFrame) -> pd.DataFrame:
     rounding to 1e-9, represented by the lowest pool row id) among the main rows (side checks
     excluded) in the wide band with all six objectives defined, with their average-tie
     percentile ranks (`rank_<objective>`, oriented so higher is better)."""
-    p = pool[(pool["lam"].isna()) | np.isclose(pool["lam"].fillna(-1.0), C.LAMBDA)]
-    p = p[p["in_wide"].astype(bool)]
-    p = p.dropna(subset=list(ENSEMBLE_OBJECTIVES))
+    lam = pool["lam"].astype(float).fillna(-1.0).to_numpy()
+    p = _frame(pool.loc[pool["lam"].isna().to_numpy() | np.isclose(lam, C.LAMBDA)])
+    p = _frame(p.loc[p["in_wide"].astype(bool)])
+    p = _frame(p.dropna(subset=list(ENSEMBLE_OBJECTIVES)))
     if p.empty:
         return p.assign(**{f"rank_{o}": [] for o in ENSEMBLE_OBJECTIVES})
     keys = p["weights"].map(lambda w: tuple(np.round(np.asarray(w, dtype=float),
@@ -452,16 +462,19 @@ def arm_summary(rows: pd.DataFrame, arms: Sequence[str]) -> list[dict[str, Any]]
     usable = rows[rows["status"].isin(C.V3_USABLE)]
     for arm in arms:
         for rf in RFS:
-            sub = usable[(usable["arm"] == arm) & (usable["rf"] == rf)]
-            done = sub[sub["complete"].fillna(False).astype(bool)] if "complete" in sub else sub
+            sub = _frame(usable.loc[(usable["arm"] == arm) & (usable["rf"] == rf)])
+            done = sub
+            if "complete" in sub:
+                flags = sub["complete"].astype("boolean").fillna(False).to_numpy(bool)
+                done = _frame(sub.loc[flags])
             entry: dict[str, Any] = {"arm": arm, "rf": rf, "n": int(len(sub)),
                                      "n_complete": int(len(done))}  # fmt: skip
             for col in SUMMARY_COLUMNS:
                 if col not in sub:
                     continue
                 source = done if col in R.REALIZED_COLUMNS else sub
-                values = pd.to_numeric(source[col], errors="coerce")
-                entry[col] = float(values.mean()) if values.notna().any() else None
+                values = np.asarray(pd.to_numeric(source[col], errors="coerce"), dtype=float)
+                entry[col] = float(np.nanmean(values)) if np.isfinite(values).any() else None
             out.append(entry)
     return out
 
@@ -500,7 +513,7 @@ def analyze_job(
     eligible = [m for m in frozen.get("months", []) if m in set(months)] or None
     arms = C.V3_ARMS if engine == "replay" else C.V3_GARCH_REPORTED
     rows = locked_rows(table)
-    rows = rows[rows["arm"].isin([*arms, C.APP_FRONTIER])]
+    rows = _frame(rows.loc[rows["arm"].isin([*arms, C.APP_FRONTIER])])
     result: dict[str, Any] = {
         "job": Path(job_dir).name,
         "parent_digest": parent["digest"],

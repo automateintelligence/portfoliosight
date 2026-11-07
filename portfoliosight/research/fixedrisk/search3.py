@@ -352,7 +352,9 @@ def search_origin_v3(
                    calls=anchor_iters, seconds=seconds["anchor"], solver="slsqp")  # fmt: skip
         for arm in searched:
             run = runs[arm]
-            info = dict(starts=run.starts, calls=run.calls, seconds=run.seconds, solver=solver)
+            info: dict[str, Any] = dict(
+                starts=run.starts, calls=run.calls, seconds=run.seconds, solver=solver
+            )
             lam = run.lam
             pooled = col.best(main, arm, lam) if run.native is not None else None
             select(arm, pooled, run.label, pooled=True, lam=lam, **info)
@@ -368,7 +370,8 @@ def search_origin_v3(
                    seconds=time.perf_counter() - t, solver="rerank")  # fmt: skip
         if C.ENB_KNEE in arms:
             status = C.ANCHOR_FAILED if kc is None or k_rid is None else kc.status
-            info = dict(starts=0, calls=0, seconds=kc.seconds if kc else 0.0, solver="app_ladder")
+            info = {"starts": 0, "calls": 0, "seconds": kc.seconds if kc else 0.0,
+                    "solver": "app_ladder"}  # fmt: skip
             select(C.ENB_KNEE, k_rid, status, pooled=False, **info)
             select(C.APP_FRONTIER, front_rid, status if front_rid is not None else
                    C.ANCHOR_FAILED, pooled=False, **info)  # fmt: skip
@@ -380,8 +383,8 @@ def search_origin_v3(
                 own = [rid for rid in col.ids if col.lams[rid] == lam]
                 pooled = col.best(main + own, C.CRASH_PENALTY, lam) if run.native is not None \
                     else None  # fmt: skip
-                info = dict(starts=run.starts, calls=run.calls, seconds=run.seconds,
-                            solver=solver)  # fmt: skip
+                info = {"starts": run.starts, "calls": run.calls, "seconds": run.seconds,
+                        "solver": solver}  # fmt: skip
                 select(C.CRASH_PENALTY, pooled, run.label, pooled=True, lam=lam, **info)
                 select(C.CRASH_PENALTY, run.native, run.label, pooled=False, lam=lam, **info)
 

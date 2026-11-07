@@ -760,18 +760,19 @@ def execute(state: WorkerState, payload: tuple[Any, ...]) -> dict[str, Any]:
     started, cpu = time.perf_counter(), time.process_time()
     summary: dict[str, Any] = {"task": spec.base, "pid": os.getpid(), "ok": False}
     v3 = getattr(spec, "protocol", 2) == 3
-    if v3:
-        from portfoliosight.research.fixedrisk import driver3
+    from portfoliosight.research.fixedrisk import driver3
+
     cells = driver3.searches_per_task(spec) if v3 else task_arm_cells(spec)
     ceiling = arm_seconds * cells
     breach: dict[str, Any] | None = None
     try:
         try:
             with runner.arm_alarm(ceiling):
-                if v3:
-                    out = driver3.run_task(state.inputs, spec, state.hooks)
-                else:
-                    out = run_task(state.inputs, spec, state.hooks)
+                out: TaskOutput | driver3.TaskOutput3 = (
+                    driver3.run_task(state.inputs, spec, state.hooks)
+                    if v3
+                    else run_task(state.inputs, spec, state.hooks)
+                )
         except runner.ArmTimeLimit:
             breach = {
                 "rule": "arm_seconds",
@@ -790,7 +791,7 @@ def execute(state: WorkerState, payload: tuple[Any, ...]) -> dict[str, Any]:
                     "detail": f"selection {slowest['sel_id']}" if slowest else "",
                 }
             else:
-                if v3:
+                if isinstance(out, driver3.TaskOutput3):
                     summary["timings"] = driver3.write_task(Path(tasks_dir), spec, out, digest)
                     summary["pool_rows"] = len(out.pool)
                 else:

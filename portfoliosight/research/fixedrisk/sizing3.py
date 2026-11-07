@@ -151,7 +151,7 @@ def sizing_task(payload: Mapping[str, Any]) -> dict[str, Any]:
         if payload.get("check_calls"):
             t = time.perf_counter()
             ctx = data.origin_context(inputs, spec.menu, spec.month)
-            bank = hooks.make_bank(ctx, spec.engine, C.PRIMARY_SEED)
+            bank = hooks.make_bank(ctx, "replay", C.PRIMARY_SEED)
             geo = geometry(ctx)
             knee = knee_columns(ctx, {a: geo.x(a) for a in C.RISK_FRACTIONS})
             check = solver_check(ctx, bank, knee, int(payload["check_calls"]))
@@ -273,10 +273,10 @@ def run_sizing(
 
     inputs = data.load_inputs(snapshot, ledger_cache=ledger_cache)
     menu = C.V3_MENU
-    schedule = list(schedule or data.schedule(inputs, menu))
-    showcase = list(showcase or data.showcase_months(inputs, menu))
-    lookback5 = set(lookback5 or data.lookback5_months(inputs, menu))
-    months = list(months or showcase)
+    order = list(schedule or data.schedule(inputs, menu))
+    shown = list(showcase or data.showcase_months(inputs, menu))
+    five = set(lookback5 or data.lookback5_months(inputs, menu))
+    chosen = list(months or shown)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     payloads = [
@@ -290,14 +290,14 @@ def run_sizing(
                 menu=menu,
                 month=m,
                 engine="replay",
-                showcase=m in set(showcase),
-                lookback5=m in lookback5,
+                showcase=m in set(shown),
+                lookback5=m in five,
                 protocol=3,
                 calls=calls,
                 starts=starts,
             ),
         }  # fmt: skip
-        for m in months
+        for m in chosen
     ]
     started = time.perf_counter()
     context = get_context("spawn")
@@ -305,13 +305,13 @@ def run_sizing(
         tasks = list(pool.map(sizing_task, payloads))
     wall = time.perf_counter() - started
     v2_seconds = v2_task_seconds(Path(v2_job_dir) / "progress.log")
-    v2_main = v2_main_seconds(Path(v2_job_dir) / "tasks", months, menu, "replay")
+    v2_main = v2_main_seconds(Path(v2_job_dir) / "tasks", chosen, menu, "replay")
     body = {
         "kind": "fixed_risk_v3_sizing",
         "protocol": {"path": C.V3_PROTOCOL_PATH, "revision": C.V3_PROTOCOL_REVISION},
         "snapshot_manifest_sha256": inputs.manifest_sha256,
         "settings": {"calls": calls, "starts": starts, "check_calls": check_calls},
-        "months": months,
+        "months": chosen,
         "sizing_wall_seconds": wall,
         "tasks": tasks,
         "measured": {
@@ -326,7 +326,7 @@ def run_sizing(
         },  # fmt: skip
         "solver_check": check_verdict(tasks) if check_calls else None,
         "projection": project(
-            schedule, showcase, tasks, v2_seconds, v2_main, workers=project_workers
+            order, shown, tasks, v2_seconds, v2_main, workers=project_workers
         ),  # fmt: skip
     }
     (out_dir / "sizing.json").write_text(json.dumps(body, indent=2, default=str) + "\n")

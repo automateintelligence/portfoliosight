@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pyarrow.parquet as pq
 import pytest
@@ -120,7 +121,7 @@ def test_v3_parent_digest_and_settings(inputs, tmp_path):
 def test_v3_job_runs_and_resumes_and_refuses_mismatched_settings(inputs, tmp_path):
     months = data.schedule(inputs, fakes.ALPHA)[-1:]
     parent = make_parent_v3(inputs, tmp_path, months)
-    kw = dict(workers=0, snapshot_dir="/snap", inputs_loader=LOADER, poll=0.0)
+    kw: dict[str, Any] = dict(workers=0, snapshot_dir="/snap", inputs_loader=LOADER, poll=0.0)
     result = driver.run_job(tmp_path, "research2003", "replay", **kw)
     assert result.status == "complete" and result.tasks_done == 1
     job = tmp_path / "research2003_replay"

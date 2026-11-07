@@ -141,9 +141,10 @@ def test_realized_table_complete_and_incomplete(tmp_path):
 
 def test_realized_volatility_by_hand():
     # v3 §5: annualized sample standard deviation of the cohort's daily returns
-    out = R.monthly_rebalanced(A_B, DAYS, W)
+    out = R.monthly_rebalanced(A_B, list(DAYS), W)
     wealth = np.array([1.05, 1.05, 1.05 + 0.0525, 1.155])
     daily = wealth / np.concatenate([[1.0], wealth[:-1]]) - 1.0
+    assert out.volatility is not None
     assert out.volatility[0] == pytest.approx(np.std(daily, ddof=1) * math.sqrt(252))
     flat = R.daily_rebalanced(np.zeros((5, 2)), W)
-    assert flat.volatility[0] == 0.0
+    assert flat.volatility is not None and flat.volatility[0] == 0.0

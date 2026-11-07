@@ -109,6 +109,7 @@ def test_worst_fall_never_reads_after_the_origin():
     assert h_clean == h_leaked
     assert len(O.history_returns(clean)) == len(ctx.sample) - 1  # the NaN row is dropped
     # the post-origin crash would have been the worst fall had it been read
+    assert leaked.history is not None
     full = leaked.history.dropna().to_numpy()
     assert O.worst_fall(full, w) > h_clean + 0.3
 
@@ -161,6 +162,7 @@ def test_scorer_row_is_consistent(replay):
     r = geo.x(0.4)
     scorer = O.Scorer(geo, bank, O.history_returns(ctx), O.origin_basis(ctx), r)
     w = geo.project(np.full(5, 0.2), r, C.TAU_NARROW)
+    assert w is not None
     row = scorer.evaluate(w)
     years, drawdowns, sums = bank.path_terms(w)
     i = O.INDEX
