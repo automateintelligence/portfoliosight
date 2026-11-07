@@ -564,7 +564,8 @@ def _integrated(art, alpha: float = 0.2, beta: float = 0.799):
 
 
 def _reference(art, cap: np.ndarray, paths: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
-    """The capped recursion one path and fund at a time, in plain Python, and its hit counts."""
+    """The capped recursion one path and fund at a time, in plain Python, and its hit counts:
+    clamps on days 2 onward only (day 1 starts at the long-run variance, `start_capped`)."""
     from qse.distributions.joint import draw_row_indices
 
     z = art.pool[draw_row_indices(art.pool_rows, paths, HORIZON, seed=seed)]
@@ -576,7 +577,7 @@ def _reference(art, cap: np.ndarray, paths: int, seed: int) -> tuple[np.ndarray,
             s2 = w / (1.0 - a - b)
             for t in range(HORIZON):
                 if s2 > cap[n]:
-                    hits[n] += 1
+                    hits[n] += t >= 1
                     s2 = cap[n]
                 eps = np.sqrt(s2) * z[p, t, n]
                 out[p, t, n] = mu + eps
@@ -627,8 +628,46 @@ def test_the_cap_starts_at_the_first_day_when_the_long_run_variance_is_above_it(
     art = bank.artifact
     long_run = art.omega / (1.0 - art.alpha - art.beta)
     panel, hits = gb.simulate_capped(art, long_run / 4.0, 3, HORIZON, SEED)
-    assert (hits >= 3).all()  # day 1 of every path is capped for every fund
-    np.testing.assert_array_equal(hits, _reference(art, long_run / 4.0, 3, SEED)[1])
+    ref, ref_hits = _reference(art, long_run / 4.0, 3, SEED)
+    np.testing.assert_array_equal(hits, ref_hits)  # day-1 clamps are not counted as hits
+    np.testing.assert_allclose(panel, ref, rtol=1e-12, atol=1e-15)  # but they are applied
+    np.testing.assert_array_equal(gb.start_capped(art, long_run / 4.0), True)
+    np.testing.assert_array_equal(gb.start_capped(art, long_run * 4.0), False)
+    # day 1 of every path is clamped: its volatility is the cap's, not the long run's
+    from qse.distributions.joint import draw_row_indices
+
+    z = art.pool[draw_row_indices(art.pool_rows, 3, HORIZON, seed=SEED)]
+    np.testing.assert_allclose(panel[:, 0] - art.mu, np.sqrt(long_run / 4.0) * z[:, 0])
+
+
+def test_simulate_capped_rejects_non_finite_or_negative_dynamics(bank):
+    art = bank.artifact
+    cap = np.full(4, np.inf)
+    integrated = replace(art, alpha=np.full(4, 0.2), beta=np.full(4, 0.8))  # no long-run level
+    with pytest.raises(ValueError, match="long-run variance"):
+        gb.simulate_capped(integrated, cap, 3, HORIZON, SEED)
+    for name, bad in (("mu", np.nan), ("omega", -1e-6), ("alpha", np.inf), ("beta", -0.1)):
+        values = np.array(getattr(art, name), dtype=float)
+        values[2] = bad
+        with pytest.raises(ValueError, match=name):
+            gb.simulate_capped(replace(art, **{name: values}), cap, 3, HORIZON, SEED)
+
+
+def test_a_garch_fund_with_a_flat_lookback_is_a_fit_failure(ctx, bank):
+    sample = np.array(ctx.sample)
+    sample[:, 2] = 0.0005  # fund C has a GARCH fit but no variance in the lookback
+    flat = replace(ctx, sample=sample)
+    with pytest.raises(gb.GarchFitFailed, match="C"):
+        gb.variance_cap(flat, bank.artifact, 3.0)
+
+
+def test_the_bank_records_which_funds_start_above_the_cap(ctx):
+    gb.clear_fit_cache()
+    tight = gb.garch_bank(ctx, "garch", SEED, vol_cap=0.2)  # below every long-run volatility
+    assert tight.start_capped == dict.fromkeys(ctx.menu.holdings, True)
+    loose = gb.garch_bank(ctx, "garch", SEED, vol_cap=50.0)
+    assert loose.start_capped == dict.fromkeys(ctx.menu.holdings, False)
+    assert gb.garch_bank(ctx, "garch", SEED, vol_cap=None).start_capped == {}
 
 
 def test_the_cap_is_k_times_the_lookbacks_realized_volatility(ctx, bank):

@@ -66,6 +66,7 @@ class FakeBank:
             self.cap_hits = {h: hit if n == 0 else 0 for n, h in enumerate(ctx.menu.holdings)}
             days = PATHS * C.HORIZON
             self.cap_hit_share = {h: count / days for h, count in self.cap_hits.items()}
+            self.start_capped = {h: bool(hit) and n == 0 for n, h in enumerate(ctx.menu.holdings)}
 
     def years(self, mixes: np.ndarray) -> np.ndarray:
         return self._draws @ np.atleast_2d(mixes).T

@@ -320,6 +320,7 @@ def test_garch_cap_hits_are_recorded_for_every_training_bank(
         assert entry["k"] == C.GARCH_VOL_CAP
         assert entry["hits"] == {"A": fakes.CAP_HITS, "B": 0, "C": 0, "D": 0}
         assert entry["share"] == {h: n / days for h, n in entry["hits"].items()}
+        assert entry["start_capped"] == {"A": True, "B": False, "C": False, "D": False}
     assert driver.run_task(inputs, full_spec(inputs), hooks()).garch_cap_hits == []  # replay
 
 

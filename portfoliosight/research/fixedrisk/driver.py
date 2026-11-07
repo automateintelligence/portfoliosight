@@ -478,7 +478,8 @@ def record_cap_hits(
     found: list[dict[str, Any]], ctx: C.OriginContext, seed: int, bank: C.PathBank
 ) -> None:
     """Add a capped GARCH bank's volatility cap (`GarchBank.vol_cap`, `cap_hits`,
-    `cap_hit_share`) to `found`, once per bank: the hits differ by seed and lookback."""
+    `cap_hit_share`, `start_capped`) to `found`, once per bank: the hits differ by seed and
+    lookback."""
     k = getattr(bank, "vol_cap", None)
     if k is None:
         return
@@ -489,6 +490,7 @@ def record_cap_hits(
             "k": k,
             "hits": dict(bank.cap_hits),  # type: ignore[attr-defined]
             "share": dict(bank.cap_hit_share),  # type: ignore[attr-defined]
+            "start_capped": dict(getattr(bank, "start_capped", None) or {}),
         }
     )
 
