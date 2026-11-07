@@ -12,7 +12,8 @@ confirmatory test and the descriptive statistics, from the task files.
   two-sided 95% interval of theta_DD above 0 and the point estimate at least 1 pp (a relevance
   filter, not a tested claim); (B) the 5th bootstrap percentile of theta_Ret at or above -50 bp;
   labels pass / fail (drawdown) / fail (return) / fail (both) / inconclusive (a verdict-blocking
-  label on arm 1 or arm 3 at an eligible cell, §4.5); per-level estimates, the "pass, uneven
+  label on arm 1 or arm 3 at an eligible cell, §4.5, or a usable row there without a finite
+  realized return and drawdown); per-level estimates, the "pass, uneven
   across risk" flag, the point-estimate verdict, the relative drawdown change, the risk
   difference, a Newey-West (Bartlett, lag 12) interval on Delta_DD(o), and the verdict wording
   of §8.4;
@@ -49,6 +50,7 @@ FAIL_DD = "fail (drawdown)"
 FAIL_RET = "fail (return)"
 FAIL_BOTH = "fail (both)"
 INCONCLUSIVE = "inconclusive"
+MISSING_OUTCOME = "missing_outcome"  # a usable row at an eligible cell without ret_m or dd_m
 ENSEMBLE_OBJECTIVES = ("mu", "u1", "tdd", "h", "enlc", "enb")  # tdd and h enter negated
 ENSEMBLE_SIGN = {"mu": 1.0, "u1": 1.0, "tdd": -1.0, "h": -1.0, "enlc": 1.0, "enb": 1.0}
 ENSEMBLE_STEP = 0.25
@@ -159,6 +161,25 @@ def blocking_cells(
     return found
 
 
+def missing_outcomes(
+    grids: Mapping[str, Sequence[np.ndarray]],
+    months: Sequence[str],
+    mask: np.ndarray,
+    listed: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Eligible (month, r) cells (`mask` over `months`) where an arm's outcome grids are not all
+    finite and the cell is not already listed in `listed` (a missing or blocking row)."""
+    seen = {(c["arm"], c["month"], c["rf"]) for c in listed}
+    found = []
+    for arm, arm_grids in grids.items():
+        bad = ~np.logical_and.reduce([np.isfinite(g) for g in arm_grids])
+        for j, rf in enumerate(RFS):
+            for o, month in enumerate(months):
+                if mask[o] and bad[j, o] and (arm, month, rf) not in seen:
+                    found.append({"arm": arm, "month": month, "rf": rf, "status": MISSING_OUTCOME})
+    return found
+
+
 # ------------------------------------------------------------------------------ statistics
 
 
@@ -241,6 +262,9 @@ def confirmatory_test(
     a, b = _conditions(dd, ret90, primary)
     blocked = blocking_cells(
         _frame(rows.loc[rows["month"].isin(eligible)]), (comparator, candidate), eligible
+    )
+    blocked += missing_outcomes(
+        {comparator: (dd1, r1), candidate: (dd3, r3)}, months, mask, blocked
     )
     label = INCONCLUSIVE if blocked else _label(a, b)
 
@@ -339,7 +363,7 @@ def verdict_text(result: Mapping[str, Any]) -> str:
     if result["label"] == INCONCLUSIVE:
         return (
             f"Inconclusive: {len(result['blocking_cells'])} eligible cells of arm 1 or arm 3 carry "
-            f"a verdict-blocking label or are missing ({figures})."
+            f"a verdict-blocking label, are missing or lack a realized outcome ({figures})."
         )
     return f"{result['label'].capitalize()}: {figures}."
 

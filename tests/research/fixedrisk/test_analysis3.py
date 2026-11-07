@@ -109,6 +109,29 @@ def test_a_blocking_label_on_arm_1_is_inconclusive_and_usable_warnings_are_not()
     assert A.confirmatory_test(table, months, resamples=100)["label"] == A.PASS
 
 
+def test_a_missing_outcome_at_an_eligible_cell_is_inconclusive():
+    table, months = _table(_const(0.02), _const(0.0))
+    cell = (table["arm"] == C.MIN_TDD) & table["pooled"] & (table["month"] == months[5])
+    cell &= np.isclose(table["r_fraction"], C.RISK_FRACTIONS[2])
+    table.loc[cell, "ret_m"] = np.nan  # one arm-3 outcome of 360 cells
+    res = A.confirmatory_test(table, months, resamples=100)
+    assert res["label"] == A.INCONCLUSIVE
+    assert res["blocking_cells"] == [
+        {"arm": C.MIN_TDD, "month": months[5], "rf": round(C.RISK_FRACTIONS[2], 6),
+         "status": A.MISSING_OUTCOME}
+    ]  # fmt: skip
+    assert "Inconclusive: 1 eligible cells" in res["verdict_text"]
+
+
+def test_missing_outcomes_at_ineligible_origins_do_not_block():
+    table, months = _table(_const(0.02), _const(0.0))
+    late = table["month"].isin(months[:10])
+    table.loc[late, ["dd_m", "ret_m"]] = np.nan  # origins without a complete realized year
+    res = A.confirmatory_test(table, months, eligible=months[10:], resamples=100)
+    assert res["label"] == A.PASS and res["blocking_cells"] == []
+    assert res["eligible_origins"] == K - 10 and res["paired_cells"] == 6 * (K - 10)
+
+
 def test_uneven_across_risk_flag():
     d_dd = _const(0.03)
     d_dd[:3] = -0.001  # three levels go the wrong way, the pooled test still passes
