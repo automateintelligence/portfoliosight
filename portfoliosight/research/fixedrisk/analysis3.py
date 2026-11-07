@@ -23,7 +23,8 @@ confirmatory test and the descriptive statistics, from the task files.
 - `cscv_arms`: purged CSCV across the six arms on realized dd_m (§7.1, `omega = k/7`);
 - `regime_buckets`, `side_checks`, `independent_banks`, `run_facts`: the regime tables, the
   lambda and 5-year side checks, the independent-bank model figures and the job's state (§5, §8.4);
-- `ensemble_candidates`, `ensemble_picks`, `simplex_weights`: the exploratory screen of §7.3.
+- `ensemble_candidates`, `ensemble_picks`, `simplex_weights`: the exploratory screen of §7.3
+  (run end to end by `ensemble3`).
 """
 
 from __future__ import annotations
@@ -782,25 +783,3 @@ def analyze_job(
             "note": masks.pbo_note, "choice_shares": masks.choice_shares(list(arms)),
         }  # fmt: skip
     return result
-
-
-def ensemble_rows(picks: pd.DataFrame, pool: pd.DataFrame) -> pd.DataFrame:
-    """The screen's picks as selection-like rows (arm `ensemble_<combination>`, pooled, usable),
-    so `realized_outcomes` and `confirmatory_test(candidate=...)` score them against arm 1."""
-    by_record = pool.set_index("record")
-    rows = []
-    for pick in picks.to_dict("records"):
-        src = by_record.loc[int(pick["record"])]
-        rows.append(
-            {
-                "sel_id": f"{src['menu']}|{src['month']}|{src['engine']}|ensemble|"
-                f"{pick['lookback']}|{float(pick['r_fraction']):.6f}|{int(pick['combination'])}",
-                "kind": "main", "menu": src["menu"], "month": src["month"],
-                "origin": src["origin"], "engine": src["engine"], "lookback": pick["lookback"],
-                "r_fraction": float(pick["r_fraction"]), "lam": None,
-                "arm": f"ensemble_{int(pick['combination'])}", "pooled": True, "status": C.OK,
-                "weights": list(np.asarray(src["weights"], dtype=float)),
-                "sigma": float(src["sigma"]), "tdd": float(src["tdd"]),
-            }
-        )  # fmt: skip
-    return pd.DataFrame(rows)

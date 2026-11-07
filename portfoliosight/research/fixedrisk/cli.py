@@ -10,6 +10,9 @@
                [--sizing FILE] [--jobs research2003_replay ...]
     v3-sizing  --snapshot S --out-dir D --v2-job-dir J [--ledger-cache C] [--workers 6]
     v3-analyze --run-dir R --snapshot S --out FILE [--job research2003_replay]
+               [--ensemble-out FILE] [--skip-ensemble]
+    v3-ensemble --run-dir R --snapshot S [--job research2003_replay] [--analysis FILE]
+               [--ensemble-out FILE]
 
 Run with `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` (workers refuse otherwise).
 """
@@ -25,6 +28,7 @@ from pathlib import Path
 
 from portfoliosight.research.fixedrisk import contracts as C
 from portfoliosight.research.fixedrisk import data, driver, estimate, manifest
+from portfoliosight.research.fixedrisk import realized as R
 from portfoliosight.research.fixedrisk.menus import MENUS
 
 REPO = Path(__file__).resolve().parents[3]
@@ -188,22 +192,65 @@ def cmd_v3_sizing(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_v3_analyze(args: argparse.Namespace) -> int:
-    from portfoliosight.research.fixedrisk import analysis3, report
+def _v3_inputs(args: argparse.Namespace) -> tuple[dict, object, tuple]:
+    """The parent manifest, the snapshot's inputs (digest checked) and the realized callables."""
+    from portfoliosight.research.fixedrisk import report
 
     parent = manifest.read_parent(Path(args.run_dir))
     inputs = data.load_inputs(args.snapshot, ledger_cache=Path(args.run_dir) / "ledger_cache")
     if inputs.manifest_sha256 != parent["snapshot"]["manifest_sha256"]:
         raise SystemExit("the snapshot's digest is not the parent manifest's")
+    return parent, inputs, report.make_callables(inputs, data)
+
+
+def _v3_ensemble(
+    args: argparse.Namespace, parent: dict, horizon: R.HorizonFn, analysis: Path | None
+) -> dict:
+    """Run the §7.3 screen after the recorded analysis; write and record its outputs."""
+    from portfoliosight.research.fixedrisk import ensemble3
+
+    job_dir = Path(args.run_dir) / args.job
     job = parent["jobs"][args.job]
-    out = analysis3.analyze_job(
-        Path(args.run_dir) / args.job, parent, job["menu"], job["engine"], inputs,
-        report.make_callables(inputs, data),
+    if args.ensemble_out:
+        out = Path(args.ensemble_out)
+    else:
+        out = ensemble3.verified_entry(job_dir, "analysis", analysis).parent / "ensemble.json"
+    picks = out.with_name(out.stem + "_picks.parquet")
+    body = ensemble3.screen_job(
+        job_dir, parent, job["menu"], job["engine"], horizon,
+        analysis_path=analysis, picks_out=picks,
+        progress=lambda line: print(line, file=sys.stderr, flush=True),
     )  # fmt: skip
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.out).write_text(json.dumps(out, indent=2, default=str) + "\n")
-    print(json.dumps({"out": args.out, "label": out["confirmatory"]["label"],
-                      "verdict": out["confirmatory"]["verdict_text"]}))  # fmt: skip
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(body, indent=2, default=str) + "\n")
+    ensemble3.record_ensemble(job_dir, out)
+    return {"out": str(out), "picks": str(picks), "would_pass": len(body["would_pass"]),
+            "label": body["label"]}  # fmt: skip
+
+
+def cmd_v3_analyze(args: argparse.Namespace) -> int:
+    from portfoliosight.research.fixedrisk import analysis3, ensemble3
+
+    parent, inputs, callables = _v3_inputs(args)
+    job = parent["jobs"][args.job]
+    job_dir = Path(args.run_dir) / args.job
+    out = analysis3.analyze_job(job_dir, parent, job["menu"], job["engine"], inputs, callables)
+    path = Path(args.out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out, indent=2, default=str) + "\n")
+    ensemble3.record_analysis(job_dir, path)  # before any ensemble code reads an outcome (§7.3)
+    summary = {"out": args.out, "label": out["confirmatory"]["label"],
+               "verdict": out["confirmatory"]["verdict_text"]}  # fmt: skip
+    if not args.skip_ensemble:
+        summary["ensemble"] = _v3_ensemble(args, parent, callables[0], path)
+    print(json.dumps(summary))
+    return 0
+
+
+def cmd_v3_ensemble(args: argparse.Namespace) -> int:
+    parent, _, callables = _v3_inputs(args)
+    analysis = Path(args.analysis) if args.analysis else None
+    print(json.dumps(_v3_ensemble(args, parent, callables[0], analysis)))
     return 0
 
 
@@ -283,7 +330,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--snapshot", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--job", default="research2003_replay")
+    p.add_argument("--ensemble-out", help="the screen's JSON (default: ensemble.json beside --out)")
+    p.add_argument("--skip-ensemble", action="store_true", help="stop after the confirmatory file")
     p.set_defaults(func=cmd_v3_analyze)
+
+    p = sub.add_parser("v3-ensemble", help="the exploratory ensemble screen (protocol v3 §7.3)")
+    p.add_argument("--run-dir", required=True)
+    p.add_argument("--snapshot", required=True)
+    p.add_argument("--job", default="research2003_replay")
+    p.add_argument("--analysis", help="the recorded analysis file (default: the record's)")
+    p.add_argument("--ensemble-out", help="default: ensemble.json beside the analysis file")
+    p.set_defaults(func=cmd_v3_ensemble)
     return parser
 
 

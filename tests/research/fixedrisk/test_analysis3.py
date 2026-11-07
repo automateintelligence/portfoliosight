@@ -278,17 +278,6 @@ def test_dsr_arms_puts_arm_3_first_and_uses_the_disjoint_months():
     assert out["intervals"] == 10 and out["n"] == 10
 
 
-def test_ensemble_rows_score_against_arm_1():
-    pool = _pool_rows().assign(menu="research2003", month="2010-01", origin=None,
-                               engine="replay", sigma=0.1)  # fmt: skip
-    cand = A.ensemble_candidates(pool)
-    weights = np.zeros((1, 6))
-    weights[0, 1] = 1.0
-    rows = A.ensemble_rows(A.ensemble_picks(cand, weights), pool)
-    assert list(rows["arm"]) == ["ensemble_0"] and rows["weights"].iloc[0] == [0.6, 0.4]
-    assert rows["status"].iloc[0] == C.OK and bool(rows["pooled"].iloc[0])
-
-
 def test_eligible_origins_come_from_the_frozen_cscv_months():
     parent = {"menus": {"research2003": {"cscv": {"months": ["2010-01", "2010-02"]}}}}
     assert A.eligible_origins(parent, "research2003") == ["2010-01", "2010-02"]
