@@ -377,7 +377,10 @@ MAX_ENLC = "max_enlc"  # arm 5, eligible pool member with the highest ENLC
 ENB_KNEE = "enb_knee"  # arm 6, the app's Optimized point on the exact risk line
 V3_ARMS = (FRONTIER, U1_ARM, MIN_TDD, CRASH_PENALTY, MAX_ENLC, ENB_KNEE)
 V3_SEARCHED = (U1_ARM, MIN_TDD, CRASH_PENALTY)
-V3_GARCH_ARMS = (FRONTIER, U1_ARM, MIN_TDD)  # the GARCH confirmation (v3 §6.4, §11.11)
+# The GARCH confirmation (v3 §6.4, §11.11, review round 2): arms 1-3 are reported; arm 4 is still
+# searched, so arm 3's pool is built as under replay, and its selection recorded, not reported.
+V3_GARCH_ARMS = (FRONTIER, U1_ARM, MIN_TDD, CRASH_PENALTY)
+V3_GARCH_REPORTED = (FRONTIER, U1_ARM, MIN_TDD)
 APP_FRONTIER = "app_frontier"  # reference row: the app's frontier mix on the exact risk line
 
 # Bands (protocol amendment of 2026-11-07): arms 1 and 3 on the narrow band, arms 2, 4 and 5 on

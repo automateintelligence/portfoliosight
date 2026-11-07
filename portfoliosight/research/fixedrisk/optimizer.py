@@ -37,6 +37,7 @@ from __future__ import annotations
 import math
 import time
 import warnings
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -86,6 +87,46 @@ COBYLA_TOL = 1e-5
 CATOL = 1e-8
 INTERIOR = ("d25", "d50", "d75")
 INTERIOR_D: tuple[float, ...] = tuple(float(CELL_D[c] or 0.0) for c in INTERIOR)
+
+
+def cobyla_on_band(
+    geo: Geometry,
+    r: float,
+    tau: float,
+    x0: np.ndarray,
+    fun: Callable[[np.ndarray], float],
+    calls: int,
+    extra: Callable[[np.ndarray], Sequence[float]] | None = None,
+) -> tuple[np.ndarray, int]:
+    """v1's COBYLA on the risk band from `x0`: the last weight is the budget's remainder, the
+    bounds and `|sigma(w) / r|^2` in `[(1 - tau)^2, (1 + tau)^2]` (and `extra(w) >= 0`) are
+    inequality constraints; `fun` receives each iterate clipped to the bounds and renormalized
+    (`geo.normalize`). Returns the solver's last point (full weights, unnormalized) and its
+    function calls."""
+    lo, hi, cov, r2 = geo.lo, geo.hi, geo.cov, r**2
+    lo2, hi2 = (1.0 - tau) ** 2, (1.0 + tau) ** 2
+
+    def full(y: np.ndarray) -> np.ndarray:
+        return np.append(y, 1.0 - y.sum())
+
+    def cons(y: np.ndarray) -> np.ndarray:
+        w = full(y)
+        var = float(w @ cov @ w) / r2
+        parts = [w - lo, hi - w, [var - lo2, hi2 - var]]
+        if extra is not None:
+            parts.append(list(extra(w)))
+        return np.concatenate(parts)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = minimize(
+            lambda y: fun(geo.normalize(full(y))),
+            x0[:-1],
+            method="COBYLA",
+            constraints=[{"type": "ineq", "fun": cons}],
+            options={"maxiter": calls, "rhobeg": RHOBEG, "tol": COBYLA_TOL, "catol": CATOL},
+        )
+    return full(res.x), int(res.nfev)
 
 
 @dataclass(frozen=True)
@@ -337,41 +378,23 @@ class ColumnSearch:
 
     def _cobyla(self, cell: Cell, arm: str, x0: np.ndarray, run: ArmRun, calls: int):
         geo = self.geo
-        lo, hi, cov, r2 = geo.lo, geo.hi, geo.cov, self.r**2
-        lo2, hi2 = (1.0 - self.tau) ** 2, (1.0 + self.tau) ** 2
         span = self.span
 
-        def full(y: np.ndarray) -> np.ndarray:
-            return np.append(y, 1.0 - y.sum())
-
-        def fun(y: np.ndarray) -> float:
-            vid = self.visit(geo.normalize(full(y)))
+        def fun(w: np.ndarray) -> float:
+            vid = self.visit(w)
             run.visits.append(vid)
             btg = self.visits[vid].btg
             return PENALTY if btg is None else -arm_value(btg, arm)
 
-        def cons(y: np.ndarray) -> np.ndarray:
-            w = full(y)
-            var = float(w @ cov @ w) / r2
-            parts = [w - lo, hi - w, [var - lo2, hi2 - var]]
-            if cell.d is not None:
-                m = geo.measure(w)
-                parts.append(
-                    [(m - cell.target + cell.half) / span, (cell.target + cell.half - m) / span]
-                )
-            return np.concatenate(parts)
+        def extra(w: np.ndarray) -> list[float]:
+            if cell.d is None:
+                return []
+            m = geo.measure(w)
+            return [(m - cell.target + cell.half) / span, (cell.target + cell.half - m) / span]
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            res = minimize(
-                fun,
-                x0[:-1],
-                method="COBYLA",
-                constraints=[{"type": "ineq", "fun": cons}],
-                options={"maxiter": calls, "rhobeg": RHOBEG, "tol": COBYLA_TOL, "catol": CATOL},
-            )
-        run.iterations += int(res.nfev)
-        return full(res.x)
+        end, nfev = cobyla_on_band(geo, self.r, self.tau, x0, fun, calls, extra)
+        run.iterations += nfev
+        return end
 
     def run_arm(self, cell: Cell, arm: str, fixed: list[np.ndarray | None]) -> ArmRun:
         clock = time.perf_counter()

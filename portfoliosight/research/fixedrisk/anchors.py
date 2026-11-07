@@ -339,9 +339,18 @@ def _anchor_starts(geo: Geometry, r: float, tau: float, surrogate: np.ndarray | 
 
 
 def maximize_on_band(
-    geo: Geometry, r: float, tau: float, value, grad, starts: list[np.ndarray]
+    geo: Geometry,
+    r: float,
+    tau: float,
+    value,
+    grad,
+    starts: list[np.ndarray],
+    visited: list[np.ndarray] | None = None,
 ) -> tuple[np.ndarray | None, int]:
-    """Best feasible answer of `max value(w)` on the band from `starts`; total iterations."""
+    """Best feasible answer of `max value(w)` on the band from `starts`; total iterations.
+
+    `visited`, when given, receives every start and every end point (after normalization and,
+    when needed, projection onto the band), in order."""
     constraints = band_constraints(geo, r, tau)
     best, best_value, iterations = None, -np.inf, 0
     for x0 in starts:
@@ -353,6 +362,8 @@ def maximize_on_band(
             end = geo.project(end, r, tau)
         if end is not None:
             candidates.append(end)
+        if visited is not None:
+            visited.extend(candidates)
         for w in candidates:
             if geo.in_band(w, r, tau):
                 v = value(w)
