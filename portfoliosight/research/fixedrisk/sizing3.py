@@ -9,7 +9,8 @@ writes `<out_dir>/sizing.json`:
 
 - measured: seconds per evaluation of the full objective set, seconds per arm search, wall and
   CPU seconds per task, pool rows and bytes per task, peak memory per worker;
-- the solver check (§4.6): per column, the native arm 3 TDD of each budget; the 768-call solver
+- the solver check (§4.6): per column, the native arm 3 TDD of each budget, and each budget's
+  calls and starts per start (the check runs at the task's start count); the 768-call solver
   is accepted when its native TDD is within 0.1 pp of, or below, the 1,536-call one in at least
   34 of the 36 columns;
 - the projection: the scale factor is v3's search seconds per (origin, r, arm) at the showcase
@@ -103,11 +104,15 @@ def side_check_seconds(out: Any) -> float:
     return side + sum(phases.get(k, 0.0) for k in ("context_5y", "bank_5y", "knee_5y", "search_5y"))
 
 
-def solver_check(ctx: C.OriginContext, bank: C.PathBank, knee: Any, calls: int) -> list[dict]:
-    """Arm 3 alone at `calls` per start: its native TDD per column (the same starts as the run)."""
-    from portfoliosight.research.fixedrisk.search3 import search_origin_v3
+def solver_check(
+    ctx: C.OriginContext, bank: C.PathBank, knee: Any, calls: int, starts: int
+) -> list[dict]:
+    """Arm 3 alone at `calls` per start and the run's `starts`: its native TDD per column."""
+    from portfoliosight.research.fixedrisk import search3
 
-    res = search_origin_v3(ctx, bank, arms=(C.FRONTIER, C.MIN_TDD), calls=calls, knee=knee)
+    res = search3.search_origin_v3(
+        ctx, bank, arms=(C.FRONTIER, C.MIN_TDD), calls=calls, starts=starts, knee=knee
+    )
     out = []
     for s in res.selections:
         if s["arm"] == C.MIN_TDD and not s["pooled"]:
@@ -154,7 +159,7 @@ def sizing_task(payload: Mapping[str, Any]) -> dict[str, Any]:
             bank = hooks.make_bank(ctx, "replay", C.PRIMARY_SEED)
             geo = geometry(ctx)
             knee = knee_columns(ctx, {a: geo.x(a) for a in C.RISK_FRACTIONS})
-            check = solver_check(ctx, bank, knee, int(payload["check_calls"]))
+            check = solver_check(ctx, bank, knee, int(payload["check_calls"]), spec.starts)
             check_seconds = time.perf_counter() - t
         return {
             "month": spec.month,
@@ -168,6 +173,10 @@ def sizing_task(payload: Mapping[str, Any]) -> dict[str, Any]:
             "native_768": native768,
             "native_check": check,
             "check_seconds": check_seconds,
+            "budgets": {
+                "run": {"calls": spec.calls, "starts": spec.starts},
+                "check": {"calls": int(payload.get("check_calls") or 0), "starts": spec.starts},
+            },
             "labels": sorted({r["status"] for r in out.selections}),
         }
 
@@ -176,7 +185,11 @@ def sizing_task(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def check_verdict(tasks: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """§4.6: per column, native TDD at 768 calls within 0.1 pp of, or below, the check budget's."""
+    """§4.6: per column, native TDD at 768 calls within 0.1 pp of, or below, the check budget's;
+    with the two budgets (calls, starts), which every task must share."""
+    budgets = [t["budgets"] for t in tasks]
+    if any(b != budgets[0] for b in budgets):
+        raise ValueError(f"tasks ran the solver check at different budgets: {budgets}")
     columns = []
     for task in tasks:
         base = {round(r["r_fraction"], 6): r["tdd"] for r in task["native_768"]}
@@ -189,6 +202,7 @@ def check_verdict(tasks: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                             "tdd_check": tcheck, "ok": ok})  # fmt: skip
     passed = sum(c["ok"] for c in columns)
     return {
+        "budgets": budgets[0] if budgets else None,
         "columns": columns,
         "passed": passed,
         "total": len(columns),

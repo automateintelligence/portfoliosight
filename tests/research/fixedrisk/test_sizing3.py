@@ -38,9 +38,13 @@ def test_v3_search_seconds_counts_one_row_per_column_and_arm():
     assert S.v3_search_seconds(rows) == pytest.approx(11.5)
 
 
-def _task(month, tdd768, tddcheck):
+BUDGETS = {"run": {"calls": 768, "starts": 3}, "check": {"calls": 1536, "starts": 3}}
+
+
+def _task(month, tdd768, tddcheck, budgets=BUDGETS):
     return {
         "month": month,
+        "budgets": budgets,
         "native_768": [{"r_fraction": a, "tdd": t} for a, t in zip(C.RISK_FRACTIONS, tdd768,
                                                                     strict=True)],
         "native_check": [{"r_fraction": a, "tdd": t} for a, t in zip(C.RISK_FRACTIONS, tddcheck,
@@ -55,8 +59,16 @@ def test_solver_check_accepts_at_34_of_36():
     tasks.append(_task("m5", [0.2015, 0.2015, 0.2009, 0.19, 0.2, 0.2], [0.2] * 6))
     verdict = S.check_verdict(tasks)
     assert (verdict["passed"], verdict["total"], verdict["accepted"]) == (34, 36, True)
+    assert verdict["budgets"] == BUDGETS
     tasks[0] = _task("m0", [0.21] + [0.2] * 5, [0.2] * 6)
     assert not S.check_verdict(tasks)["accepted"]
+
+
+def test_solver_check_rejects_tasks_run_at_different_budgets():
+    other = {"run": {"calls": 768, "starts": 2}, "check": {"calls": 1536, "starts": 2}}
+    tasks = [_task("m0", [0.2] * 6, [0.2] * 6), _task("m1", [0.2] * 6, [0.2] * 6, other)]
+    with pytest.raises(ValueError, match="budgets"):
+        S.check_verdict(tasks)
 
 
 def _projection(v3_search, v2_task, side=0.0, workers=10):
@@ -98,12 +110,22 @@ def test_sizing_task_runs_a_task_and_the_solver_check(tmp_path, monkeypatch):
 
     inputs = fakes.synthetic_inputs()
     monkeypatch.setattr(data, "load_inputs", lambda *a, **k: inputs)
+    from portfoliosight.research.fixedrisk import search3
+
     month = data.schedule(inputs, fakes.ALPHA)[-2]
+    seen = []
+    original = search3.search_origin_v3
+
+    def spy(*args, **kwargs):
+        seen.append({k: kwargs.get(k) for k in ("calls", "starts")})
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(search3, "search_origin_v3", spy)
     payload = {
         "snapshot": "/snap", "tasks_dir": str(tmp_path / "tasks"), "digest": "sizing",
         "check_calls": 8,
         "spec": dict(menu="research2003", month=month, engine="replay", protocol=3, calls=4,
-                     evaluate=False),
+                     starts=2, evaluate=False),
     }  # fmt: skip
     out = S.sizing_task(payload)
     assert out["month"] == month and out["peak_rss_bytes"] > 0
@@ -113,3 +135,7 @@ def test_sizing_task_runs_a_task_and_the_solver_check(tmp_path, monkeypatch):
     assert (tmp_path / "tasks" / f"research2003_{month}_replay.parquet").is_file()
     verdict = S.check_verdict([out])
     assert verdict["total"] == 6 and not verdict["accepted"]  # 36 columns are needed
+    # the check runs at the task's start count, and both budgets are recorded
+    assert seen[-1] == {"calls": 8, "starts": 2} and {c["starts"] for c in seen} == {2}
+    budgets = {"run": {"calls": 4, "starts": 2}, "check": {"calls": 8, "starts": 2}}
+    assert out["budgets"] == verdict["budgets"] == budgets
