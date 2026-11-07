@@ -6,6 +6,8 @@ out each mix is, and move one risk slider and one diversification slider. Educat
 math, not investment advice. The site is in **private preview** for now. 
 Spec: `docs/specs/2026-10-13-portfoliosight-demo-design.md`. What comes next: `ROADMAP.md`.
 
+<img width="1876" height="888" alt="image" src="https://github.com/user-attachments/assets/36278b12-a1eb-4f6d-aad8-f1424887ad1d" />
+
 ## Layout
 
 ```
