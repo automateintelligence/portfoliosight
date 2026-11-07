@@ -13,6 +13,8 @@
                [--ensemble-out FILE] [--skip-ensemble]
     v3-ensemble --run-dir R --snapshot S [--job research2003_replay] [--analysis FILE]
                [--ensemble-out FILE]
+    v3-report  --run-dir R --snapshot S --out FILE [--job research2003_replay]
+               [--analysis FILE] [--ensemble FILE] [--allow-partial]
 
 Run with `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` (workers refuse otherwise).
 """
@@ -254,6 +256,28 @@ def cmd_v3_ensemble(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_v3_report(args: argparse.Namespace) -> int:
+    from portfoliosight.research.fixedrisk import report3
+
+    parent = manifest.read_parent(Path(args.run_dir))
+    inputs = data.load_inputs(args.snapshot, ledger_cache=Path(args.run_dir) / "ledger_cache")
+    if inputs.manifest_sha256 != parent["snapshot"]["manifest_sha256"]:
+        raise SystemExit("the snapshot's digest is not the parent manifest's")
+    try:
+        text = report3.run_report(
+            Path(args.run_dir), parent=parent, job=args.job,
+            analysis_path=Path(args.analysis) if args.analysis else None,
+            ensemble_path=Path(args.ensemble) if args.ensemble else None,
+            allow_partial=args.allow_partial,
+        )  # fmt: skip
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out).write_text(text)
+    print(json.dumps({"out": args.out, "interim": text.startswith("# INTERIM")}))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fixedrisk", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -341,6 +365,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--analysis", help="the recorded analysis file (default: the record's)")
     p.add_argument("--ensemble-out", help="default: ensemble.json beside the analysis file")
     p.set_defaults(func=cmd_v3_ensemble)
+
+    p = sub.add_parser("v3-report", help="the v3 Markdown report (protocol v3 §8.4)")
+    p.add_argument("--run-dir", required=True)
+    p.add_argument("--snapshot", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--job", default="research2003_replay")
+    p.add_argument("--analysis", help="the recorded analysis file (default: the record's)")
+    p.add_argument("--ensemble", help="the recorded ensemble file (default: the record's)")
+    p.add_argument("--allow-partial", action="store_true",
+                   help="write a labelled interim report of an incomplete job")  # fmt: skip
+    p.set_defaults(func=cmd_v3_report)
     return parser
 
 
