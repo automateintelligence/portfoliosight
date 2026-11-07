@@ -315,8 +315,13 @@ def confirmatory_test(
         "label": label,
         "blocking_cells": blocked,
         "point_estimate_verdict": (
-            PASS if (dd.value or -1) >= DD_LINE and (ret95.value or -1) >= RET_LINE else "fail"
-        ),  # fmt: skip
+            PASS
+            if dd.value is not None
+            and dd.value >= DD_LINE
+            and ret95.value is not None
+            and ret95.value >= RET_LINE
+            else "fail"
+        ),
         "uneven_across_risk": bool(label == PASS and wrong >= 3),
         "per_level": per_level,
         "sensitivities": sensitivities,

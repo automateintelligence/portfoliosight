@@ -132,6 +132,13 @@ def test_missing_outcomes_at_ineligible_origins_do_not_block():
     assert res["eligible_origins"] == K - 10 and res["paired_cells"] == 6 * (K - 10)
 
 
+def test_point_estimate_verdict_counts_a_zero_return_difference():
+    table, months = _table(_const(0.02), _const(0.0))
+    res = A.confirmatory_test(table, months, resamples=100)
+    assert res["theta_ret"]["value"] == pytest.approx(0.0)
+    assert res["point_estimate_verdict"] == A.PASS
+
+
 def test_uneven_across_risk_flag():
     d_dd = _const(0.03)
     d_dd[:3] = -0.001  # three levels go the wrong way, the pooled test still passes
