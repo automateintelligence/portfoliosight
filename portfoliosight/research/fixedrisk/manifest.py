@@ -165,6 +165,7 @@ def run_settings() -> dict[str, Any]:
         "paths": C.PATHS,
         "horizon": C.HORIZON,
         "lookback": C.LOOKBACK,
+        "garch_vol_cap": C.GARCH_VOL_CAP,
         "sensitivity_lookback": C.SENSITIVITY_LOOKBACK,
         "risk_fractions": list(C.RISK_FRACTIONS),
         "cells": list(C.CELLS),

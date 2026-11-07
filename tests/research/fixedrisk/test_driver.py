@@ -33,6 +33,7 @@ def reset_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fakes, "FAIL_MONTH", None)
     monkeypatch.setattr(fakes, "FIT_FAIL_MONTH", None)
     monkeypatch.setattr(fakes, "FALLBACK_MONTH", None)
+    monkeypatch.setattr(fakes, "CAP_HIT_MONTH", None)
     monkeypatch.setattr(fakes, "NOT_FOUND_CELL", None)
     monkeypatch.setattr(fakes, "SLEEP", 0.0)
     for name in ("FAKE_FAIL_MONTH", "FAKE_FIT_FAIL_MONTH", "FAKE_SLEEP"):
@@ -300,6 +301,67 @@ def test_a_garch_fallback_is_logged_and_in_the_task_file(
     assert driver.FALLBACKS_KEY not in other
     assert json.loads(other[driver.WINDOWS_KEY]) == {"X": "10y", "Y": "10y", "Z": "10y"}
     assert f"task tsp_{specs[1].month}_garch garch_windows" not in log
+
+
+def test_garch_cap_hits_are_recorded_for_every_training_bank(
+    inputs: data.ResearchInputs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = full_spec(inputs, "garch")
+    monkeypatch.setattr(fakes, "CAP_HIT_MONTH", spec.month)
+    out = driver.run_task(inputs, spec, hooks())
+    banks = [
+        ("3y", C.PRIMARY_SEED),
+        *(("3y", s) for s in C.STABILITY_SEEDS),
+        ("5y", C.PRIMARY_SEED),
+    ]
+    assert [(e["lookback"], e["seed"]) for e in out.garch_cap_hits] == banks
+    days = fakes.PATHS * C.HORIZON
+    for entry in out.garch_cap_hits:
+        assert entry["k"] == C.GARCH_VOL_CAP
+        assert entry["hits"] == {"A": fakes.CAP_HITS, "B": 0, "C": 0, "D": 0}
+        assert entry["share"] == {h: n / days for h, n in entry["hits"].items()}
+    assert driver.run_task(inputs, full_spec(inputs), hooks()).garch_cap_hits == []  # replay
+
+
+def test_garch_cap_hits_are_logged_and_in_the_task_file(
+    inputs: data.ResearchInputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = make_parent(inputs, tmp_path)
+    month = parent["menus"]["tsp"]["schedule"][2]
+    monkeypatch.setattr(fakes, "CAP_HIT_MONTH", month)
+    result = driver.run_job(
+        tmp_path, "tsp", "garch", workers=0, hooks=HOOKS, snapshot_dir="/snap", poll=0.0
+    )
+    assert result.status == "complete" and result.tasks_failed == 0
+    tasks = tmp_path / "tsp_garch" / "tasks"
+    specs = driver.job_tasks(parent, "tsp", "garch")
+    meta = pq.read_schema(driver.task_paths(tasks, specs[2])["selections"]).metadata
+    first, *_ = json.loads(meta[driver.CAP_HITS_KEY])
+    assert (first["lookback"], first["seed"], first["k"]) == ("3y", C.PRIMARY_SEED, 3.0)
+    assert first["hits"] == {"X": fakes.CAP_HITS, "Y": 0, "Z": 0}
+    log = (tmp_path / "tsp_garch" / "progress.log").read_text()
+    assert f'task tsp_{month}_garch garch_cap_hits: {{"lookback": "3y", "seed": ' in log
+    other = pq.read_schema(driver.task_paths(tasks, specs[1])["selections"]).metadata
+    assert {e["hits"]["X"] for e in json.loads(other[driver.CAP_HITS_KEY])} == {0}
+    assert f"task tsp_{specs[1].month}_garch garch_cap_hits" not in log  # no hit, no line
+
+
+def test_the_garch_volatility_cap_is_a_run_setting(
+    inputs: data.ResearchInputs, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert manifest.run_settings()["garch_vol_cap"] == C.GARCH_VOL_CAP == 3.0
+    parent = make_parent(inputs, tmp_path)
+    assert parent["settings"]["garch_vol_cap"] == 3.0
+    monkeypatch.setattr(C, "GARCH_VOL_CAP", 5.0)
+    assert "settings differ from the parent's: ['garch_vol_cap']" in manifest.code_mismatches(
+        parent, hooks=HOOKS
+    )
+    monkeypatch.setattr(C, "GARCH_VOL_CAP", None)  # a bank built without the cap
+    assert manifest.build_parent(
+        inputs, snapshot_dir=Path("/snap"), solvers=SOLVERS,
+        placement=dict(manifest.PROTOCOL_PLACEMENT), projections=dict(manifest.PROTOCOL_PROJECTION),
+        hooks=HOOKS,
+    )["digest"] != parent["digest"]  # fmt: skip
 
 
 # ------------------------------------------------------------------------------- files

@@ -19,7 +19,10 @@ A holding that fits on neither GARCH dynamics window and that the bank holds at 
 volatility (protocol amendment 1, revised) leaves its rows as they are: the task summary counts it
 (`garch_fallback`), the progress log names it, and the selections file's schema metadata lists it
 (`garch_fallbacks`). The metadata also names each holding's dynamics window (`garch_windows`:
-10y, 3y or fallback); the progress log repeats it when some holding is not on 10 years.
+10y, 3y or fallback); the progress log repeats it when some holding is not on 10 years. Each
+training bank's volatility cap (ADR 0006) is recorded there too (`garch_cap_hits`: per bank its
+lookback, seed and `k`, and per holding the path-days on which the cap bound and their share); the
+progress log repeats a bank's entry when the cap bound on some path-day.
 
 A task runs under a wall alarm of the per-arm ceiling (600 s) times its arm-cells; a task that
 rings it, or holds a selection slower than 600 s, writes `<job>/breaches/<base>.json` and no task
@@ -71,6 +74,7 @@ KINDS = ("main", "stability", "showcase", "sens_tau", "sens_5y", "sens_endpoints
 DIGEST_KEY = b"parent_digest"
 FALLBACKS_KEY = b"garch_fallbacks"
 WINDOWS_KEY = b"garch_windows"
+CAP_HITS_KEY = b"garch_cap_hits"
 COMPARATOR_ARMS = ("F", "BS")
 
 SELECTION_SCHEMA = pa.schema(
@@ -238,6 +242,8 @@ class TaskOutput:
     # GARCH holdings held at constant volatility after a failed fit, once per (lookback, holding)
     garch_fallbacks: list[dict[str, Any]] = field(default_factory=list)
     garch_windows: dict[str, str] = field(default_factory=dict)  # holding -> dynamics window
+    # each training GARCH bank's volatility cap: lookback, seed, k, capped path-days per holding
+    garch_cap_hits: list[dict[str, Any]] = field(default_factory=list)
 
 
 def job_tasks(parent: dict[str, Any], menu: str, engine: str) -> list[TaskSpec]:
@@ -468,6 +474,25 @@ def record_fallbacks(found: list[dict[str, Any]], ctx: C.OriginContext, bank: C.
             found.append({"lookback": ctx.lookback, "holding": holding, "reason": reason})
 
 
+def record_cap_hits(
+    found: list[dict[str, Any]], ctx: C.OriginContext, seed: int, bank: C.PathBank
+) -> None:
+    """Add a capped GARCH bank's volatility cap (`GarchBank.vol_cap`, `cap_hits`,
+    `cap_hit_share`) to `found`, once per bank: the hits differ by seed and lookback."""
+    k = getattr(bank, "vol_cap", None)
+    if k is None:
+        return
+    found.append(
+        {
+            "lookback": ctx.lookback,
+            "seed": seed,
+            "k": k,
+            "hits": dict(bank.cap_hits),  # type: ignore[attr-defined]
+            "share": dict(bank.cap_hit_share),  # type: ignore[attr-defined]
+        }
+    )
+
+
 def run_task(
     inputs: data.ResearchInputs,
     spec: TaskSpec,
@@ -499,6 +524,7 @@ def run_task(
             )
             return None
         record_fallbacks(col.out.garch_fallbacks, ctx, built)
+        record_cap_hits(col.out.garch_cap_hits, ctx, seed, built)
         if not col.out.garch_windows:  # the same at every seed and lookback of the origin
             col.out.garch_windows = dict(getattr(built, "windows", None) or {})
         return built
@@ -617,6 +643,8 @@ def write_task(tasks_dir: Path, spec: TaskSpec, out: TaskOutput, digest: str) ->
         extra[FALLBACKS_KEY] = json.dumps(out.garch_fallbacks).encode()
     if out.garch_windows:
         extra[WINDOWS_KEY] = json.dumps(out.garch_windows).encode()
+    if out.garch_cap_hits:
+        extra[CAP_HITS_KEY] = json.dumps(out.garch_cap_hits).encode()
     # last: the marker
     _write_table(paths["selections"], out.selections, SELECTION_SCHEMA, digest, extra)
 
@@ -741,6 +769,7 @@ def execute(state: WorkerState, payload: tuple[Any, ...]) -> dict[str, Any]:
                     fit_failures=out.fit_failures,
                     garch_fallbacks=out.garch_fallbacks,
                     garch_windows=out.garch_windows,
+                    garch_cap_hits=out.garch_cap_hits,
                     evaluated=len(out.evaluated),
                     max_selection_seconds=seconds,
                     phases=out.phases,
@@ -1129,6 +1158,9 @@ def run_job(
             windows = summary.get("garch_windows") or {}
             if any(window != "10y" for window in windows.values()):
                 log.line(f"task {summary['task']} garch_windows: {json.dumps(windows)}")
+            for item in summary.get("garch_cap_hits") or []:
+                if any(item["hits"].values()):
+                    log.line(f"task {summary['task']} garch_cap_hits: {json.dumps(item)}")
             write_manifest("running")
             found = summary.get("breach")
             if found:  # recorded by the worker; the task wrote no files and is not done

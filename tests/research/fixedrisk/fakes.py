@@ -5,7 +5,9 @@ The module doubles as a `--hooks` module for spawned workers: it defines `make_b
 `FAIL_MONTH` (or the environment variable `FAKE_FAIL_MONTH`) makes a search raise at that month;
 `FIT_FAIL_MONTH` (or `FAKE_FIT_FAIL_MONTH`) makes a GARCH bank raise the real `GarchFitFailed` at
 that month (3-year lookback only); `FALLBACK_MONTH` makes a GARCH bank at that month hold its
-first holding at constant volatility (`GarchBank.fallbacks`, `GarchBank.windows`); `NOT_FOUND_CELL`
+first holding at constant volatility (`GarchBank.fallbacks`, `GarchBank.windows`); every GARCH
+bank carries the volatility cap's fields (`GarchBank.vol_cap`, `cap_hits`, `cap_hit_share`), and
+`CAP_HIT_MONTH` gives its first holding `CAP_HITS` capped path-days that month; `NOT_FOUND_CELL`
 reports that cell's arms as `not_found` rows;
 `SLEEP` (or `FAKE_SLEEP`) seconds are spent in each search.
 """
@@ -31,6 +33,8 @@ CALLS: list[dict] = []
 FAIL_MONTH: str | None = None
 FIT_FAIL_MONTH: str | None = None
 FALLBACK_MONTH: str | None = None
+CAP_HIT_MONTH: str | None = None
+CAP_HITS = 756
 NOT_FOUND_CELL: str | None = None
 SLEEP: float = 0.0
 
@@ -57,6 +61,11 @@ class FakeBank:
             self.windows = {
                 h: "fallback" if h in self.fallbacks else "10y" for h in ctx.menu.holdings
             }
+            self.vol_cap = C.GARCH_VOL_CAP
+            hit = CAP_HITS if ctx.month == CAP_HIT_MONTH else 0
+            self.cap_hits = {h: hit if n == 0 else 0 for n, h in enumerate(ctx.menu.holdings)}
+            days = PATHS * C.HORIZON
+            self.cap_hit_share = {h: count / days for h, count in self.cap_hits.items()}
 
     def years(self, mixes: np.ndarray) -> np.ndarray:
         return self._draws @ np.atleast_2d(mixes).T
