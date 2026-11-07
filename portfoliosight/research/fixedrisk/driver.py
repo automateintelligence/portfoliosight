@@ -226,6 +226,10 @@ class TaskSpec:
     stability: bool = False
     showcase: bool = False
     lookback5: bool = False
+    protocol: int = 2  # 3: the v3 task (driver3.run_task)
+    calls: int = 768  # v3: COBYLA calls per start
+    starts: int = C.V3_STARTS  # v3: starts per searched arm
+    evaluate: bool = True  # v3: score the locked selections on the independent banks
 
     @property
     def base(self) -> str:
@@ -250,6 +254,22 @@ def job_tasks(parent: dict[str, Any], menu: str, engine: str) -> list[TaskSpec]:
     facts = parent["menus"][menu]
     stability, showcase = set(facts["stability_months"]), set(facts["showcase_months"])
     five = set(facts["lookback5_months"])
+    if manifest.is_v3(parent):
+        settings = parent["settings"]
+        return [
+            TaskSpec(
+                menu,
+                month,
+                engine,
+                False,
+                month in showcase,
+                month in five,
+                protocol=3,
+                calls=int(settings["calls"]),
+                starts=int(settings["starts"]),
+            )  # fmt: skip
+            for month in facts["schedule"]
+        ]
     return [
         TaskSpec(menu, month, engine, month in stability, month in showcase, month in five)
         for month in facts["schedule"]
@@ -739,18 +759,25 @@ def execute(state: WorkerState, payload: tuple[Any, ...]) -> dict[str, Any]:
     arm_seconds = float(rest[0]) if rest else math.inf
     started, cpu = time.perf_counter(), time.process_time()
     summary: dict[str, Any] = {"task": spec.base, "pid": os.getpid(), "ok": False}
-    ceiling = arm_seconds * task_arm_cells(spec)
+    v3 = getattr(spec, "protocol", 2) == 3
+    if v3:
+        from portfoliosight.research.fixedrisk import driver3
+    cells = driver3.searches_per_task(spec) if v3 else task_arm_cells(spec)
+    ceiling = arm_seconds * cells
     breach: dict[str, Any] | None = None
     try:
         try:
             with runner.arm_alarm(ceiling):
-                out = run_task(state.inputs, spec, state.hooks)
+                if v3:
+                    out = driver3.run_task(state.inputs, spec, state.hooks)
+                else:
+                    out = run_task(state.inputs, spec, state.hooks)
         except runner.ArmTimeLimit:
             breach = {
                 "rule": "arm_seconds",
                 "limit": ceiling,
                 "value": time.perf_counter() - started,
-                "detail": f"task wall alarm: {task_arm_cells(spec)} arm-cells x {arm_seconds} s",
+                "detail": f"task wall alarm: {cells} arm-cells x {arm_seconds} s",
             }
         else:
             slowest = max(out.selections, key=lambda row: row["seconds"], default=None)
@@ -763,7 +790,11 @@ def execute(state: WorkerState, payload: tuple[Any, ...]) -> dict[str, Any]:
                     "detail": f"selection {slowest['sel_id']}" if slowest else "",
                 }
             else:
-                write_task(Path(tasks_dir), spec, out, digest)
+                if v3:
+                    summary["timings"] = driver3.write_task(Path(tasks_dir), spec, out, digest)
+                    summary["pool_rows"] = len(out.pool)
+                else:
+                    write_task(Path(tasks_dir), spec, out, digest)
                 summary.update(
                     ok=True,
                     selections=len(out.selections),

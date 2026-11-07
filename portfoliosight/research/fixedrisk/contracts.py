@@ -364,7 +364,7 @@ class SearchOrigin(Protocol):
 # --------------------------------------------------------------------------- protocol v3
 
 V3_PROTOCOL_PATH = "docs/plans/2026-11-07-fixed-risk-experiment-v3-protocol.md"
-V3_PROTOCOL_REVISION = 1
+V3_PROTOCOL_REVISION = 4
 V3_MENU = "research2003"
 
 # The six arms (v3 §2.2), in report order. Arms 1 and 6 use only mu_s and Sigma; arms 2-4 are

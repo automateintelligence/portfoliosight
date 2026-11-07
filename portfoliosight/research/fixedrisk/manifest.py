@@ -256,15 +256,21 @@ def code_mismatches(
                 f"code is at commit {head}, the parent manifest records {recorded}"
                 + (f"; changed outside the allowed paths: {outside}" if outside else "")
             )
-    if parent["protocol"]["revision"] != C.PROTOCOL_REVISION:
+    if is_v3(parent):
+        problems += v3_mismatches(parent)
+    elif parent["protocol"]["revision"] != C.PROTOCOL_REVISION:
         problems.append(
             f"protocol revision {C.PROTOCOL_REVISION} in the code, "
             f"{parent['protocol']['revision']} in the parent"
         )
     for name, current in (
-        ("settings", run_settings()),
-        ("seeds", run_seeds()),
-        ("ceilings", run_ceilings()),
+        ()
+        if is_v3(parent)
+        else (
+            ("settings", run_settings()),
+            ("seeds", run_seeds()),
+            ("ceilings", run_ceilings()),
+        )
     ):
         if parent.get(name) != current:
             changed = sorted(
@@ -433,3 +439,160 @@ def job_manifest(
         "started_utc": started_utc or utc(),
         "updated_utc": utc(),
     }
+
+
+# ------------------------------------------------------------------------- protocol v3
+
+V3_KIND = "fixed_risk_parent_v3"
+V3_SCHEMA_VERSION = 3
+V3_WORKERS = 10  # v3 §8.2
+V3_RSS_CEILING = 24 * 2**30  # aggregate memory ceiling, v3 §8.2
+V3_JOBS = ("research2003_replay",)  # the confirmations are appended as amendments (v3 §6.4)
+
+
+def is_v3(parent: Mapping[str, Any]) -> bool:
+    return parent.get("kind") == V3_KIND
+
+
+def run_settings_v3(calls: int = 768, starts: int = C.V3_STARTS) -> dict[str, Any]:
+    """The v3 settings of the running code; `calls` and `starts` are the resource items the
+    sizing run may change (v3 §8.1), everything else is fixed by the code."""
+    from portfoliosight.engine import ladder
+    from portfoliosight.engine.optimize import NX
+
+    return {
+        "paths": C.PATHS,
+        "horizon": C.HORIZON,
+        "lookback": C.LOOKBACK,
+        "sensitivity_lookback": C.SENSITIVITY_LOOKBACK,
+        "risk_fractions": list(C.RISK_FRACTIONS),
+        "arms": list(C.V3_ARMS),
+        "searched_arms": list(C.V3_SEARCHED),
+        "garch_arms": list(C.V3_GARCH_ARMS),
+        "garch_reported_arms": list(C.V3_GARCH_REPORTED),
+        "arm_tau": dict(C.ARM_TAU),
+        "tau_narrow": C.TAU_NARROW,
+        "tau_wide": C.TAU_WIDE,
+        "tail_paths": C.TAIL_PATHS,
+        "u_arms": {name: list(triple) for name, triple in C.ARMS.items()},
+        "lambda": C.LAMBDA,
+        "lambda_side": list(C.LAMBDA_SIDE),
+        "enlc_return_tol": C.ENLC_RETURN_TOL,
+        "solver": C.V3_SOLVER,
+        "calls": int(calls),
+        "starts": int(starts),
+        "check_calls": C.V3_CHECK_CALLS,
+        "sobol_points": C.SOBOL_POINTS,
+        "knee_app_columns": NX,
+        "knee_levels": ladder.LEVELS,
+        "knee_random_starts": ladder.RANDOM_STARTS,
+        "knee_seed": ladder.SEED,
+        "garch_vol_cap": C.GARCH_VOL_CAP,
+        "multi_years": list(C.V3_MULTI_YEARS),
+        "usable_labels": list(C.V3_USABLE),
+    }
+
+
+def run_seeds_v3() -> dict[str, Any]:
+    return {
+        "primary": C.PRIMARY_SEED,
+        "test": list(C.TEST_SEEDS),
+        "bootstrap": 20261201,
+    }
+
+
+def build_parent_v3(
+    inputs: data.ResearchInputs,
+    *,
+    snapshot_dir: Path,
+    cpu_hours: float,
+    jobs: Sequence[str] = V3_JOBS,
+    calls: int = 768,
+    starts: int = C.V3_STARTS,
+    workers: int = V3_WORKERS,
+    only_months: Sequence[str] | None = None,
+    sizing: Mapping[str, Any] | None = None,
+    repo: Path = REPO,
+    hooks: str | None = None,
+) -> dict[str, Any]:
+    """The v3 parent manifest (v3 §8.3): protocol path and SHA-256, snapshot digest, schedule,
+    seeds, solver and budget, side-check settings, CSCV masks, job budgets, git HEAD.
+
+    `only_months` restricts every menu's schedule (a smoke run; recorded as `smoke`); `sizing`
+    records the sizing run's projection and decision."""
+    menus = {}
+    for key in jobs:
+        menu = key.rsplit("_", 1)[0]
+        if menu not in menus:
+            facts = menu_facts(inputs, inputs.menu(menu))
+            if only_months is not None:
+                keep = set(only_months)
+                for name in ("schedule", "showcase_months", "stability_months", "lookback5_months"):
+                    facts[name] = [m for m in facts[name] if m in keep]
+                facts["origins"] = len(facts["schedule"])
+            menus[menu] = facts
+    protocol = repo / C.V3_PROTOCOL_PATH
+    share = cpu_hours / len(jobs)
+    body: dict[str, Any] = {
+        "schema_version": V3_SCHEMA_VERSION,
+        "kind": V3_KIND,
+        "protocol": {
+            "path": C.V3_PROTOCOL_PATH,
+            "revision": C.V3_PROTOCOL_REVISION,
+            "sha256": file_sha256(protocol) if protocol.is_file() else None,
+        },
+        "snapshot": {
+            "path": str(inputs.root) if inputs.root else str(snapshot_dir),
+            "manifest_sha256": inputs.manifest_sha256,
+            "d_star": inputs.d_star.isoformat(),
+        },
+        "menus": menus,
+        "engines": {engine: {"solver": C.V3_SOLVER} for engine in C.ENGINES},
+        "settings": run_settings_v3(calls, starts),
+        "seeds": run_seeds_v3(),
+        "jobs": {
+            key: {
+                "menu": key.rsplit("_", 1)[0],
+                "engine": key.rsplit("_", 1)[1],
+                "host": "local",
+                "cpu_hours_budget": share,
+            }
+            for key in jobs
+        },
+        "ceilings": {
+            "workers_per_host": int(workers),
+            "rss_bytes_per_host": V3_RSS_CEILING,
+            "arm_seconds": ARM_SECONDS,
+            "cpu_hours_total": float(cpu_hours),
+            "one_job_at_a_time_per_host": True,
+            "stop_on_breach": True,
+        },
+        "smoke": only_months is not None,
+        "sizing": dict(sizing) if sizing else None,
+        "hooks": hooks,
+        "git_head": git_head(repo),
+    }
+    body["digest"] = body_digest(body)
+    return {**body, "created_utc": utc()}
+
+
+def v3_mismatches(parent: Mapping[str, Any]) -> list[str]:
+    """Why a v3 parent's settings are not the running code's (empty when they are)."""
+    problems = []
+    if parent["protocol"]["revision"] != C.V3_PROTOCOL_REVISION:
+        problems.append(
+            f"protocol revision {C.V3_PROTOCOL_REVISION} in the code, "
+            f"{parent['protocol']['revision']} in the parent"
+        )
+    recorded = parent.get("settings") or {}
+    current = run_settings_v3(recorded.get("calls", 768), recorded.get("starts", C.V3_STARTS))
+    for name, now, then in (
+        ("settings", current, recorded),
+        ("seeds", run_seeds_v3(), parent.get("seeds") or {}),
+    ):
+        if now != then:
+            changed = sorted(k for k in set(now) | set(then) if now.get(k) != then.get(k))
+            problems.append(f"{name} differ from the parent's: {changed}")
+    if parent["ceilings"].get("arm_seconds") != ARM_SECONDS:
+        problems.append("ceilings differ from the parent's: ['arm_seconds']")
+    return problems
