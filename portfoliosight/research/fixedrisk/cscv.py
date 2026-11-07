@@ -257,3 +257,78 @@ def cscv_run(masks: CscvMasks, returns: np.ndarray) -> CscvResult:
             f"(minimum {MIN_EVALUABLE})"
         )
     return result
+
+
+def cscv_candidates(
+    masks: CscvMasks,
+    values: np.ndarray,
+    *,
+    lower_is_better: bool,
+) -> CscvResult:
+    """Purged CSCV over any number of candidates scored by their mean (v3 §7.1, §7.3).
+
+    `values` is A x K x C (candidates in tie order, the masks' K eligible origins, C risk levels);
+    a candidate's score on a side is its mean over that side's origins in each level, averaged
+    with equal weight over the levels. The same evaluability rules as `cscv_run` apply. The
+    training choice is the best training score (first in tie order); its test rank `k` runs from
+    1 (worst test score) to A, `omega = k / (A + 1)` (six arms: `k/7`), `lambda = ln(omega / (1 -
+    omega))`, and PBO is the share of evaluable splits with `lambda < 0`.
+    """
+    x = np.asarray(values, dtype=float)
+    a, k, _ = x.shape
+    if k != len(masks.origins):
+        raise ValueError("values must be candidates x eligible origins x levels")
+    finite = np.isfinite(x).all(axis=0)
+    present = finite.any(axis=0)
+    result = CscvResult(pairs=int(present.sum()), splits_total=len(masks.splits))
+    if not present.any():
+        result.pbo_note = "no rows in the common mask"
+        return result
+    xp = np.where(finite[None, :, :], x, np.nan)[:, :, present]
+    fp = finite[:, present]
+    sign = -1.0 if lower_is_better else 1.0  # internally higher is better
+
+    def score(side: np.ndarray) -> np.ndarray:
+        return sign * np.nanmean(np.nanmean(xp[:, side, :], axis=1), axis=1)
+
+    for split in masks.splits:
+        train_n = (fp & split.train[:, None]).sum(axis=0)
+        test_n = (fp & split.test[:, None]).sum(axis=0)
+        block_n = min(
+            int((fp[masks.blocks[b]] & split.train[masks.blocks[b], None]).sum(axis=0).min())
+            for b in split.train_blocks
+        )
+        reason = None
+        if train_n.min() < MIN_SIDE_ORIGINS:
+            reason = f"training side keeps {int(train_n.min())} origins (< {MIN_SIDE_ORIGINS})"
+        elif test_n.min() < MIN_SIDE_ORIGINS:
+            reason = f"test side keeps {int(test_n.min())} origins (< {MIN_SIDE_ORIGINS})"
+        elif block_n < MIN_TRAIN_BLOCK_ORIGINS:
+            reason = f"a training block keeps {block_n} origins (< {MIN_TRAIN_BLOCK_ORIGINS})"
+        if reason:
+            result.dropped.append({"split": split.index, "reason": reason})
+            continue
+        train_s, test_s = score(split.train), score(split.test)
+        chosen = int(np.argmax(train_s))
+        rank = float(stats.rankdata(test_s)[chosen])  # 1 worst, A best, average ranks on ties
+        omega = rank / (a + 1)
+        result.evaluable.append(
+            {
+                "split": split.index,
+                "chosen": chosen,
+                "tied": int(np.sum(train_s == train_s.max())) > 1,
+                "train_score": (sign * train_s).tolist(),
+                "test_score": (sign * test_s).tolist(),
+                "rank": rank,
+                "omega": omega,
+                "lambda": math.log(omega / (1.0 - omega)),
+            }
+        )
+    if len(result.evaluable) >= MIN_EVALUABLE:
+        result.pbo = float(np.mean([r["lambda"] < 0 for r in result.evaluable]))
+    else:
+        result.pbo_note = (
+            f"PBO not computable: {len(result.evaluable)} of {len(masks.splits)} splits evaluable "
+            f"(minimum {MIN_EVALUABLE})"
+        )
+    return result
