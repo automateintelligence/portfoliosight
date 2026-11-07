@@ -387,11 +387,16 @@ def run_task(
 
 
 def task_paths(tasks_dir: Path, spec: Any) -> dict[str, Path]:
+    return base_paths(tasks_dir, spec.base)
+
+
+def base_paths(tasks_dir: Path, base: str) -> dict[str, Path]:
+    """The four files of the task named `base` (`<menu>_<month>_<engine>`), the marker first."""
     return {
-        "selections": tasks_dir / f"{spec.base}.parquet",
-        "pool": tasks_dir / "pool" / f"{spec.base}.parquet",
-        "columns": tasks_dir / "columns" / f"{spec.base}.parquet",
-        "evaluated": tasks_dir / "evaluated" / f"{spec.base}.parquet",
+        "selections": tasks_dir / f"{base}.parquet",
+        "pool": tasks_dir / "pool" / f"{base}.parquet",
+        "columns": tasks_dir / "columns" / f"{base}.parquet",
+        "evaluated": tasks_dir / "evaluated" / f"{base}.parquet",
     }
 
 

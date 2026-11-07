@@ -52,7 +52,7 @@ import os
 import queue
 import time
 import traceback
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -671,15 +671,40 @@ def write_task(tasks_dir: Path, spec: TaskSpec, out: TaskOutput, digest: str) ->
     _write_table(paths["selections"], out.selections, SELECTION_SCHEMA, digest, extra)
 
 
+def artifact_problems(paths: Mapping[str, Path], digest: str | None) -> list[str]:
+    """Each of a task's files (`paths`, by role) that is missing, unreadable or, with `digest`,
+    carries another parent digest in its Parquet metadata."""
+    problems = []
+    for name, path in paths.items():
+        if not path.is_file():
+            problems.append(f"{name} file {path} is missing")
+            continue
+        try:
+            meta = pq.read_schema(path).metadata or {}
+        except (OSError, pa.ArrowInvalid):
+            problems.append(f"{name} file {path} is unreadable")
+            continue
+        found = meta.get(DIGEST_KEY)
+        if digest is not None and found != digest.encode():
+            stamp = found.decode() if found is not None else None
+            problems.append(f"{name} file {path} carries parent digest {stamp}, not {digest}")
+    return problems
+
+
+def required_paths(tasks_dir: Path, spec: TaskSpec) -> dict[str, Path]:
+    """Every file a task writes: v2's selections, anchors and evaluated; v3's selections, pool,
+    columns and evaluated."""
+    if spec.protocol == 3:
+        from portfoliosight.research.fixedrisk import driver3
+
+        return driver3.task_paths(Path(tasks_dir), spec)
+    return task_paths(Path(tasks_dir), spec)
+
+
 def task_done(tasks_dir: Path, spec: TaskSpec, digest: str) -> bool:
-    path = task_paths(tasks_dir, spec)["selections"]
-    if not path.is_file():
-        return False
-    try:
-        meta = pq.read_schema(path).metadata or {}
-    except (OSError, pa.ArrowInvalid):
-        return False
-    return meta.get(DIGEST_KEY) == digest.encode()
+    """Every file of the task exists and carries `digest`; a missing or stale companion of the
+    selections marker leaves the task incomplete, so a resumed job reruns it."""
+    return not artifact_problems(required_paths(tasks_dir, spec), digest)
 
 
 # ---------------------------------------------------------------------------- pools

@@ -1,7 +1,8 @@
 """Report hooks of the v3 run (protocol v3 §5, §6, §7): realized outcomes per arm, the
 confirmatory test and the descriptive statistics, from the task files.
 
-- `load_tables`: the selections (and columns, evaluated) of a job's task files of one digest;
+- `load_tables`: the selections (and columns, evaluated) of a job's task files, every file of
+  every task checked against the parent digest (a mismatch is an error);
 - `realized_outcomes`: `realized.realized_table` on the selections, with the v3 multi-year
   horizons (2, 3 and 5 years) and realized volatility;
 - `arm_grid`: one arm's (6 levels x K origins) grid of a column, from the arm's locked row
@@ -61,20 +62,25 @@ WEIGHT_DECIMALS = 9  # two rows are the same mix when every weight agrees after 
 
 
 def load_tables(job_dir: Path, digest: str | None = None) -> dict[str, pd.DataFrame]:
-    """The job's selections, columns and evaluated tables (task files of `digest` only)."""
-    import pyarrow.parquet as pq
+    """The job's selections, columns and evaluated tables. Every task with a selections marker
+    must have all four files (the pool is checked, not loaded), each carrying `digest` when
+    given; otherwise a ValueError lists every problem."""
+    from portfoliosight.research.fixedrisk.driver import artifact_problems
+    from portfoliosight.research.fixedrisk.driver3 import base_paths
 
     tasks = Path(job_dir) / "tasks"
     parts: dict[str, list[pd.DataFrame]] = {"selections": [], "columns": [], "evaluated": []}
+    problems: list[str] = []
     for marker in sorted(tasks.glob("*.parquet")):
-        meta = pq.read_schema(marker).metadata or {}
-        if digest is not None and meta.get(b"parent_digest") != digest.encode():
+        paths = base_paths(tasks, marker.stem)
+        found = artifact_problems(paths, digest)
+        if found:
+            problems += found
             continue
-        parts["selections"].append(pd.read_parquet(marker))
-        for name in ("columns", "evaluated"):
-            path = tasks / name / marker.name
-            if path.is_file():
-                parts[name].append(pd.read_parquet(path))
+        for name in parts:
+            parts[name].append(pd.read_parquet(paths[name]))
+    if problems:
+        raise ValueError(f"task files of {job_dir} are incomplete or stale: " + "; ".join(problems))
     return {k: pd.concat(v, ignore_index=True) if v else pd.DataFrame() for k, v in parts.items()}
 
 

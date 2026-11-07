@@ -10,8 +10,8 @@ from typing import Any
 import pyarrow.parquet as pq
 import pytest
 
+from portfoliosight.research.fixedrisk import analysis3, data, driver, driver3, manifest
 from portfoliosight.research.fixedrisk import contracts as C
-from portfoliosight.research.fixedrisk import data, driver, driver3, manifest
 
 from . import fakes
 
@@ -95,6 +95,40 @@ def test_selections_join_to_their_own_pool_records(showcase_out, tmp_path):
         assert list(rec["weights"]) == pytest.approx(row["weights"])
 
 
+def restamp(path: Path, digest: str) -> None:
+    """Rewrite a task file as if an earlier parent (`digest`) had written it."""
+    table = pq.read_table(path)
+    meta = {**(table.schema.metadata or {}), driver3.DIGEST_KEY: digest.encode()}
+    pq.write_table(table.replace_schema_metadata(meta), path)
+
+
+@pytest.mark.parametrize("companion", ["pool", "columns", "evaluated"])
+def test_a_missing_or_stale_companion_leaves_the_task_incomplete(showcase_out, tmp_path, companion):
+    spec, out = showcase_out
+    tasks = tmp_path / "job" / "tasks"
+    driver3.write_task(tasks, spec, out, "digest-1")
+    path = driver3.task_paths(tasks, spec)[companion]
+    restamp(path, "digest-0")
+    assert not driver.task_done(tasks, spec, "digest-1")
+    with pytest.raises(ValueError, match=f"{companion} file .*digest-0"):
+        analysis3.load_tables(tmp_path / "job", "digest-1")
+    path.unlink()
+    assert not driver.task_done(tasks, spec, "digest-1")
+    with pytest.raises(ValueError, match=f"{companion} file .* is missing"):
+        analysis3.load_tables(tmp_path / "job", "digest-1")
+
+
+def test_analysis_rejects_a_task_of_another_digest_and_loads_a_matching_one(showcase_out, tmp_path):
+    spec, out = showcase_out
+    driver3.write_task(tmp_path / "job" / "tasks", spec, out, "digest-1")
+    tables = analysis3.load_tables(tmp_path / "job", "digest-1")
+    assert len(tables["selections"]) == len(out.selections)
+    assert len(tables["columns"]) == len(out.columns)
+    assert len(tables["evaluated"]) == len(out.evaluated)
+    with pytest.raises(ValueError, match="selections file .*digest-1"):
+        analysis3.load_tables(tmp_path / "job", "digest-2")
+
+
 def make_parent_v3(inputs, run_dir: Path, months, **kw) -> dict:
     parent = manifest.build_parent_v3(
         inputs, snapshot_dir=Path("/snap"), cpu_hours=5.0, calls=CALLS, only_months=months, **kw
@@ -143,6 +177,14 @@ def test_v3_job_runs_and_resumes_and_refuses_mismatched_settings(inputs, tmp_pat
     assert driver3.task_paths(job / "tasks", spec)["pool"].is_file()
     again = driver.run_job(tmp_path, "research2003", "replay", **kw)
     assert again.status == "complete" and "0 to run" in (job / "progress.log").read_text()
+    # a companion left by an earlier parent makes the task incomplete: it reruns
+    columns = driver3.task_paths(job / "tasks", spec)["columns"]
+    restamp(columns, "an-earlier-digest")
+    rerun = driver.run_job(tmp_path, "research2003", "replay", **kw)
+    assert rerun.status == "complete"
+    starts = [ln for ln in (job / "progress.log").read_text().splitlines() if " start: " in ln]
+    assert "0 already done, 1 to run" in starts[-1]
+    assert pq.read_schema(columns).metadata[driver3.DIGEST_KEY] == parent["digest"].encode()
     # the same run directory under a parent whose settings the code does not have
     body = {k: v for k, v in parent.items() if k not in ("digest", "created_utc")}
     body["settings"] = {**body["settings"], "tail_paths": 50}
