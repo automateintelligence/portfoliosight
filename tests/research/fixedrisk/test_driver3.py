@@ -81,6 +81,20 @@ def test_v3_task_files(showcase_out, tmp_path):
     assert pq.read_table(paths["evaluated"]).num_rows == len(out.evaluated)
 
 
+def test_selections_join_to_their_own_pool_records(showcase_out, tmp_path):
+    spec, out = showcase_out
+    driver3.write_task(tmp_path, spec, out, "digest-1")
+    pool = pq.read_table(driver3.task_paths(tmp_path, spec)["pool"]).to_pandas()
+    by_record = pool.set_index("record")
+    joined = [r for r in out.selections if r["pool_row"] >= 0]
+    assert {r["lookback"] for r in joined} == {C.LOOKBACK, C.SENSITIVITY_LOOKBACK}
+    for row in joined:
+        rec = by_record.loc[row["pool_row"]]
+        assert rec["lookback"] == row["lookback"]
+        assert rec["r_fraction"] == pytest.approx(row["r_fraction"])
+        assert list(rec["weights"]) == pytest.approx(row["weights"])
+
+
 def make_parent_v3(inputs, run_dir: Path, months, **kw) -> dict:
     parent = manifest.build_parent_v3(
         inputs, snapshot_dir=Path("/snap"), cpu_hours=5.0, calls=CALLS, only_months=months, **kw

@@ -334,6 +334,10 @@ def run_task(
             return kind
 
         rows = selection_rows(result, kind_of=kind_of, ctx=ctx, engine=engine, seed=C.PRIMARY_SEED)
+        offset = len(out.pool)  # this context's pool rows follow the earlier contexts' rows
+        for row in rows:
+            if row["pool_row"] >= 0:
+                row["pool_row"] += offset
         out.selections += rows
         for row in rows:
             if row["weights"] is not None:
