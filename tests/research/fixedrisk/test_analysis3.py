@@ -295,3 +295,111 @@ def test_eligible_origins_come_from_the_frozen_cscv_months():
     for broken in ({"menus": {"research2003": {}}}, {"menus": {"research2003": {"cscv": {}}}}):
         with pytest.raises(ValueError, match="frozen eligible origins"):
             A.eligible_origins(broken, "research2003")
+
+
+def _realized_rows(months, value, *, kind="main", lookback="3y", regime_of=None, lam_side=None):
+    """Main-like rows of every arm with realized and model columns from `value(arm, j, o, col)`."""
+    rows = []
+    for arm in C.V3_ARMS:
+        pooled = arm not in (C.FRONTIER, C.ENB_KNEE)
+        lams = [C.LAMBDA] if arm == C.CRASH_PENALTY else [None]
+        if lam_side is not None:
+            if arm != C.CRASH_PENALTY:
+                continue
+            lams = [lam_side]
+        for lam in lams:
+            for j, rf in enumerate(C.RISK_FRACTIONS):
+                for o, month in enumerate(months):
+                    row = dict(sel_id=f"{arm}|{lam}|{kind}|{rf}|{month}", kind=kind,
+                               lookback=lookback, month=month, r_fraction=rf, lam=lam, arm=arm,
+                               pooled=pooled, status=C.OK, complete=True,
+                               regime=regime_of(o) if regime_of else "calm")  # fmt: skip
+                    for col in ("ret_m", "dd_m", "vol_m", "u1", "h", "tdd", "enb", "bad", "es_25"):
+                        row[col] = value(arm, j, o, col)
+                    rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def test_regime_buckets_average_levels_then_origins_per_regime():
+    months = month_labels(12)
+    regime = lambda o: "equity drawdown" if o < 4 else "calm"  # noqa: E731
+
+    def value(arm, j, o, col):
+        if col == "dd_m":  # arm 3 falls 2 pp less in drawdown years, 1 pp more in calm years
+            base = 0.30 if o < 4 else 0.08
+            return base - (0.02 if o < 4 else -0.01) * (arm == C.MIN_TDD)
+        if col == "ret_m":
+            return (-0.2 if o < 4 else 0.1) + 0.01 * j
+        return 0.1
+
+    rows = A.locked_rows(_realized_rows(months, value, regime_of=regime))
+    out = A.regime_buckets(rows, months, eligible=months[1:])
+    by = {b["regime"]: b for b in out}
+    assert by["equity drawdown"]["origins"] == 3 and by["calm"]["origins"] == 8
+    assert by["equity drawdown"]["d_dd"] == pytest.approx(0.02)
+    assert by["calm"]["d_dd"] == pytest.approx(-0.01)
+    assert by["calm"]["d_ret"] == pytest.approx(0.0)
+    assert by["equity drawdown"]["arms"][C.FRONTIER]["dd_m"] == pytest.approx(0.30)
+    assert by["calm"]["arms"][C.FRONTIER]["ret_m"] == pytest.approx(0.1 + 0.01 * 2.5)
+    assert by["rate shock"]["origins"] == 0 and by["rate shock"]["d_dd"] is None
+
+
+def test_side_checks_summarize_each_lambda_and_the_five_year_lookback():
+    months = month_labels(5)
+
+    def value(arm, j, o, col):
+        return 0.1 if col != "h" else 0.3
+
+    def side(lam):
+        return lambda arm, j, o, col: {"h": 0.3 - lam, "u1": lam}.get(col, 0.1)
+
+    table = pd.concat(
+        [
+            _realized_rows(months, value),
+            _realized_rows(months[:3], side(0.05), kind="side_lambda", lam_side=0.05),
+            _realized_rows(months[:3], side(0.2), kind="side_lambda", lam_side=0.2),
+            _realized_rows(months[:2], lambda a, j, o, c: 0.2, kind="sens_5y", lookback="5y"),
+        ],
+        ignore_index=True,
+    )
+    out = A.side_checks(table)
+    lam = {row["lam"]: row for row in out["lambda"]["rows"]}
+    assert out["lambda"]["months"] == months[:3]
+    assert lam[0.05]["h"] == pytest.approx(0.25) and lam[0.2]["u1"] == pytest.approx(0.2)
+    assert lam[C.LAMBDA]["h"] == pytest.approx(0.3) and lam[C.LAMBDA]["n"] == 18  # same months
+    five = out["lookback_5y"]
+    assert five["months"] == months[:2]
+    assert {r["arm"] for r in five["arms_5y"]} == set(C.V3_ARMS)
+    assert all(r["dd_m"] == pytest.approx(0.2) for r in five["arms_5y"])
+    assert all(r["dd_m"] == pytest.approx(0.1) and r["n"] == 12 for r in five["arms_3y"])
+
+
+def test_independent_banks_average_seeds_per_arm():
+    months = month_labels(3)
+    rows = A.locked_rows(_realized_rows(months, lambda a, j, o, c: 0.1))
+    evaluated = pd.DataFrame(
+        [{"sel_id": s, "test_seed": seed, "bad": 0.0, "es_25": 0.0, "u1": 0.0,
+          "tdd": 0.1 + (0.02 if seed % 2 else 0.0)}
+         for s in rows["sel_id"] for seed in (20261113, 20261114)]
+    )  # fmt: skip
+    out = {r["arm"]: r for r in A.independent_banks(rows, evaluated)}
+    assert out[C.MIN_TDD]["tdd_train"] == pytest.approx(0.1)
+    assert out[C.MIN_TDD]["tdd_independent"] == pytest.approx(0.11)
+    assert out[C.MIN_TDD]["seeds"] == 2 and out[C.MIN_TDD]["n"] == 18
+
+
+def test_run_facts_read_the_job_files(tmp_path):
+    job = tmp_path / "research2003_replay"
+    (job / "tasks").mkdir(parents=True)
+    (job / "tasks" / "research2003_2010-01_replay.parquet").write_bytes(b"")
+    (job / "job.json").write_text('{"status": "complete", "tasks_done": 1, "tasks_total": 2}')
+    (job / "failures.jsonl").write_text('{"task": "x", "error": "boom"}\n')
+    (job / "overrides.jsonl").write_text('{"reason": "owner approved"}\n')
+    parent = {"menus": {"research2003": {"schedule": ["2010-01", "2010-02"]}},
+              "amendments": [{"text": "GARCH job added"}]}  # fmt: skip
+    facts = A.run_facts(job, parent, "research2003")
+    assert facts["status"] == "complete" and facts["task_files"] == 1 and facts["schedule"] == 2
+    assert not facts["complete"]  # one task file of two
+    assert facts["failures"] == [{"task": "x", "error": "boom"}]
+    assert facts["overrides"] == [{"reason": "owner approved"}]
+    assert facts["amendments"] == [{"text": "GARCH job added"}]

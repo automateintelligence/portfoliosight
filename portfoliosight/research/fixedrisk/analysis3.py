@@ -21,12 +21,15 @@ confirmatory test and the descriptive statistics, from the task files.
 - `rank_agreement`: Spearman and Kendall tau-b across the six arms between model TDD and
   realized dd_m at each (origin, r) (§5);
 - `cscv_arms`: purged CSCV across the six arms on realized dd_m (§7.1, `omega = k/7`);
+- `regime_buckets`, `side_checks`, `independent_banks`, `run_facts`: the regime tables, the
+  lambda and 5-year side checks, the independent-bank model figures and the job's state (§5, §8.4);
 - `ensemble_candidates`, `ensemble_picks`, `simplex_weights`: the exploratory screen of §7.3.
 """
 
 from __future__ import annotations
 
 import itertools
+import json
 import math
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -556,6 +559,163 @@ def diversification(rows: pd.DataFrame, months: Sequence[str]) -> dict[str, Any]
     return out
 
 
+def _pooled(rows: pd.DataFrame, columns: Sequence[str] = SUMMARY_COLUMNS) -> dict[str, Any]:
+    """Means of `columns` over usable rows (realized columns over those with a complete year)."""
+    usable = _frame(rows.loc[rows["status"].isin(C.V3_USABLE).to_numpy()])
+    done = usable
+    if "complete" in usable:
+        done = _frame(usable.loc[usable["complete"].astype("boolean").fillna(False).to_numpy(bool)])
+    entry: dict[str, Any] = {"n": int(len(usable)), "n_complete": int(len(done))}
+    for col in columns:
+        if col not in usable:
+            continue
+        source = done if col in R.REALIZED_COLUMNS else usable
+        values = np.asarray(pd.to_numeric(source[col], errors="coerce"), dtype=float)
+        entry[col] = float(np.nanmean(values)) if np.isfinite(values).any() else None
+    return entry
+
+
+def _origin_level_mean(grid: np.ndarray, mask: np.ndarray) -> float | None:
+    """Equal weight over the levels within each origin, then over the origins in `mask`."""
+    per_origin = evidence._masked_mean(grid, axis=0)[mask]
+    per_origin = per_origin[np.isfinite(per_origin)]
+    return float(per_origin.mean()) if per_origin.size else None
+
+
+def regime_buckets(
+    rows: pd.DataFrame,
+    months: Sequence[str],
+    *,
+    eligible: Sequence[str],
+    arms: Sequence[str] = C.V3_ARMS,
+) -> list[dict[str, Any]]:
+    """Per regime of the realized year (v2 §5: equity drawdown, rate shock, calm), over the
+    eligible origins carrying it: each arm's mean realized return, drawdown and volatility, and
+    arm 3 against arm 1 (Delta_DD = dd_m(arm 1) - dd_m(arm 3), Delta_Ret = ret_m(arm 3) -
+    ret_m(arm 1)) on the paired cells; equal weight over the levels within an origin, then over
+    the origins. Descriptive."""
+    months = [str(m) for m in months]
+    labelled = rows.dropna(subset=["regime"]) if "regime" in rows else rows.iloc[0:0]
+    regime = labelled.groupby(labelled["month"].astype(str))["regime"].first().to_dict()
+    frozen = {str(m) for m in eligible}
+    grids = {
+        (arm, col): arm_grid(rows, arm, col, months)
+        for arm in arms
+        for col in ("ret_m", "dd_m", "vol_m")
+        if col in rows
+    }
+    dd1, dd3 = grids[(C.FRONTIER, "dd_m")], grids[(C.MIN_TDD, "dd_m")]
+    r1, r3 = grids[(C.FRONTIER, "ret_m")], grids[(C.MIN_TDD, "ret_m")]
+    paired = np.isfinite(dd1) & np.isfinite(dd3) & np.isfinite(r1) & np.isfinite(r3)
+    out = []
+    for label in R.REGIMES:
+        mask = np.array([m in frozen and regime.get(m) == label for m in months])
+        entry: dict[str, Any] = {"regime": label, "origins": int(mask.sum()), "arms": {}}
+        for arm in arms:
+            entry["arms"][arm] = {
+                col: _origin_level_mean(grids[(arm, col)], mask)
+                for col in ("ret_m", "dd_m", "vol_m")
+                if (arm, col) in grids
+            }
+        entry["d_dd"] = _origin_level_mean(np.where(paired, dd1 - dd3, np.nan), mask)
+        entry["d_ret"] = _origin_level_mean(np.where(paired, r3 - r1, np.nan), mask)
+        out.append(entry)
+    return out
+
+
+def side_checks(table: pd.DataFrame, arms: Sequence[str] = C.V3_ARMS) -> dict[str, Any]:
+    """The side checks (v3 §2.4, §3), pooled over levels and origins: arm 4's pooled selection at
+    each crash-penalty weight (the side lambdas and the main lambda on the same origins), and every
+    arm under the 5-year lookback beside the 3-year selections of the same origins."""
+    main = locked_rows(table)
+    side = _frame(table.loc[(table["kind"] == "side_lambda").to_numpy()])
+    side = _frame(side.loc[(side["arm"] == C.CRASH_PENALTY).to_numpy()
+                           & side["pooled"].astype(bool).to_numpy()])  # fmt: skip
+    lam_months = sorted(set(side["month"].astype(str)))
+    lam_rows = []
+    lam = side["lam"].astype(float).to_numpy()
+    for value in sorted({*C.LAMBDA_SIDE, C.LAMBDA}):
+        if value == C.LAMBDA:
+            pick = (main["arm"] == C.CRASH_PENALTY).to_numpy()
+            sub = _frame(main.loc[pick & main["month"].astype(str).isin(lam_months).to_numpy()])
+        else:
+            sub = _frame(side.loc[np.isclose(lam, value)])
+        lam_rows.append({"lam": value, **_pooled(sub)})
+    five = locked_rows(table, kind="sens_5y", lookback=C.SENSITIVITY_LOOKBACK)
+    five_months = sorted(set(five["month"].astype(str)))
+    three = _frame(main.loc[main["month"].astype(str).isin(five_months).to_numpy()])
+    return {
+        "lambda": {"months": lam_months, "rows": lam_rows},
+        "lookback_5y": {
+            "months": five_months,
+            "arms_5y": [{"arm": a, **_pooled(_frame(five.loc[(five["arm"] == a).to_numpy()]))}
+                        for a in arms],
+            "arms_3y": [{"arm": a, **_pooled(_frame(three.loc[(three["arm"] == a).to_numpy()]))}
+                        for a in arms],
+        },
+    }  # fmt: skip
+
+
+INDEPENDENT_COLUMNS = ("tdd", "bad", "es_25", "u1")
+
+
+def independent_banks(
+    rows: pd.DataFrame, evaluated: pd.DataFrame, arms: Sequence[str] = C.V3_ARMS
+) -> list[dict[str, Any]]:
+    """Per arm, the training-bank mean of TDD, Bad, ES_2.5 and U1 over its locked rows beside
+    the mean over the independent banks (each row's seeds averaged first), v3 §5."""
+    if evaluated.empty:
+        return []
+    usable = _frame(rows.loc[rows["status"].isin(C.V3_USABLE).to_numpy()])
+    per_row = pd.DataFrame(evaluated.groupby("sel_id")[list(INDEPENDENT_COLUMNS)].mean())
+    seeds = pd.Series(evaluated.groupby("sel_id")["test_seed"].nunique())
+    out = []
+    for arm in arms:
+        sub = _frame(usable.loc[(usable["arm"] == arm).to_numpy()])
+        ids = [i for i in sub["sel_id"] if i in per_row.index]
+        n_seeds = seeds.reindex(ids).to_numpy(dtype=float)
+        entry: dict[str, Any] = {"arm": arm, "n": len(ids),
+                                 "seeds": int(n_seeds.max()) if ids else 0}  # fmt: skip
+        for col in INDEPENDENT_COLUMNS:
+            train = np.asarray(pd.to_numeric(sub[col], errors="coerce"), dtype=float)
+            independent = pd.Series(per_row[col]).reindex(ids).to_numpy(dtype=float)
+            entry[f"{col}_train"] = float(np.nanmean(train)) if np.isfinite(train).any() else None
+            entry[f"{col}_independent"] = (
+                float(np.nanmean(independent)) if np.isfinite(independent).any() else None
+            )
+        out.append(entry)
+    return out
+
+
+def _jsonl(path: Path) -> list[Any]:
+    if not path.is_file():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def run_facts(job_dir: Path, parent: Mapping[str, Any], menu: str) -> dict[str, Any]:
+    """The job's state for the report: its manifest status, task files against the schedule,
+    failures, owner overrides and the parent's amendments; `complete` when the job manifest says
+    complete and every scheduled task has a selections file."""
+    job_dir = Path(job_dir)
+    path = job_dir / "job.json"
+    info = json.loads(path.read_text()) if path.is_file() else {}
+    schedule = len(parent["menus"][menu]["schedule"])
+    files = len(list((job_dir / "tasks").glob("*.parquet")))
+    return {
+        "status": info.get("status", "not run"),
+        "tasks_done": info.get("tasks_done"),
+        "tasks_total": info.get("tasks_total"),
+        "cpu_seconds": info.get("cpu_seconds"),
+        "task_files": files,
+        "schedule": schedule,
+        "complete": info.get("status") == "complete" and files == schedule,
+        "failures": _jsonl(job_dir / "failures.jsonl"),
+        "overrides": _jsonl(job_dir / "overrides.jsonl"),
+        "amendments": list(parent.get("amendments") or []),
+    }
+
+
 def analyze_job(
     job_dir: Path,
     parent: Mapping[str, Any],
@@ -581,6 +741,7 @@ def analyze_job(
     result: dict[str, Any] = {
         "job": Path(job_dir).name,
         "parent_digest": parent["digest"],
+        "run": run_facts(Path(job_dir), parent, menu),
         "selections": int(len(tables["selections"])),
         "eligible_frozen": len(eligible),
         "eligible_outside_schedule": sorted(set(eligible) - set(months)),
@@ -589,6 +750,9 @@ def analyze_job(
         "arms": arm_summary(rows, [*arms, C.APP_FRONTIER]),
         "diversification": diversification(rows, months),
         "descriptive_comparisons": {},
+        "regimes": regime_buckets(rows, months, eligible=eligible, arms=arms),
+        "side_checks": side_checks(table, arms),
+        "independent_banks": independent_banks(rows, tables["evaluated"], arms),
     }
     for arm in arms:
         if arm in (C.FRONTIER, C.MIN_TDD):
