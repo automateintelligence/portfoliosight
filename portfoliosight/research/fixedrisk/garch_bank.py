@@ -28,8 +28,17 @@ from the full common history, level from the lookback.
    A constant-volatility holding divides by its sample standard deviation (0 stays 0). The
    common rows are then re-standardized per column (QSE `residual_pool`, at least 126 rows).
    Older shocks are standardized with recent parameters, on purpose (ADR 0005).
-3. Simulate: production `shape.simulate_panel` with the bank's seed, 2,000 x 252 days, each
-   recursion started at the dynamics fit's long-run variance (the production start).
+3. Simulate: production `shape.simulate_panel`'s row draw and recursion with the bank's seed,
+   2,000 x 252 days, each recursion started at the dynamics fit's long-run variance (the
+   production start), with each fund's conditional variance held at or below a cap (ADR 0006):
+   `sigma2_t <- min(sigma2_t, cap)` before day t's shock, so a capped variance also feeds the next
+   day. The cap is `k^2` times the fund's realized daily variance of log returns over the lookback
+   (`ctx.sample`, ddof 1), `k = GARCH_VOL_CAP` (3): simulated daily volatility at most `k` times
+   the lookback's. A constant-volatility fallback has no recursion and is never capped. Without
+   it, near-integrated fits (persistence 0.997-0.999) let a few paths' variance wander upward
+   without bound. `GarchBank.cap_hits` counts, per holding, the path-days on which the cap bound
+   (`cap_hit_share` over paths x days). `vol_cap=None` runs `shape.simulate_panel` itself, and an
+   infinite cap reproduces it byte for byte.
 4. Level: production `ranges.garch_range_model` takes the pooled moments and the lookback's chart
    moments (`ctx.mu_s`, `ctx.cov`, from `ctx.sample`); the 5-year sensitivity changes only these.
    Step 1 is then applied once to the whole panel, in place, and the levelled panel `R'` is kept
@@ -46,9 +55,10 @@ gross days before any division.
 Differences from production (§5: not a qualification of the production engine): the dynamics
 window is each holding's own last 10 years with a 3-year retry, where production fits on the
 menu calendar's last ten years without a retry; the shock pool spans the full common history,
-where production pools the fit window's common rows; the zero-variance threshold is the
-protocol's `1e-14` on `w'Sigma_R'w`, where production tests `sd(y) = 0` exactly (no feasible mix
-of either menu comes near either threshold).
+where production pools the fit window's common rows; the simulated variance is capped at `k`
+times the lookback's volatility (ADR 0006), where production runs QSE's uncapped recursion; the
+zero-variance threshold is the protocol's `1e-14` on `w'Sigma_R'w`, where production tests
+`sd(y) = 0` exactly (no feasible mix of either menu comes near either threshold).
 """
 
 from __future__ import annotations
@@ -81,6 +91,7 @@ from portfoliosight.engine.shape import (
 from portfoliosight.engine.stats import TRADING_DAYS
 from portfoliosight.research.fixedrisk.contracts import (
     FIT_FAILED,
+    GARCH_VOL_CAP,
     HORIZON,
     PATHS,
     PRIMARY_SEED,
@@ -88,7 +99,7 @@ from portfoliosight.research.fixedrisk.contracts import (
     OriginContext,
 )
 from qse.distributions.garch_recursion import garch11_long_run_variance
-from qse.distributions.joint import fit_garch_t_panel, residual_pool
+from qse.distributions.joint import draw_row_indices, fit_garch_t_panel, residual_pool
 from qse.distributions.joint.panel_fit import GarchPanelFit
 from qse.exceptions import DistributionFitError
 
@@ -320,6 +331,62 @@ def origin_artifact(ctx: OriginContext) -> tuple[GarchArtifact, dict[str, str]]:
     return artifact, {holding: item.window for holding, item in zip(holdings, fits, strict=True)}
 
 
+def variance_cap(ctx: OriginContext, artifact: GarchArtifact, k: float) -> np.ndarray:
+    """Each fund's cap on its simulated conditional variance (N): `k^2` times its realized daily
+    variance of log returns over the lookback (`ctx.sample`, ddof 1), infinite for a
+    constant-volatility fund (`alpha = beta = 0`: no recursion to cap).
+
+    Anchored on the lookback, not on the fit's long-run variance `omega / (1 - alpha - beta)`,
+    which near persistence 1 is unreliable (ADR 0006).
+    """
+    if not (np.isfinite(k) and k > 0.0):
+        raise ValueError(f"the volatility cap's multiple must be finite and positive, not {k!r}")
+    sample = np.asarray(ctx.sample, dtype=np.float64)
+    if sample.ndim != 2 or sample.shape[1] != len(artifact.funds) or len(sample) < 2:
+        raise ValueError("the volatility cap needs a T x N lookback sample with T >= 2")
+    if not np.isfinite(sample).all() or (sample <= -1.0).any():
+        raise ValueError("the volatility cap needs finite lookback returns above -100%")
+    realized = np.var(np.log1p(sample), axis=0, ddof=1)
+    constant = (np.asarray(artifact.alpha) == 0.0) & (np.asarray(artifact.beta) == 0.0)
+    return np.where(constant, np.inf, k * k * realized)
+
+
+def simulate_capped(
+    artifact: GarchArtifact,
+    cap: np.ndarray,
+    paths: int = PATHS,
+    horizon: int = HORIZON,
+    seed: int = PRIMARY_SEED,
+) -> tuple[np.ndarray, np.ndarray]:
+    """`shape.simulate_panel` with each fund's conditional variance held at or below `cap` (N)
+    inside the recursion, and the path-days per fund on which the cap bound (N, int64).
+
+    The same pool-row draw and the same arithmetic as QSE's `simulate_garch11` (which takes no
+    cap and is never edited here), with `sigma2_t <- min(sigma2_t, cap)` before day t's shock,
+    day 1 included; the capped variance feeds day t + 1. An infinite cap returns
+    `shape.simulate_panel`'s bytes.
+    """
+    if artifact.pool is None:
+        raise ValueError(artifact.unavailable_reason or "the volatility model has no pool")
+    funds = len(artifact.funds)
+    cap = np.asarray(cap, dtype=np.float64)
+    if cap.shape != (funds,) or np.isnan(cap).any() or (cap < 0.0).any():
+        raise ValueError("the cap holds one non-negative variance per fund")
+    out = artifact.pool[draw_row_indices(artifact.pool_rows, paths, horizon, seed=seed)]
+    mu, omega = np.asarray(artifact.mu), np.asarray(artifact.omega)
+    alpha, beta = np.asarray(artifact.alpha), np.asarray(artifact.beta)
+    start = garch11_long_run_variance(omega, alpha, beta)
+    sigma2 = np.broadcast_to(start, (paths, funds)).copy()
+    hits = np.zeros(funds, dtype=np.int64)
+    for t in range(horizon):
+        hits += np.count_nonzero(sigma2 > cap, axis=0)
+        np.minimum(sigma2, cap, out=sigma2)
+        eps = np.sqrt(sigma2) * out[:, t]
+        out[:, t] = mu + eps
+        sigma2 = omega + alpha * (eps * eps) + beta * sigma2
+    return out, hits
+
+
 @dataclass(eq=False)
 class GarchBank:
     """2,000 levelled GARCH-t FHS paths of one (menu, origin, seed); implements `PathBank`."""
@@ -335,6 +402,8 @@ class GarchBank:
     fit_status: dict[str, str]  # holding -> QSE status of the fit used
     windows: dict[str, str]  # holding -> dynamics window: "10y", "3y" or FALLBACK
     artifact: GarchArtifact = field(repr=False)
+    vol_cap: float | None = None  # k of the volatility cap (ADR 0006); None: not capped
+    cap_hits: dict[str, int] = field(default_factory=dict)  # holding -> capped path-days
     horizon: int = HORIZON
     engine: Engine = "garch"
     growth_bound_ok: bool = True
@@ -352,6 +421,12 @@ class GarchBank:
             for fund, message in zip(art.funds, art.messages, strict=True)
             if self.windows[fund] == FALLBACK
         }
+
+    @property
+    def cap_hit_share(self) -> dict[str, float]:
+        """Each holding's share of the bank's path-days on which the volatility cap bound."""
+        days = self.paths * self.horizon
+        return {fund: count / days for fund, count in self.cap_hits.items()}
 
     @property
     def nbytes(self) -> int:
@@ -458,8 +533,16 @@ class GarchBank:
         return year, vjp
 
 
-def garch_bank(ctx: OriginContext, engine: Engine = "garch", seed: int = PRIMARY_SEED) -> GarchBank:
+def garch_bank(
+    ctx: OriginContext,
+    engine: Engine = "garch",
+    seed: int = PRIMARY_SEED,
+    vol_cap: float | None = GARCH_VOL_CAP,
+) -> GarchBank:
     """The GARCH bank of one (menu, origin, seed): dynamics window, shock pool, lookback level.
+
+    `vol_cap` is the volatility cap's `k` (ADR 0006); None simulates with production
+    `shape.simulate_panel`, uncapped.
 
     Raises `GarchFitFailed` when a holding's input cannot be used (a fit that fails on both
     windows is held at constant volatility instead), and `ValueError` when the context holds a
@@ -470,7 +553,13 @@ def garch_bank(ctx: OriginContext, engine: Engine = "garch", seed: int = PRIMARY
     if not ctx.days or max(ctx.days) > ctx.origin:
         raise ValueError("the training window must be non-empty and end on or before the origin")
     artifact, windows = origin_artifact(ctx)
-    panel = simulate_panel(artifact, PATHS, HORIZON, seed)  # P x H x N, C-contiguous, ours
+    cap_hits: dict[str, int] = {}
+    if vol_cap is None:
+        panel = simulate_panel(artifact, PATHS, HORIZON, seed)  # P x H x N, C-contiguous, ours
+    else:
+        cap = variance_cap(ctx, artifact, vol_cap)
+        panel, hits = simulate_capped(artifact, cap, PATHS, HORIZON, seed)
+        cap_hits = {fund: int(n) for fund, n in zip(artifact.funds, hits, strict=True)}
     model = garch_range_model(panel, ctx.mu_s, ctx.cov, seed)
     step = _step_one(model.mu_s, model.cov, model.mean, model.sd)
     level_mean, level_cov, mu_s, cov = model.level_mean, model.level_cov, model.mu_s, model.cov
@@ -491,4 +580,6 @@ def garch_bank(ctx: OriginContext, engine: Engine = "garch", seed: int = PRIMARY
         fit_status=dict(zip(artifact.funds, artifact.status, strict=True)),
         windows=windows,
         artifact=artifact,
+        vol_cap=vol_cap,
+        cap_hits=cap_hits,
     )

@@ -39,6 +39,9 @@ PATHS = 2_000
 HORIZON = 252
 LOOKBACK = "3y"  # 756 union-calendar rows, 90% complete (protocol §3)
 SENSITIVITY_LOOKBACK = "5y"
+# GARCH bank: each fund's simulated daily volatility is held at or below this multiple of its
+# realized daily volatility over the lookback, inside the variance recursion (ADR 0006)
+GARCH_VOL_CAP: float | None = 3.0
 
 PRIMARY_SEED = 20261013
 STABILITY_SEEDS = (20261014, 20261015, 20261016, 20261017)

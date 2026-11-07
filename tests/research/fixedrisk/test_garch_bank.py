@@ -127,11 +127,19 @@ def absorbing() -> tuple[OriginContext, gb.GarchBank]:
     sigma = np.array([2.0, 2.0])
     corr = np.array([[1.0, 0.95], [0.95, 1.0]])
     ctx = _ctx(sample, _days(ROWS, ORIGIN), ("P", "Q"), sigma=sigma, corr=corr)
-    return ctx, gb.garch_bank(ctx, "garch", SEED)
+    # uncapped: the cap (ADR 0006) trims the tails that reach -100% here; absorption is step 2's
+    return ctx, gb.garch_bank(ctx, "garch", SEED, vol_cap=None)
 
 
 def _production_years(bank: gb.GarchBank, ctx: OriginContext, mixes: np.ndarray) -> np.ndarray:
-    panel = simulate_panel(bank.artifact, PATHS, HORIZON, bank.seed)
+    """Production's levelling and years on the bank's simulated panel: production
+    `shape.simulate_panel` when uncapped, its capped twin (`gb.simulate_capped`, byte-identical
+    at an infinite cap) when the bank is capped (ADR 0006)."""
+    if bank.vol_cap is None:
+        panel = simulate_panel(bank.artifact, PATHS, HORIZON, bank.seed)
+    else:
+        cap = gb.variance_cap(ctx, bank.artifact, bank.vol_cap)
+        panel, _ = gb.simulate_capped(bank.artifact, cap, PATHS, HORIZON, bank.seed)
     return simulated_years(garch_range_model(panel, ctx.mu_s, ctx.cov, bank.seed), mixes)
 
 
@@ -537,3 +545,140 @@ def test_the_level_comes_from_the_lookback_not_the_dynamics_window():
     np.testing.assert_array_equal(c.mu_s, later.mu_s)
     np.testing.assert_array_equal(c.cov, later.cov)
     assert not np.allclose(c.cov, b.cov)
+
+
+# ---------------------------------------------- simulated volatility cap (ADR 0006)
+
+
+def _integrated(art, alpha: float = 0.2, beta: float = 0.799):
+    """The artifact with every fund's dynamics near integrated (persistence 0.999, as C, IYR and
+    SPY in 2010-2011), the long-run variance kept."""
+    n = len(art.funds)
+    long_run = art.omega / (1.0 - art.alpha - art.beta)
+    return replace(
+        art,
+        alpha=np.full(n, alpha),
+        beta=np.full(n, beta),
+        omega=long_run * (1.0 - alpha - beta),
+    )
+
+
+def _reference(art, cap: np.ndarray, paths: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    """The capped recursion one path and fund at a time, in plain Python, and its hit counts."""
+    from qse.distributions.joint import draw_row_indices
+
+    z = art.pool[draw_row_indices(art.pool_rows, paths, HORIZON, seed=seed)]
+    out = np.empty_like(z)
+    hits = np.zeros(len(art.funds), dtype=np.int64)
+    for n in range(len(art.funds)):
+        w, a, b, mu = art.omega[n], art.alpha[n], art.beta[n], art.mu[n]
+        for p in range(paths):
+            s2 = w / (1.0 - a - b)
+            for t in range(HORIZON):
+                if s2 > cap[n]:
+                    hits[n] += 1
+                    s2 = cap[n]
+                eps = np.sqrt(s2) * z[p, t, n]
+                out[p, t, n] = mu + eps
+                s2 = w + a * eps * eps + b * s2
+    return out, hits
+
+
+def test_an_infinite_cap_is_the_production_simulation_byte_for_byte(bank):
+    art = bank.artifact
+    panel, hits = gb.simulate_capped(art, np.full(4, np.inf), PATHS, HORIZON, SEED)
+    assert panel.tobytes() == simulate_panel(art, PATHS, HORIZON, SEED).tobytes()
+    np.testing.assert_array_equal(hits, 0)
+
+
+def test_the_cap_binds_on_a_near_integrated_fit_and_the_variance_never_exceeds_it(bank):
+    from qse.distributions.joint import draw_row_indices
+
+    art = _integrated(bank.artifact)
+    free, none = gb.simulate_capped(art, np.full(4, np.inf), PATHS, HORIZON, SEED)
+    sd = np.sqrt(art.omega / (1.0 - art.alpha - art.beta))
+    cap = (1.5 * sd) ** 2  # 1.5 x the long-run volatility: well inside the paths' wander
+    panel, hits = gb.simulate_capped(art, cap, PATHS, HORIZON, SEED)
+    assert (hits > 0).all() and (hits < PATHS * HORIZON).all()
+    np.testing.assert_array_equal(none, 0)
+    assert np.abs(free - art.mu).max() > np.abs(panel - art.mu).max()
+    # every day's volatility, recovered as (r - mu) / z, is at most the cap's
+    z = art.pool[draw_row_indices(art.pool_rows, PATHS, HORIZON, seed=SEED)]
+    moved = np.abs(z) > 1e-3
+    sigma = np.abs(panel - art.mu)[moved] / np.abs(z)[moved]
+    funds = np.broadcast_to(np.arange(4), z.shape)[moved]
+    assert (sigma <= np.sqrt(cap)[funds] * (1 + 1e-9)).all()
+    assert (sigma >= np.sqrt(cap)[funds] * (1 - 1e-9)).sum() > 0  # held at the cap on some days
+
+
+def test_cap_hit_counts_and_returns_match_a_plain_recursion(bank):
+    art = _integrated(bank.artifact)
+    sd = np.sqrt(art.omega / (1.0 - art.alpha - art.beta))
+    cap = np.array([1.2, 1.5, 2.0, np.inf]) ** 2 * sd**2
+    paths = 40
+    panel, hits = gb.simulate_capped(art, cap, paths, HORIZON, SEED)
+    ref, ref_hits = _reference(art, cap, paths, SEED)
+    np.testing.assert_array_equal(hits, ref_hits)
+    assert hits[0] > hits[1] > hits[2] > 0 and hits[3] == 0
+    np.testing.assert_allclose(panel, ref, rtol=1e-12, atol=1e-15)
+
+
+def test_the_cap_starts_at_the_first_day_when_the_long_run_variance_is_above_it(bank):
+    art = bank.artifact
+    long_run = art.omega / (1.0 - art.alpha - art.beta)
+    panel, hits = gb.simulate_capped(art, long_run / 4.0, 3, HORIZON, SEED)
+    assert (hits >= 3).all()  # day 1 of every path is capped for every fund
+    np.testing.assert_array_equal(hits, _reference(art, long_run / 4.0, 3, SEED)[1])
+
+
+def test_the_cap_is_k_times_the_lookbacks_realized_volatility(ctx, bank):
+    cap = gb.variance_cap(ctx, bank.artifact, 3.0)
+    expected = 9.0 * np.var(np.log1p(ctx.sample), axis=0, ddof=1)
+    np.testing.assert_allclose(cap, expected, rtol=1e-15)
+    long_run = bank.artifact.omega / (1.0 - bank.artifact.alpha - bank.artifact.beta)
+    assert not np.allclose(cap, 9.0 * long_run)  # not anchored on the long-run variance
+    for k in (0.0, -1.0, np.inf, np.nan):
+        with pytest.raises(ValueError, match="cap"):
+            gb.variance_cap(ctx, bank.artifact, k)
+
+
+def test_a_constant_volatility_fund_is_never_capped(ctx, monkeypatch):
+    _failing(monkeypatch, "B")
+    gb.clear_fit_cache()
+    bank = gb.garch_bank(ctx, "garch", SEED, vol_cap=1e-3)  # a cap every GARCH fund hits
+    cap = gb.variance_cap(ctx, bank.artifact, 1e-3)
+    assert cap[1] == np.inf and np.isfinite(cap[[0, 2, 3]]).all()
+    assert bank.cap_hits["B"] == 0 and all(bank.cap_hits[h] > 0 for h in "ACD")
+
+
+def test_the_bank_is_capped_at_k_3_by_default_and_records_its_hits(ctx, monkeypatch):
+    assert gb.GARCH_VOL_CAP == 3.0
+    gb.clear_fit_cache()
+    real = gb.simulate_capped
+    seen = {}
+
+    def spy(art, cap, paths, horizon, seed):
+        seen["cap"] = cap
+        return real(art, cap, paths, horizon, seed)
+
+    monkeypatch.setattr(gb, "simulate_capped", spy)
+    bank = gb.garch_bank(ctx, "garch", SEED)
+    assert bank.vol_cap == 3.0
+    np.testing.assert_array_equal(seen["cap"], gb.variance_cap(ctx, bank.artifact, 3.0))
+    assert set(bank.cap_hits) == set(ctx.menu.holdings)
+    tight = gb.garch_bank(ctx, "garch", SEED, vol_cap=1.0)
+    assert tight.vol_cap == 1.0
+    _, hits = real(bank.artifact, gb.variance_cap(ctx, bank.artifact, 1.0), PATHS, HORIZON, SEED)
+    assert tight.cap_hits == dict(zip(ctx.menu.holdings, hits.tolist(), strict=True))
+    assert all(isinstance(n, int) for n in tight.cap_hits.values())
+    assert tight.cap_hit_share == {h: n / (PATHS * HORIZON) for h, n in tight.cap_hits.items()}
+    assert 0 < max(tight.cap_hit_share.values()) < 1
+
+
+def test_no_cap_leaves_the_bank_on_the_production_simulation(ctx):
+    gb.clear_fit_cache()
+    bank = gb.garch_bank(ctx, "garch", SEED, vol_cap=None)
+    assert bank.vol_cap is None and bank.cap_hits == {} and bank.cap_hit_share == {}
+    mixes = _mixes(np.random.default_rng(12), 4, 5)
+    theirs = _production_years(bank, ctx, mixes)
+    assert np.max(np.abs(bank.years(mixes) - theirs)) <= 1e-10
