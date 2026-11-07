@@ -54,7 +54,7 @@ def _const(x):
 )
 def test_constant_differences_give_exact_answers(d_dd, d_ret, label):
     table, months = _table(_const(d_dd), _const(d_ret))
-    res = A.confirmatory_test(table, months, resamples=200)
+    res = A.confirmatory_test(table, months, eligible=months, resamples=200)
     assert res["theta_dd"]["value"] == pytest.approx(d_dd)
     assert res["theta_ret"]["value"] == pytest.approx(d_ret)
     assert res["theta_dd"]["interval"]["24"] == pytest.approx([d_dd, d_dd])
@@ -71,7 +71,7 @@ def test_bootstrap_matches_a_direct_computation():
     d_dd = rng.normal(0.012, 0.02, size=(6, K))
     d_ret = rng.normal(-0.001, 0.01, size=(6, K))
     table, months = _table(d_dd, d_ret)
-    res = A.confirmatory_test(table, months, resamples=500)
+    res = A.confirmatory_test(table, months, eligible=months, resamples=500)
     per_origin_dd = d_dd.mean(axis=0)
     per_origin_ret = d_ret.mean(axis=0)
     assert res["theta_dd"]["value"] == pytest.approx(per_origin_dd.mean())
@@ -102,11 +102,11 @@ def test_only_eligible_origins_enter():
 def test_a_blocking_label_on_arm_1_is_inconclusive_and_usable_warnings_are_not():
     table, months = _table(_const(0.02), _const(0.0),
                            statuses={(C.FRONTIER, 2, 5): C.ANCHOR_FAILED})  # fmt: skip
-    res = A.confirmatory_test(table, months, resamples=100)
+    res = A.confirmatory_test(table, months, eligible=months, resamples=100)
     assert res["label"] == A.INCONCLUSIVE and res["blocking_cells"][0]["status"] == C.ANCHOR_FAILED
     table, months = _table(_const(0.02), _const(0.0),
                            statuses={(C.FRONTIER, 2, 5): C.INSUFFICIENT_STARTS})  # fmt: skip
-    assert A.confirmatory_test(table, months, resamples=100)["label"] == A.PASS
+    assert A.confirmatory_test(table, months, eligible=months, resamples=100)["label"] == A.PASS
 
 
 def test_a_missing_outcome_at_an_eligible_cell_is_inconclusive():
@@ -114,13 +114,40 @@ def test_a_missing_outcome_at_an_eligible_cell_is_inconclusive():
     cell = (table["arm"] == C.MIN_TDD) & table["pooled"] & (table["month"] == months[5])
     cell &= np.isclose(table["r_fraction"], C.RISK_FRACTIONS[2])
     table.loc[cell, "ret_m"] = np.nan  # one arm-3 outcome of 360 cells
-    res = A.confirmatory_test(table, months, resamples=100)
+    res = A.confirmatory_test(table, months, eligible=months, resamples=100)
     assert res["label"] == A.INCONCLUSIVE
     assert res["blocking_cells"] == [
         {"arm": C.MIN_TDD, "month": months[5], "rf": round(C.RISK_FRACTIONS[2], 6),
          "status": A.MISSING_OUTCOME}
     ]  # fmt: skip
     assert "Inconclusive: 1 eligible cells" in res["verdict_text"]
+
+
+def test_eligible_origins_are_required():
+    table, months = _table(_const(0.02), _const(0.0))
+    with pytest.raises(TypeError):
+        A.confirmatory_test(table, months, resamples=100)  # type: ignore[call-arg]
+
+
+def test_an_eligible_origin_with_every_row_missing_is_inconclusive():
+    table, months = _table(_const(0.02), _const(0.0))
+    table = pd.DataFrame(table[table["month"] != months[7]])  # the whole origin vanished
+    res = A.confirmatory_test(table, months, eligible=months, resamples=100)
+    assert res["label"] == A.INCONCLUSIVE
+    assert res["eligible_origins"] == K
+    missing = {(c["arm"], c["month"]) for c in res["blocking_cells"]}
+    assert missing == {(C.FRONTIER, months[7]), (C.MIN_TDD, months[7])}
+    assert len(res["blocking_cells"]) == 2 * len(C.RISK_FRACTIONS)
+
+
+def test_an_eligible_origin_with_every_outcome_missing_is_inconclusive():
+    table, months = _table(_const(0.02), _const(0.0))
+    gone = table["month"] == months[7]
+    table.loc[gone, ["dd_m", "ret_m"]] = np.nan
+    table.loc[gone, "complete"] = False
+    res = A.confirmatory_test(table, months, eligible=months, resamples=100)
+    assert res["label"] == A.INCONCLUSIVE and res["eligible_origins"] == K
+    assert {c["status"] for c in res["blocking_cells"]} == {A.MISSING_OUTCOME}
 
 
 def test_missing_outcomes_at_ineligible_origins_do_not_block():
@@ -134,7 +161,7 @@ def test_missing_outcomes_at_ineligible_origins_do_not_block():
 
 def test_point_estimate_verdict_counts_a_zero_return_difference():
     table, months = _table(_const(0.02), _const(0.0))
-    res = A.confirmatory_test(table, months, resamples=100)
+    res = A.confirmatory_test(table, months, eligible=months, resamples=100)
     assert res["theta_ret"]["value"] == pytest.approx(0.0)
     assert res["point_estimate_verdict"] == A.PASS
 
@@ -143,7 +170,7 @@ def test_uneven_across_risk_flag():
     d_dd = _const(0.03)
     d_dd[:3] = -0.001  # three levels go the wrong way, the pooled test still passes
     table, months = _table(d_dd, _const(0.0))
-    res = A.confirmatory_test(table, months, resamples=100)
+    res = A.confirmatory_test(table, months, eligible=months, resamples=100)
     assert res["label"] == A.PASS and res["uneven_across_risk"]
 
 
@@ -260,3 +287,11 @@ def test_ensemble_rows_score_against_arm_1():
     rows = A.ensemble_rows(A.ensemble_picks(cand, weights), pool)
     assert list(rows["arm"]) == ["ensemble_0"] and rows["weights"].iloc[0] == [0.6, 0.4]
     assert rows["status"].iloc[0] == C.OK and bool(rows["pooled"].iloc[0])
+
+
+def test_eligible_origins_come_from_the_frozen_cscv_months():
+    parent = {"menus": {"research2003": {"cscv": {"months": ["2010-01", "2010-02"]}}}}
+    assert A.eligible_origins(parent, "research2003") == ["2010-01", "2010-02"]
+    for broken in ({"menus": {"research2003": {}}}, {"menus": {"research2003": {"cscv": {}}}}):
+        with pytest.raises(ValueError, match="frozen eligible origins"):
+            A.eligible_origins(broken, "research2003")

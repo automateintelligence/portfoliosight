@@ -220,11 +220,21 @@ def _label(a: bool, b: bool) -> str:
     return PASS if a and b else FAIL_DD if b else FAIL_RET if a else FAIL_BOTH
 
 
+def eligible_origins(parent: Mapping[str, Any], menu: str) -> list[str]:
+    """The frozen eligible origins of `menu` (`menus.<menu>.cscv.months` of the parent manifest,
+    the 234 origins with a complete realized year, v3 §3); a ValueError when absent."""
+    months = ((parent.get("menus") or {}).get(menu) or {}).get("cscv", {}).get("months")
+    if not months:
+        raise ValueError(f"the parent manifest has no frozen eligible origins for {menu} "
+                         "(menus.<menu>.cscv.months)")  # fmt: skip
+    return [str(m) for m in months]
+
+
 def confirmatory_test(
     table: pd.DataFrame,
     months: Sequence[str],
     *,
-    eligible: Sequence[str] | None = None,
+    eligible: Sequence[str],
     candidate: str = C.MIN_TDD,
     comparator: str = C.FRONTIER,
     blocks: Sequence[int] = evidence.BLOCKS,
@@ -235,14 +245,13 @@ def confirmatory_test(
 
     `table` holds the selections with their realized columns (`ret_m`, `dd_m`, `complete`);
     `months` is the chronological origin index of the bootstrap (the schedule); `eligible` the
-    origins with a complete realized year (default: those with a complete row).
+    frozen eligible origins (`eligible_origins`), never derived from the rows, so an eligible
+    origin whose rows or outcomes are all missing is a blocking cell, not a dropped origin.
     """
     rows = locked_rows(table)
     months = [str(m) for m in months]
-    if eligible is None:
-        done = _frame(rows.loc[rows["complete"].astype("boolean").fillna(False).to_numpy(bool)])
-        eligible = sorted(set(done["month"].astype(str)))
-    eligible = [m for m in months if m in set(eligible)]
+    frozen = {str(m) for m in eligible}
+    eligible = [m for m in months if m in frozen]
     mask = np.array([m in set(eligible) for m in months])
     k = len(months)
 
@@ -565,7 +574,7 @@ def analyze_job(
     facts = parent["menus"][menu]
     months = [str(m) for m in facts["schedule"]]
     frozen = facts.get("cscv") or {}
-    eligible = [m for m in frozen.get("months", []) if m in set(months)] or None
+    eligible = eligible_origins(parent, menu)
     arms = C.V3_ARMS if engine == "replay" else C.V3_GARCH_REPORTED
     rows = locked_rows(table)
     rows = _frame(rows.loc[rows["arm"].isin([*arms, C.APP_FRONTIER])])
@@ -573,6 +582,8 @@ def analyze_job(
         "job": Path(job_dir).name,
         "parent_digest": parent["digest"],
         "selections": int(len(tables["selections"])),
+        "eligible_frozen": len(eligible),
+        "eligible_outside_schedule": sorted(set(eligible) - set(months)),
         "labels": tables["selections"]["status"].value_counts().to_dict(),
         "confirmatory": confirmatory_test(table, months, eligible=eligible),
         "arms": arm_summary(rows, [*arms, C.APP_FRONTIER]),
