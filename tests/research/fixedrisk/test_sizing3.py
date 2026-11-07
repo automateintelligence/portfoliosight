@@ -89,3 +89,27 @@ def test_projection_rules(v2_task, decision):
     p = _projection(v3_search=1000.0, v2_task=v2_task, workers=1000)
     assert p["projected_wall_hours"] == pytest.approx(v2_task / 3600.0)
     assert p["decision"] == decision
+
+
+def test_sizing_task_runs_a_task_and_the_solver_check(tmp_path, monkeypatch):
+    from portfoliosight.research.fixedrisk import data
+
+    from . import fakes
+
+    inputs = fakes.synthetic_inputs()
+    monkeypatch.setattr(data, "load_inputs", lambda *a, **k: inputs)
+    month = data.schedule(inputs, fakes.ALPHA)[-2]
+    payload = {
+        "snapshot": "/snap", "tasks_dir": str(tmp_path / "tasks"), "digest": "sizing",
+        "check_calls": 8,
+        "spec": dict(menu="research2003", month=month, engine="replay", protocol=3, calls=4,
+                     evaluate=False),
+    }  # fmt: skip
+    out = S.sizing_task(payload)
+    assert out["month"] == month and out["peak_rss_bytes"] > 0
+    assert out["timings"]["pool_rows"] > 0 and out["timings"]["pool_bytes"] > 0
+    assert len(out["native_768"]) == len(out["native_check"]) == len(C.RISK_FRACTIONS)
+    assert out["search_seconds"] > 0
+    assert (tmp_path / "tasks" / f"research2003_{month}_replay.parquet").is_file()
+    verdict = S.check_verdict([out])
+    assert verdict["total"] == 6 and not verdict["accepted"]  # 36 columns are needed

@@ -393,6 +393,26 @@ def cscv_arms(
     return cscv.cscv_candidates(masks, values, lower_is_better=True)
 
 
+def dsr_arms(
+    rows: pd.DataFrame, disjoint: Sequence[str], arms: Sequence[str] = C.V3_ARMS
+) -> dict[str, Any]:
+    """§7.2: the deflated Sharpe ratio of arm 3's Delta_DD(o) against arm 1 on the disjoint
+    intervals, the trials being every other arm's Delta_DD(o) against arm 1 (arm 3 first)."""
+    from portfoliosight.research.fixedrisk import dsr
+
+    months = [str(m) for m in disjoint]
+    base = arm_grid(rows, C.FRONTIER, "dd_m", months)
+    order = [C.MIN_TDD, *[a for a in arms if a not in (C.FRONTIER, C.MIN_TDD)]]
+    series = np.stack(
+        [evidence._masked_mean(base - arm_grid(rows, arm, "dd_m", months), axis=0)
+         for arm in order],
+        axis=1,
+    )  # fmt: skip
+    ok = np.isfinite(series).all(axis=1)
+    result = dsr.deflated_sharpe(series[ok], primary=0).record()
+    return {"trials": order, "intervals": int(ok.sum()), **result}
+
+
 # --------------------------------------------------------------------- ensemble screen (§7.3)
 
 
@@ -535,6 +555,9 @@ def analyze_job(
         )
     if len(arms) == len(C.V3_ARMS):
         result["rank_agreement"] = rank_agreement(rows, months)
+    disjoint = [str(i["month"]) for i in facts.get("disjoint_intervals", [])]
+    if len(arms) == len(C.V3_ARMS) and disjoint:
+        result["dsr"] = dsr_arms(rows, disjoint)
     masks = cscv_arms(rows, frozen, arms) if frozen else None
     if masks is not None:
         result["cscv"] = {
@@ -542,3 +565,25 @@ def analyze_job(
             "note": masks.pbo_note, "choice_shares": masks.choice_shares(list(arms)),
         }  # fmt: skip
     return result
+
+
+def ensemble_rows(picks: pd.DataFrame, pool: pd.DataFrame) -> pd.DataFrame:
+    """The screen's picks as selection-like rows (arm `ensemble_<combination>`, pooled, usable),
+    so `realized_outcomes` and `confirmatory_test(candidate=...)` score them against arm 1."""
+    by_record = pool.set_index("record")
+    rows = []
+    for pick in picks.to_dict("records"):
+        src = by_record.loc[int(pick["record"])]
+        rows.append(
+            {
+                "sel_id": f"{src['menu']}|{src['month']}|{src['engine']}|ensemble|"
+                f"{pick['lookback']}|{float(pick['r_fraction']):.6f}|{int(pick['combination'])}",
+                "kind": "main", "menu": src["menu"], "month": src["month"],
+                "origin": src["origin"], "engine": src["engine"], "lookback": pick["lookback"],
+                "r_fraction": float(pick["r_fraction"]), "lam": None,
+                "arm": f"ensemble_{int(pick['combination'])}", "pooled": True, "status": C.OK,
+                "weights": list(np.asarray(src["weights"], dtype=float)),
+                "sigma": float(src["sigma"]), "tdd": float(src["tdd"]),
+            }
+        )  # fmt: skip
+    return pd.DataFrame(rows)

@@ -209,3 +209,24 @@ def test_ensemble_picks_tie_to_the_lowest_record():
     weights[1, 0] = 1.0  # mu only: every candidate ties, record 0 wins
     picks = A.ensemble_picks(cand, weights)
     assert picks.set_index("combination")["record"].to_dict() == {0: 2, 1: 0}
+
+
+def test_dsr_arms_puts_arm_3_first_and_uses_the_disjoint_months():
+    months = month_labels(30)
+    rng = np.random.default_rng(2)
+    noise = rng.normal(0, 0.01, size=(6, 30))
+    rows = _six_arm_rows(months, lambda i, o: 0.1, lambda i, o: 0.1 + noise[i, o])
+    out = A.dsr_arms(rows, months[::3])
+    assert out["trials"][0] == C.MIN_TDD and len(out["trials"]) == 5
+    assert out["intervals"] == 10 and out["n"] == 10
+
+
+def test_ensemble_rows_score_against_arm_1():
+    pool = _pool_rows().assign(menu="research2003", month="2010-01", origin=None,
+                               engine="replay", sigma=0.1)  # fmt: skip
+    cand = A.ensemble_candidates(pool)
+    weights = np.zeros((1, 6))
+    weights[0, 1] = 1.0
+    rows = A.ensemble_rows(A.ensemble_picks(cand, weights), pool)
+    assert list(rows["arm"]) == ["ensemble_0"] and rows["weights"].iloc[0] == [0.6, 0.4]
+    assert rows["status"].iloc[0] == C.OK and bool(rows["pooled"].iloc[0])
