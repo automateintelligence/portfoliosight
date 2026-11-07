@@ -4,6 +4,11 @@ PortfolioSight shows long-only investment mixes at a chosen level of risk, and t
 one-year outcomes each mix could have. These are the terms used for how those ranges are
 simulated.
 
+**Mix**:
+How money is split across the funds of a menu, as a weight per fund. "Your starting mix" is the
+one the user entered.
+_Also called_: allocation (the same thing)
+
 ## Simulation
 
 **Lookback**:

@@ -5,7 +5,7 @@ both presets of the mock; standard library only).
 
 Per viewport, theme and preset: with details off and the sections expanded through their chips,
 `document.body.innerText` matches none of the fifteen forbidden patterns (word-bounded,
-case-insensitive) and contains every plain label of the assertion ("The mix you entered" only where
+case-insensitive) and contains every plain label of the assertion ("Your starting mix" only where
 an allocation exists); the `disclaimer` element's text equals the spec 3.7 paragraph verbatim, is
 visible, and has neither an `aria-expanded="false"` ancestor nor a `section-*` ancestor (checked on
 load, expanded, and with details on); "Historical math, not investment advice." is the whole text of
@@ -346,7 +346,7 @@ const PLAIN_ALWAYS = [
   "Best-return mix at this risk", "Selected mix", "More return", "More diversified", "Optimized",
   "Same menu, different years of history", "Historical math, not investment advice.",
 ];
-const PLAIN_WITH_ALLOCATION = ["The mix you entered"];
+const PLAIN_WITH_ALLOCATION = ["Your starting mix"];
 const TECHNICAL = [
   "Standard deviation of yearly return", "effective number of bets, minimum torsion", "minimum torsion",
   "Estimated central 95% range",

@@ -391,7 +391,7 @@ test("every frontier line is named at its right end and the names do not collide
 test("the square and the open circle show the same card as the selected mix", async ({ page }, testInfo) => {
   await open(page);
   const card = page.getByTestId("mix-card");
-  const titles: Record<string, string> = { selected: "Selected mix", current: "The mix you entered", div: "Optimized" };
+  const titles: Record<string, string> = { selected: "Selected mix", current: "Your starting mix", div: "Optimized" };
   if (isPhone(testInfo.project.name)) {
     // at rest on Optimized the selected point sits on the open circle, and a tap there reaches the
     // point (it pins its card); move the point off the circle first
@@ -598,7 +598,7 @@ test("stress cards name the selected mix and set the entered mix in bold", async
   for (let i = 0; i < 3; i++) {
     await expect(cards.nth(i).locator(".big")).toHaveText(/^What this mix did: [+−]?\d+\.\d% \(Selected mix\)$/);
     const entered = cards.nth(i).locator("strong");
-    await expect(entered).toHaveText(/^The mix you entered: [+−]?\d+\.\d%$/);
+    await expect(entered).toHaveText(/^Your starting mix: [+−]?\d+\.\d%$/);
     expect(Number(await entered.evaluate((el) => getComputedStyle(el).fontWeight))).toBeGreaterThanOrEqual(700);
     expect(Number(await entered.locator(".num").evaluate((el) => getComputedStyle(el).fontWeight))).toBeGreaterThanOrEqual(700);
   }
