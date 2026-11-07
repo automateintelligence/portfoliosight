@@ -195,6 +195,9 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
       <p className="hint" data-testid="funds-hint">
         {plain.fundsAsYouType}
       </p>
+      <p className="hint" data-testid="mix-means">
+        {plain.mixMeans}
+      </p>
       {changed && (
         <div className="recalc" role="status">
           <span>{plain.fundsChanged}</span>
@@ -210,9 +213,9 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
         </p>
       )}
       {mixStatus === "all_set_aside" && <p className="hint">{plain.allSetAside}</p>}
-      {mixStatus === "unknown_price" && <p className="hint">A fund with shares entered has no current price, so the mix you entered cannot be valued.</p>}
+      {mixStatus === "unknown_price" && <p className="hint">A fund with shares entered has no current price, so your starting mix cannot be valued.</p>}
       {mixStatus === "ok" && setAside !== null && setAside > 0.0005 && (
-        <p className="hint">{`${pct(setAside)} of the mix you entered is in funds set aside in this view; the rest is scaled up to 100%.`}</p>
+        <p className="hint">{`${pct(setAside)} of your starting mix is in funds set aside in this view; the rest is scaled up to 100%.`}</p>
       )}
       <div className="rows" role="list" ref={rowsRef}>
         <div className="row row-head" aria-hidden="true">

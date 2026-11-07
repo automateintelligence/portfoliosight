@@ -46,7 +46,7 @@ describe("copy (spec 3.6, 3.7)", () => {
     expect([copy.plain.riskBad, copy.plain.riskTypical, copy.plain.resultStripSuffix]).toEqual(["Bad year", "Typical year", "over one year"]);
     expect(copy.plain.frontier).toBe("Best return at each level of risk");
     expect(copy.plain.ghosts).toBe("Same menu, different years of history");
-    expect(copy.plain.currentMix).toBe("The mix you entered");
+    expect(copy.plain.currentMix).toBe("Your starting mix");
     expect(copy.plain.building).toBe("Give us a moment: computing this menu (about 30 seconds)");
     expect(copy.plain.advice).toBe("Historical math, not investment advice.");
     expect(copy.capsRule("25", 23)).toBe("No single fund above 25% (menu of 23)");

@@ -31,7 +31,7 @@ export const plain = {
   /** The legend's and the line's name for the No limits curve (owner direction 2026-10-13). */
   noAllocationLimits: "No allocation limits",
   resetLimits: "Reset limits",
-  currentMix: "The mix you entered",
+  currentMix: "Your starting mix",
   selectedMix: "Selected mix",
   cellMix: "The mix at this spot",
   /** The selected mix's card: how to keep it open, and how to let it go once pinned. */
@@ -63,10 +63,12 @@ export const plain = {
   sharePreview: "PortfolioSight is in private preview: the link opens for invited testers only until the site is public.",
   custom: "Custom…",
   symbolsHelp: "Only funds and stocks with verified current data are offered.",
-  trades: "Moves to get from the mix you entered to the selected mix.",
+  trades: "Moves to get from your starting mix to the selected mix.",
   tradesExport: "Export CSV",
   fundsRecalculate: "Recalculate with these funds",
   fundsAsYouType: "Amounts apply as you type.",
+  /** Mix and allocation name the same thing (owner direction 2026-11-07). */
+  mixMeans: "A mix, also called an allocation, is how your money is split across funds.",
   fundsChanged: "The fund list has changed: recalculate to see it on the chart.",
   fundsNone: "No amounts entered: tickers only.",
   fundsClear: "Clear all",
@@ -79,7 +81,7 @@ export const plain = {
   colSelected: "Selected mix %",
   stressSentinel: "Not enough of this mix existed then to say.",
   notEnoughHistory: "not enough shared history",
-  allSetAside: "The mix you entered uses only funds set aside in this view",
+  allSetAside: "Your starting mix uses only funds set aside in this view",
   lowRisk: "there is little risk here, but it may all be in one place",
   chips: { funds: "Funds & amounts", trades: "Trades", stress: "Stress tests", settings: "Settings" },
 } as const;

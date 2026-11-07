@@ -97,6 +97,7 @@ it("says amounts apply as you type and applies them without a button", () => {
   const onAmount = vi.fn();
   show({ unit: "usd", amounts: [100, 100], onAmount });
   expect(screen.getByTestId("funds-hint").textContent).toBe("Amounts apply as you type.");
+  expect(screen.getByTestId("mix-means").textContent).toBe("A mix, also called an allocation, is how your money is split across funds.");
   expect(screen.queryByTestId("use-menu")).toBeNull();
   fireEvent.change(screen.getByLabelText(`${funds[0].id} amount in dollars`), { target: { value: "250" } });
   expect(onAmount).toHaveBeenCalledWith(funds[0].id, 250);
