@@ -435,3 +435,97 @@ def ensemble_picks(candidates: pd.DataFrame, weights: np.ndarray) -> pd.DataFram
                  "record": int(row["record"]), "score": float(scores[i, c])}
             )  # fmt: skip
     return pd.DataFrame(out)
+
+
+# ------------------------------------------------------------------------------- one job
+
+SUMMARY_COLUMNS = (
+    "ret_m", "dd_m", "vol_m", "ret_net", "dd_net", "real_m", "ret_2y", "ret_3y", "ret_5y",
+    "sigma", "mu", "u1", "bad", "tdd", "h", "enlc", "enb", "dr2",
+)  # fmt: skip
+
+
+def arm_summary(rows: pd.DataFrame, arms: Sequence[str]) -> list[dict[str, Any]]:
+    """Per arm and risk level, the mean of each realized and model figure over the usable rows
+    with a complete realized year (realized means), or all usable rows (model means)."""
+    out = []
+    usable = rows[rows["status"].isin(C.V3_USABLE)]
+    for arm in arms:
+        for rf in RFS:
+            sub = usable[(usable["arm"] == arm) & (usable["rf"] == rf)]
+            done = sub[sub["complete"].fillna(False).astype(bool)] if "complete" in sub else sub
+            entry: dict[str, Any] = {"arm": arm, "rf": rf, "n": int(len(sub)),
+                                     "n_complete": int(len(done))}  # fmt: skip
+            for col in SUMMARY_COLUMNS:
+                if col not in sub:
+                    continue
+                source = done if col in R.REALIZED_COLUMNS else sub
+                values = pd.to_numeric(source[col], errors="coerce")
+                entry[col] = float(values.mean()) if values.notna().any() else None
+            out.append(entry)
+    return out
+
+
+def diversification(rows: pd.DataFrame, months: Sequence[str]) -> dict[str, Any]:
+    """Arm 3 against arm 1: mean differences of ENB, DR^2 and ENLC, and the share of (origin, r)
+    where arm 3 has the higher ENB (§5)."""
+    out: dict[str, Any] = {}
+    for col in ("enb", "dr2", "enlc"):
+        a3, a1 = arm_grid(rows, C.MIN_TDD, col, months), arm_grid(rows, C.FRONTIER, col, months)
+        d = (a3 - a1)[np.isfinite(a3) & np.isfinite(a1)]
+        out[f"{col}_mean_difference"] = float(d.mean()) if d.size else None
+        if col == "enb":
+            out["share_higher_enb"] = float(np.mean(d > 0)) if d.size else None
+    return out
+
+
+def analyze_job(
+    job_dir: Path,
+    parent: Mapping[str, Any],
+    menu: str,
+    engine: str,
+    inputs: Any,
+    callables: tuple,
+) -> dict[str, Any]:
+    """Realized outcomes per arm, the confirmatory test and the descriptive statistics of one
+    job (the report's inputs). No ensemble code runs here (§7.3, point 1)."""
+    tables = load_tables(job_dir, parent["digest"])
+    horizon, span, spy_tr, cpi, dgs10 = callables
+    table = realized_outcomes(
+        tables["selections"], horizon, span=span, cpi=cpi, spy_tr=spy_tr, dgs10=dgs10
+    )
+    facts = parent["menus"][menu]
+    months = [str(m) for m in facts["schedule"]]
+    frozen = facts.get("cscv") or {}
+    eligible = [m for m in frozen.get("months", []) if m in set(months)] or None
+    arms = C.V3_ARMS if engine == "replay" else C.V3_GARCH_REPORTED
+    rows = locked_rows(table)
+    rows = rows[rows["arm"].isin([*arms, C.APP_FRONTIER])]
+    result: dict[str, Any] = {
+        "job": Path(job_dir).name,
+        "parent_digest": parent["digest"],
+        "selections": int(len(tables["selections"])),
+        "labels": tables["selections"]["status"].value_counts().to_dict(),
+        "confirmatory": confirmatory_test(table, months, eligible=eligible),
+        "arms": arm_summary(rows, [*arms, C.APP_FRONTIER]),
+        "diversification": diversification(rows, months),
+        "descriptive_comparisons": {},
+    }
+    for arm in arms:
+        if arm in (C.FRONTIER, C.MIN_TDD):
+            continue
+        result["descriptive_comparisons"][f"{arm}_vs_{C.FRONTIER}"] = confirmatory_test(
+            table, months, eligible=eligible, candidate=arm
+        )
+        result["descriptive_comparisons"][f"{C.MIN_TDD}_vs_{arm}"] = confirmatory_test(
+            table, months, eligible=eligible, candidate=C.MIN_TDD, comparator=arm
+        )
+    if len(arms) == len(C.V3_ARMS):
+        result["rank_agreement"] = rank_agreement(rows, months)
+    masks = cscv_arms(rows, frozen, arms) if frozen else None
+    if masks is not None:
+        result["cscv"] = {
+            "evaluable": len(masks.evaluable), "total": masks.splits_total, "pbo": masks.pbo,
+            "note": masks.pbo_note, "choice_shares": masks.choice_shares(list(arms)),
+        }  # fmt: skip
+    return result

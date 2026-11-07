@@ -6,6 +6,10 @@
              [--placement JOB=HOST ...] [--estimate FILE ...]
     run      --run-dir R --menu M --engine E [--workers 6] [--snapshot S] [--host-label L]
     status   --run-dir R
+    v3-parent  --snapshot S --run-dir R --cpu-hours H [--calls 768] [--starts 3] [--months M ...]
+               [--sizing FILE] [--jobs research2003_replay ...]
+    v3-sizing  --snapshot S --out-dir D --v2-job-dir J [--ledger-cache C] [--workers 6]
+    v3-analyze --run-dir R --snapshot S --out FILE [--job research2003_replay]
 
 Run with `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` (workers refuse otherwise).
 """
@@ -147,6 +151,62 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_v3_parent(args: argparse.Namespace) -> int:
+    inputs = data.load_inputs(args.snapshot, ledger_cache=Path(args.run_dir) / "ledger_cache")
+    sizing = None
+    if args.sizing:
+        body = json.loads(Path(args.sizing).read_text())
+        sizing = {"file": str(args.sizing), "projection": body.get("projection"),
+                  "solver_check": body.get("solver_check")}  # fmt: skip
+        for item in (sizing["projection"] or {}), (sizing["solver_check"] or {}):
+            item.pop("projected_task_seconds", None)
+            item.pop("columns", None)
+    parent = manifest.build_parent_v3(
+        inputs, snapshot_dir=Path(args.snapshot), cpu_hours=args.cpu_hours,
+        jobs=tuple(args.jobs or manifest.V3_JOBS), calls=args.calls, starts=args.starts,
+        only_months=args.months, sizing=sizing, hooks=args.hooks,
+    )  # fmt: skip
+    path = manifest.write_parent(Path(args.run_dir), parent)
+    print(json.dumps({"parent": str(path), "digest": parent["digest"], "jobs": parent["jobs"]}))
+    return 0
+
+
+def cmd_v3_sizing(args: argparse.Namespace) -> int:
+    _require_blas()
+    from portfoliosight.research.fixedrisk import sizing3
+
+    body = sizing3.run_sizing(
+        snapshot=args.snapshot, out_dir=Path(args.out_dir), v2_job_dir=Path(args.v2_job_dir),
+        months=args.months, ledger_cache=args.ledger_cache, workers=args.workers,
+        calls=args.calls, starts=args.starts,
+    )  # fmt: skip
+    print(json.dumps({"out": str(Path(args.out_dir) / "sizing.json"),
+                      "projection": {k: v for k, v in body["projection"].items()
+                                     if k != "projected_task_seconds"},
+                      "solver_check": {k: v for k, v in (body["solver_check"] or {}).items()
+                                       if k != "columns"}}, indent=2, default=str))  # fmt: skip
+    return 0
+
+
+def cmd_v3_analyze(args: argparse.Namespace) -> int:
+    from portfoliosight.research.fixedrisk import analysis3, report
+
+    parent = manifest.read_parent(Path(args.run_dir))
+    inputs = data.load_inputs(args.snapshot, ledger_cache=Path(args.run_dir) / "ledger_cache")
+    if inputs.manifest_sha256 != parent["snapshot"]["manifest_sha256"]:
+        raise SystemExit("the snapshot's digest is not the parent manifest's")
+    job = parent["jobs"][args.job]
+    out = analysis3.analyze_job(
+        Path(args.run_dir) / args.job, parent, job["menu"], job["engine"], inputs,
+        report.make_callables(inputs, data),
+    )  # fmt: skip
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out).write_text(json.dumps(out, indent=2, default=str) + "\n")
+    print(json.dumps({"out": args.out, "label": out["confirmatory"]["label"],
+                      "verdict": out["confirmatory"]["verdict_text"]}))  # fmt: skip
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fixedrisk", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -194,6 +254,36 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("status", help="progress of every job of a run")
     p.add_argument("--run-dir", required=True)
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("v3-parent", help="write the v3 parent manifest")
+    p.add_argument("--snapshot", required=True)
+    p.add_argument("--run-dir", required=True)
+    p.add_argument("--cpu-hours", required=True, type=float, help="twice the sizing projection")
+    p.add_argument("--calls", type=int, default=768)
+    p.add_argument("--starts", type=int, default=C.V3_STARTS)
+    p.add_argument("--months", nargs="*", help="restrict the schedule (a smoke run)")
+    p.add_argument("--sizing", help="sizing.json whose projection and decision are recorded")
+    p.add_argument("--jobs", nargs="*")
+    p.add_argument("--hooks")
+    p.set_defaults(func=cmd_v3_parent)
+
+    p = sub.add_parser("v3-sizing", help="the v3 sizing run (protocol v3 §8.1)")
+    p.add_argument("--snapshot", required=True)
+    p.add_argument("--out-dir", required=True)
+    p.add_argument("--v2-job-dir", required=True, help="fr-run-v2b/research2003_replay")
+    p.add_argument("--ledger-cache")
+    p.add_argument("--workers", type=int, default=6)
+    p.add_argument("--months", nargs="*")
+    p.add_argument("--calls", type=int, default=768)
+    p.add_argument("--starts", type=int, default=C.V3_STARTS)
+    p.set_defaults(func=cmd_v3_sizing)
+
+    p = sub.add_parser("v3-analyze", help="realized outcomes and the confirmatory test of a job")
+    p.add_argument("--run-dir", required=True)
+    p.add_argument("--snapshot", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--job", default="research2003_replay")
+    p.set_defaults(func=cmd_v3_analyze)
     return parser
 
 
