@@ -6,7 +6,6 @@ import math
 from dataclasses import replace
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from portfoliosight.research.fixedrisk import contracts as C
@@ -14,7 +13,7 @@ from portfoliosight.research.fixedrisk import objectives3 as O
 from portfoliosight.research.fixedrisk.anchors import geometry
 from portfoliosight.research.fixedrisk.banks import replay_bank
 
-from .optimizer_data import synthetic_context
+from .optimizer_data import synthetic_context, with_history
 
 
 def _loop_drawdown(wealth_row: np.ndarray) -> float:
@@ -100,26 +99,10 @@ def test_worst_fall_constant_weights():
     assert O.worst_fall(returns, w) == pytest.approx(_loop_drawdown(wealth))
 
 
-def _with_history(ctx: C.OriginContext, extra_after: int = 0) -> C.OriginContext:
-    """A context whose history is its sample on business days ending at the origin, plus
-    `extra_after` crash days dated after the origin (which `H` must never read)."""
-    n = len(ctx.menu.holdings)
-    days = pd.bdate_range(end=pd.Timestamp(ctx.origin), periods=len(ctx.sample))
-    frame = pd.DataFrame(ctx.sample, index=days, columns=list(ctx.menu.holdings))
-    frame.iloc[0, 0] = np.nan  # a day without every holding is not a common row
-    if extra_after:
-        later = pd.bdate_range(
-            start=pd.Timestamp(ctx.origin) + pd.Timedelta(days=1), periods=extra_after
-        )
-        crash = pd.DataFrame(np.full((extra_after, n), -0.08), index=later, columns=frame.columns)
-        frame = pd.concat([frame, crash])
-    return replace(ctx, history=frame)
-
-
 def test_worst_fall_never_reads_after_the_origin():
     ctx = synthetic_context(funds=4, rows=400)
-    clean = _with_history(ctx)
-    leaked = _with_history(ctx, extra_after=30)
+    clean = with_history(ctx)
+    leaked = with_history(ctx, extra_after=30)
     w = np.full(4, 0.25)
     h_clean = O.worst_fall(O.history_returns(clean), w)
     h_leaked = O.worst_fall(O.history_returns(leaked), w)
@@ -173,7 +156,7 @@ def test_replay_absorbed_paths_do_not_raise(replay):
 
 def test_scorer_row_is_consistent(replay):
     ctx, bank = replay
-    ctx = _with_history(ctx)
+    ctx = with_history(ctx)
     geo = geometry(ctx)
     r = geo.x(0.4)
     scorer = O.Scorer(geo, bank, O.history_returns(ctx), O.origin_basis(ctx), r)

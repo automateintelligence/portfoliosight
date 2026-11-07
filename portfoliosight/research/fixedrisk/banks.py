@@ -44,6 +44,8 @@ class ReplayBank:
     engine: Engine = "replay"
     index: np.ndarray | None = field(default=None, repr=False)  # P x 252 ordered day indices
     _fund_sums: np.ndarray | None = field(default=None, repr=False)
+    _work: list[np.ndarray] = field(default_factory=list, repr=False)  # reused P x H buffers
+    _buffers: list[np.ndarray] = field(default_factory=list, repr=False)
 
     @property
     def fund_sums(self) -> np.ndarray:
@@ -64,7 +66,7 @@ class ReplayBank:
         """
         if self.index is None:
             raise ValueError("this replay bank keeps no ordered day index (built before v3)")
-        from .objectives3 import path_drawdowns
+        from .objectives3 import cumulative_drawdowns
 
         g = 1.0 + self.a_matrix @ np.asarray(w, dtype=float)
         dead = g <= 0.0
@@ -73,8 +75,10 @@ class ReplayBank:
         prefix[0] = 0.0
         np.cumsum(np.log(safe), out=prefix[1:])
         years = np.expm1(self.runs @ prefix)
-        wealth = np.cumprod(safe[self.index], axis=1)
-        drawdowns = path_drawdowns(wealth)
+        if not self._work or self._work[0].shape != self.index.shape:
+            self._work = [np.empty(self.index.shape)]
+        daily = np.take(safe, self.index, out=self._work[0])
+        drawdowns = cumulative_drawdowns(daily, self._buffers)
         if dead.any():
             lost = dead[self.index].any(axis=1)
             years[lost] = -1.0

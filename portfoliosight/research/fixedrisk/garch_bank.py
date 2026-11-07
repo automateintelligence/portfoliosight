@@ -409,6 +409,7 @@ class GarchBank:
     growth_bound_ok: bool = True
 
     def __post_init__(self) -> None:
+        self._dd_buffers: list[np.ndarray] = []  # path_terms' reusable work buffer
         self.paths = self.levelled_t.shape[1] // self.horizon
         self.m = self.mu_s / TRADING_DAYS  # daily chart means
 
@@ -508,7 +509,7 @@ class GarchBank:
         `S_pn = 252 m_n + k(w) (sum_t R'_ptn - 252 R_bar'_n)`, so `S_p w` is the path's additive
         year.
         """
-        from .objectives3 import path_drawdowns
+        from .objectives3 import cumulative_drawdowns
 
         mixes = self._mixes(w)
         if len(mixes) != 1:
@@ -521,7 +522,7 @@ class GarchBank:
         years = daily.prod(axis=1)
         years[lost] = 0.0
         years -= 1.0
-        drawdowns = path_drawdowns(np.cumprod(daily, axis=1))
+        drawdowns = cumulative_drawdowns(daily, self._dd_buffers)  # daily: now the wealth
         drawdowns[lost] = 1.0
         k = float(self._scale(mixes)[0])
         sums = self.horizon * self.m[None, :] + k * (

@@ -47,3 +47,24 @@ def synthetic_context(
         risk_free_rate=rf,
         inputs_sha256=digest,
     )
+
+
+def with_history(ctx: OriginContext, extra_after: int = 0) -> OriginContext:
+    """`ctx` with a history: its sample on business days ending at the origin (the first row
+    missing one holding, so it is not a common row), plus `extra_after` crash days dated after
+    the origin, which nothing may read."""
+    from dataclasses import replace
+
+    import pandas as pd
+
+    n = len(ctx.menu.holdings)
+    days = pd.bdate_range(end=pd.Timestamp(ctx.origin), periods=len(ctx.sample))
+    frame = pd.DataFrame(np.array(ctx.sample), index=days, columns=list(ctx.menu.holdings))
+    frame.iloc[0, 0] = np.nan
+    if extra_after:
+        later = pd.bdate_range(
+            start=pd.Timestamp(ctx.origin) + pd.Timedelta(days=1), periods=extra_after
+        )
+        crash = pd.DataFrame(np.full((extra_after, n), -0.08), index=later, columns=frame.columns)
+        frame = pd.concat([frame, crash])
+    return replace(ctx, history=frame)

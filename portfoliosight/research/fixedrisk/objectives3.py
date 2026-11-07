@@ -54,9 +54,27 @@ FIELDS = (
 INDEX = {name: i for i, name in enumerate(FIELDS)}
 
 
-def path_drawdowns(wealth: np.ndarray) -> np.ndarray:
-    """Maximum drawdown of each path of a (P, H) wealth array, `realized._drawdown`'s rule."""
-    return np.asarray(_drawdown(np.asarray(wealth, dtype=float).T), dtype=float)
+def path_drawdowns(wealth: np.ndarray, work: np.ndarray | None = None) -> np.ndarray:
+    """Maximum drawdown of each path of a (P, H) wealth array: `realized._drawdown`'s arithmetic
+    (peak the running maximum, at least the starting value 1) along each contiguous row.
+
+    `work`, a (P, H) float64 buffer, is used for the running peak instead of a fresh array."""
+    w = np.ascontiguousarray(wealth, dtype=float)
+    peak = np.maximum.accumulate(w, axis=1, out=work)
+    np.maximum(peak, 1.0, out=peak)
+    np.divide(w, peak, out=peak)
+    return 1.0 - peak.min(axis=1)
+
+
+def cumulative_drawdowns(daily_gross: np.ndarray, buffers: list[np.ndarray]) -> np.ndarray:
+    """Path maximum drawdowns of (P, H) daily gross returns, compounded in place.
+
+    `buffers` holds a reusable work buffer (created on first use): the hot path allocates no
+    large array per call. `daily_gross` is overwritten with the wealth paths."""
+    if not buffers or buffers[0].shape != daily_gross.shape:
+        buffers[:] = [np.empty_like(daily_gross)]
+    np.cumprod(daily_gross, axis=1, out=daily_gross)
+    return path_drawdowns(daily_gross, buffers[0])
 
 
 def tail_mean(values: np.ndarray, tail: int = C.TAIL_PATHS) -> float:
