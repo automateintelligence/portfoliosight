@@ -137,3 +137,13 @@ def test_realized_table_complete_and_incomplete(tmp_path):
     assert (done["ret_net"] < done["ret_m"] + 1e-9).all()
     assert done["real_m"].notna().all()
     assert HOLDINGS == ("A", "B", "C")
+
+
+def test_realized_volatility_by_hand():
+    # v3 §5: annualized sample standard deviation of the cohort's daily returns
+    out = R.monthly_rebalanced(A_B, DAYS, W)
+    wealth = np.array([1.05, 1.05, 1.05 + 0.0525, 1.155])
+    daily = wealth / np.concatenate([[1.0], wealth[:-1]]) - 1.0
+    assert out.volatility[0] == pytest.approx(np.std(daily, ddof=1) * math.sqrt(252))
+    flat = R.daily_rebalanced(np.zeros((5, 2)), W)
+    assert flat.volatility[0] == 0.0

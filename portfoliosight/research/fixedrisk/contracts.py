@@ -359,3 +359,48 @@ class SearchOrigin(Protocol):
         solver: str = "exact_grad",
         starts: int = STARTS,
     ) -> OriginResult: ...
+
+
+# --------------------------------------------------------------------------- protocol v3
+
+V3_PROTOCOL_PATH = "docs/plans/2026-11-07-fixed-risk-experiment-v3-protocol.md"
+V3_PROTOCOL_REVISION = 1
+V3_MENU = "research2003"
+
+# The six arms (v3 §2.2), in report order. Arms 1 and 6 use only mu_s and Sigma; arms 2-4 are
+# searched on the bank; arm 5 re-ranks the column's pool.
+FRONTIER = "frontier"  # arm 1, argmax mu_s'w on the narrow band (the test's comparator)
+U1_ARM = "U1"  # arm 2, argmax U1 on the wide band (v2's primary arm, the control)
+MIN_TDD = "min_tdd"  # arm 3, argmin TDD on the narrow band (primary, tested)
+CRASH_PENALTY = "crash_penalty"  # arm 4, argmax U1 - lambda H on the wide band
+MAX_ENLC = "max_enlc"  # arm 5, eligible pool member with the highest ENLC
+ENB_KNEE = "enb_knee"  # arm 6, the app's Optimized point on the exact risk line
+V3_ARMS = (FRONTIER, U1_ARM, MIN_TDD, CRASH_PENALTY, MAX_ENLC, ENB_KNEE)
+V3_SEARCHED = (U1_ARM, MIN_TDD, CRASH_PENALTY)
+V3_GARCH_ARMS = (FRONTIER, U1_ARM, MIN_TDD)  # the GARCH confirmation (v3 §6.4, §11.11)
+APP_FRONTIER = "app_frontier"  # reference row: the app's frontier mix on the exact risk line
+
+# Bands (protocol amendment of 2026-11-07): arms 1 and 3 on the narrow band, arms 2, 4 and 5 on
+# the wide band, arm 6 on the exact line (within the app's 1e-6).
+TAU_NARROW = TAU_R_SENSITIVITY  # 0.001
+TAU_WIDE = TAU_R  # 0.01
+ARM_TAU: dict[str, float] = {
+    FRONTIER: TAU_NARROW,
+    U1_ARM: TAU_WIDE,
+    MIN_TDD: TAU_NARROW,
+    CRASH_PENALTY: TAU_WIDE,
+    MAX_ENLC: TAU_WIDE,
+}
+
+TAIL_PATHS = 100  # TDD and ENLC read the worst 5% of the 2,000 paths (decision Q1)
+LAMBDA = 0.1  # arm 4's crash-penalty weight (decision Q3)
+LAMBDA_SIDE = (0.05, 0.2)  # arm 4 side checks, showcase origins only
+ENLC_RETURN_TOL = 0.005  # arm 5: mu_s'w >= mu_s'w_F - 50 bp (v3 §2.6, §11.3)
+V3_SOLVER = "cobyla768"
+V3_CHECK_CALLS = 1536  # the arm 3 solver check (v3 §4.6)
+V3_STARTS = 3
+V3_MULTI_YEARS = (2, 3, 5)  # realized multi-year horizons (v3 §3, §11.7 with 5 years added)
+
+KNEE_COLLAPSED = "knee_collapsed"  # arm 6: the ladder gained no ENB (a valid selection)
+NO_ELIGIBLE = "no_eligible"  # arm 5: no pool member met the filter of §2.6
+V3_USABLE = (OK, INSUFFICIENT_STARTS, GROWTH_BOUND_FAILED, KNEE_COLLAPSED)

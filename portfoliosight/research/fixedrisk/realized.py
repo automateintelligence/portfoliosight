@@ -48,10 +48,13 @@ REALIZED_COLUMNS = (
     "ret_net",
     "dd_net",
     "turnover",
+    "vol_m",
     "real_m",
     "regime",
+    "ret_2y",
     "ret_3y",
     "ret_5y",
+    "real_2y",
     "real_3y",
     "real_5y",
 )
@@ -59,11 +62,14 @@ REALIZED_COLUMNS = (
 
 @dataclass(frozen=True)
 class Outcomes:
-    """Per-mix figures of one horizon: total return, maximum drawdown, summed rebalance turnover."""
+    """Per-mix figures of one horizon: total return, maximum drawdown, summed rebalance turnover
+    and realized volatility (annualized sample standard deviation of the cohort's daily returns,
+    the first measured from the funding value 1)."""
 
     annual: np.ndarray
     drawdown: np.ndarray
     turnover: np.ndarray
+    volatility: np.ndarray | None = None
 
 
 def rebalance_positions(days: Sequence[Any]) -> np.ndarray:
@@ -82,6 +88,16 @@ def _drawdown(wealth: np.ndarray) -> np.ndarray:
     return (1.0 - wealth / peak).max(axis=0)
 
 
+def _volatility(wealth: np.ndarray) -> np.ndarray:
+    """Annualized standard deviation (ddof 1) of the daily returns of a wealth path from 1."""
+    w = np.atleast_2d(np.asarray(wealth, dtype=float).T).T
+    previous = np.vstack([np.ones((1, w.shape[1])), w[:-1]])
+    daily = w / previous - 1.0
+    if len(daily) < 2:
+        return np.full(w.shape[1], np.nan)
+    return np.std(daily, axis=0, ddof=1) * math.sqrt(HORIZON_DAYS)
+
+
 def _mixes(weights: Any, n: int) -> np.ndarray:
     mixes = np.atleast_2d(np.asarray(weights, dtype=float))
     if mixes.shape[1] != n:
@@ -94,7 +110,7 @@ def daily_rebalanced(daily: np.ndarray, weights: Any) -> Outcomes:
     returns = np.asarray(daily, dtype=float)
     mixes = _mixes(weights, returns.shape[1])
     wealth = np.cumprod(1.0 + returns @ mixes.T, axis=0)
-    return Outcomes(wealth[-1] - 1.0, _drawdown(wealth), np.zeros(len(mixes)))
+    return Outcomes(wealth[-1] - 1.0, _drawdown(wealth), np.zeros(len(mixes)), _volatility(wealth))
 
 
 def monthly_rebalanced(
@@ -123,7 +139,7 @@ def monthly_rebalanced(
             holdings = mixes * value[:, None]
             turnover += trade
         start = end + 1
-    return Outcomes(wealth[-1] - 1.0, _drawdown(wealth), turnover)
+    return Outcomes(wealth[-1] - 1.0, _drawdown(wealth), turnover, _volatility(wealth))
 
 
 def cpi_factor(cpi: pd.Series, origin: Any, end: Any) -> float:
@@ -231,6 +247,7 @@ def realized_table(
         frame.loc[ids, "ret_net"] = net.annual
         frame.loc[ids, "dd_net"] = net.drawdown
         frame.loc[ids, "turnover"] = gross.turnover
+        frame.loc[ids, "vol_m"] = gross.volatility
         if cpi is not None:
             factor = cpi_factor(cpi, origin, end)
             frame.loc[ids, "real_m"] = [real_return(x, factor) for x in gross.annual]

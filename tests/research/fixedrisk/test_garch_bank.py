@@ -682,3 +682,26 @@ def test_no_cap_leaves_the_bank_on_the_production_simulation(ctx):
     mixes = _mixes(np.random.default_rng(12), 4, 5)
     theirs = _production_years(bank, ctx, mixes)
     assert np.max(np.abs(bank.years(mixes) - theirs)) <= 1e-10
+
+
+def test_path_terms_years_drawdowns_and_fund_sums(bank):
+    # v3 §2.3, §2.6: wealth is the cumulative product of 1 + y_pt; S w is the additive year
+    w = np.array([0.1, 0.2, 0.3, 0.4])
+    years, drawdowns, sums = bank.path_terms(w)
+    np.testing.assert_allclose(years, bank.years(w)[:, 0], rtol=0, atol=1e-12)
+    daily = ((_k(bank, w) * w) @ bank.levelled_t).reshape(PATHS, HORIZON)
+    daily += 1.0 + float(w @ bank.m) - _k(bank, w) * float(w @ bank.level_mean)
+    for p in (0, 11, PATHS - 1):
+        peak, worst = 1.0, 0.0
+        for value in np.cumprod(daily[p]):
+            peak = max(peak, value)
+            worst = max(worst, 1.0 - value / peak)
+        assert drawdowns[p] == pytest.approx(worst, abs=1e-13)
+    np.testing.assert_allclose(sums @ w, (daily - 1.0).sum(axis=1), rtol=0, atol=1e-12)
+
+
+def test_path_terms_absorbed_paths_have_drawdown_one(absorbing):
+    _, bank = absorbing
+    years, drawdowns, _ = bank.path_terms(np.array([0.5, 0.5]))
+    lost = years == -1.0
+    assert lost.any() and (drawdowns[lost] == 1.0).all() and (drawdowns[~lost] < 1.0).all()

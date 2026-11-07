@@ -437,13 +437,18 @@ class GarchBank:
 
     # ------------------------------------------------------------------ step 2 terms
 
-    def _terms(self, mixes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Each mix's weights on R' (M x N, `k w`) and its daily constant (M), as `_garch_terms`."""
-        m_w = mixes @ self.m
+    def _scale(self, mixes: np.ndarray) -> np.ndarray:
+        """Each mix's `k(w) = sqrt(w'(Sigma/252)w / w'Sigma_R'w)` (M); 0 on the zero-variance
+        branch."""
         s_w = np.sqrt(np.einsum("ij,jk,ik->i", mixes, self.cov, mixes) / TRADING_DAYS)
         v2 = np.einsum("ij,jk,ik->i", mixes, self.level_cov, mixes)
         sd_y = np.sqrt(np.maximum(v2, 0.0))
-        k = np.divide(s_w, sd_y, out=np.zeros_like(s_w), where=v2 > ZERO_VARIANCE)
+        return np.divide(s_w, sd_y, out=np.zeros_like(s_w), where=v2 > ZERO_VARIANCE)
+
+    def _terms(self, mixes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Each mix's weights on R' (M x N, `k w`) and its daily constant (M), as `_garch_terms`."""
+        m_w = mixes @ self.m
+        k = self._scale(mixes)
         return k[:, None] * mixes, m_w - k * (mixes @ self.level_mean)
 
     def _mixes(self, weights) -> np.ndarray:
@@ -483,6 +488,46 @@ class GarchBank:
                 years[part, block] = product.T
         years -= 1.0
         return years
+
+    @property
+    def levelled_path_sums(self) -> np.ndarray:
+        """`sum_t R'_{p,t,n}` per path and fund (N x P), computed once (v3 §2.6)."""
+        sums = getattr(self, "_path_sums", None)
+        if sums is None:
+            sums = self.levelled_t.reshape(len(self.holdings), self.paths, self.horizon).sum(axis=2)
+            sums.setflags(write=False)
+            self._path_sums = sums
+        return sums
+
+    def path_terms(self, w: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """One mix's compounded years (P,), path maximum drawdowns (P,) and fund path sums (P, N).
+
+        Daily returns `y_pt = m'w + k(w) x_pt'w` (v3 §2.3); wealth is their cumulative gross
+        product, drawdowns by `realized._drawdown`'s rule; an absorbed path (a day at or below
+        -100%) has year -1 and drawdown 1. Fund sums (spec §5.3):
+        `S_pn = 252 m_n + k(w) (sum_t R'_ptn - 252 R_bar'_n)`, so `S_p w` is the path's additive
+        year.
+        """
+        from .objectives3 import path_drawdowns
+
+        mixes = self._mixes(w)
+        if len(mixes) != 1:
+            raise ValueError("path_terms takes one mix, a vector of weights")
+        weights, shift = self._terms(mixes)
+        gross = weights[0] @ self.levelled_t
+        gross += 1.0 + shift[0]
+        daily = gross.reshape(self.paths, self.horizon)
+        lost = np.any(daily <= 0.0, axis=1)
+        years = daily.prod(axis=1)
+        years[lost] = 0.0
+        years -= 1.0
+        drawdowns = path_drawdowns(np.cumprod(daily, axis=1))
+        drawdowns[lost] = 1.0
+        k = float(self._scale(mixes)[0])
+        sums = self.horizon * self.m[None, :] + k * (
+            self.levelled_path_sums.T - self.horizon * self.level_mean[None, :]
+        )
+        return years, drawdowns, sums
 
     def years_and_vjp(self, w: np.ndarray) -> tuple[np.ndarray, Callable[[np.ndarray], np.ndarray]]:
         """One mix's (P,) years and `vjp(a)`: the gradient of `sum_p a_p R_p` with respect to `w`.
