@@ -145,7 +145,7 @@ def _white_line(wl: dict[str, Any]) -> str:
                 "dBad bp",
                 "dES bp",
                 "Risk diff bp",
-                "Realized gain bp (95%)",
+                "Realized gain bp (99%)",
                 "Drawdown improvement pp",
             ],
             rows,
