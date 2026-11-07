@@ -497,19 +497,26 @@ def ensemble_candidates(pool: pd.DataFrame) -> pd.DataFrame:
 
 def ensemble_picks(candidates: pd.DataFrame, weights: np.ndarray) -> pd.DataFrame:
     """For each weight combination and (lookback, r_fraction), the candidate with the highest
-    weighted rank score; ties to the lowest pool row id."""
+    weighted rank score; ties to the lowest pool row id.
+
+    Ties are decided in exact arithmetic: the scores are computed on the raw average ranks
+    (multiples of 1/2, recovered as `rank * n`) times weights on the 0.25 grid, sums of multiples
+    of 1/8 that floating point holds exactly, so equal scores never differ in a last bit."""
     rank_cols = [f"rank_{o}" for o in ENSEMBLE_OBJECTIVES]
+    w = np.asarray(weights, dtype=float)
     out = []
     for _, group in candidates.groupby(["lookback", "r_fraction"], sort=True):
         g = group.sort_values("record")
-        ranks = g[rank_cols].to_numpy(float)
-        scores = ranks @ np.asarray(weights, dtype=float).T  # n x combos
+        n = len(g)
+        raw = np.round(g[rank_cols].to_numpy(float) * n * 2.0) / 2.0
+        scores = raw @ w.T  # n x combos, exact
         best = np.argmax(scores, axis=0)  # first maximum = lowest record
+        records = g["record"].to_numpy(dtype=np.int64)
+        lookback, r_fraction = g["lookback"].iloc[0], g["r_fraction"].iloc[0]
         for c, i in enumerate(best):
-            row = g.iloc[int(i)]
             out.append(
-                {"combination": c, "lookback": row["lookback"], "r_fraction": row["r_fraction"],
-                 "record": int(row["record"]), "score": float(scores[i, c])}
+                {"combination": c, "lookback": lookback, "r_fraction": r_fraction,
+                 "record": int(records[i]), "score": float(scores[i, c]) / n}
             )  # fmt: skip
     return pd.DataFrame(out)
 

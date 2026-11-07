@@ -403,3 +403,27 @@ def test_run_facts_read_the_job_files(tmp_path):
     assert facts["failures"] == [{"task": "x", "error": "boom"}]
     assert facts["overrides"] == [{"reason": "owner approved"}]
     assert facts["amendments"] == [{"text": "GARCH job added"}]
+
+
+def test_ensemble_picks_break_exact_ties_to_the_lowest_record_despite_rounding():
+    """Scores that are equal in exact arithmetic (ranks k/3, weights in quarters) can differ in
+    the last bit of a floating-point sum; the tie must still go to the lowest record."""
+    from fractions import Fraction
+
+    base = dict(lookback="3y", r_fraction=0.4, in_wide=True, lam=None)
+    objectives = {  # three mixes whose ranks among themselves are 1/3, 2/3 and 1
+        0: dict(mu=3.0, u1=3.0, tdd=0.3, h=0.3, enlc=1.0, enb=1.0),
+        1: dict(mu=1.0, u1=1.0, tdd=0.1, h=0.1, enlc=1.5, enb=1.5),
+        2: dict(mu=2.0, u1=2.0, tdd=0.2, h=0.2, enlc=2.0, enb=2.0),
+    }
+    pool = pd.DataFrame([{**base, "record": r, "weights": [r, 1.0], **objectives[r]}
+                         for r in objectives])  # fmt: skip
+    ranks = {0: (3, 3, 1, 1, 1, 1), 1: (1, 1, 3, 3, 2, 2), 2: (2, 2, 2, 2, 3, 3)}
+    weights = A.simplex_weights()
+    picks = A.ensemble_picks(A.ensemble_candidates(pool), weights)
+    for combo, chosen in zip(picks["combination"], picks["record"], strict=True):
+        w = [Fraction(round(x * 4), 4) for x in weights[combo]]
+        exact = {r: sum(Fraction(k, 3) * x for k, x in zip(ranks[r], w, strict=True))
+                 for r in ranks}  # fmt: skip
+        best = max(exact.values())
+        assert chosen == min(r for r in exact if exact[r] == best), weights[combo]
