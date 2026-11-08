@@ -44,6 +44,8 @@ method are in `docs/reviews/`.
   experiment (`research2003`: 11 funds capped at 40% and 8 large US stocks capped at 10%, history
   back to 2003), added beside the Example Portfolio and TSP once the experiment's results report
   is written (issue #187).
+- Brokerage CSV exports (Fidelity, Schwab, …) as an upload format, beside the PortfolioSight template
+  that Funds & amounts reads today.
 - Tester access: a SecuritySight-style login (authorized email domains, one-time code, 30-day
   session) replaces the private-preview link when testers are invited.
 - Paid tier: more than 30 funds per portfolio, and tickers outside the served universe fetched on
