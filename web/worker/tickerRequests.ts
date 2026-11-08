@@ -11,9 +11,9 @@
 // This module must load in plain Node (unit tests): Workers types are used as ambient types
 // only and nothing is imported from `cloudflare:*`.
 
+import { MAX_TICKERS_PER_REQUEST, TICKER_SHAPE, TICKER_SOURCES, type TickerSource } from "../src/api/tickerShape";
 import { jsonError, jsonResponse, readBodyLimited, SITE_ORIGIN, visitorAddress } from "./share";
 
-export type TickerSource = "csv" | "picker";
 export type TickerRequestRow = { ticker: string; count: number; csv: number; picker: number; first_seen: string; last_seen: string };
 
 /** Resolves `true` once the tickers are counted. */
@@ -21,12 +21,10 @@ export type TickerRecorderFn = (ip: string, tickers: string[], source: TickerSou
 /** The ids the site serves, or `null` when they cannot be read (then nothing is left out). */
 export type ServedIdsFn = () => Promise<ReadonlySet<string> | null>;
 
-export const TICKER_SHAPE = /^[A-Z0-9.-]{1,10}$/;
 export const MAX_TICKER_REQUEST_BODY_BYTES = 4096;
-export const MAX_TICKERS_PER_REQUEST = 100;
 export const MAX_NEW_TICKERS_PER_VISITOR_DAY = 300;
 const MAX_LISTED = 5000;
-const SOURCES: ReadonlySet<unknown> = new Set<TickerSource>(["csv", "picker"]);
+const SOURCES: ReadonlySet<unknown> = new Set(TICKER_SOURCES);
 
 const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const noContent = () => new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
