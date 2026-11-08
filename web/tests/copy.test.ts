@@ -14,11 +14,31 @@ describe("copy (spec 3.6, 3.7)", () => {
     copy.stressLine("−31%"),
     copy.stressGap(2, 18, "11"),
     copy.staleLine("2026-10-09"),
+    copy.uploadNoTicker,
+    copy.uploadNoFunds,
+    copy.uploadUnreadable,
+    copy.uploadTooBig,
+    copy.uploadTwoColumns("shares"),
+    copy.uploadBadNumber(3, "BND", "shares", "ten"),
+    copy.uploadNegative(3, "BND", "percent"),
+    copy.uploadNoTickerOnRow(4),
+    copy.uploadNoCommonColumn("VTI has only shares; BND has only percent."),
+    copy.uploadSkipped(["XYZ", "ABC"]),
+    copy.uploadMismatch.percentDollars(2),
+    copy.uploadMismatch.dollarsShares(1),
+    copy.uploadMismatch.percentShares(3),
   ];
 
   it("default copy holds none of the forbidden words", () => {
     expect(defaults.length).toBeGreaterThan(50);
     for (const word of copy.forbiddenDefault) {
+      const re = new RegExp(`\\b${word.replace(/ /g, "\\s+")}\\b`, "i");
+      for (const text of defaults) expect(re.test(text), `"${word}" in "${text}"`).toBe(false);
+    }
+  });
+
+  it("default copy has no account words (the site has no accounts)", () => {
+    for (const word of ["login", "sign in", "password"]) {
       const re = new RegExp(`\\b${word.replace(/ /g, "\\s+")}\\b`, "i");
       for (const text of defaults) expect(re.test(text), `"${word}" in "${text}"`).toBe(false);
     }

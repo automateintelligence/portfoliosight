@@ -73,6 +73,13 @@ export const plain = {
   fundsNone: "No amounts entered: tickers only.",
   fundsClear: "Clear all",
   fundsClearHint: "Clear every amount; the funds stay in the list",
+  fundsTemplate: "Download template",
+  fundsTemplateHint: "A sample CSV file to fill in: a ticker column, then shares, dollars or percent",
+  fundsUpload: "Upload CSV",
+  fundsUploadHint: "Replace the fund list with the funds in a CSV file",
+  /** What leaves the browser when a file is uploaded: nothing of the file, only the tickers we do not have. */
+  fundsUploadPrivacy: "Your file is read in this browser and is not uploaded. Tickers we don't have are sent to us, without any amounts, so we can look at adding them.",
+  uploadDismiss: "Dismiss",
   fundsScale: "Scale to 100%",
   fundsScaleHint: "Scale the amounts in proportion so they add up to exactly 100%",
   fundsOpen: "Show funds & amounts",
@@ -201,3 +208,26 @@ export const stripFigure = (cap: string, money: string, percent: string) => `${c
 /** Why the strip stays in percent although shares are entered (details). */
 export const stripNoPrice = (funds: string[]) =>
   `Shown in percent: ${funds.length === 1 ? `${funds[0]} has` : `${funds.slice(0, -1).join(", ")} and ${funds[funds.length - 1]} have`} no latest price, so the shares entered cannot be valued in dollars.`;
+
+// ── CSV upload in Funds & amounts (owner direction 2026-11-08) ───────────────
+/** Why a file is refused whole (nothing is loaded). */
+export const uploadNoTicker = "The file needs a column named ticker.";
+export const uploadNoFunds = "The file has no funds in it.";
+export const uploadUnreadable = "The file could not be read as a CSV.";
+export const uploadTooBig = "That file is too big to be a fund list.";
+export const uploadTwoColumns = (column: string) => `The file has two columns named ${column}.`;
+export const uploadBadNumber = (row: number, ticker: string, column: string, text: string) =>
+  `Row ${row} (${ticker}): "${text.length > 24 ? `${text.slice(0, 24)}…` : text}" in the ${column} column is not a number.`;
+export const uploadNegative = (row: number, ticker: string, column: string) => `Row ${row} (${ticker}): the ${column} column can't be negative.`;
+export const uploadNoTickerOnRow = (row: number) => `Row ${row} has an amount but no ticker.`;
+/** The funds with amounts share no column: `who` is the sentence naming which fund has which columns. */
+export const uploadNoCommonColumn = (who: string) => `Every fund with an amount needs the same column filled in (shares, dollars or percent). ${who}`;
+/** After an upload: every ticker that was left out, so no one assumes it made it in. */
+export const uploadSkipped = (tickers: string[]) => `Not added (no data for these yet): ${tickers.join(", ")}.`;
+const fundsOf = (n: number) => `${n} ${n === 1 ? "fund" : "funds"}`;
+/** A column that was not used because it does not agree with the one that was. */
+export const uploadMismatch = {
+  percentDollars: (n: number) => `Percent didn't match dollars for ${fundsOf(n)} and was ignored.`,
+  dollarsShares: (n: number) => `Dollars didn't match shares at the latest price for ${fundsOf(n)} and were ignored.`,
+  percentShares: (n: number) => `Percent didn't match shares at the latest price for ${fundsOf(n)} and was ignored.`,
+};
