@@ -5,8 +5,9 @@
 //   3. `/api/*`: reads come straight from R2; `POST /api/tensors`, `POST /api/range`,
 //      `GET /api/health` and a tensor that R2 does not hold are forwarded to the origin (with
 //      `x-ps-tier: admin` only for a verified admin cookie, engines spec §6.2);
-//      `POST /api/share` and `GET /api/tier` are handled here; every other `/api/` path or
-//      method is a 404;
+//      `POST /api/share`, `GET /api/tier` and `/api/ticker-requests` (a POST records tickers
+//      people asked for that the site does not serve; a GET lists them for an admin and is a
+//      404 for anyone else) are handled here; every other `/api/` path or method is a 404;
 //   4. a page request with `?admin=` sets or clears the admin cookie and redirects (admin.ts);
 //   5. everything else is a static asset.
 //
@@ -19,9 +20,10 @@
 import { adminLink, isAdmin, menuMax, serveTier, TIER_HEADER, tierOf, type AdminEnv } from "./admin";
 import { isPreviewOn, previewGate } from "./preview";
 import { handleShare, jsonError, readBodyLimited, ShareLimiter, type ShareEnv, type ShareLimiterFn } from "./share";
+import { handleTickerRequest, listTickerRequests, TickerRequests, type ServedIdsFn, type TickerRecorderFn } from "./tickerRequests";
 
-// wrangler binds SHARE_LIMITER to this class by name
-export { ShareLimiter };
+// wrangler binds SHARE_LIMITER and TICKER_REQUESTS to these classes by name
+export { ShareLimiter, TickerRequests };
 
 export interface Env extends ShareEnv, AdminEnv {
   API_ORIGIN: string;
@@ -29,6 +31,7 @@ export interface Env extends ShareEnv, AdminEnv {
   DATA: R2Bucket;
   ASSETS: Fetcher;
   SHARE_LIMITER: DurableObjectNamespace;
+  TICKER_REQUESTS: DurableObjectNamespace;
 }
 
 const APEX_HOST = "portfoliosight.ai";
@@ -48,6 +51,8 @@ const UPSTREAM_HEADERS = ["content-type", "cache-control", "etag", "retry-after"
 
 // `meta/current.json` is held per isolate for 60 s (spec §9.3)
 let currentGeneration: { generation: string; readAt: number } | null = null;
+// the ids `meta/symbols.json` lists, held per isolate for the same 60 s
+let servedIds: { ids: ReadonlySet<string>; readAt: number } | null = null;
 
 const unavailable = () => jsonError(503, "unavailable", "The data is not available right now");
 const notFound = () => jsonError(404, "not_found", "No such API path");
@@ -99,6 +104,29 @@ async function serveSymbols(env: Env): Promise<Response> {
   const object = await env.DATA.get("meta/symbols.json");
   return object === null ? unavailable() : fromR2(object, CACHE_META);
 }
+
+/** The ids the site serves (R2 `meta/symbols.json`), or `null` when they cannot be read. */
+const servedIdsOf = (env: Env): ServedIdsFn => async () => {
+  const now = Date.now();
+  if (servedIds !== null && now - servedIds.readAt < CURRENT_TTL_MS) return servedIds.ids;
+  servedIds = null;
+  try {
+    const object = await env.DATA.get("meta/symbols.json");
+    if (object === null) return null;
+    const parsed: unknown = await object.json();
+    const list = typeof parsed === "object" && parsed !== null ? (parsed as { symbols?: unknown }).symbols : undefined;
+    if (!Array.isArray(list)) return null;
+    const ids = new Set<string>();
+    for (const entry of list) {
+      const id = typeof entry === "object" && entry !== null ? (entry as { id?: unknown }).id : undefined;
+      if (typeof id === "string") ids.add(id.toUpperCase());
+    }
+    servedIds = { ids, readAt: now };
+    return ids;
+  } catch {
+    return null;
+  }
+};
 
 /**
  * Forwards to the origin's `/v1/<rest>` with exactly the headers of spec §9.3. Nothing else of
@@ -171,6 +199,25 @@ function durableLimiter(env: Env): ShareLimiterFn {
   };
 }
 
+/** Hands the tickers to the one global store. Any failure is "not recorded". */
+function durableRequests(env: Env): TickerRecorderFn {
+  return async (ip, tickers, source) => {
+    try {
+      const stub = env.TICKER_REQUESTS.get(env.TICKER_REQUESTS.idFromName("global"));
+      const res = await stub.fetch("https://ticker-requests/record", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ip, tickers, source }),
+      });
+      await res.body?.cancel().catch(() => undefined);
+      return res.ok;
+    } catch {
+      console.error("ticker requests: store unavailable");
+      return false;
+    }
+  };
+}
+
 async function handleApi(request: Request, env: Env, pathname: string): Promise<Response> {
   const rest = pathname.slice("/api/".length);
   const route = `${request.method} ${rest}`;
@@ -183,6 +230,9 @@ async function handleApi(request: Request, env: Env, pathname: string): Promise<
     if (body === null) return jsonError(413, "payload_too_large", "The request body is over 16 KB");
     return forward(request, env, rest, body);
   }
+  if (route === "POST ticker-requests") return handleTickerRequest(request, durableRequests(env), servedIdsOf(env));
+  // the list is the admin's: anyone else gets the answer of an unknown path
+  if (route === "GET ticker-requests") return (await isAdmin(request, env)) ? listTickerRequests(env.TICKER_REQUESTS) : notFound();
   if (route === "POST share") return handleShare(request, env, durableLimiter(env), menuMax(env, await tierOf(request, env)));
   if ((request.method === "GET" || request.method === "HEAD") && rest.startsWith("tensors/")) {
     return serveTensor(request, env, rest.split("/").slice(1));
