@@ -337,10 +337,14 @@ export default function App() {
       busy={busy}
       menuMax={state.tier.menuMax}
       selected={view?.weights ?? null}
+      upload={state.upload}
       onUnit={(unit) => dispatch({ type: "setUnit", unit })}
       onAmount={(id, amount) => dispatch({ type: "setAmount", id, amount })}
-      onUseMenu={(rows) => dispatch({ type: "useMenu", rows })}
+      onUseMenu={(rows, unit) => dispatch({ type: "useMenu", rows, unit })}
       onNeedSymbols={needSymbols}
+      onUpload={(report) => dispatch({ type: "setUpload", report })}
+      onDismissUpload={() => dispatch({ type: "dismissUpload" })}
+      onRequestTickers={(tickers, source) => dispatch({ type: "requestTickers", tickers, source })}
     />
   );
 

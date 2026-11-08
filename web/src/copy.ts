@@ -215,6 +215,7 @@ export const uploadNoTicker = "The file needs a column named ticker.";
 export const uploadNoFunds = "The file has no funds in it.";
 export const uploadUnreadable = "The file could not be read as a CSV.";
 export const uploadTooBig = "That file is too big to be a fund list.";
+export const uploadCatalogLoading = "The list of funds we have is still loading. Try again in a moment.";
 export const uploadTwoColumns = (column: string) => `The file has two columns named ${column}.`;
 export const uploadBadNumber = (row: number, ticker: string, column: string, text: string) =>
   `Row ${row} (${ticker}): "${text.length > 24 ? `${text.slice(0, 24)}…` : text}" in the ${column} column is not a number.`;

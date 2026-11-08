@@ -1,12 +1,15 @@
-import { Eraser, Percent, Plus, X } from "lucide-react";
+import { Download, Eraser, Percent, Plus, Upload, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SymbolEntry } from "../api/http";
 import type { Tensor } from "../api/tensor";
-import { fundsTotal, fundsUpTo, menuFull, menuNeedsMore, plain } from "../copy";
+import { TICKER_SHAPE, type TickerSource } from "../api/tickerShape";
+import { fundsTotal, fundsUpTo, menuFull, menuNeedsMore, plain, uploadCatalogLoading, uploadSkipped, uploadTooBig, uploadUnreadable } from "../copy";
 import { amountText, money, parseAmount, pct } from "../format";
 import { amountsToWeights, percentShown, percentTotal, scaleTo100 } from "../math/amounts";
-import { MIN_FUNDS, type Row, type Unit } from "../state/store";
+import { MIN_FUNDS, type Row, type Unit, type UploadReport } from "../state/store";
+import { MAX_FILE_BYTES, parseFundsCsv, resolveUpload, TEMPLATE_CSV, TEMPLATE_FILENAME } from "./fundsCsv";
 import { matchGroup, rankSymbols } from "./symbolSearch";
+import { downloadCsv } from "./tradesCsv";
 
 type Props = {
   rows: Row[];
@@ -21,10 +24,17 @@ type Props = {
   menuMax: number;
   /** Weights of the point selected in the chart, in the tensor's fund order. */
   selected: number[] | null;
+  /** What the last CSV upload has to say (refusal, tickers left out, notes), until dismissed. */
+  upload: UploadReport | null;
   onUnit: (unit: Unit) => void;
   onAmount: (id: string, amount: number | null) => void;
-  onUseMenu: (rows: Row[]) => void;
+  /** A fund list to use, with the unit its amounts are in when that is not the page's own. */
+  onUseMenu: (rows: Row[], unit?: Unit) => void;
   onNeedSymbols: () => void;
+  onUpload: (report: UploadReport) => void;
+  onDismissUpload: () => void;
+  /** Tickers the site does not serve that someone asked for (a CSV file, or typed into the picker). */
+  onRequestTickers: (tickers: string[], source: TickerSource) => void;
 };
 
 const UNITS: { id: Unit; label: string; hint: string }[] = [
@@ -60,13 +70,25 @@ function AmountInput({ id, value, unit, onCommit }: { id: string; value: number 
 const sameIds = (a: Row[], b: Row[]) => a.length === b.length && [...a.map((r) => r.id)].sort().join(",") === [...b.map((r) => r.id)].sort().join(",");
 
 /** Funds & amounts: the menu, the ways to enter it, and the two mixes side by side (spec 3.3). */
-export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuError, busy, menuMax, selected, onUnit, onAmount, onUseMenu, onNeedSymbols }: Props) {
+export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAside, menuError, busy, menuMax, selected, upload, onUnit, onAmount, onUseMenu, onNeedSymbols, onUpload, onDismissUpload, onRequestTickers }: Props) {
   // Adding or removing funds edits a draft; amounts of the menu in use apply as they are typed.
   const [draft, setDraft] = useState<Row[] | null>(null);
+  // A file's list comes with the unit of its amounts. The page's menu keeps its own unit until the
+  // list is used, so the amounts of the menu on screen are never read in another unit meanwhile.
+  const [draftUnit, setDraftUnit] = useState<Unit | null>(null);
   const [query, setQuery] = useState("");
   const [addError, setAddError] = useState("");
-  useEffect(() => setDraft(null), [rows.map((r) => r.id).join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
+  const fileRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    setDraft(null);
+    setDraftUnit(null);
+  }, [rows.map((r) => r.id).join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => onNeedSymbols(), [onNeedSymbols]);
+  const unit = draft !== null && draftUnit !== null ? draftUnit : pageUnit;
+  const changeUnit = (next: Unit) => (draft !== null && draftUnit !== null ? setDraftUnit(next) : onUnit(next));
+  // Amounts of funds already plotted normally apply to the page as they are typed; while the draft's
+  // unit is not the page's they stay in the draft, or the plotted menu would read them in the wrong unit.
+  const unitPending = unit !== pageUnit;
 
   const list = draft ?? rows;
   const excluded = useMemo(() => new Map((tensor?.universe.excluded ?? []).map((e) => [e.id, e.reason])), [tensor]);
@@ -81,7 +103,11 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
 
   // The fund list on screen differs from the one plotted: only then is there anything to recalculate.
   const changed = draft !== null;
-  const edit = (next: Row[]) => setDraft(sameIds(next, rows) ? null : next);
+  const edit = (next: Row[]) => {
+    const same = sameIds(next, rows);
+    setDraft(same ? null : next);
+    if (same) setDraftUnit(null);
+  };
 
   // "Mix entered %": the amounts as percentages of what was entered, whatever the unit. Funds
   // this view sets aside are left out, as they are for the square on the chart.
@@ -99,7 +125,7 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
   const setAmount = (id: string, amount: number | null) => {
     if (draft) setDraft(draft.map((r) => (r.id === id ? { ...r, amount } : r)));
     // Amounts of funds already plotted apply as they are typed, with or without a changed list.
-    if (rows.some((r) => r.id === id)) onAmount(id, amount);
+    if (!unitPending && rows.some((r) => r.id === id)) onAmount(id, amount);
   };
   const remove = (id: string) => edit(list.filter((r) => r.id !== id));
   const add = (sym: { id: string; name?: string | null }) => {
@@ -120,8 +146,45 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
   const tryAddTyped = () => {
     if (!q) return;
     const exact = (matches[0] && matchGroup(matches[0], q) === 1 ? matches[0] : undefined) ?? (matches.length === 1 ? matches[0] : undefined);
-    if (exact) add(exact);
-    else setAddError(`${query.trim().toUpperCase()} isn't offered: no verified current data for it.`);
+    if (exact) return add(exact);
+    const typed = query.trim().toUpperCase();
+    setAddError(`${typed} isn't offered: no verified current data for it.`);
+    // Committed (not merely typed), shaped like a ticker and matching nothing served: someone wants a ticker we do not have.
+    if (symbols !== null && matches.length === 0 && TICKER_SHAPE.test(typed)) onRequestTickers([typed], "picker");
+  };
+
+  /** A CSV file replaces the fund list: the draft, as adding funds makes it, with the file's amounts and unit. */
+  const loadFile = async (file: File) => {
+    const refuse = (error: string, skipped: string[] = []) => {
+      onUpload({ error, skipped, notes: [], pending: [], menu: [] });
+      if (skipped.length > 0) onRequestTickers(skipped, "csv");
+    };
+    setQuery("");
+    setAddError("");
+    if (file.size > MAX_FILE_BYTES) return refuse(uploadTooBig);
+    if (symbols === null) return refuse(uploadCatalogLoading);
+    let text: string;
+    try {
+      text = await file.text();
+    } catch {
+      return refuse(uploadUnreadable);
+    }
+    const parsed = parseFundsCsv(text);
+    if (!parsed.ok) return refuse(parsed.error);
+    const resolved = resolveUpload(parsed.lines, symbols, { min: MIN_FUNDS, max: menuMax });
+    if (!resolved.ok) return refuse(resolved.error, resolved.skipped);
+    const { plan } = resolved;
+    if (sameIds(plan.rows, rows)) {
+      // the funds on screen already: nothing to recalculate, so the amounts and their unit apply now
+      setDraft(null);
+      setDraftUnit(null);
+      onUseMenu(plan.rows, plan.unit ?? undefined);
+    } else {
+      setDraft(plan.rows);
+      setDraftUnit(plan.unit);
+    }
+    onUpload({ error: null, skipped: plan.skipped, notes: plan.notes, pending: plan.pending, menu: plan.rows.map((r) => r.id) });
+    if (plan.skipped.length > 0) onRequestTickers(plan.skipped, "csv");
   };
 
   // In %, while the entries are not exactly 100% as the fields show them, the running total and
@@ -140,7 +203,7 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
   const setAll = (next: (number | null)[]) => {
     if (draft) setDraft(draft.map((r, i) => ({ ...r, amount: next[i] })));
     list.forEach((r, i) => {
-      if (next[i] !== r.amount && rows.some((p) => p.id === r.id)) onAmount(r.id, next[i]);
+      if (!unitPending && next[i] !== r.amount && rows.some((p) => p.id === r.id)) onAmount(r.id, next[i]);
     });
   };
   // Each button goes away (Scale) or turns off (Clear all) once used, so keyboard focus moves on to
@@ -162,7 +225,7 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
       <div className="toolbar">
         <div className="seg" data-testid="unit-toggle" role="radiogroup" aria-label="Amounts are in">
           {UNITS.map((u) => (
-            <button key={u.id} type="button" role="radio" className="seg-btn" aria-checked={unit === u.id} title={u.hint} onClick={() => onUnit(u.id)}>
+            <button key={u.id} type="button" role="radio" className="seg-btn" aria-checked={unit === u.id} title={u.hint} onClick={() => changeUnit(u.id)}>
               {u.label}
             </button>
           ))}
@@ -192,6 +255,58 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
           <span>{plain.fundsClear}</span>
         </button>
       </div>
+      <div className="toolbar file-tools">
+        <button type="button" className="btn btn-quiet" data-testid="funds-template" title={plain.fundsTemplateHint} aria-label={`${plain.fundsTemplate}: ${plain.fundsTemplateHint.toLowerCase()}`} onClick={() => downloadCsv(TEMPLATE_CSV, TEMPLATE_FILENAME)}>
+          <Download size={14} aria-hidden="true" />
+          <span>{plain.fundsTemplate}</span>
+        </button>
+        <button type="button" className="btn btn-quiet" data-testid="funds-upload" title={plain.fundsUploadHint} aria-label={`${plain.fundsUpload}: ${plain.fundsUploadHint.toLowerCase()}`} onClick={() => fileRef.current?.click()}>
+          <Upload size={14} aria-hidden="true" />
+          <span>{plain.fundsUpload}</span>
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          hidden
+          accept=".csv,text/csv"
+          data-testid="funds-file"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            // cleared so choosing the same file again is a change again
+            e.target.value = "";
+            if (file) void loadFile(file);
+          }}
+        />
+      </div>
+      <p className="hint" data-testid="funds-upload-hint">
+        {plain.fundsUploadPrivacy}
+      </p>
+      {upload && (upload.error !== null || upload.skipped.length > 0 || upload.notes.length > 0) && (
+        <div className="upload-report" data-testid="upload-report">
+          <div className="upload-report-body">
+            {upload.error !== null && (
+              <p className="err" role="alert" data-testid="upload-error">
+                {upload.error}
+              </p>
+            )}
+            {upload.skipped.length > 0 && (
+              <p role="status" data-testid="upload-skipped">
+                {uploadSkipped(upload.skipped)}
+              </p>
+            )}
+            {upload.notes.length > 0 && (
+              <div className="upload-notes" role="status" data-testid="upload-mismatch">
+                {upload.notes.map((note) => (
+                  <p key={note}>{note}</p>
+                ))}
+              </div>
+            )}
+          </div>
+          <button type="button" className="btn btn-quiet" data-testid="upload-dismiss" onClick={onDismissUpload}>
+            {plain.uploadDismiss}
+          </button>
+        </div>
+      )}
       <p className="hint" data-testid="funds-hint">
         {plain.fundsAsYouType}
       </p>
@@ -201,7 +316,7 @@ export function Funds({ rows, unit, tensor, symbols, mixStatus, setAside, menuEr
       {changed && (
         <div className="recalc" role="status">
           <span>{plain.fundsChanged}</span>
-          <button type="button" className="btn btn-primary" data-testid="use-menu" disabled={pctBlocked || countBlocked || busy} onClick={() => onUseMenu(list)}>
+          <button type="button" className="btn btn-primary" data-testid="use-menu" disabled={pctBlocked || countBlocked || busy} onClick={() => onUseMenu(list, draftUnit ?? undefined)}>
             {plain.fundsRecalculate}
           </button>
         </div>

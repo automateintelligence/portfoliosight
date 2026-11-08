@@ -18,6 +18,7 @@ describe("copy (spec 3.6, 3.7)", () => {
     copy.uploadNoFunds,
     copy.uploadUnreadable,
     copy.uploadTooBig,
+    copy.uploadCatalogLoading,
     copy.uploadTwoColumns("shares"),
     copy.uploadBadNumber(3, "BND", "shares", "ten"),
     copy.uploadNegative(3, "BND", "percent"),
