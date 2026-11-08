@@ -13,7 +13,12 @@ SCOPED_DIRS = (
     "portfoliosight/jobs",
     "scripts",
 )
-EXCLUDED_FILES = ("portfoliosight/frontier_cli.py", "scripts/make_fixtures.py")
+# Offline tools never run by the app: fixture generation and the research input freezer (FRED).
+EXCLUDED_FILES = (
+    "portfoliosight/frontier_cli.py",
+    "scripts/make_fixtures.py",
+    "scripts/freeze_fixed_risk_inputs.py",
+)
 ALLOWED_HOSTS = ("api.tiingo.com", "www.tsp.gov", "api.mailchannels.net")
 ALLOWED_SUFFIX = ".r2.cloudflarestorage.com"
 URL_RE = re.compile(r"""https?://[^\s"']+""")
