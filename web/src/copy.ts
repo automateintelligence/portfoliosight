@@ -223,7 +223,7 @@ export const uploadNegative = (row: number, ticker: string, column: string) => `
 export const uploadNoTickerOnRow = (row: number) => `Row ${row} has an amount but no ticker.`;
 /** A row longer than the header: an unquoted thousands comma (1,000) splits one number into two cells. */
 export const uploadTooManyValues = (row: number) =>
-  `Row ${row} has more values than the header has columns. Put numbers that contain commas in quotes, or remove the commas.`;
+  `Row ${row} has more values than the header has columns. Put numbers that contain commas in quotes or remove those commas, and remove any extra comma at the end of a row.`;
 /** The funds with amounts share no column: `who` is the sentence naming which fund has which columns. */
 export const uploadNoCommonColumn = (who: string) => `Every fund with an amount needs the same column filled in (shares, dollars or percent). ${who}`;
 /** After an upload: every ticker that was left out, so no one assumes it made it in. */

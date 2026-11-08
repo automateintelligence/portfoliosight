@@ -136,7 +136,7 @@ describe("parseFundsCsv", () => {
     expect(failure('ticker,shares\n"VTI,1\n')).toBe("The file could not be read as a CSV.");
   });
   it("refuses a row with more values than the header has columns, as an unquoted thousands comma makes, naming the row", () => {
-    const why = (row: number) => `Row ${row} has more values than the header has columns. Put numbers that contain commas in quotes, or remove the commas.`;
+    const why = (row: number) => `Row ${row} has more values than the header has columns. Put numbers that contain commas in quotes or remove those commas, and remove any extra comma at the end of a row.`;
     expect(failure("ticker,shares,dollars\nVTI,1,000,\n")).toBe(why(2));
     expect(failure("ticker,shares,dollars\nBND,5,\n\nVTI,1,000,500\n")).toBe(why(4));
     expect(failure("ticker,dollars\nVTI,10,000\n")).toBe(why(2));
