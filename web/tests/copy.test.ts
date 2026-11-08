@@ -23,6 +23,7 @@ describe("copy (spec 3.6, 3.7)", () => {
     copy.uploadBadNumber(3, "BND", "shares", "ten"),
     copy.uploadNegative(3, "BND", "percent"),
     copy.uploadNoTickerOnRow(4),
+    copy.uploadTooManyValues(3),
     copy.uploadNoCommonColumn("VTI has only shares; BND has only percent."),
     copy.uploadSkipped(["XYZ", "ABC"]),
     copy.uploadMismatch.percentDollars(2),

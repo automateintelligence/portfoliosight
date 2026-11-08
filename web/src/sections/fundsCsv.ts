@@ -12,6 +12,7 @@ import {
   uploadNoFunds,
   uploadNoTicker,
   uploadNoTickerOnRow,
+  uploadTooManyValues,
   uploadTwoColumns,
   uploadUnreadable,
 } from "../copy";
@@ -73,7 +74,8 @@ const add = (a: number | null, b: number | null) => (a === null ? b : b === null
  * The funds of a CSV file. The header names a `ticker` column and any of `shares`, `dollars` and
  * `percent` (case and surrounding spaces do not matter; other columns are ignored). A fund named
  * on two rows has its amounts added column by column. A number that is not one, or is negative,
- * refuses the whole file and names the row (as the file shows it, blank lines counted).
+ * or a row with more cells than the header, refuses the whole file and names the row (as the file
+ * shows it, blank lines counted).
  */
 export function parseFundsCsv(text: string): Parsed {
   const clean = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text; // a byte order mark, as Excel writes
@@ -95,6 +97,8 @@ export function parseFundsCsv(text: string): Parsed {
   for (const [i, cells] of body.entries()) {
     const row = i + 2; // the header is row 1
     if (cells.every((cell) => cell.trim() === "")) continue;
+    // an unquoted 1,000 is two cells and would shift every column after it; a row may not outrun the header
+    if (cells.length > header.length) return { ok: false, error: uploadTooManyValues(row) };
     const ticker = (cells[tickerAt] ?? "").trim().toUpperCase();
     const amounts: Record<Column, number | null> = { shares: null, dollars: null, percent: null };
     for (const column of COLUMNS) {

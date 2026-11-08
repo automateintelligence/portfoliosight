@@ -135,6 +135,19 @@ describe("parseFundsCsv", () => {
   it("refuses a badly quoted file", () => {
     expect(failure('ticker,shares\n"VTI,1\n')).toBe("The file could not be read as a CSV.");
   });
+  it("refuses a row with more values than the header has columns, as an unquoted thousands comma makes, naming the row", () => {
+    const why = (row: number) => `Row ${row} has more values than the header has columns. Put numbers that contain commas in quotes, or remove the commas.`;
+    expect(failure("ticker,shares,dollars\nVTI,1,000,\n")).toBe(why(2));
+    expect(failure("ticker,shares,dollars\nBND,5,\n\nVTI,1,000,500\n")).toBe(why(4));
+    expect(failure("ticker,dollars\nVTI,10,000\n")).toBe(why(2));
+  });
+  it("reads the same number quoted, and a file whose every line ends in a comma", () => {
+    expect(lines('ticker,shares,dollars\nVTI,"1,000",\n')).toEqual([line("VTI", 1000, null, null)]);
+    expect(lines("ticker,shares,dollars,\nVTI,1,,\nBND,,500,\n")).toEqual([line("VTI", 1, null, null), line("BND", null, 500, null)]);
+  });
+  it("reads values under unnamed columns the header leaves blank, as a spreadsheet pads them", () => {
+    expect(lines("ticker,shares,,\nVTI,1,,a note\n")).toEqual([line("VTI", 1, null, null)]);
+  });
 });
 
 describe("resolveUpload: which column is used", () => {
