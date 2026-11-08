@@ -2,11 +2,15 @@
 // ticker typed into the fund picker that matches nothing). `POST /api/ticker-requests` records
 // them, `GET /api/ticker-requests` lists them for an admin: what people want added.
 //
-// Only a ticker and a count are kept. A visitor address counts a ticker at most once per UTC
-// day, and the address is held only as a hash under a salt that is random per day and dropped
-// with the day's rows; no address, amount or file content is stored or logged. One address may
-// add at most `MAX_NEW_PER_VISITOR_DAY` new tickers a day, so the table cannot be flooded from
-// one place. Answers never repeat a ticker.
+// Per ticker, only its counts by source and the first and last days it was asked for are kept.
+// A visitor counts a ticker at most once per UTC day. For that, the day's rows hold a SHA-256 of
+// the visitor's address (of an IPv6 address, its /64) under a salt that is random per day; that
+// salt and those hashes are stored for the day only, and the first request of a later day deletes
+// them. The address itself, any amount and any file content are never stored or logged. One
+// visitor may add at most `MAX_NEW_TICKERS_PER_VISITOR_DAY` tickers a day, and everyone together
+// at most `MAX_NEW_TICKER_ROWS_PER_DAY` tickers the table does not have yet; past either, tickers
+// are silently not counted (tickers the table has still count, up to the visitor's limit). Answers
+// never repeat a ticker.
 //
 // This module must load in plain Node (unit tests): Workers types are used as ambient types
 // only and nothing is imported from `cloudflare:*`.
@@ -23,6 +27,8 @@ export type ServedIdsFn = () => Promise<ReadonlySet<string> | null>;
 
 export const MAX_TICKER_REQUEST_BODY_BYTES = 4096;
 export const MAX_NEW_TICKERS_PER_VISITOR_DAY = 300;
+/** The most rows (tickers not in the table before) the table gains per UTC day, from everyone together. */
+export const MAX_NEW_TICKER_ROWS_PER_DAY = 2000;
 const MAX_LISTED = 5000;
 const SOURCES: ReadonlySet<unknown> = new Set(TICKER_SOURCES);
 
@@ -83,6 +89,33 @@ export async function listTickerRequests(namespace: DurableObjectNamespace): Pro
   }
 }
 
+const IPV4_AS_IPV6 = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/;
+const HEX_GROUP = /^[0-9a-f]{1,4}$/;
+
+/**
+ * The part of an address that is one visitor for the per-day count: of an IPv6 address its /64
+ * (a subscriber is usually handed a whole /64, so rotating addresses inside it is one visitor),
+ * written as `2001:db8:1:2::/64`; an IPv4 address, also one written as IPv6 (`::ffff:a.b.c.d`),
+ * as it is. Anything that is not an address is returned unchanged.
+ */
+export function visitorNetwork(ip: string): string {
+  if (!ip.includes(":")) return ip;
+  const lower = ip.toLowerCase();
+  const mapped = IPV4_AS_IPV6.exec(lower);
+  if (mapped) return mapped[1];
+  const halves = lower.split("::");
+  if (halves.length > 2) return ip;
+  const groupsOf = (part: string) => (part === "" ? [] : part.split(":"));
+  const head = groupsOf(halves[0]);
+  const tail = halves.length === 2 ? groupsOf(halves[1]) : [];
+  const last = halves.length === 2 ? tail : head;
+  const width = head.length + tail.length + (last.length > 0 && last[last.length - 1].includes(".") ? 1 : 0); // a dotted IPv4 end is two groups
+  if (halves.length === 1 ? width !== 8 : width > 7) return ip;
+  const prefix = [...head, ...Array<string>(8 - width).fill("0"), ...tail].slice(0, 4);
+  if (!prefix.every((group) => HEX_GROUP.test(group))) return ip;
+  return `${prefix.map((group) => parseInt(group, 16).toString(16)).join(":")}::/64`;
+}
+
 async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -94,7 +127,7 @@ async function sha256Hex(text: string): Promise<string> {
  *
  * `POST /record {ip, tickers, source}` answers `{recorded}`, the number of tickers counted;
  * `GET /list` answers the rows. The check-and-count runs without an `await`, so two simultaneous
- * requests from one address cannot both count a ticker.
+ * requests cannot both count a ticker for one visitor, nor together pass a daily limit.
  */
 export class TickerRequests {
   private readonly sql: SqlStorage;
@@ -106,6 +139,7 @@ export class TickerRequests {
     );
     this.sql.exec("CREATE TABLE IF NOT EXISTS ticker_seen (day TEXT NOT NULL, visitor TEXT NOT NULL, ticker TEXT NOT NULL, PRIMARY KEY (day, visitor, ticker))");
     this.sql.exec("CREATE TABLE IF NOT EXISTS day_salt (day TEXT PRIMARY KEY, salt TEXT NOT NULL)");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS ticker_requests_first_seen ON ticker_requests (first_seen)");
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -125,7 +159,7 @@ export class TickerRequests {
     const valid = tickers.filter((t): t is string => typeof t === "string" && TICKER_SHAPE.test(t));
     const day = utcDay(Date.now());
     // the day's salt is read or made without an await; only the hashing waits, and the count follows without one
-    const visitor = await sha256Hex(`${this.saltFor(day)}|${ip}`);
+    const visitor = await sha256Hex(`${this.saltFor(day)}|${visitorNetwork(ip)}`);
     return jsonResponse(200, { recorded: this.record(day, visitor, valid, source as TickerSource) });
   }
 
@@ -142,10 +176,13 @@ export class TickerRequests {
     this.sql.exec("DELETE FROM ticker_seen WHERE day < ?", day);
     this.sql.exec("DELETE FROM day_salt WHERE day < ?", day);
     let used = Number(this.sql.exec("SELECT COUNT(*) AS n FROM ticker_seen WHERE day = ? AND visitor = ?", day, visitor).toArray()[0].n);
+    let created = Number(this.sql.exec("SELECT COUNT(*) AS n FROM ticker_requests WHERE first_seen = ?", day).toArray()[0].n);
     let recorded = 0;
     for (const ticker of new Set(tickers)) {
       if (used >= MAX_NEW_TICKERS_PER_VISITOR_DAY) break;
       if (this.sql.exec("SELECT 1 AS seen FROM ticker_seen WHERE day = ? AND visitor = ? AND ticker = ?", day, visitor, ticker).toArray().length > 0) continue;
+      const known = this.sql.exec("SELECT 1 AS known FROM ticker_requests WHERE ticker = ?", ticker).toArray().length > 0;
+      if (!known && created >= MAX_NEW_TICKER_ROWS_PER_DAY) continue; // the table is full for today; known tickers still count
       this.sql.exec("INSERT INTO ticker_seen (day, visitor, ticker) VALUES (?, ?, ?)", day, visitor, ticker);
       this.sql.exec(
         "INSERT INTO ticker_requests (ticker, csv, picker, first_seen, last_seen) VALUES (?, ?, ?, ?, ?) " +
@@ -156,6 +193,7 @@ export class TickerRequests {
         day,
         day,
       );
+      if (!known) created += 1;
       used += 1;
       recorded += 1;
     }

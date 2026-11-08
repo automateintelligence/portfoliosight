@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual as nodeTimingSafeEqual } from "node:crypto";
 import initSqlJs, { type Database, type SqlValue } from "sql.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { visitorNetwork } from "../worker/tickerRequests";
 
 // Tickers people ask for that the site does not serve: POST /api/ticker-requests records them
 // (one count per visitor address per UTC day), GET reads the list for an admin only. The Durable
@@ -118,6 +119,28 @@ const listed = async (m: Made) => {
 };
 const counts = async (m: Made) => Object.fromEntries((await listed(m)).map((r) => [r.ticker, r.count]));
 const errorCode = async (res: Response) => ((await res.json()) as { error: { code: string } }).error.code;
+
+describe("visitorNetwork", () => {
+  it("reduces an IPv6 address to its /64, leaves IPv4 as it is, and returns anything else unchanged", () => {
+    for (const [ip, network] of [
+      ["2001:db8:1:2::1", "2001:db8:1:2::/64"],
+      ["2001:0DB8:0001:0002:FFFF:EEEE:DDDD:CCCC", "2001:db8:1:2::/64"],
+      ["2001:db8::", "2001:db8:0:0::/64"],
+      ["::1", "0:0:0:0::/64"],
+      ["fe80::1:2:3:4", "fe80:0:0:0::/64"],
+      ["64:ff9b:1:2::192.0.2.1", "64:ff9b:1:2::/64"],
+      ["::ffff:203.0.113.7", "203.0.113.7"],
+      ["203.0.113.7", "203.0.113.7"],
+      ["unknown", "unknown"],
+      ["1:2:3", "1:2:3"],
+      ["1::2::3", "1::2::3"],
+      ["1:2:3:4:5:6:7:8:9", "1:2:3:4:5:6:7:8:9"],
+      ["12345::1", "12345::1"],
+    ] as const) {
+      expect(visitorNetwork(ip), ip).toBe(network);
+    }
+  });
+});
 
 describe("ticker requests", () => {
   beforeEach(() => {
@@ -285,6 +308,57 @@ describe("ticker requests", () => {
       vi.setSystemTime(new Date(DAY2));
       await send(m, batch(300));
       expect((await counts(m)).T300).toBe(2);
+    });
+    it("counts IPv6 addresses in one /64 as one visitor, however they are written, and stores no part of them", async () => {
+      const m = await makeEnv();
+      await send(m, ["ZQXJ"], "csv", { "cf-connecting-ip": "2001:db8:1:2::1" });
+      await send(m, ["ZQXJ"], "csv", { "cf-connecting-ip": "2001:0DB8:0001:0002:ffff:eeee:dddd:cccc" });
+      expect(await counts(m)).toEqual({ ZQXJ: 1 });
+      await send(m, ["ZQXJ"], "csv", { "cf-connecting-ip": "2001:db8:1:3::1" });
+      expect(await counts(m)).toEqual({ ZQXJ: 2 });
+      const stored = dump(m.db).toLowerCase();
+      for (const part of ["2001:db8", "2001:0db8", "db8:1"]) expect(stored).not.toContain(part);
+    });
+    it("holds the 300-a-day limit across a /64, so rotating addresses inside it adds no more", async () => {
+      const m = await makeEnv();
+      const batch = (from: number) => Array.from({ length: 100 }, (_, i) => `T${from + i}`);
+      for (const [n, from] of [0, 100, 200, 300].entries()) {
+        expect((await send(m, batch(from), "csv", { "cf-connecting-ip": `2001:db8:aa:bb::${n + 1}` })).status).toBe(204);
+      }
+      expect(Object.keys(await counts(m))).toHaveLength(300);
+    });
+    it("leaves an IPv4 address, and an IPv4 address written as IPv6, as the one address", async () => {
+      const m = await makeEnv();
+      await send(m, ["ZQXJ"], "csv", { "cf-connecting-ip": "203.0.113.7" });
+      await send(m, ["ZQXJ"], "csv", { "cf-connecting-ip": "::ffff:203.0.113.7" });
+      expect(await counts(m)).toEqual({ ZQXJ: 1 });
+      await send(m, ["ZQXJ"], "csv", { "cf-connecting-ip": "203.0.113.8" });
+      await send(m, ["ZQXJ"], "csv", { "cf-connecting-ip": "::ffff:203.0.113.200" });
+      expect(await counts(m)).toEqual({ ZQXJ: 3 });
+    });
+    it("adds at most 2000 new tickers a day across all visitors, silently; known tickers still count, and the next day adds again", async () => {
+      const m = await makeEnv();
+      const batch = (from: number) => Array.from({ length: 100 }, (_, i) => `N${from + i}`);
+      // seven visitors, 300 new tickers each: 2,100 asked for, 2,000 added
+      for (let visitor = 0; visitor < 7; visitor += 1) {
+        for (let k = 0; k < 3; k += 1) {
+          const res = await send(m, batch(visitor * 300 + k * 100), "csv", { "cf-connecting-ip": `192.0.2.${visitor + 10}` });
+          expect(res.status).toBe(204);
+        }
+      }
+      let table = await counts(m);
+      expect(Object.keys(table)).toHaveLength(2000);
+      expect(table.N1999).toBe(1);
+      expect(table.N2000).toBeUndefined();
+      expect((await send(m, ["N0", "ZNEW"], "picker", { "cf-connecting-ip": "192.0.2.50" })).status).toBe(204);
+      table = await counts(m);
+      expect(table.N0).toBe(2);
+      expect(table.ZNEW).toBeUndefined();
+      vi.setSystemTime(new Date(DAY2));
+      await send(m, ["ZNEW", "N2000"], "csv", { "cf-connecting-ip": "192.0.2.50" });
+      table = await counts(m);
+      expect(table.ZNEW).toBe(1);
+      expect(table.N2000).toBe(1);
     });
     it("treats a missing or malformed address as one visitor", async () => {
       const m = await makeEnv();
