@@ -11,8 +11,16 @@
     "run_worker_first": true
   },
   "r2_buckets": [{ "binding": "DATA", "bucket_name": "portfoliosight-data" }],
-  "durable_objects": { "bindings": [{ "name": "SHARE_LIMITER", "class_name": "ShareLimiter" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShareLimiter"] }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "SHARE_LIMITER", "class_name": "ShareLimiter" },
+      { "name": "TICKER_REQUESTS", "class_name": "TickerRequests" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ShareLimiter"] },
+    { "tag": "v2", "new_sqlite_classes": ["TickerRequests"] }
+  ],
   "routes": [
     { "pattern": "portfoliosight.ai", "custom_domain": true },
     { "pattern": "www.portfoliosight.ai", "custom_domain": true }

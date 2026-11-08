@@ -1212,3 +1212,129 @@ test("details on: the legend, the axis titles and their technical lines do not o
     await expect(page.getByTestId(`fund-label-${id}`)).toBeVisible();
   }
 });
+
+// ── CSV upload and the download template (Funds & amounts) ───────────────────
+const template = "ticker,shares,dollars,percent\nVTI,,10000,40\nVXUS,,5000,20\nBND,,7500,30\nVNQ,,2500,10\n";
+const csvFile = (text: string, name = "mix.csv") => ({ name, mimeType: "text/csv", buffer: Buffer.from(text) });
+const tickerRequests = async (page: Page) => (await (await page.request.get("/__mock/ticker-requests")).json()) as { tickers: string[]; source: string }[];
+
+test("the template downloads as portfoliosight-template.csv with the four example funds", async ({ page }) => {
+  await open(page);
+  await section(page, "funds");
+  const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("funds-template").click()]);
+  expect(download.suggestedFilename()).toBe("portfoliosight-template.csv");
+  const chunks: Buffer[] = [];
+  for await (const chunk of await download.createReadStream()) chunks.push(chunk as Buffer);
+  expect(Buffer.concat(chunks).toString("utf8")).toBe(template);
+});
+
+test("uploading a CSV replaces the fund list, lists what it could not add, and Recalculate sends the new funds", async ({ page }) => {
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await section(page, "funds");
+  const before = (await posts(page)).length;
+  // the template, as the upload button's own file picker takes it back: VXUS is not served by the mock
+  const [chooser] = await Promise.all([page.waitForEvent("filechooser"), page.getByTestId("funds-upload").click()]);
+  await chooser.setFiles(csvFile(template, "portfoliosight-template.csv"));
+  await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): VXUS.");
+  await expect(page.getByTestId("upload-skipped")).toBeVisible();
+  // the fund list on screen is the file's, in dollars; the menu in use has not changed yet
+  for (const id of ["VTI", "BND", "VNQ"]) await expect(page.getByTestId(`fund-row-${id}`)).toBeVisible();
+  await expect(page.getByTestId("fund-row-SGOV")).toHaveCount(0);
+  await expect(page.getByTestId("amount-head")).toHaveText("Amount ($)");
+  await expect(page.getByLabel("VTI amount in dollars")).toHaveValue("10000");
+  await expect(page.getByLabel("VNQ amount in dollars")).toHaveValue("2500");
+  await expect(page.getByTestId("upload-mismatch")).toHaveCount(0);
+  expect((await posts(page)).length, "nothing is computed before the button is pressed").toBe(before);
+  // the address still describes the menu in use (percent, which the address leaves out)
+  expect(new URL(page.url()).searchParams.get("unit")).toBeNull();
+  expect(new URL(page.url()).searchParams.get("f")).toBe("SGOV:50,VTIP:50");
+  await page.getByTestId("use-menu").click();
+  await expect.poll(async () => (await posts(page)).length).toBe(before + 1);
+  expect((await posts(page)).at(-1)!.funds.map((f) => f.id).sort()).toEqual(["BND", "VNQ", "VTI"]);
+  await expect.poll(() => new URL(page.url()).searchParams.get("unit")).toBe("usd");
+  await expect.poll(() => new URL(page.url()).searchParams.get("f")).toBe("VTI:10000,BND:7500,VNQ:2500");
+  await expect(page.getByTestId("mix-entered-VTI")).toHaveText("50.0%");
+  // what could not be added is still said, and was reported to us without any amounts
+  await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): VXUS.");
+  expect(await tickerRequests(page)).toEqual([{ tickers: ["VXUS"], source: "csv" }]);
+  // neither the file's contents nor the report reach the address
+  const address = decodeURIComponent(page.url());
+  for (const text of ["VXUS", "Not added", "upload", "10000,40"]) expect(address).not.toContain(text);
+  // dismissed
+  await page.getByTestId("upload-dismiss").click();
+  await expect(page.getByTestId("upload-skipped")).toHaveCount(0);
+});
+
+test("a file with shares and dollars that disagree says so once the new menu has prices", async ({ page }) => {
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await section(page, "funds");
+  // VTI closes at 162.07 and BND at 33.99 in the mock's data: 10 VTI is $1,620.70, not $9,999
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker,shares,dollars\nVTI,10,9999\nBND,5,170\n"));
+  await expect(page.getByTestId("use-menu")).toBeVisible();
+  await expect(page.getByTestId("amount-head")).toHaveText("Shares (Qty)");
+  await expect(page.getByTestId("upload-mismatch")).toHaveCount(0);
+  await page.getByTestId("use-menu").click();
+  await expect(page.getByTestId("upload-mismatch")).toHaveText("Dollars didn't match shares at the latest price for 1 fund and were ignored.");
+  await expect(page.getByTestId("mix-entered-VTI")).not.toHaveText("");
+  expect(await tickerRequests(page)).toEqual([]);
+});
+
+test("a file whose amounts do not share a column is refused whole, with who has what", async ({ page }) => {
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await section(page, "funds");
+  const before = (await posts(page)).length;
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker,shares,percent\nVTI,10,\nBND,,40\n"));
+  await expect(page.getByTestId("upload-error")).toHaveText(
+    "Every fund with an amount needs the same column filled in (shares, dollars or percent). VTI has only shares; BND has only percent.",
+  );
+  await expect(page.getByTestId("fund-row-SGOV")).toBeVisible();
+  await expect(page.getByTestId("fund-row-VTI")).toHaveCount(0);
+  await expect(page.getByTestId("use-menu")).toHaveCount(0);
+  expect((await posts(page)).length).toBe(before);
+  // a file that cannot be read as numbers is refused too, naming the row
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker,dollars\nVTI,1000\nBND,lots\n"));
+  await expect(page.getByTestId("upload-error")).toHaveText('Row 3 (BND): "lots" in the dollars column is not a number.');
+});
+
+test("tickers left out of a file are listed even when the file is refused for having too few funds", async ({ page }) => {
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await section(page, "funds");
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker\nVTI\nXYZ\nABC\n"));
+  await expect(page.getByTestId("upload-error")).toHaveText("A menu needs at least 2 funds.");
+  await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): XYZ, ABC.");
+  await expect(page.getByTestId("fund-row-SGOV")).toBeVisible();
+  await expect.poll(async () => (await tickerRequests(page)).length).toBe(1);
+  expect(await tickerRequests(page)).toEqual([{ tickers: ["XYZ", "ABC"], source: "csv" }]);
+});
+
+test("the list of skipped tickers stays when the funds panel is closed and opened again @desktop-only", async ({ page }) => {
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await section(page, "funds");
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker\nVTI\nBND\nXYZ\n"));
+  await expect(page.getByTestId("upload-skipped")).toBeVisible();
+  await page.getByTestId("funds-toggle").click();
+  await expect(page.getByTestId("upload-skipped")).toHaveCount(0);
+  await page.getByTestId("funds-toggle").click();
+  await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): XYZ.");
+});
+
+test("a ticker typed into the picker that the site does not have is reported once Enter is pressed, once per visit", async ({ page }) => {
+  await open(page);
+  await section(page, "funds");
+  const field = page.getByTestId("fund-add");
+  await field.fill("zzqj");
+  expect(await tickerRequests(page), "typing alone reports nothing").toEqual([]);
+  await field.press("Enter");
+  await expect(page.getByText("ZZQJ isn't offered")).toBeVisible();
+  await expect.poll(async () => (await tickerRequests(page)).length).toBe(1);
+  expect(await tickerRequests(page)).toEqual([{ tickers: ["ZZQJ"], source: "picker" }]);
+  await field.fill("ZZQJ");
+  await field.press("Enter");
+  await field.fill("not a ticker at all");
+  await field.press("Enter");
+  await field.fill("VTI");
+  await field.press("Enter");
+  await expect(page.getByTestId("fund-row-VTI")).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(await tickerRequests(page)).toEqual([{ tickers: ["ZZQJ"], source: "picker" }]);
+});

@@ -7,11 +7,13 @@
 //                                "tier" switch is "admin"
 //   POST /api/tensors            (bodies are recorded)
 //   POST /api/share              (always 202; nothing is sent)
+//   POST /api/ticker-requests    (bodies are recorded; always 204)
 //   POST /api/range              409 range_unavailable (the page keeps its own figure), or the
 //                                stand-in one-year range of the posted weights (below) while the
 //                                "ranges" switch is on
 //   GET  /__mock/posts           recorded POST /api/tensors bodies
 //   GET  /__mock/ranges          recorded POST /api/range bodies
+//   GET  /__mock/ticker-requests recorded POST /api/ticker-requests bodies
 //   POST /__mock/config          {"stale": 3, "unavailable": "10y", "challenge": 1, "build409": 2, "ranges": true,
 //                                 "noGeneration": true, "tier": "admin", "manySymbols": true, "stocks": true}
 //                                (manySymbols adds 120 served stand-ins MOCKF001 ... MOCKF120;
@@ -256,6 +258,7 @@ const windowUnavailable = (lookback) => ({ status: "failed", error: "window_unav
 const noGeneration = { error: { code: "no_generation", message: "No generation has been published yet.", details: null } };
 let posts = [];
 let rangePosts = [];
+let tickerRequests = [];
 
 // The service resamples the menu's daily history; the mock has none, so its stand-in for the
 // one-year range of a mix is mu -+ 1.96 sigma around mu, from the tensor's own moments. It is
@@ -293,10 +296,12 @@ const server = http.createServer(async (req, res) => {
 
   if (where === "/__mock/posts" && method === "GET") return send(res, 200, posts);
   if (where === "/__mock/ranges" && method === "GET") return send(res, 200, rangePosts);
+  if (where === "/__mock/ticker-requests" && method === "GET") return send(res, 200, tickerRequests);
   if (where === "/__mock/reset" && method === "POST") {
     config = { ...DEFAULTS };
     posts = [];
     rangePosts = [];
+    tickerRequests = [];
     return send(res, 200, { ok: true });
   }
   if (where === "/__mock/config" && method === "POST") {
@@ -354,6 +359,15 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, { status: "ready", generation: G, hash, url: `/api/tensors/${G}/${hash}/${lookback}` });
   }
   if (method === "POST" && where === "/api/share") return send(res, 202, { ok: true });
+  if (method === "POST" && where === "/api/ticker-requests") {
+    try {
+      tickerRequests.push(JSON.parse(await readBody(req)));
+    } catch {
+      return send(res, 400, { error: { code: "invalid_request", message: "body is not JSON", details: null } });
+    }
+    res.writeHead(204, { "cache-control": "no-store", "x-ps-preview": "1" });
+    return res.end();
+  }
   if (method === "POST" && where === "/api/range") {
     let body = null;
     try {

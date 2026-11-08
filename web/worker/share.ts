@@ -27,7 +27,7 @@ export interface ShareEnv {
 /** Resolves `true` when the send may go ahead; `exempt` lifts the per-address caps only. */
 export type ShareLimiterFn = (ip: string, exempt: boolean) => Promise<boolean>;
 
-const SITE_ORIGIN = "https://portfoliosight.ai";
+export const SITE_ORIGIN = "https://portfoliosight.ai";
 const MAIL_URL = "https://api.mailchannels.net/tx/v1/send";
 const DKIM_DOMAIN = "automateintelligence.ai";
 const DKIM_SELECTOR = "mailchannels";
@@ -325,6 +325,12 @@ async function sendShareMail(env: ShareEnv, to: string, link: string): Promise<b
 
 const IP_SHAPE = /^[0-9A-Fa-f:.]{2,45}$/;
 
+/** The visitor's address as Cloudflare reports it, or "unknown" when it is missing or not an address. */
+export function visitorAddress(request: Request): string {
+  const claimed = request.headers.get("cf-connecting-ip") ?? "";
+  return IP_SHAPE.test(claimed) ? claimed : "unknown";
+}
+
 /**
  * `POST /api/share {"to", "url"}`. Validation comes first; the limiter is asked only for a
  * sendable request. `maxFunds` is the sender's menu limit (its access tier).
@@ -350,8 +356,7 @@ export async function handleShare(request: Request, env: ShareEnv, limiter: Shar
   if (link === null) return jsonError(400, "invalid_url", "This view cannot be emailed; copy the link instead");
 
   const exempt = await secretEquals(request.headers.get("x-ps-gate"), env.PS_GATE_SECRET);
-  const claimed = request.headers.get("cf-connecting-ip") ?? "";
-  const ip = IP_SHAPE.test(claimed) ? claimed : "unknown";
+  const ip = visitorAddress(request);
   if (!(await limiter(ip, exempt))) return jsonError(429, "rate_limited", "Too many shares; try again later");
 
   if (!(await sendShareMail(env, to, link))) return jsonError(502, "mail_failed", "The message could not be sent");

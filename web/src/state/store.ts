@@ -11,6 +11,7 @@ import {
   fetchTier,
   getTensor,
   postTensor,
+  postTickerRequests,
   PUBLIC_TIER,
   type Preset,
   type PresetsBody,
@@ -19,10 +20,12 @@ import {
   type Tier,
 } from "../api/http";
 import type { Tensor } from "../api/tensor";
+import { MAX_TICKERS_PER_REQUEST, TICKER_SHAPE, type TickerSource } from "../api/tickerShape";
 import { linkTooManyFunds } from "../copy";
 import { amountsToWeights, amountsValue, percentTotal } from "../math/amounts";
 import { portfolioMath } from "../math/portfolio";
 import { positionOfCeiling } from "../math/view";
+import { settlePending, type PendingCheck } from "../sections/fundsCsv";
 import { decode, encode, type UrlState } from "./url";
 
 export type Unit = UrlState["unit"];
@@ -30,6 +33,12 @@ export type LookbackId = UrlState["lookback"];
 export type ThemeId = NonNullable<UrlState["theme"]>;
 export type Cap = UrlState["caps"][number];
 export type Row = { id: string; name: string; amount: number | null };
+/**
+ * What the last CSV upload has to tell: why it was refused, the tickers it left out, notes on
+ * columns that were not used, and the checks still waiting for the new menu's prices (`menu` is
+ * the fund list they wait for). Page state only: it is not part of the address.
+ */
+export type UploadReport = { error: string | null; skipped: string[]; notes: string[]; pending: PendingCheck[]; menu: string[] };
 export type BuildStatus = "idle" | "building" | "ready" | "build-retry" | "build-failed-final";
 
 export const LOOKBACKS: LookbackId[] = ["1y", "2y", "3y", "5y", "10y", "ew"];
@@ -71,6 +80,8 @@ export type State = {
   /** One-sentence problem with the requested menu (unknown symbols, refused request). */
   menuError: string | null;
   loadError: string | null;
+  /** The last CSV upload's report, until it is dismissed or the next upload replaces it. */
+  upload: UploadReport | null;
 };
 
 export type Action =
@@ -90,7 +101,10 @@ export type Action =
   | { type: "challenged" }
   | { type: "setUnit"; unit: Unit }
   | { type: "setAmount"; id: string; amount: number | null }
-  | { type: "useMenu"; rows: Row[] }
+  | { type: "useMenu"; rows: Row[]; unit?: Unit }
+  | { type: "setUpload"; report: UploadReport }
+  | { type: "dismissUpload" }
+  | { type: "requestTickers"; tickers: string[]; source: TickerSource }
   | { type: "setCaps"; caps: Cap[] };
 
 export type Store = {
@@ -221,6 +235,7 @@ export function createStore(init: { search: string }): Store {
     staleness: null,
     menuError: null,
     loadError: null,
+    upload: null,
   };
 
   const listeners = new Set<() => void>();
@@ -234,6 +249,7 @@ export function createStore(init: { search: string }): Store {
   let failures = 0;
   let lastPost: { key: string; body: string } | null = null;
   let symbolsAsked = false;
+  const requestedTickers = new Set<string>();
 
   const emit = () => listeners.forEach((l) => l());
   const set = (patch: Partial<State>, writeUrl = true) => {
@@ -334,6 +350,20 @@ export function createStore(init: { search: string }): Store {
       menuError: null,
       ghosts: state.ghosts.filter((g) => g !== lookback),
     });
+    settleUpload();
+  }
+
+  /**
+   * The upload's checks that need prices run once the menu on screen is the file's menu and its
+   * tensor is here (shares against the file's dollars or percent at the tensor's latest closes).
+   */
+  function settleUpload() {
+    const report = state.upload;
+    if (report === null || report.pending.length === 0 || state.tensor === null) return;
+    const ids = (list: string[]) => [...list].sort().join(",");
+    if (ids(state.rows.map((r) => r.id)) !== ids(report.menu)) return;
+    const notes = settlePending(report.pending, state.tensor.universe.funds);
+    set({ upload: { ...report, notes: [...report.notes, ...notes], pending: [] } }, false);
   }
 
   function fail(error: string, retryable: boolean) {
@@ -691,15 +721,34 @@ export function createStore(init: { search: string }): Store {
         // The funds table never offers more than the tier allows; a longer list is refused, not cut.
         const rows = action.rows;
         if (rows.length < MIN_FUNDS || rows.length > state.tier.menuMax) return;
+        // A unit that comes with the list (a CSV upload) is taken in the same step as its amounts,
+        // so the plotted menu never reads amounts in another unit.
+        const unit = action.unit ?? state.unit;
         const sameFunds = menuKey(rows, []) === menuKey(state.rows, []);
         if (sameFunds) {
-          set({ rows, preset: null });
+          set({ rows, unit, preset: null });
+          settleUpload();
           return;
         }
         failures = 0;
         const ids = new Set(rows.map((r) => r.id));
         state = { ...state, tensor: null, tensorLookback: null, t: "auto" };
-        menuChanged({ rows, preset: null, caps: state.caps.filter((c) => ids.has(c.id)) });
+        menuChanged({ rows, unit, preset: null, caps: state.caps.filter((c) => ids.has(c.id)) });
+        return;
+      }
+      case "setUpload":
+        set({ upload: action.report }, false);
+        settleUpload();
+        return;
+      case "dismissUpload":
+        set({ upload: null }, false);
+        return;
+      case "requestTickers": {
+        // Tickers asked for that the site does not serve; each goes once per visit, and a failure is silent.
+        const fresh = [...new Set(action.tickers.map((t) => t.trim().toUpperCase()).filter((t) => TICKER_SHAPE.test(t) && !requestedTickers.has(t)))].slice(0, MAX_TICKERS_PER_REQUEST);
+        if (fresh.length === 0 || halted) return;
+        for (const ticker of fresh) requestedTickers.add(ticker);
+        void postTickerRequests(fresh, action.source);
         return;
       }
       case "setCaps": {
