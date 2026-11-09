@@ -10,9 +10,11 @@ method are in `docs/reviews/`.
   slider with a bad and a typical year, one diversification slider that starts at a suggested
   position, and a quiet Good / Average / Fair / Poor word. Technical names sit behind a details
   toggle.
-- Two ready-made menus, the Example Portfolio (the default, with its allocation) and TSP
-  (G, F, C, S, I), plus custom menus of 2 to 30 served funds built on request and cached by
-  menu, limits and lookback.
+- Three ready-made menus, the Example Portfolio (the default, with its allocation), TSP
+  (G, F, C, S, I) and Example Portfolio 2 (the long-history research menu of the fixed-risk
+  experiment: 11 funds limited to 40% each and 8 large US stocks limited to 10% each, with an
+  equal starting mix in percent, history back to 2003), plus custom menus of 2 to 30 served funds
+  built on request and cached by menu, limits and lookback.
 - Funds and amounts in shares, percent or dollars; trades from the entered mix to the selected
   one; stress cards for 2008, March 2020 and 2022 that never show a number for a mix that mostly
   did not exist; per-fund limits that scale with the size of the menu; six lookbacks with faint
@@ -40,10 +42,8 @@ method are in `docs/reviews/`.
   - Vanguard-only: a moderate allocation mix using Vanguard ETFs and/or mutual funds.
   - Fidelity-only: a moderate allocation mix using Fidelity ETFs and/or mutual funds.
   Select the funds and starting allocation percentages when designing each menu.
-- A third ready-made menu: the long-history research menu from the fixed-risk optimization
-  experiment (`research2003`: 11 funds capped at 40% and 8 large US stocks capped at 10%, history
-  back to 2003), added beside the Example Portfolio and TSP once the experiment's results report
-  is written (issue #187).
+- Example Portfolio 2's starting mix: today an equal share (about 5.26%) in each of its 19
+  holdings, a placeholder until the owner picks a mix from the chart (`data/presets.json`).
 - Brokerage CSV exports (Fidelity, Schwab, …) as an upload format, beside the PortfolioSight template
   that Funds & amounts reads today.
 - Tester access: a SecuritySight-style login (authorized email domains, one-time code, 30-day
