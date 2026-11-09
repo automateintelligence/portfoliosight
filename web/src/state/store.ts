@@ -137,13 +137,26 @@ const unitOfPreset = (preset: Preset): Unit | null =>
 const rowsOfPreset = (preset: Preset): Row[] =>
   preset.funds.map((f) => ({ id: f.id, name: f.name ?? f.id, amount: preset.allocation ? (preset.allocation[f.id] ?? null) : null }));
 
-/** The URL description of a state (spec 8.1). A preset is named by `u`; its rows are not repeated. */
+const fractionToPercent = (x: number | null | undefined): number | null => (x === null || x === undefined ? null : Number((x * 100).toFixed(6)));
+
+/** The limits a preset declares, as the page holds limits: whole percents, blank for the default rule. */
+const capsOfPreset = (preset: Preset): Cap[] => preset.caps.map((c) => ({ id: c.id, min: fractionToPercent(c.min), max: fractionToPercent(c.max) }));
+
+const capList = (caps: Cap[]) => [...caps].sort((a, b) => a.id.localeCompare(b.id)).map((c) => [c.id, c.min, c.max]);
+/** Whether two sets of limits are the same, whatever their order. */
+const sameCaps = (a: Cap[], b: Cap[]) => JSON.stringify(capList(a)) === JSON.stringify(capList(b));
+
+/**
+ * The URL description of a state (spec 8.1). A preset is named by `u`; its rows are not repeated,
+ * and neither are its own limits: a link to a preset without `c` means the limits it declares.
+ */
 export function toUrlState(state: State, haveR: boolean): UrlState {
+  const own = state.preset ? state.presets?.presets.find((p) => p.id === state.preset) : undefined;
   return {
     preset: state.preset as UrlState["preset"],
     funds: state.preset ? [] : state.rows.map((r) => ({ id: r.id, amount: r.amount })),
     unit: state.unit,
-    caps: state.caps,
+    caps: own && sameCaps(state.caps, capsOfPreset(own)) ? [] : state.caps,
     lookback: state.lookback,
     ghosts: state.ghosts,
     r: haveR ? state.s : null,
@@ -201,8 +214,7 @@ export function enteredValue(
   return value.status === "unknown_price" ? { status: "unknown_price", funds: value.unknownPrice.map((i) => funds[i].id) } : value;
 }
 
-const menuKey = (rows: Row[], caps: Cap[]) =>
-  JSON.stringify([rows.map((r) => r.id).sort(), [...caps].sort((a, b) => a.id.localeCompare(b.id)).map((c) => [c.id, c.min, c.max])]);
+const menuKey = (rows: Row[], caps: Cap[]) => JSON.stringify([rows.map((r) => r.id).sort(), capList(caps)]);
 
 export function createStore(init: { search: string }): Store {
   const url = decode(init.search);
@@ -304,7 +316,7 @@ export function createStore(init: { search: string }): Store {
   /** How to ask for this menu's tensor at `lookback`: the preset's declared URL, or a POST body. */
   function requestFor(lookback: LookbackId, post = false): { get: string } | { post: string } | { unavailable: string } {
     const preset = activePreset();
-    if (preset && state.caps.length === 0 && !post) {
+    if (preset && sameCaps(state.caps, capsOfPreset(preset)) && !post) {
       const entry = preset.lookbacks[lookback];
       if (entry && entry.status === "ready" && entry.url) return { get: entry.url };
       if (entry && entry.status === "unavailable") return { unavailable: NOT_ENOUGH_HISTORY };
@@ -543,12 +555,14 @@ export function createStore(init: { search: string }): Store {
     set({ staleness: age > 4 ? { asof: presetsAsof } : null }, false);
   }
 
-  function adoptPreset(preset: Preset, keepUnit: boolean) {
+  /** Makes `preset` the menu: its rows, its unit and its own limits (or the limits a link carried, with `keepCaps`). */
+  function adoptPreset(preset: Preset, keepUnit: boolean, keepCaps = false) {
     state = {
       ...state,
       preset: preset.id,
       rows: rowsOfPreset(preset),
       unit: keepUnit ? state.unit : (unitOfPreset(preset) ?? "pct"),
+      caps: keepCaps ? state.caps : capsOfPreset(preset),
     };
   }
 
@@ -617,7 +631,8 @@ export function createStore(init: { search: string }): Store {
       }
       const preset = state.presets.presets.find((p) => p.id === state.preset) ?? state.presets.presets[0];
       if (!preset) return;
-      adoptPreset(preset, unitInUrl);
+      // A link's own limits (`c`) win; without any, a preset opens with the limits it declares.
+      adoptPreset(preset, unitInUrl, state.caps.length > 0);
       // An explicit percent unit on a preset that arrives in another unit cannot be written back
       // with `u=` (the address omits unit=pct), so it is kept as a custom menu instead.
       if (state.unit === "pct" && (unitOfPreset(preset) ?? "pct") !== "pct") state = { ...state, preset: null };
@@ -673,7 +688,7 @@ export function createStore(init: { search: string }): Store {
         failures = 0;
         adoptPreset(preset, false);
         // A new menu starts at its own default position (spec 4.9), with the suggested point.
-        state = { ...state, tensor: null, tensorLookback: null, caps: [], t: "auto" };
+        state = { ...state, tensor: null, tensorLookback: null, t: "auto" };
         menuChanged({});
         return;
       }
@@ -754,8 +769,13 @@ export function createStore(init: { search: string }): Store {
       case "setCaps": {
         failures = 0;
         if (menuKey(state.rows, action.caps) === menuKey(state.rows, state.caps)) return;
+        // A link to a preset without `c` means the limits the preset declares, so every limit
+        // back at the default rule, on a preset that declares some, can only be written out as a
+        // custom menu (as a changed unit is, above).
+        const own = activePreset();
+        const custom = own !== null && action.caps.length === 0 && capsOfPreset(own).length > 0;
         // Caps change the tensor but not the menu: keep the view while the new one loads.
-        set({ caps: action.caps, ghostTensors: {}, unavailable: {}, menuError: null });
+        set({ caps: action.caps, ...(custom ? { preset: null } : {}), ghostTensors: {}, unavailable: {}, menuError: null });
         // A cap policy is always sent, the all-default one included, so the server is the judge.
         void load(state.lookback, { previous: state.tensorLookback, fresh: true });
         for (const g of state.ghosts) void loadGhost(g);

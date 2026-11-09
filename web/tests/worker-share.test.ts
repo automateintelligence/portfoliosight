@@ -186,6 +186,14 @@ describe("share by email", () => {
     expect(S.reencodeShareUrl("https://portfoliosight.ai")).toBe(`${SITE}/?lb=5y&d=auto`);
   });
 
+  it("mails a link to each ready-made portfolio the page knows, and to no other", () => {
+    for (const id of ["guide2017", "tsp", "research2003"]) {
+      expect(S.reencodeShareUrl(`${SITE}/?u=${id}`), id).toBe(`${SITE}/?u=${id}&lb=5y&d=auto`);
+    }
+    expect(S.reencodeShareUrl(`${SITE}/?u=research2003&c=SPY::30,GE::5&lb=3y`)).toBe(`${SITE}/?u=research2003&c=SPY::30,GE::5&lb=3y&d=auto`);
+    for (const id of ["research2004", "research2003x", "Research2003", ""]) expect(S.reencodeShareUrl(`${SITE}/?u=${id}`), id).toBeNull();
+  });
+
   it("mails a link in every one of the page's four themes and in no other theme", async () => {
     // spec §8.1: `t` is ks-dark | light | hud | grid
     const themes = ["ks-dark", "light", "hud", "grid"];

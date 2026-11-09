@@ -136,6 +136,14 @@ describe("encode and decode", () => {
     expect(encode(decode(capped))).toBe(capped);
   });
 
+  it("reads and writes the third ready-made portfolio, and still refuses a preset it does not know", () => {
+    expect(decode("?u=research2003")).toEqual({ ...EMPTY, preset: "research2003" });
+    expect(encode({ ...EMPTY, preset: "research2003" })).toBe("?u=research2003&lb=5y&d=auto");
+    const edited = "?u=research2003&c=SPY::30,GE::5&lb=5y&d=auto";
+    expect(encode(decode(edited))).toBe(edited);
+    expect(decode("?u=research2004").preset).toBeNull();
+  });
+
   it("escapes a fund id so it cannot add a key or break the list", () => {
     const state: UrlState = { ...EMPTY, funds: [{ id: "X&K=1#Y", amount: 5 }, { id: "A B+C%", amount: null }], caps: [{ id: "X&K=1#Y", min: 1, max: 2 }] };
     const search = encode(state);

@@ -17,6 +17,7 @@ import {
 
 const GUIDE_NAME = "Example Portfolio";
 const TSP_NAME = "TSP (G, F, C, S, I)";
+const RESEARCH_NAME = "Example Portfolio 2";
 const TSP_IDS = ["TSP-C", "TSP-F", "TSP-G", "TSP-I", "TSP-S"];
 const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
 const THEME_BG: Record<string, string> = { "ks-dark": "#141417", light: "#F3F3F3", hud: "#080506", grid: "#04070B" };
@@ -1077,9 +1078,10 @@ test("DoD-21 presets and tensors come from R2, and a build request for the defau
   expect(answer.headers()["x-ps-source"], "presets are read from R2").toBe("r2");
   const presets = (await answer.json()) as Presets;
   expect(presets.generation).toMatch(/^\d{4}-\d{2}-\d{2}-[0-9.]+$/);
-  expect(presets.presets.map((preset) => preset.id).sort()).toEqual(["guide2017", "tsp"]);
+  expect(presets.presets.map((preset) => preset.id).sort()).toEqual(["guide2017", "research2003", "tsp"]);
   expect(presets.presets.find((preset) => preset.id === "guide2017")!.name).toBe(GUIDE_NAME);
   expect(presets.presets.find((preset) => preset.id === "tsp")!.name).toBe(TSP_NAME);
+  expect(presets.presets.find((preset) => preset.id === "research2003")!.name).toBe(RESEARCH_NAME);
   for (const preset of presets.presets) {
     expect(Object.keys(preset.lookbacks).sort(), `${preset.id}: lookbacks`).toEqual([...LOOKBACKS].sort());
     for (const lookback of LOOKBACKS) {

@@ -85,7 +85,8 @@ export function Settings({ tensor, lookback, ghosts, caps, unavailable, details,
       const max = hi !== Number(defMaxText) ? hi : null;
       if (min !== null || max !== null) overrides.push({ id, min, max });
     }
-    onCaps(overrides);
+    // A fund this view sets aside has no row here, but its limit is part of the menu's policy.
+    onCaps([...overrides, ...caps.filter((c) => !ids.includes(c.id))]);
   };
   // "No limits" is on when every fund may go from 0% to 100%.
   const noLimits = ids.length > 0 && ids.every((id) => caps.some((c) => c.id === id && (c.min ?? 0) === 0 && c.max === 100));

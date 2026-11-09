@@ -2,7 +2,8 @@
 // and local development. It serves the UI fixture for every tensor key and never talks to
 // anything outside this process.
 //
-//   GET  /api/presets, /api/symbols, /api/health, /api/tensors/{G}/{hash}/{lookback}
+//   GET  /api/presets (three presets, the third with its own per-fund limits and a starting mix in
+//        percent), /api/symbols, /api/health, /api/tensors/{G}/{hash}/{lookback}
 //   GET  /api/tier               {"tier": "public", "menu_max": 30}, or admin and 100 while the
 //                                "tier" switch is "admin"
 //   POST /api/tensors            (bodies are recorded)
@@ -28,6 +29,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PS_MOCK_PORT || 8791);
 const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
 const SECOND_NAME = "TSP (G, F, C, S, I) [mock-7f3]";
+const THIRD_NAME = "Example Portfolio 2 [mock-c91]";
 
 const fixture = JSON.parse(fs.readFileSync(path.join(here, "..", "fixtures", "guide2017_5y.json"), "utf8"));
 const G = fixture.generation;
@@ -35,6 +37,7 @@ const H1 = fixture.universe.hash;
 const shift = (hash, by) => hash.split("").map((c) => ((parseInt(c, 16) + by) % 16).toString(16)).join("");
 const H2 = shift(H1, 1);
 const H3 = shift(H1, 2);
+const H4 = shift(H1, 3);
 
 function holdings() {
   const file = path.join(here, "..", "..", "data", "holdings", "holdings_guide2017_step2.csv");
@@ -52,12 +55,23 @@ const guideFunds = holdings().map((h) => ({ id: h.id, name: names.get(h.id) ?? h
 const allocation = Object.fromEntries(holdings().map((h) => [h.id, h.amount]));
 const lookbacks = (hash) => Object.fromEntries(LOOKBACKS.map((lb) => [lb, { status: "ready", url: `/api/tensors/${G}/${hash}/${lb}` }]));
 
+// The third preset declares its own limits, as the service does: the first eleven funds at most 40%,
+// the rest at most 10%. Its starting mix is an equal share in percent, in hundredths that add up
+// to exactly 100.
+const limitedCaps = guideFunds.map((f, i) => ({ id: f.id, min: null, max: i < 11 ? 0.4 : 0.1 }));
+const equalPercent = (ids) => {
+  const base = Math.floor(10000 / ids.length);
+  const extra = 10000 - base * ids.length;
+  return Object.fromEntries(ids.map((id, i) => [id, (base + (i < extra ? 1 : 0)) / 100]));
+};
+
 const presets = {
   generation: G,
   asof: fixture.asof,
   presets: [
-    { id: "guide2017", name: "Example Portfolio", hash: H1, funds: guideFunds, allocation, allocation_unit: "$", lookbacks: lookbacks(H1) },
-    { id: "tsp", name: SECOND_NAME, hash: H2, funds: guideFunds, allocation: null, allocation_unit: null, lookbacks: lookbacks(H2) },
+    { id: "guide2017", name: "Example Portfolio", hash: H1, funds: guideFunds, caps: [], allocation, allocation_unit: "$", lookbacks: lookbacks(H1) },
+    { id: "tsp", name: SECOND_NAME, hash: H2, funds: guideFunds, caps: [], allocation: null, allocation_unit: null, lookbacks: lookbacks(H2) },
+    { id: "research2003", name: THIRD_NAME, hash: H4, funds: guideFunds, caps: limitedCaps, allocation: equalPercent(guideFunds.map((f) => f.id)), allocation_unit: "%", lookbacks: lookbacks(H4) },
   ],
 };
 
@@ -226,6 +240,8 @@ function tensorFor(hash, lookback) {
   }
   if (hash === H2) {
     copy.universe = { ...copy.universe, hash: H2, preset_id: "tsp", name: SECOND_NAME };
+  } else if (hash === H4) {
+    copy.universe = { ...copy.universe, hash: H4, preset_id: "research2003", name: THIRD_NAME };
   } else if (hash !== H1) {
     copy.universe = { ...copy.universe, hash, preset_id: null, name: "Custom menu" };
   }
