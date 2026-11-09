@@ -88,7 +88,6 @@
   --thumb-ring: var(--accent);
   --hover: rgba(255,255,255,.05);
   --selected-bg: rgba(199,99,70,.18);
-  --dim: rgba(20,20,23,.46);
   --on-accent: #FFFFFF;
   --overlay: rgba(8,8,10,.62);
   --focus: var(--accent-light);
@@ -156,7 +155,6 @@
   --thumb-ring: var(--accent);
   --hover: rgba(0,0,0,.045);
   --selected-bg: rgba(15,108,189,.10);
-  --dim: rgba(255,255,255,.58);
   --on-accent: #FFFFFF;
   --overlay: rgba(27,27,27,.32);
   --focus: var(--accent);
@@ -223,7 +221,6 @@
   --thumb-ring: #FFD25A;
   --hover: rgba(255,170,90,.1);
   --selected-bg: rgba(232,64,28,.2);
-  --dim: rgba(8,5,6,.5);
   --on-accent: #FFFFFF;
   --overlay: rgba(4,2,2,.74);
   --focus: #FFD25A;
@@ -294,7 +291,6 @@
   --thumb-ring: var(--accent);
   --hover: rgba(53,201,232,.08);
   --selected-bg: rgba(53,201,232,.14);
-  --dim: rgba(4,7,11,.55);
   --on-accent: #04070B;
   --overlay: rgba(2,4,7,.72);
   --focus: var(--warn);

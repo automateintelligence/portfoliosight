@@ -127,25 +127,6 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
   // `data-ghost-count` counts the history windows toggled on; the No limits line is not one.
   const lookbackGhosts = ghosts.filter((g) => g.id !== NO_LIMITS).length;
 
-  // Everything right of the ceiling is beyond the chosen risk: that part of the map recedes.
-  const dimPath = useMemo(() => {
-    if (!tensor || !view || !scales) return "none";
-    const curve = tensor.frontier_curve;
-    // The map's own bottom edge (half a cell under the lowest return floor), so nothing is dimmed below it.
-    const ys = tensor.grid.y;
-    const floor = Math.min(scales.plot.bottom, scales.y(ys[0] - (ys.length > 1 ? (ys[1] - ys[0]) / 2 : 0)));
-    const x0 = scales.x(view.ceiling);
-    const pts: string[] = [`${x0.toFixed(1)}px ${floor.toFixed(1)}px`, `${x0.toFixed(1)}px ${(scales.y(view.ceilingMu) - 2).toFixed(1)}px`];
-    let last = x0;
-    for (let i = 0; i < curve.sigma.length; i++) {
-      if (curve.sigma[i] <= view.ceiling) continue;
-      last = scales.x(curve.sigma[i]);
-      pts.push(`${last.toFixed(1)}px ${(scales.y(curve.mu[i]) - 2).toFixed(1)}px`);
-    }
-    pts.push(`${last.toFixed(1)}px ${floor.toFixed(1)}px`);
-    return `polygon(${pts.join(", ")})`;
-  }, [tensor, view, scales]);
-
   // Every frontier line is named at its right end by the history it was measured over.
   const lines: LineEnd[] = useMemo(() => {
     if (!tensor) return [];
@@ -321,7 +302,6 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
       {ready && (
         <>
           <Heatmap tensor={tensor} frontierEnb={frontierEnb} ghosts={ghosts} scales={scales} themeEpoch={themeEpoch} reveal={reveal} />
-          <div className="dim" aria-hidden="true" style={{ clipPath: dimPath }} />
           <p className="chart-label y-title" data-testid="y-title">
             {plain.yAxis}
             {details && !phone && <span className="tech">{technical.yAxis}</span>}
