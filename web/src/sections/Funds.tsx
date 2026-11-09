@@ -255,58 +255,6 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
           <span>{plain.fundsClear}</span>
         </button>
       </div>
-      <div className="toolbar file-tools">
-        <button type="button" className="btn btn-quiet" data-testid="funds-template" title={plain.fundsTemplateHint} aria-label={`${plain.fundsTemplate}: ${plain.fundsTemplateHint.toLowerCase()}`} onClick={() => downloadCsv(TEMPLATE_CSV, TEMPLATE_FILENAME)}>
-          <Download size={14} aria-hidden="true" />
-          <span>{plain.fundsTemplate}</span>
-        </button>
-        <button type="button" className="btn btn-quiet" data-testid="funds-upload" title={plain.fundsUploadHint} aria-label={`${plain.fundsUpload}: ${plain.fundsUploadHint.toLowerCase()}`} onClick={() => fileRef.current?.click()}>
-          <Upload size={14} aria-hidden="true" />
-          <span>{plain.fundsUpload}</span>
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          hidden
-          accept=".csv,text/csv"
-          data-testid="funds-file"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            // cleared so choosing the same file again is a change again
-            e.target.value = "";
-            if (file) void loadFile(file);
-          }}
-        />
-      </div>
-      <p className="hint" data-testid="funds-upload-hint">
-        {plain.fundsUploadPrivacy}
-      </p>
-      {upload && (upload.error !== null || upload.skipped.length > 0 || upload.notes.length > 0) && (
-        <div className="upload-report" data-testid="upload-report">
-          <div className="upload-report-body">
-            {upload.error !== null && (
-              <p className="err" role="alert" data-testid="upload-error">
-                {upload.error}
-              </p>
-            )}
-            {upload.skipped.length > 0 && (
-              <p role="status" data-testid="upload-skipped">
-                {uploadSkipped(upload.skipped)}
-              </p>
-            )}
-            {upload.notes.length > 0 && (
-              <div className="upload-notes" role="status" data-testid="upload-mismatch">
-                {upload.notes.map((note) => (
-                  <p key={note}>{note}</p>
-                ))}
-              </div>
-            )}
-          </div>
-          <button type="button" className="btn btn-quiet" data-testid="upload-dismiss" onClick={onDismissUpload}>
-            {plain.uploadDismiss}
-          </button>
-        </div>
-      )}
       <p className="hint" data-testid="funds-hint">
         {plain.fundsAsYouType}
       </p>
@@ -413,6 +361,58 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
         )}
         <p className="hint" data-testid="funds-limit">{`${fundsUpTo(menuMax)} ${plain.symbolsHelp}`}</p>
       </div>
+      <div className="toolbar file-tools">
+        <button type="button" className="btn btn-quiet" data-testid="funds-template" title={plain.fundsTemplateHint} aria-label={`${plain.fundsTemplate}: ${plain.fundsTemplateHint.toLowerCase()}`} onClick={() => downloadCsv(TEMPLATE_CSV, TEMPLATE_FILENAME)}>
+          <Download size={14} aria-hidden="true" />
+          <span>{plain.fundsTemplate}</span>
+        </button>
+        <button type="button" className="btn btn-quiet" data-testid="funds-upload" title={plain.fundsUploadHint} aria-label={`${plain.fundsUpload}: ${plain.fundsUploadHint.toLowerCase()}`} onClick={() => fileRef.current?.click()}>
+          <Upload size={14} aria-hidden="true" />
+          <span>{plain.fundsUpload}</span>
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          hidden
+          accept=".csv,text/csv"
+          data-testid="funds-file"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            // cleared so choosing the same file again is a change again
+            e.target.value = "";
+            if (file) void loadFile(file);
+          }}
+        />
+      </div>
+      <p className="hint" data-testid="funds-upload-hint">
+        {plain.fundsUploadPrivacy}
+      </p>
+      {upload && (upload.error !== null || upload.skipped.length > 0 || upload.notes.length > 0) && (
+        <div className="upload-report" data-testid="upload-report">
+          <div className="upload-report-body">
+            {upload.error !== null && (
+              <p className="err" role="alert" data-testid="upload-error">
+                {upload.error}
+              </p>
+            )}
+            {upload.skipped.length > 0 && (
+              <p role="status" data-testid="upload-skipped">
+                {uploadSkipped(upload.skipped)}
+              </p>
+            )}
+            {upload.notes.length > 0 && (
+              <div className="upload-notes" role="status" data-testid="upload-mismatch">
+                {upload.notes.map((note) => (
+                  <p key={note}>{note}</p>
+                ))}
+              </div>
+            )}
+          </div>
+          <button type="button" className="btn btn-quiet" data-testid="upload-dismiss" onClick={onDismissUpload}>
+            {plain.uploadDismiss}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
