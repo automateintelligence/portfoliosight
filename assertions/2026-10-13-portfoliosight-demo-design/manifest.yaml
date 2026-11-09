@@ -235,7 +235,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-30
-    claim: "The nightly writes meta/G/generation.json once, builds each missing preset tensor with D_G, switches meta/current.json only after all 12 keys exist, resumes an interrupted run without rewriting anything under meta/G/, skips building when current.json already points at G, deletes generations older than the previous one, and marks TSP stale (not failed) when the tsp.gov fetch breaks."
+    claim: "The nightly writes meta/G/generation.json once, builds each missing preset tensor with D_G, switches meta/current.json only after all 18 keys exist, resumes an interrupted run without rewriting anything under meta/G/, skips building when current.json already points at G, deletes generations older than the previous one, and marks TSP stale (not failed) when the tsp.gov fetch breaks."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_30_generation_publish_atomic.py"
     setup: ""
     teardown: ""
@@ -243,7 +243,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-31
-    claim: "GET /v1/presets returns the two presets of data/presets.json in the spec 6 shape, with guide2017.allocation equal to Qty x Price per symbol from the Step 2 holdings CSV in dollars (18 non-zero of 23) and tsp.allocation null, and GET /v1/health returns the spec 6 fields."
+    claim: "GET /v1/presets returns the three presets of data/presets.json in the spec 6 shape, with guide2017.allocation equal to Qty x Price per symbol from the Step 2 holdings CSV in dollars (18 non-zero of 23), tsp.allocation null and research2003 named Example Portfolio 2 with its 19 holdings, their limits and an equal percent mix, and GET /v1/health returns the spec 6 fields."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_31_presets_health_bodies.py"
     setup: ""
     teardown: ""
@@ -443,7 +443,7 @@ assertions:
     level: spec
     kind: example
   - id: A-PS-56
-    claim: "GET /api/presets comes from R2 with both presets and six ready lookbacks, the guide2017 5y tensor is schema-valid, immutable-cached, ETagged and from R2, and a POST for the default preset returns 200 with a url whose body is byte-identical to that tensor; the default tensor uses all 23 Step 2 funds and sets none aside, and a POST for those funds plus FIENX resolves to a schema-valid tensor that sets exactly FIENX aside with the reason converted to an ETF; no data since 2024-10-30."
+    claim: "GET /api/presets comes from R2 with the three presets and six ready lookbacks, the guide2017 5y tensor is schema-valid, immutable-cached, ETagged and from R2, and a POST for the default preset returns 200 with a url whose body is byte-identical to that tensor; the default tensor uses all 23 Step 2 funds and sets none aside, and a POST for those funds plus FIENX resolves to a schema-valid tensor that sets exactly FIENX aside with the reason converted to an ETF; no data since 2024-10-30."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_56_presets_tensors_from_r2.py"
     setup: ""
     teardown: ""
@@ -451,7 +451,7 @@ assertions:
     level: spec
     kind: example
   - id: A-PS-57
-    claim: "The current generation's asof equals the test's own D_G for the check day, the nightly finished with zero errors, the generation holds the 12 preset tensors, the KS-001 cache is at most 300 MB, the timer is enabled, and the page's details line shows the same date."
+    claim: "The current generation's asof equals the test's own D_G for the check day, the nightly finished with zero errors, the generation holds the 18 preset tensors, the KS-001 cache is at most 300 MB, the timer is enabled, and the page's details line shows the same date."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_57_nightly_fresh.py"
     setup: ""
     teardown: ""

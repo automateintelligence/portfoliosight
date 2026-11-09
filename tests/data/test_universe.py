@@ -231,10 +231,14 @@ def test_a_tier_needs_exactly_one_of_file_and_files(tmp_path, tier3):
         universe.load_tiers(path)
 
 
+RESEARCH_FUNDS = "SPY IWM IWD EFA EEM IYR TLT IEF SHY LQD VIPSX".split()
+RESEARCH_STOCKS = "GE MSFT XOM PFE C WMT AIG INTC".split()
+
+
 def test_presets_match_appendix_a():
     presets = {preset.id: preset for preset in universe.load_presets()}
-    assert list(presets) == ["guide2017", "tsp"]
-    guide, tsp = presets["guide2017"], presets["tsp"]
+    assert list(presets) == ["guide2017", "tsp", "research2003"]
+    guide, tsp, research = presets["guide2017"], presets["tsp"], presets["research2003"]
     assert guide.name == "Example Portfolio"
     assert list(guide.funds) == _step2_symbols()
     assert guide.allocation is not None and guide.allocation_unit == "$"
@@ -245,9 +249,118 @@ def test_presets_match_appendix_a():
     assert tsp.name == "TSP (G, F, C, S, I)"
     assert list(tsp.funds) == ["TSP-G", "TSP-F", "TSP-C", "TSP-S", "TSP-I"]
     assert tsp.allocation is None and tsp.allocation_unit is None
+    assert guide.caps == {} and tsp.caps == {}
     spec = SPEC.read_text(encoding="utf-8")
-    for preset in (guide, tsp):
+    for preset in (guide, tsp, research):
         assert re.search(re.escape(f'"{preset.name}"'), spec), preset.name
+
+
+def test_research2003_is_the_long_history_menu_with_its_limits_and_an_equal_mix():
+    research = {preset.id: preset for preset in universe.load_presets()}["research2003"]
+    assert research.name == "Example Portfolio 2"
+    assert list(research.funds) == RESEARCH_FUNDS + RESEARCH_STOCKS and len(research.funds) == 19
+    # each fund at most 40%, each stock at most 10%, no minimum anywhere
+    assert research.caps == {
+        **{fund: {"min": None, "max": 0.4} for fund in RESEARCH_FUNDS},
+        **{stock: {"min": None, "max": 0.1} for stock in RESEARCH_STOCKS},
+    }
+    # an equal mix in percent: hundredths that add up to exactly 100.00, the page's own rule
+    assert research.allocation_unit == "%" and research.allocation is not None
+    amounts = research.allocation
+    assert list(amounts) == list(research.funds)
+    assert sorted(set(amounts.values())) == [5.26, 5.27]
+    assert [fund for fund, amount in amounts.items() if amount == 5.27] == list(research.funds[:6])
+    assert round(sum(amounts.values()) * 100) == 10000
+
+
+def _presets_file(tmp_path, *presets, holdings: bool = False):
+    (tmp_path / "data").mkdir(exist_ok=True)
+    if holdings:
+        (tmp_path / "data" / "h.csv").write_text(
+            "Account,Symbol,Description,Qty,Price\nx,VTI,d,2,3\nx,BND,d,1,1\n"
+        )
+    path = tmp_path / "data" / "presets.json"
+    path.write_text(json.dumps({"presets": list(presets)}))
+    return path
+
+
+def _preset(**changes):
+    base = {"id": "p", "name": "P", "funds": ["VTI", "BND", "AGG"], "allocation": None}
+    return {**base, **changes}
+
+
+def test_declared_caps_are_read_as_fractions_with_a_missing_bound_left_to_the_default(tmp_path):
+    path = _presets_file(
+        tmp_path, _preset(caps={"vti": {"max": 0.5}, "BND": {"min": 0.1, "max": 1}, "AGG": {}})
+    )
+    (preset,) = universe.load_presets(path)
+    assert preset.caps == {
+        "VTI": {"min": None, "max": 0.5},
+        "BND": {"min": 0.1, "max": 1.0},
+        "AGG": {"min": None, "max": None},
+    }
+    assert isinstance(preset.caps["BND"]["max"], float)  # the API reads a bound as a float
+
+
+@pytest.mark.parametrize(
+    ("caps", "message"),
+    [
+        ([], "caps must be an object"),
+        ({"XYZ": {"max": 0.5}}, "XYZ"),
+        ({"VTI": 0.5}, "VTI"),
+        ({"VTI": {"cap": 0.5}}, "cap"),
+        ({"VTI": {"max": 1.5}}, "VTI"),
+        ({"VTI": {"min": -0.1}}, "VTI"),
+        ({"VTI": {"max": "40%"}}, "VTI"),
+        ({"VTI": {"max": True}}, "VTI"),
+        ({"VTI": {"min": 0.6, "max": 0.5}}, "VTI"),
+        ({"VTI": {"max": 0.2}, "BND": {"max": 0.2}, "AGG": {"max": 0.2}}, "maximums"),
+        ({"VTI": {"min": 0.6}, "BND": {"min": 0.6}}, "minimums"),
+    ],
+)
+def test_declared_caps_that_the_engine_would_refuse_are_refused_when_the_file_is_read(
+    tmp_path, caps, message
+):
+    path = _presets_file(tmp_path, _preset(caps=caps))
+    with pytest.raises(ValueError, match=message):
+        universe.load_presets(path)
+
+
+def test_an_allocation_written_in_the_file_needs_a_unit_and_an_amount_for_every_fund(tmp_path):
+    amounts = {"VTI": 50.0, "BND": 30.0, "AGG": 20.0}
+    (preset,) = universe.load_presets(
+        _presets_file(tmp_path, _preset(allocation=amounts, allocation_unit="%"))
+    )
+    assert preset.allocation == amounts and preset.allocation_unit == "%"
+    in_dollars = _preset(allocation={"VTI": 5, "BND": 3, "AGG": 0}, allocation_unit="$")
+    (dollars,) = universe.load_presets(_presets_file(tmp_path, in_dollars))
+    assert dollars.allocation == {"VTI": 5.0, "BND": 3.0, "AGG": 0.0}
+    assert dollars.allocation_unit == "$"
+    bad = [
+        (_preset(allocation=amounts), "allocation_unit"),
+        (_preset(allocation=amounts, allocation_unit="shares"), "allocation_unit"),
+        (_preset(allocation={"VTI": 50.0, "BND": 50.0}, allocation_unit="%"), "AGG"),
+        (_preset(allocation={**amounts, "XYZ": 1.0}, allocation_unit="%"), "XYZ"),
+        (_preset(allocation={**amounts, "AGG": -20.0}, allocation_unit="%"), "AGG"),
+        (_preset(allocation={**amounts, "AGG": "20"}, allocation_unit="%"), "AGG"),
+        (_preset(allocation={"VTI": 0, "BND": 0, "AGG": 0}, allocation_unit="$"), "nothing"),
+        (_preset(allocation={"VTI": 50.0, "BND": 30.0, "AGG": 19.9}, allocation_unit="%"), "100"),
+        (_preset(allocation=amounts, allocation_unit="%", allocation_source="data/h.csv"), "both"),
+    ]
+    for item, message in bad:
+        with pytest.raises(ValueError, match=message):
+            universe.load_presets(_presets_file(tmp_path, item, holdings=True))
+
+
+def test_percent_amounts_may_miss_100_by_the_page_s_tolerance_and_no_more(tmp_path):
+    for total_gap, accepted in ((0.05, True), (-0.05, True), (0.06, False)):
+        amounts = {"VTI": 50.0, "BND": 30.0, "AGG": 20.0 + total_gap}
+        path = _presets_file(tmp_path, _preset(allocation=amounts, allocation_unit="%"))
+        if accepted:
+            assert universe.load_presets(path)[0].allocation == amounts
+        else:
+            with pytest.raises(ValueError, match="100"):
+                universe.load_presets(path)
 
 
 def test_preset_fund_missing_from_holdings_is_refused(tmp_path):

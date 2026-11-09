@@ -1,4 +1,4 @@
-"""The two ready-made menus and the body of ``GET /v1/presets`` (spec 6, Appendix A)."""
+"""The ready-made menus and the body of ``GET /v1/presets`` (spec 6, Appendix A)."""
 
 from __future__ import annotations
 
@@ -25,7 +25,8 @@ def tensor_url(generation: str, uhash: str, lookback: str) -> str:
 
 
 def preset_definitions() -> list[Preset]:
-    """The presets of ``data/presets.json``; a dollar allocation is rounded to cents."""
+    """The presets of ``data/presets.json``; an allocation is rounded to hundredths (cents, or a
+    hundredth of a percent), the precision of the page's amount fields."""
     presets = []
     for preset in load_presets():
         allocation = preset.allocation
@@ -36,8 +37,24 @@ def preset_definitions() -> list[Preset]:
 
 
 def preset_funds(preset: Preset) -> list[dict[str, Any]]:
-    """A preset's requested policy: every fund at the default caps."""
-    return [{"id": fund, "min": None, "max": None} for fund in preset.funds]
+    """A preset's requested policy: the limits it declares, the default bounds everywhere else.
+
+    A preset that declares none is every fund at the default bounds, which is the policy (and so
+    the universe hash and tensor keys) the first two presets have always had.
+    """
+    policy = []
+    for fund in preset.funds:
+        bounds = preset.caps.get(fund, {})
+        policy.append({"id": fund, "min": bounds.get("min"), "max": bounds.get("max")})
+    return policy
+
+
+def preset_caps(preset: Preset) -> list[dict[str, Any]]:
+    """The limits a preset declares, ``[{"id", "min", "max"}]`` in menu order (``[]`` for none).
+
+    The page shows these as the menu's limits and sends them with a request that edits one.
+    """
+    return [fund for fund in preset_funds(preset) if fund["id"] in preset.caps]
 
 
 def presets_body(generation: str, asof: str, store: store_mod.Store) -> dict[str, Any]:
@@ -67,6 +84,7 @@ def presets_body(generation: str, asof: str, store: store_mod.Store) -> dict[str
                     }
                     for fund in preset.funds
                 ],
+                "caps": preset_caps(preset),
                 "allocation": preset.allocation,
                 "allocation_unit": preset.allocation_unit,
                 "lookbacks": lookbacks,
