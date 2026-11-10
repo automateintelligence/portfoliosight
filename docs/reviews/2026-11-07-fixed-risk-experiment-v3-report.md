@@ -309,6 +309,52 @@ Ten weightings with the largest drawdown improvement. Rows: weightings; averaged
 
 **Deflated Sharpe ratio with 126 trials** on 19 disjoint years, primary trial #107 (model return 0.50, loss contributors 0.50): DSR 0.913; Sharpe ratio 0.376, benchmark 0.085.
 
+## EXPLORATORY: region check (addendum of 2026-11-09)
+
+Written by hand from `fr-run-v3/analysis/region_check.json` (code at commit `0a69305`); `v3-report` does not regenerate this section. Specification, with eight dated corrections made before the run: `docs/plans/2026-11-09-fixed-risk-v3-region-check.md`. It reuses the 234 start months of the confirmatory test, so nothing here is a finding.
+
+**Question.** Drop the fixed-risk constraint. Take every recorded mix whose model return is at most 50 bp below the frontier mix's and whose volatility is at or below the risk line. Does a mix picked there by simulated drawdown, by ENB, by the worst historical fall, or by a blend of them, fall less in the following year than simply lowering the risk setting?
+
+**Yardstick (L).** The frontier mix moved toward the frontier mix one risk setting lower, far enough to give up 50 bp of model return (on average 44% of the way; the full step in 12% of cells). The lowest risk setting has no lower neighbour, so comparisons against L use 1,170 of the 1,404 cells. Against the frontier mix, L fell 0.81 pp less and returned 33 bp less in the following year (means, no interval computed).
+
+**Outcome: decision rule 1, closed.** The best mix of each region picked with hindsight (one of a median 636 mixes per cell, range 17 to 3,127) fell 0.77 pp less than L, 95% interval [0.40, 1.12]. The bar fixed in advance was 1 pp. No mix in the region, even picked with hindsight, beats lowering the risk setting by that much. Rules 2 and 3 were not reached; the best of the 15 rules in hindsight was the lowest-simulated-drawdown rule, and it did not beat L either.
+
+Averages over cells. Drawdown difference is in pp, positive = the pick fell less, with its 95% interval. Return difference is in bp with its one-sided 95% lower bound in brackets.
+
+| Pick inside the region | Drawdown vs L | Return vs L | Drawdown vs frontier | Return vs frontier | Model volatility % | ENB | Share below the risk line |
+|---|---|---|---|---|---|---|---|
+| Best mix in hindsight (upper bound) | +0.77 [+0.40, +1.12] | +136 [+99] | +1.48 [+1.03, +1.91] | +98 [+60] | 11.06 | 12.3 | 42% |
+| Lowest simulated drawdown | -0.21 [-0.57, +0.15] | -24 [-55] | +0.57 [+0.18, +0.99] | -51 [-78] | 10.74 | 11.6 | 58% |
+| Lowest worst historical fall | -0.35 [-0.86, +0.13] | +34 [-24] | +0.43 [-0.05, +0.93] | +3 [-35] | 10.88 | 11.8 | 42% |
+| Half simulated drawdown, half ENB | -0.50 [-1.02, -0.11] | -3 [-58] | +0.32 [-0.01, +0.63] | -31 [-69] | 11.01 | 12.8 | 50% |
+| Highest ENB | -0.78 [-1.34, -0.28] | +45 [-26] | +0.04 [-0.26, +0.35] | +11 [-37] | 11.38 | 14.4 | 4% |
+| Lowest simulated drawdown, same risk line only | -0.61 [-1.20, -0.10] | -15 [-70] | +0.23 [-0.15, +0.67] | -44 [-88] | 11.43 | 11.7 | 0% |
+
+The frontier mix's own averages: model volatility 11.48%, realized drawdown 9.60%, realized return 7.40%.
+
+Reading it:
+
+- The lowest-simulated-drawdown pick does fall less than the frontier mix (0.57 pp, interval above zero), but 58% of those picks sit below the risk line. It gets there by taking less risk, and it costs 51 bp of realized return. Lowering the risk setting buys more (0.81 pp) for less (33 bp).
+- Held to the same risk line, the same pick shows no reliable drawdown gain over the frontier mix (0.23 pp, interval includes zero).
+- The highest-ENB pick raises ENB from about 11.8 to 14.4 at the same realized return and the same realized drawdown as the frontier mix. It neither helps nor hurts.
+
+By risk setting (descriptive, means, no intervals):
+
+| Risk setting | Frontier drawdown % | L: drawdown saved pp | L: return given up bp | Best mix in hindsight vs L pp | Lowest simulated drawdown vs L pp | Highest ENB vs L pp |
+|---|---|---|---|---|---|---|
+| 0.10 | 4.60 | no L | no L | no L | no L | no L |
+| 0.25 | 7.02 | 0.74 | 30 | +0.66 | -0.27 | -0.33 |
+| 0.40 | 9.00 | 0.70 | 38 | +0.85 | -0.12 | -0.43 |
+| 0.55 | 10.53 | 0.64 | 42 | +0.95 | -0.09 | -0.69 |
+| 0.70 | 12.24 | 0.90 | 36 | +0.67 | -0.29 | -1.26 |
+| 0.85 | 14.20 | 1.09 | 20 | +0.74 | -0.28 | -1.21 |
+
+**Can the model rank mixes at all?** Among mixes on the same risk line (at least 20 per cell, 1,404 cells), the rank correlation between simulated tail drawdown and realized drawdown averaged -0.01, 95% interval [-0.14, +0.14], and was above zero in 50% of cells. Simulated drawdown did not rank same-risk mixes by how far they fell. Model return against realized return averaged +0.16 [+0.04, +0.29], above zero in 63% of cells: a weak signal, but a real one.
+
+**Separate test of the search.** On a made-up menu with a planted crash hedge and a decoy of equal volatility, model return and covariance, the lowest-simulated-drawdown search bought the hedge and not the decoy (`tests/research/fixedrisk/test_crash_hedge.py`). So the search and the measure do see crash behaviour when the lookback holds it. The correlation above says that what they saw in the 3-year lookbacks of this history did not carry over to the following year.
+
+Housekeeping: 128,654 main-pool rows that break a fund's bounds were left out; no allowed row lacked a model measure. A mix counts as "same risk line" when it was recorded in the wide band under that cell's own risk setting.
+
 ## Limits stated by the protocol
 
 - **What preregistration covers (§1).** v3 reuses the frozen history of v2, and its arms were chosen after the owner saw v2's realized results. The thresholds (1 pp, 50 bp, 95%) were chosen after v2's realized intervals on these years were seen; v2's realized-support rule used a 99% lower bound.
