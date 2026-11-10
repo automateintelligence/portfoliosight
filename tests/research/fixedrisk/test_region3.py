@@ -408,7 +408,7 @@ def _mu(j: int) -> float:
     return 0.04 + 0.01 * j
 
 
-def _pool(outside: bool = False) -> PoolBuffer:
+def _pool(outside: bool = False, undefined: str | None = None) -> PoolBuffer:
     buf = PoolBuffer()
     for j, rf in enumerate(C.RISK_FRACTIONS):
         common = {"lookback": "3y", "r_fraction": rf, "r": _r(j), "start": -1, "call": -1}
@@ -461,6 +461,12 @@ def _pool(outside: bool = False) -> PoolBuffer:
                     weights=np.array([1.0, 0.0]),
                     values=_values(sigma=0.95 * _r(j), mu=_mu(j), in_wide=0.0, tdd=0.9, enb=0.1,
                                    h=0.9))  # fmt: skip
+        if undefined is not None and j == 5:
+            # a mix without an ENB, allowed ("inside") or 2e-8 past fund 0's bound ("outside")
+            w = [0.55, 0.45] if undefined == "inside" else [1.0 + 2e-8, -2e-8]
+            buf.add(**common, lam=None, arm=C.U1_ARM, source="search", weights=np.array(w),
+                    values=_values(sigma=0.9 * _r(j), mu=_mu(j), in_wide=0.0, tdd=0.2,
+                                   enb=np.nan, h=0.2))  # fmt: skip
     return buf
 
 
@@ -480,7 +486,9 @@ def _selections(month: str) -> pd.DataFrame:
     )  # fmt: skip
 
 
-def _job(tmp_path: Path, months: list[str], outside: bool = False) -> Path:
+def _job(
+    tmp_path: Path, months: list[str], outside: bool = False, undefined: str | None = None
+) -> Path:
     job = tmp_path / "run" / "research2003_replay"
     tasks = job / "tasks"
     for month in months:
@@ -488,8 +496,10 @@ def _job(tmp_path: Path, months: list[str], outside: bool = False) -> Path:
         _write(tasks / f"{base}.parquet", _selections(month))
         _write(tasks / "columns" / f"{base}.parquet", pd.DataFrame({"month": [month]}))
         _write(tasks / "evaluated" / f"{base}.parquet", pd.DataFrame({"sel_id": ["x"]}))
-        table = _pool(outside).table(menu=MENU, month=month, origin=origin_of(month).date(),
-                              engine=ENGINE, seed=C.PRIMARY_SEED)  # fmt: skip
+        table = _pool(outside, undefined).table(
+            menu=MENU, month=month, origin=origin_of(month).date(), engine=ENGINE,
+            seed=C.PRIMARY_SEED,
+        )  # fmt: skip
         write_pool(tasks / "pool" / f"{base}.parquet", table, {DIGEST_KEY: DIGEST.encode()})
     return job
 
@@ -522,8 +532,8 @@ def _direct(a: float, month: str) -> tuple[float, float]:
     return float(out.annual[0]), float(out.drawdown[0])
 
 
-def _recorded_job(tmp_path, months, outside=False):
-    job = _job(tmp_path, months, outside)
+def _recorded_job(tmp_path, months, outside=False, undefined=None):
+    job = _job(tmp_path, months, outside, undefined)
     analysis = tmp_path / "run" / "analysis" / "analysis.json"
     analysis.parent.mkdir(parents=True)
     analysis.write_text("{}")
@@ -666,3 +676,28 @@ def test_region_job_leaves_out_mixes_outside_the_bounds(tmp_path):
     fair = out["picks"][G.RULE_NAMES_ID["fair_drawdown"]]
     assert fair["vs_L"]["theta_dd"] == pytest.approx(np.mean(dd_l - dd_s), abs=1e-12)
     assert out["picks"][G.SAME_LINE]["vs_F"]["theta_dd"] == pytest.approx(0.0, abs=1e-15)
+
+
+def test_an_allowed_mix_without_a_model_measure_stops_the_run(tmp_path):
+    months = month_labels(2)
+    job = _recorded_job(tmp_path, months, undefined="inside")
+    with pytest.raises(ValueError, match=f"{months[0]}: 1 allowed main-pool row"):
+        G.region_job(job, _parent(months, months), MENU, ENGINE, _horizon(set(months)),
+                     bounds=BOUNDS, resamples=50)  # fmt: skip
+
+
+def test_a_mix_outside_the_bounds_without_a_model_measure_is_only_removed(tmp_path):
+    months = month_labels(2)
+    job = _recorded_job(tmp_path, months, undefined="outside")
+    out = G.region_job(job, _parent(months, months), MENU, ENGINE, _horizon(set(months)),
+                       bounds=BOUNDS, resamples=50)  # fmt: skip
+    assert out["domain_removed_rows"] == 2 and out["cells"] == 12
+
+
+def test_distinct_mixes_refuses_an_undefined_measure():
+    pool = pd.DataFrame(
+        [{"record": 0, "r_fraction": 0.25, "in_wide": True, "weights": np.array([1.0, 0.0]),
+          "mu": 0.1, "sigma": 0.1, "tdd": 0.1, "enb": np.nan, "h": 0.1}]
+    )  # fmt: skip
+    with pytest.raises(ValueError, match="1 row"):
+        G.distinct_mixes(pool)

@@ -167,13 +167,20 @@ def _level(r_fraction: Any) -> np.ndarray:
     return np.array([index.get(float(v), -1) for v in rf], dtype=np.int64)
 
 
+def _undefined(pool: pd.DataFrame) -> int:
+    """Rows of `pool` without one of the model measures."""
+    return int(np.asarray(pool[list(MODEL)].isna().any(axis=1)).sum())
+
+
 def distinct_mixes(pool: pd.DataFrame) -> pd.DataFrame:
     """The month's distinct mixes in tie order (risk setting ascending, then record): rows whose
     weights agree after rounding to 1e-9 count once, the first kept. `line_mask` has bit j set
-    when any copy was recorded in the wide band under risk setting `A.RFS[j]`. Rows with an
-    undefined model figure are left out."""
-    p = A._frame(pool.dropna(subset=list(MODEL)))
-    p = A._frame(p.sort_values(["r_fraction", "record"], kind="stable"))
+    when any copy was recorded in the wide band under risk setting `A.RFS[j]`. A row without
+    `mu`, `sigma`, `tdd`, `enb` or `h` is an error (correction 7), never left out."""
+    missing = _undefined(pool)
+    if missing:
+        raise ValueError(f"{missing} row(s) lack a model measure (mu, sigma, tdd, enb or h)")
+    p = A._frame(pool.sort_values(["r_fraction", "record"], kind="stable"))
     if p.empty:
         return p.assign(line_mask=np.zeros(0, dtype=np.int64)).reset_index(drop=True)
     w = np.vstack(p["weights"].to_list())
@@ -592,7 +599,7 @@ def region_job(
     frontier = A.locked_rows(tables["selections"])
     frontier = A._frame(frontier.loc[(frontier["arm"] == C.FRONTIER).to_numpy()])
     pick_parts, cell_parts = [], []
-    undefined = removed = 0
+    removed = 0
     for month in chosen:
         path = base_paths(job_dir / "tasks", f"{menu}_{month}_{engine}")["pool"]
         pool = read_month_pool(path)
@@ -600,7 +607,12 @@ def region_job(
             np.zeros(0, dtype=bool)  # fmt: skip
         removed += int((~allowed).sum())
         pool = A._frame(pool.loc[allowed]).reset_index(drop=True)
-        undefined += int(np.asarray(pool[list(MODEL)].isna().any(axis=1)).sum())
+        missing = _undefined(pool)
+        if missing:
+            raise ValueError(
+                f"{month}: {missing} allowed main-pool row(s) lack a model measure "
+                "(mu, sigma, tdd, enb or h); the region check stops (correction 7)"
+            )
         p, c = month_cells(pool, frontier, menu=menu, month=month, horizon=horizon)
         pick_parts.append(p)
         cell_parts.append(c)
@@ -640,7 +652,6 @@ def region_job(
             "seed": evidence.BOOTSTRAP_SEED,
         },  # fmt: skip
         "domain_removed_rows": removed,
-        "undefined_rows": undefined,
         "region_size": {
             "median": float(np.median(sizes)) if sizes.size else None,
             "min": int(sizes.min()) if sizes.size else None,
