@@ -14,6 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from portfoliosight.research import evidence
 from portfoliosight.research.fixedrisk import analysis3 as A
 from portfoliosight.research.fixedrisk import contracts as C
 from portfoliosight.research.fixedrisk import ensemble3 as E
@@ -360,6 +361,28 @@ def test_predictiveness_mean_share_and_interval():
     assert p["tdd_vs_dd"]["cells"] == 6 * K
     assert p["mu_vs_ret"]["mean"] == pytest.approx(-0.5)
     assert p["mu_vs_ret"]["positive_share"] == 0.0
+
+
+def test_predictiveness_weights_every_valid_cell_equally():
+    # one start month with six cells at +1, another with one valid cell at -1: 5/7, not 0
+    cells = _cells()
+    cells.loc[cells["month"] == MONTHS[0], "rho_dd"] = 1.0
+    cells.loc[(cells["month"] == MONTHS[1]) & (cells["rf"] == A.RFS[2]), "rho_dd"] = -1.0
+    out = G.assemble(_constant_picks({RULE["fair_drawdown"]: (0.02, 0.0)}, 0.05), cells,
+                     MONTHS, resamples=50)  # fmt: skip
+    p = out["predictiveness"]["tdd_vs_dd"]
+    assert p["mean"] == pytest.approx(5 / 7, abs=1e-15)
+    assert p["cells"] == 7 and p["positive_share"] == pytest.approx(6 / 7)
+    # the interval: the same cell-weighted mean over each resample's start months
+    boot = evidence.Bootstrap(K, blocks=(evidence.BLOCK,), resamples=50,
+                              seed=evidence.BOOTSTRAP_SEED)  # fmt: skip
+    total, count = np.zeros(K), np.zeros(K)
+    total[0], count[0], total[1], count[1] = 6.0, 6.0, -1.0, 1.0
+    index = boot.indices[evidence.BLOCK]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        draws = total[index].sum(axis=1) / count[index].sum(axis=1)
+    want = np.percentile(draws[np.isfinite(draws)], [2.5, 97.5])
+    assert p["interval"] == pytest.approx(want.tolist(), abs=1e-15)
 
 
 # ------------------------------------------------------------------- end to end, one job

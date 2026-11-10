@@ -27,7 +27,8 @@ from each mix's weights, the code path `v3-analyze` uses for a selection. Across
 (`assemble`): paired differences against L and against F with v3's bootstrap
 (`analysis3._estimate`: levels within a start month, then start months; block 24, 2,000
 resamples, seed 20261201), the rule ceiling (the rule with the largest mean drawdown improvement
-over L), the predictiveness correlations and the decision rules (`decide`).
+over L), the predictiveness correlations (a mean over valid cells, each weighted equally,
+with the same bootstrap's resampled start months; correction 8) and the decision rules (`decide`).
 """
 
 from __future__ import annotations
@@ -452,8 +453,19 @@ def decide(
 
 
 def _predictive(boot: evidence.Bootstrap, grid: np.ndarray) -> dict[str, Any]:
-    e = A._estimate(boot, grid, 0.95)
-    finite = grid[np.isfinite(grid)]
+    """The mean over the valid cells of a (levels x months) grid, each cell weighted equally
+    (correction 8), with a 95% interval from resampled start months: per resample, the sum of
+    the valid cell values over its months divided by their count."""
+    ok = np.isfinite(grid)
+    total = np.where(ok, grid, 0.0).sum(axis=0)
+    count = ok.sum(axis=0).astype(float)
+
+    def mean(index: np.ndarray) -> np.ndarray:
+        n = count[index].sum(axis=1)
+        return np.where(n > 0, total[index].sum(axis=1) / np.maximum(n, 1.0), np.nan)
+
+    e = boot.estimate(mean, 0.95, evidence._count(grid))
+    finite = grid[ok]
     return {"cells": int(finite.size), "mean": e.value,
             "interval": list(e.intervals[evidence.BLOCK]),
             "positive_share": float(np.mean(finite > 0.0)) if finite.size else None}  # fmt: skip
