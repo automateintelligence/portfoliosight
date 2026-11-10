@@ -324,19 +324,18 @@ def test_no_look_ahead():
         gb.garch_bank(leaky, "garch", SEED)
 
 
-def test_a_real_non_converging_10_year_fit_is_retried_on_3_years(ctx, monkeypatch):
-    rng = np.random.default_rng(2)
-    sample = ctx.sample.copy()
-    sample[:, 1] = np.r_[np.zeros(ROWS - 260), rng.normal(0, 0.01, 260)]  # flat, then trading
-    bad = _ctx(sample, ctx.days, ctx.menu.holdings)
+def test_a_non_converging_10_year_fit_is_retried_on_3_years_and_cached(ctx, monkeypatch):
+    """The non-convergence is injected (`_failing`): whether a real optimizer converges on a
+    degenerate series turns on the last floating-point unit and on the BLAS thread count."""
+    _failing(monkeypatch, "B", longer_than=gb.RETRY_ROWS)
     gb.clear_fit_cache()
-    bank = gb.garch_bank(bad, "garch", SEED)
+    bank = gb.garch_bank(ctx, "garch", SEED)
     assert bank.windows == {"A": "10y", "B": "3y", "C": "10y", "D": "10y"}
     assert bank.fit_status["B"] == "garch" and bank.fallbacks == {}
     assert bank.artifact.messages[1].startswith("10y fit_failed")
     calls = []
     monkeypatch.setattr(gb, "fit_garch_t_panel", lambda *a, **k: calls.append(1))
-    assert gb.holding_fit(bad, 1).window == "3y"  # cached: no refit
+    assert gb.holding_fit(ctx, 1).window == "3y"  # cached: no refit
     assert calls == []
 
 
