@@ -687,14 +687,17 @@ def test_default_set_is_the_universe_priority_order(tmp_path):
     universe = load_tiers()
     fetched = [c[1] for c in provider.calls if c[0] == "daily"]
     assert fetched == [s for s in universe.tier1 if not s.startswith("TSP-")]
-    assert [c[1] for c in tsp_provider.calls if c[0] == "daily"] == list(universe.tier1[23:])
+    tsp = [s for s in universe.tier1 if s.startswith("TSP-")]
+    assert [c[1] for c in tsp_provider.calls if c[0] == "daily"] == tsp
     now = _manifest(store)
-    assert len(now) == 39 and now["BND"]["income"] is True and now["BND"]["tier"] == 1
+    assert len(now) == 56 and now["BND"]["income"] is True and now["BND"]["tier"] == 1
     assert now["EFA"]["status"] == "ok" and now["TSP-G"]["source"] == "tsp"
     assert now["TSP-G"]["kind"] == "tsp" and now["VTI"]["kind"] == "etf"
-    # 23 funds cost two requests each; the 16 TSP funds are not budgeted.
-    assert json.loads(store.get("meta/budget.json"))["days"] == {"2026-02-24": 46}
-    assert len(_listed(store)) == 39  # every tier 1 fund is served
+    assert now["GE"]["tier"] == 1 and now["GE"]["kind"] == "stock"  # a preset's stock
+    # 23 Step 2 funds and 17 more preset funds cost two requests each; the 16 TSP funds are
+    # not budgeted.
+    assert json.loads(store.get("meta/budget.json"))["days"] == {"2026-02-24": 80}
+    assert len(_listed(store)) == 56  # every tier 1 fund is served
     assert {entry["reason"] for entry in now.values()} == {None}
 
 
@@ -718,7 +721,8 @@ def test_a_fund_whose_data_ended_is_not_served_and_the_universe_says_why(tmp_pat
     )
     assert code == 0 and clock.slept == []
     now = _manifest(store)
-    assert set(now) == set(universe.tier2) - set(universe.tier1) and len(now) == 317 - 23
+    # tier 1 holds the 23 Step 2 funds and 9 more tier 2 funds of the presets
+    assert set(now) == set(universe.tier2) - set(universe.tier1) and len(now) == 317 - 32
     assert now["FIENX"]["status"] == "stale" and now["FIENX"]["tier"] == 2
     assert now["FIENX"]["reason"] == "converted to an ETF; no data since 2025-12-30"
     assert [symbol for symbol, entry in now.items() if entry["status"] != "ok"] == ["FIENX"]

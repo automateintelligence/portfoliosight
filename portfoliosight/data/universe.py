@@ -51,12 +51,13 @@ class SymbolInfo:
 
 @dataclass(frozen=True)
 class Tiers:
-    tier1: tuple[str, ...]  # the 23 Step 2 funds, then the 16 TSP funds
+    tier1: tuple[str, ...]  # the 23 Step 2 funds, the 16 TSP funds, then the other preset funds
     tier2: tuple[str, ...]  # file order
     tier3: tuple[str, ...]  # file order across its files, repeats dropped, tier 2 symbols kept
     income: frozenset[str]
     starter_slice: int
     notes: Mapping[str, str] = field(default_factory=dict)
+    preset_funds: tuple[str, ...] = ()  # the funds tier 1 adds from the presets, in its order
 
     def tier3_only(self) -> tuple[str, ...]:
         """Tier 3 symbols that are not already in tier 2, in file order."""
@@ -64,7 +65,13 @@ class Tiers:
         return tuple(s for s in self.tier3 if s not in tier2)
 
     def info(self) -> dict[str, SymbolInfo]:
-        """Every symbol of every tier with its lowest tier."""
+        """Every symbol of every tier with its lowest tier.
+
+        A symbol whose lowest tier in the universe files is 3 is a stock, also when a preset
+        lifts it to tier 1.
+        """
+        listed1 = set(self.tier1) - set(self.preset_funds)
+        stocks = {s for s in self.tier3_only() if s not in listed1}
         out: dict[str, SymbolInfo] = {}
         for tier, symbols in ((1, self.tier1), (2, self.tier2), (3, self.tier3)):
             for symbol in symbols:
@@ -72,7 +79,7 @@ class Tiers:
                     continue
                 if is_tsp(symbol):
                     kind = "tsp"
-                elif tier == 3:
+                elif symbol in stocks:
                     kind = "stock"
                 else:
                     kind = None
@@ -151,6 +158,10 @@ def load_tiers(tiers_file: Path = TIERS_FILE) -> Tiers:
     tier1 = _holdings_symbols(holdings)
     if by_tier[1].get("tsp"):
         tier1 += list(TSP_FUNDS)
+    added: dict[str, None] = {}  # every preset's funds, refreshed before the presets are built
+    if by_tier[1].get("presets"):
+        for preset in load_presets(root / by_tier[1]["presets"]):
+            added.update((fund, None) for fund in preset.funds if fund not in tier1)
     income: set[str] = set()
     files: dict[int, tuple[str, ...]] = {}
     for tier in (2, 3):
@@ -162,12 +173,13 @@ def load_tiers(tiers_file: Path = TIERS_FILE) -> Tiers:
             income.update(symbol for symbol, tagged in lines if tagged)
         files[tier] = tuple(joined)
     return Tiers(
-        tier1=_unique(tier1, holdings),
+        tier1=_unique(tier1, holdings) + tuple(added),
         tier2=files[2],
         tier3=files[3],
         income=frozenset(income),
         starter_slice=int(by_tier[3].get("starter_slice", 130)),
         notes={str(k).upper(): str(v) for k, v in config.get("notes", {}).items()},
+        preset_funds=tuple(added),
     )
 
 

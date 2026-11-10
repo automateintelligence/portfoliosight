@@ -633,10 +633,10 @@ def test_a_preset_fund_the_catalog_does_not_serve_is_set_aside_and_the_run_still
     # The data is fixed: the next generation's tensors include WMT, under the same key hash.
     _set_wmt(store, served=True)
     later = NOW + timedelta(days=1)
-    day = pd.Timestamp("2026-10-13")  # the new D_G: the two tier 1 funds of the menu have a session
+    day = pd.Timestamp("2026-10-13")  # the new D_G: every fund of the menu has a session
     rows = {
         fund: (day, float(store_mod.get_record(store, fund).iloc[-1]["close"]))
-        for fund in ("EFA", "LQD")
+        for fund in research.funds
     }
     providers = {"tiingo": _Tail("tiingo", rows), "tsp": _NoData("tsp")}
     second = nightly.run(store=store, now=later, providers=providers)
@@ -650,6 +650,31 @@ def test_a_preset_fund_the_catalog_does_not_serve_is_set_aside_and_the_run_still
     # and the generation built while WMT was pending still serves it as it was built
     old = json.loads(store.get(tensor_key(generation, uhash, "5y")))
     assert [fund["id"] for fund in old["universe"]["excluded"]] == ["WMT"]
+
+
+def test_every_preset_tensor_ends_on_the_generation_day_with_each_served_funds_close(
+    unpublished, generation, d_g
+):
+    """The provider has the D_G session of every preset fund the store is one session behind
+    on. The tensors are built from it, whatever tier the universe files put a fund in; WMT,
+    ``pending`` and set aside, is not checked."""
+    store = unpublished
+    _set_wmt(store, served=False)
+    funds = list(dict.fromkeys(fund for preset in preset_definitions() for fund in preset.funds))
+    rows = _one_session_behind(store, [fund for fund in funds if fund != "WMT"], d_g)
+    assert {day.date() for day, _ in rows.values()} == {d_g}
+    providers = {"tiingo": _Tail("tiingo", rows), "tsp": _Tail("tsp", rows)}
+    status = nightly.run(store=store, now=NOW, providers=providers)
+    assert status["published"] is True and status["generation"] == generation
+    excluded: set[str] = set()
+    for key in _expected_keys(generation):
+        tensor = json.loads(store.get(key))
+        universe = tensor["universe"]
+        assert tensor["lookback"]["end"] == d_g.isoformat(), (universe["preset_id"], key)
+        unpriced = [fund["id"] for fund in universe["funds"] if fund["last_close"] is None]
+        assert unpriced == [], (universe["preset_id"], key)
+        excluded.update(fund["id"] for fund in universe["excluded"])
+    assert excluded == {"WMT"}
 
 
 @pytest.mark.parametrize(

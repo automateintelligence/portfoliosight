@@ -46,11 +46,11 @@ def _step2_symbols() -> list[str]:
         return [row["Symbol"] for row in csv.DictReader(handle)]
 
 
-def test_tier1_is_the_step2_funds_then_the_tsp_funds():
+def test_tier1_starts_with_the_step2_funds_then_the_tsp_funds():
     tiers = universe.load_tiers()
     step2 = _step2_symbols()
     assert len(step2) == 23
-    assert list(tiers.tier1) == step2 + TSP_IDS
+    assert list(tiers.tier1[:39]) == step2 + TSP_IDS
     assert list(universe.TSP_FUNDS) == TSP_IDS
     assert universe.TSP_FUNDS["TSP-LINC"] == "L Income" and universe.TSP_FUNDS["TSP-G"] == "G Fund"
 
@@ -83,13 +83,15 @@ def test_tier3_is_the_qse_core_list_then_the_qse_portfoliosight_list():
 def test_the_starter_slice_stays_inside_the_qse_core_list():
     tiers = universe.load_tiers()
     core, added = _file_symbols(QSE_CORE), _file_symbols(QSE_PORTFOLIOSIGHT)
-    tier2 = set(tiers.tier2)
+    tier2, tier1 = set(tiers.tier2), set(tiers.tier1)
     core_only = [s for s in core if s not in tier2]
     added_only = [s for s in added if s not in tier2]
     assert universe.priority_order("starter", tiers, only_tiers=(3,)) == core_only[:130]
     assert not set(added_only) & set(universe.priority_order("starter", tiers))
-    # Power walks them last; the walk itself spends nothing on a symbol the lake keeps.
-    assert universe.priority_order("power", tiers, only_tiers=(3,)) == core_only + added_only
+    # Power walks them last, but for the preset stocks tier 1 already holds; the walk itself
+    # spends nothing on a symbol the lake keeps.
+    power = universe.priority_order("power", tiers, only_tiers=(3,))
+    assert power == [s for s in core_only + added_only if s not in tier1]
 
 
 def test_priority_order_starter_and_power():
@@ -108,9 +110,12 @@ def test_priority_order_starter_and_power():
     slice_ = starter[n1 + len(income) + len(rest) :]
     assert slice_ == list(tiers.tier3_only()[:130]) and len(slice_) == 130
     assert power[: len(starter) - 130] == starter[:-130]
-    assert power[len(starter) - 130 :] == list(tiers.tier3_only())
-    # Provider symbols kept current on Starter stay inside the 450 unique-symbols budget.
-    assert len([s for s in starter if not universe.is_tsp(s)]) == 317 + 130 <= 450
+    assert power[len(starter) - 130 :] == [s for s in tiers.tier3_only() if s not in tier1]
+    # Provider symbols kept current on Starter: tiers 1 and 2 (317 plus the 8 preset stocks)
+    # stay inside the 450 unique-symbols budget; the tier 3 slice takes what is left.
+    provider = [s for s in starter if not universe.is_tsp(s)]
+    assert len(provider) == 317 + 8 + 130
+    assert len(provider) - 130 <= 450
 
 
 def test_priority_order_can_be_limited_to_tiers():
@@ -271,6 +276,41 @@ def test_research2003_is_the_long_history_menu_with_its_limits_and_an_equal_mix(
     assert sorted(set(amounts.values())) == [5.26, 5.27]
     assert [fund for fund, amount in amounts.items() if amount == 5.27] == list(research.funds[:6])
     assert round(sum(amounts.values()) * 100) == 10000
+
+
+def test_tier1_holds_every_preset_fund_after_the_step2_and_tsp_funds():
+    tiers = universe.load_tiers()
+    funds = [fund for preset in universe.load_presets() for fund in preset.funds]
+    assert set(funds) <= set(tiers.tier1) and len(set(tiers.tier1)) == len(tiers.tier1)
+    research_tier2 = [fund for fund in RESEARCH_FUNDS if fund not in ("EFA", "LQD")]
+    assert list(tiers.tier1) == _step2_symbols() + TSP_IDS + research_tier2 + RESEARCH_STOCKS
+    # the lower tiers' walk leaves them to tier 1
+    lower = universe.priority_order("power", tiers, only_tiers=(2, 3))
+    assert not set(funds) & set(lower)
+    # a preset stock is still a stock and a tier 2 bond fund keeps its income tag
+    info = tiers.info()
+    assert info["GE"] == universe.SymbolInfo("GE", 1, False, "stock")
+    assert info["TLT"] == universe.SymbolInfo("TLT", 1, True, None)
+
+
+def test_tier1_adds_the_named_presets_funds_in_order_without_repeats(tmp_path):
+    path = _universe_config(tmp_path, {"file": "data/universes/a.txt"}, a="A\nB\n")
+    config = json.loads(path.read_text())
+    config["tiers"][0]["presets"] = "data/presets.json"
+    path.write_text(json.dumps(config))
+    _presets_file(
+        tmp_path,
+        _preset(id="p1", funds=["BND", "VTI", "B", "NEW"]),
+        _preset(id="p2", funds=["NEW", "A", "TSP-G"]),
+    )
+    tiers = universe.load_tiers(path)
+    assert tiers.tier1 == ("VTI", "BND", "B", "NEW", "A", "TSP-G")
+    info = tiers.info()
+    assert info["B"] == universe.SymbolInfo("B", 1, False, "stock")
+    assert info["BND"] == universe.SymbolInfo("BND", 1, True, None)
+    assert info["NEW"] == universe.SymbolInfo("NEW", 1, False, None)
+    assert info["TSP-G"] == universe.SymbolInfo("TSP-G", 1, False, "tsp")
+    assert universe.priority_order("power", tiers, only_tiers=(2, 3)) == []
 
 
 def _presets_file(tmp_path, *presets, holdings: bool = False):
