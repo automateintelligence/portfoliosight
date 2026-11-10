@@ -115,3 +115,20 @@ correction conflicts with the text above, the correction governs.
    but return lower bound against L below -50 bp: labelled "closed for these measures: fails the
    return condition". Nothing goes forward.
 4. **"Below the risk line"** means below the wide band: `sigma < r * (1 - contracts.TAU_R)`.
+
+Added the same day, still before any realized outcome of a region mix was looked at (a two-month
+smoke run of the code produced a file that nobody read; it is deleted before the full run):
+
+5. **Region mixes must be allowed mixes.** The pool also records evaluated points that break a
+   fund's bounds (about 2.7% of main-pool rows). A region mix must pass the harness's own domain
+   check: every weight within the menu's bounds and the weights summing to one, each within
+   `FEASIBILITY_TOL` (`anchors.Geometry.in_domain`). The output reports how many rows this removes.
+6. **Sharper crash-hedge test.** A hedge with negative overall correlation is bought by any
+   variance-based search, so it does not show that the drawdown measure sees crash behaviour. The
+   made-up menu gains a decoy: same volatility, same model return and the same full-sample
+   covariance with the equity-like funds as the hedge, but its offsetting moves come on ordinary
+   days and it does nothing special on crash days. Two assertions: (a) of two mixes that differ
+   only by swapping the hedge and decoy weights, the hedge-heavy one has the lower simulated tail
+   drawdown at equal model volatility; (b) the lowest-simulated-drawdown search holds more of the
+   hedge than of the decoy and reaches a lower simulated tail drawdown than the frontier search.
+   If either fails, stop and report.
