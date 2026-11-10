@@ -263,12 +263,14 @@ def cmd_v3_region(args: argparse.Namespace) -> int:
     job's analysis record unless `--months` restricts it."""
     from portfoliosight.research.fixedrisk import region3
 
-    parent, _, callables = _v3_inputs(args)
+    parent, inputs, callables = _v3_inputs(args)
     job = parent["jobs"][args.job]
     job_dir = Path(args.run_dir) / args.job
     out = Path(args.out) if args.out else Path(args.run_dir) / "analysis" / "region_check.json"
+    spec = inputs.menu(job["menu"])  # pyright: ignore[reportAttributeAccessIssue]
     body = region3.region_job(
         job_dir, parent, job["menu"], job["engine"], callables[0],
+        bounds=(spec.lower, spec.upper),
         analysis_path=Path(args.analysis) if args.analysis else None, months=args.months,
         progress=lambda line: print(line, file=sys.stderr, flush=True),
     )  # fmt: skip

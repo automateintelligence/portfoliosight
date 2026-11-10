@@ -10,7 +10,9 @@ Per cell (an eligible start month and one of the six risk settings):
   (correction 2: one simulated bank per month, so a mix's `mu`, `sigma`, `tdd`, `enb` and `h`
   depend on its weights and the month alone), with `mu >= mu_F - 50 bp` and
   `sigma <= r (1 + TAU_R) + FEASIBILITY_TOL` (correction 1); rows with the same weights after
-  rounding to 1e-9 count once, the first in (risk setting, record) order;
+  rounding to 1e-9 count once, the first in (risk setting, record) order; only allowed mixes
+  enter (correction 5: `in_domain`, the rule of `anchors.Geometry.in_domain`), so every pick,
+  the mix ceiling and the same-line and predictiveness sets are allowed mixes;
 - the left tip L blends F towards the frontier selection one setting lower,
   `L = F + t (F_lower - F)` with `t = clip(0.005 / (mu_F - mu_F_lower), 0, 1)`, 1 when
   `mu_F <= mu_F_lower`; the lowest setting has no L;
@@ -30,6 +32,7 @@ over L), the predictiveness correlations and the decision rules (`decide`).
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -145,6 +148,18 @@ def read_month_pool(path: Path) -> pd.DataFrame:
     return frame
 
 
+def in_domain(weights: Any, lower: Any, upper: Any) -> np.ndarray:
+    """Per row of `weights`, `anchors.Geometry.in_domain`'s rule: every weight within its bounds
+    and the weights summing to one (an exact sum), each within `FEASIBILITY_TOL`."""
+    w = np.atleast_2d(np.asarray(weights, dtype=float))
+    lo, hi = np.asarray(lower, dtype=float), np.asarray(upper, dtype=float)
+    box = (w >= lo - C.FEASIBILITY_TOL).all(axis=1) & (w <= hi + C.FEASIBILITY_TOL).all(axis=1)
+    budget = np.array(
+        [abs(math.fsum(row.tolist()) - 1.0) <= C.FEASIBILITY_TOL for row in w], dtype=bool
+    )
+    return box & budget
+
+
 def _level(r_fraction: Any) -> np.ndarray:
     rf = np.round(np.asarray(r_fraction, dtype=float), 6)
     index = {v: j for j, v in enumerate(A.RFS)}
@@ -237,10 +252,12 @@ def month_cells(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """The picks and cell facts of one start month.
 
-    `frontier` holds arm 1's locked rows (`analysis3.locked_rows`). Returns the picks (one row
-    per cell and name: F, L, every rule id, the same-line pick and the mix ceiling, with the
-    pool `record` (-1 for F and L), realized `dd` and `ret`, and model `sigma`, `mu`, `enb` and
-    `below`) and the cells (`t`, region and same-line counts, the two Spearman correlations)."""
+    `pool` holds the month's allowed main-pool rows (`read_month_pool`, then `in_domain`, as
+    `region_job` reads them). `frontier` holds arm 1's locked rows (`analysis3.locked_rows`).
+    Returns the picks (one row per cell and name: F, L, every rule id, the same-line pick and
+    the mix ceiling, with the pool `record` (-1 for F and L), realized `dd` and `ret`, and model
+    `sigma`, `mu`, `enb` and `below`) and the cells (`t`, region and same-line counts, the two
+    Spearman correlations)."""
     keep = (
         (frontier["arm"] == C.FRONTIER).to_numpy()
         & (frontier["month"].astype(str) == month).to_numpy()
@@ -536,14 +553,17 @@ def region_job(
     engine: str,
     horizon: R.HorizonFn,
     *,
+    bounds: tuple[Sequence[float], Sequence[float]],
     analysis_path: Path | None = None,
     months: Sequence[str] | None = None,
     resamples: int = evidence.RESAMPLES,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """The region check of one job; refuses to read a realized outcome before the confirmatory
-    analysis' digest is recorded (`ensemble3.verified_entry`). `months` restricts the eligible
-    start months (a smoke run); the bootstrap index stays the job's schedule."""
+    analysis' digest is recorded (`ensemble3.verified_entry`). `bounds` are the menu's (lower,
+    upper) weight bounds in holding order; rows outside them (`in_domain`) are left out and
+    counted. `months` restricts the eligible start months (a smoke run); the bootstrap index
+    stays the job's schedule."""
     from portfoliosight.research.fixedrisk.driver3 import base_paths
 
     job_dir = Path(job_dir)
@@ -560,10 +580,14 @@ def region_job(
     frontier = A.locked_rows(tables["selections"])
     frontier = A._frame(frontier.loc[(frontier["arm"] == C.FRONTIER).to_numpy()])
     pick_parts, cell_parts = [], []
-    undefined = 0
+    undefined = removed = 0
     for month in chosen:
         path = base_paths(job_dir / "tasks", f"{menu}_{month}_{engine}")["pool"]
         pool = read_month_pool(path)
+        allowed = in_domain(np.vstack(pool["weights"].to_list()), *bounds) if len(pool) else \
+            np.zeros(0, dtype=bool)  # fmt: skip
+        removed += int((~allowed).sum())
+        pool = A._frame(pool.loc[allowed]).reset_index(drop=True)
         undefined += int(np.asarray(pool[list(MODEL)].isna().any(axis=1)).sum())
         p, c = month_cells(pool, frontier, menu=menu, month=month, horizon=horizon)
         pick_parts.append(p)
@@ -603,6 +627,7 @@ def region_job(
             "resamples": resamples,
             "seed": evidence.BOOTSTRAP_SEED,
         },  # fmt: skip
+        "domain_removed_rows": removed,
         "undefined_rows": undefined,
         "region_size": {
             "median": float(np.median(sizes)) if sizes.size else None,

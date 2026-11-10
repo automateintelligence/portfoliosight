@@ -27,6 +27,7 @@ from .synth import month_labels, origin_of
 
 DIGEST = "digest-g"
 MENU, ENGINE = "research2003", "replay"
+BOUNDS = ((0.0, 0.0), (1.0, 1.0))  # the two-fund test menu
 
 
 # ------------------------------------------------------------------------------ helpers
@@ -122,6 +123,37 @@ def test_read_month_pool_keeps_the_main_rows_of_every_band(tmp_path):
     pool = G.read_month_pool(path)
     assert sorted(pool["record"].tolist()) == [0, 1, 2]
     assert np.vstack(pool["weights"].to_list()).shape == (3, 2)
+
+
+def test_in_domain_at_and_just_past_the_bounds():
+    lower, upper = (0.0, 0.0), (0.4, 1.0)
+    w = np.array(
+        [
+            [0.4, 0.6],  # exactly at fund 0's upper bound: allowed
+            [0.4 + 5e-9, 0.6 - 5e-9],  # inside the 1e-8 tolerance: allowed
+            [0.4 + 2e-8, 0.6 - 2e-8],  # just past it: out
+            [-5e-9, 1.0 + 5e-9],  # inside the tolerance at both bounds: allowed
+            [-2e-8, 1.0 + 2e-8],  # just past the lower bound: out
+            [0.2, 0.8 + 5e-9],  # the budget inside the tolerance: allowed
+            [0.2, 0.8 + 2e-8],  # the budget just past it: out
+        ]
+    )
+    assert G.in_domain(w, lower, upper).tolist() == [True, True, False, True, False, True, False]
+
+
+def test_in_domain_is_the_geometry_check():
+    from portfoliosight.research.fixedrisk.anchors import geometry
+
+    from .optimizer_data import synthetic_context
+
+    geo = geometry(synthetic_context(funds=5, rows=300, cap=0.3, seed=7))
+    rng = np.random.default_rng(4)
+    w = rng.dirichlet(np.ones(5), size=400)
+    w[:200] = np.clip(w[:200], 0.0, 0.3)  # many at the cap, the budget off for some
+    w[200:300] += rng.choice([-3e-8, -5e-9, 0.0, 5e-9, 3e-8], size=(100, 5))
+    got = G.in_domain(w, geo.lo, geo.hi)
+    assert got.tolist() == [geo.in_domain(row) for row in w]
+    assert 0 < int(got.sum()) < len(w)
 
 
 # ----------------------------------------------------------------------------- left tip
@@ -353,7 +385,7 @@ def _mu(j: int) -> float:
     return 0.04 + 0.01 * j
 
 
-def _pool() -> PoolBuffer:
+def _pool(outside: bool = False) -> PoolBuffer:
     buf = PoolBuffer()
     for j, rf in enumerate(C.RISK_FRACTIONS):
         common = {"lookback": "3y", "r_fraction": rf, "r": _r(j), "start": -1, "call": -1}
@@ -392,6 +424,20 @@ def _pool() -> PoolBuffer:
                     source="search", weights=np.array([0.0, 1.0]),
                     values=_values(sigma=_r(j), mu=_mu(j), in_wide=1.0, tdd=0.01, enb=9.0,
                                    h=0.01))  # fmt: skip
+        if outside:
+            # 2e-8 past fund 0's bound: it would win every rule and the same-line pick
+            buf.add(**common, lam=None, arm=C.U1_ARM, source="search",
+                    weights=np.array([1.0 + 2e-8, -2e-8]),
+                    values=_values(sigma=_r(j), mu=_mu(j), in_wide=1.0, tdd=0.01, enb=9.0,
+                                   h=0.01))  # fmt: skip
+        if outside and j == 5:
+            # exactly at fund 0's bound (the only such two-fund mix, so recorded once), below
+            # the top setting's line and above every other setting's ceiling, worst on every
+            # measure: kept, so the top cell's region has three mixes
+            buf.add(**common, lam=None, arm=C.U1_ARM, source="search",
+                    weights=np.array([1.0, 0.0]),
+                    values=_values(sigma=0.95 * _r(j), mu=_mu(j), in_wide=0.0, tdd=0.9, enb=0.1,
+                                   h=0.9))  # fmt: skip
     return buf
 
 
@@ -411,7 +457,7 @@ def _selections(month: str) -> pd.DataFrame:
     )  # fmt: skip
 
 
-def _job(tmp_path: Path, months: list[str]) -> Path:
+def _job(tmp_path: Path, months: list[str], outside: bool = False) -> Path:
     job = tmp_path / "run" / "research2003_replay"
     tasks = job / "tasks"
     for month in months:
@@ -419,7 +465,7 @@ def _job(tmp_path: Path, months: list[str]) -> Path:
         _write(tasks / f"{base}.parquet", _selections(month))
         _write(tasks / "columns" / f"{base}.parquet", pd.DataFrame({"month": [month]}))
         _write(tasks / "evaluated" / f"{base}.parquet", pd.DataFrame({"sel_id": ["x"]}))
-        table = _pool().table(menu=MENU, month=month, origin=origin_of(month).date(),
+        table = _pool(outside).table(menu=MENU, month=month, origin=origin_of(month).date(),
                               engine=ENGINE, seed=C.PRIMARY_SEED)  # fmt: skip
         write_pool(tasks / "pool" / f"{base}.parquet", table, {DIGEST_KEY: DIGEST.encode()})
     return job
@@ -453,8 +499,8 @@ def _direct(a: float, month: str) -> tuple[float, float]:
     return float(out.annual[0]), float(out.drawdown[0])
 
 
-def _recorded_job(tmp_path, months):
-    job = _job(tmp_path, months)
+def _recorded_job(tmp_path, months, outside=False):
+    job = _job(tmp_path, months, outside)
     analysis = tmp_path / "run" / "analysis" / "analysis.json"
     analysis.parent.mkdir(parents=True)
     analysis.write_text("{}")
@@ -470,7 +516,7 @@ def test_the_region_check_reads_no_outcome_before_the_analysis_digest_is_recorde
         raise AssertionError("a realized outcome was read before the digest was recorded")
 
     with pytest.raises(ValueError, match="no analysis digest recorded"):
-        G.region_job(job, _parent(months, months), MENU, ENGINE, horizon)
+        G.region_job(job, _parent(months, months), MENU, ENGINE, horizon, bounds=BOUNDS)
 
 
 def test_month_cells_on_a_known_pool(tmp_path):
@@ -524,7 +570,7 @@ def test_region_job_end_to_end_against_direct_computations(tmp_path):
     eligible = months[:3]
     job = _recorded_job(tmp_path, months)
     out = G.region_job(job, _parent(months, eligible), MENU, ENGINE, _horizon(set(eligible)),
-                       resamples=50)  # fmt: skip
+                       bounds=BOUNDS, resamples=50)  # fmt: skip
     assert out["label"] == G.EXPLORATORY
     assert out["months"] == eligible and out["cells"] == 18
     assert out["region_scope"] == G.REGION_SCOPE
@@ -554,8 +600,12 @@ def test_region_job_is_deterministic(tmp_path):
     months = month_labels(3)
     job = _recorded_job(tmp_path, months)
     parent = _parent(months, months)
-    first = G.region_job(job, parent, MENU, ENGINE, _horizon(set(months)), resamples=50)
-    second = G.region_job(job, parent, MENU, ENGINE, _horizon(set(months)), resamples=50)
+    first = G.region_job(
+        job, parent, MENU, ENGINE, _horizon(set(months)), bounds=BOUNDS, resamples=50
+    )
+    second = G.region_job(
+        job, parent, MENU, ENGINE, _horizon(set(months)), bounds=BOUNDS, resamples=50
+    )
     assert json.dumps(first, default=str) == json.dumps(second, default=str)
 
 
@@ -563,7 +613,7 @@ def test_region_job_restricted_to_some_months(tmp_path):
     months = month_labels(4)
     job = _recorded_job(tmp_path, months)
     out = G.region_job(job, _parent(months, months), MENU, ENGINE, _horizon(set(months)),
-                       months=[months[1]], resamples=50)  # fmt: skip
+                       bounds=BOUNDS, months=[months[1]], resamples=50)  # fmt: skip
     assert out["months"] == [months[1]] and out["cells"] == 6
     assert out["months_restricted"] is True
 
@@ -578,3 +628,18 @@ def test_record_region_adds_its_digest_after_the_analysis(tmp_path):
     assert set(record) == {"analysis", "region"}
     assert record["region"]["sha256"] == E.sha256_file(path)
     assert E.verified_entry(job, "region") == path.resolve()
+
+
+def test_region_job_leaves_out_mixes_outside_the_bounds(tmp_path):
+    months = month_labels(3)
+    job = _recorded_job(tmp_path, months, outside=True)
+    out = G.region_job(job, _parent(months, months), MENU, ENGINE, _horizon(set(months)),
+                       bounds=BOUNDS, resamples=50)  # fmt: skip
+    assert out["domain_removed_rows"] == 6 * 3  # one row per risk setting and month
+    # F and S everywhere, plus the edge mix in the top setting's cells
+    assert out["region_size"] == {"median": 2.0, "min": 2, "max": 3}
+    dd_l = np.array([[_direct(_a(j) - 0.05, m)[1] for j in range(1, 6)] for m in months])
+    dd_s = np.array([[_direct(_a(j) - 0.03, m)[1] for j in range(1, 6)] for m in months])
+    fair = out["picks"][G.RULE_NAMES_ID["fair_drawdown"]]
+    assert fair["vs_L"]["theta_dd"] == pytest.approx(np.mean(dd_l - dd_s), abs=1e-12)
+    assert out["picks"][G.SAME_LINE]["vs_F"]["theta_dd"] == pytest.approx(0.0, abs=1e-15)
