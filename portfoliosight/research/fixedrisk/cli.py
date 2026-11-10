@@ -13,6 +13,8 @@
                [--ensemble-out FILE] [--skip-ensemble]
     v3-ensemble --run-dir R --snapshot S [--job research2003_replay] [--analysis FILE]
                [--ensemble-out FILE]
+    v3-region  --run-dir R --snapshot S [--job research2003_replay] [--analysis FILE]
+               [--out FILE] [--months M ...]
     v3-report  --run-dir R --snapshot S --out FILE [--job research2003_replay]
                [--analysis FILE] [--ensemble FILE] [--allow-partial]
 
@@ -256,6 +258,29 @@ def cmd_v3_ensemble(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_v3_region(args: argparse.Namespace) -> int:
+    """The region check (docs/plans/2026-11-09-fixed-risk-v3-region-check.md); recorded in the
+    job's analysis record unless `--months` restricts it."""
+    from portfoliosight.research.fixedrisk import region3
+
+    parent, _, callables = _v3_inputs(args)
+    job = parent["jobs"][args.job]
+    job_dir = Path(args.run_dir) / args.job
+    out = Path(args.out) if args.out else Path(args.run_dir) / "analysis" / "region_check.json"
+    body = region3.region_job(
+        job_dir, parent, job["menu"], job["engine"], callables[0],
+        analysis_path=Path(args.analysis) if args.analysis else None, months=args.months,
+        progress=lambda line: print(line, file=sys.stderr, flush=True),
+    )  # fmt: skip
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(body, indent=2, default=str) + "\n")
+    if args.months is None:
+        region3.record_region(job_dir, out)
+    print(json.dumps({"out": str(out), "label": body["label"], "cells": body["cells"],
+                      "recorded": args.months is None}))  # fmt: skip
+    return 0
+
+
 def cmd_v3_report(args: argparse.Namespace) -> int:
     from portfoliosight.research.fixedrisk import report3
 
@@ -365,6 +390,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--analysis", help="the recorded analysis file (default: the record's)")
     p.add_argument("--ensemble-out", help="default: ensemble.json beside the analysis file")
     p.set_defaults(func=cmd_v3_ensemble)
+
+    p = sub.add_parser("v3-region", help="the exploratory region check (addendum 2026-11-09)")
+    p.add_argument("--run-dir", required=True)
+    p.add_argument("--snapshot", required=True)
+    p.add_argument("--job", default="research2003_replay")
+    p.add_argument("--analysis", help="the recorded analysis file (default: the record's)")
+    p.add_argument("--out", help="default: <run-dir>/analysis/region_check.json")
+    p.add_argument("--months", nargs="*", help="restrict the start months (a smoke run; the "
+                   "output is then not recorded)")  # fmt: skip
+    p.set_defaults(func=cmd_v3_region)
 
     p = sub.add_parser("v3-report", help="the v3 Markdown report (protocol v3 §8.4)")
     p.add_argument("--run-dir", required=True)
