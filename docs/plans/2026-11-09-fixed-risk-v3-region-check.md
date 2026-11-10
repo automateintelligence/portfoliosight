@@ -96,3 +96,22 @@ If this test fails, stop and report; do not adjust the test or the search to mak
 ## Output
 
 `fr-run-v3/analysis/region_check.json` and a section appended to the v3 report.
+
+## Corrections, 2026-11-09
+
+Made after reading the code and before any realized outcome of a region mix was computed. Where a
+correction conflicts with the text above, the correction governs.
+
+1. **Risk ceiling.** The wide band is a fraction of `r`, not an absolute 0.01. The ceiling is the
+   code's wide-band upper edge: `sigma <= r * (1 + contracts.TAU_R) + FEASIBILITY_TOL`.
+2. **Region rows.** "Main pool" means the lookback, seed and penalty-weight filter only, with no
+   band filter, so mixes below the line stay in. The region of a cell draws on every main-pool mix
+   recorded for that start month, under any of the six risk settings, that meets the return floor
+   and the risk ceiling of the cell. This holds only if a mix's `mu`, `sigma`, `tdd`, `enb` and `h`
+   depend on its weights and the start month alone (one simulated bank per month). If they do not,
+   the region is limited to the cell's own rows and the output says so. Rows with identical weights
+   count once; row order for ties is risk setting ascending, then recorded order.
+3. **Uncovered case in the decision rules.** Rule ceiling at least 1 pp with its interval above 0,
+   but return lower bound against L below -50 bp: labelled "closed for these measures: fails the
+   return condition". Nothing goes forward.
+4. **"Below the risk line"** means below the wide band: `sigma < r * (1 - contracts.TAU_R)`.
