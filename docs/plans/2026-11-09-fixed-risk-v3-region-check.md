@@ -132,3 +132,13 @@ smoke run of the code produced a file that nobody read; it is deleted before the
    drawdown at equal model volatility; (b) the lowest-simulated-drawdown search holds more of the
    hedge than of the decoy and reaches a lower simulated tail drawdown than the frontier search.
    If either fails, stop and report.
+
+Added after review round 1, still before the full run:
+
+7. **Missing model measures.** A main-pool row that is an allowed mix but lacks `mu`, `sigma`,
+   `tdd`, `enb` or `h` stops the run with an error; it is not dropped silently, because a dropped
+   mix could lower the mix ceiling. The main pool of `fr-run-v3` has no such row (0 of 4,075,092
+   three-year rows, counted on model columns only).
+8. **Predictiveness mean.** The mean is over valid cells, each cell weighted equally, as the
+   Statistics section says; its interval resamples start months in blocks and recomputes that
+   same cell-weighted mean.
