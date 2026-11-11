@@ -160,12 +160,17 @@ def _tr_series(record: pd.DataFrame) -> pd.Series:
     return pd.Series(record["tr_index"].to_numpy(dtype=float), index=index).dropna()
 
 
-def _close_on(record: pd.DataFrame, asof: datetime) -> float | None:
-    """The raw close dated exactly ``asof``; ``None`` when the fund has no price that day."""
-    on_day = record.loc[pd.to_datetime(record["date"]) == asof, "close"]
-    if on_day.empty or pd.isna(on_day.iloc[-1]):
+def _last_close(record: pd.DataFrame, asof: datetime) -> tuple[float, str] | None:
+    """The latest raw close dated on or before ``asof`` and its ISO date.
+
+    A served fund may lag ``asof`` by up to three sessions (spec 5.2), so its last close is
+    not always the close of ``asof`` itself. ``None`` when no row up to ``asof`` has a close.
+    """
+    rows = record.loc[(pd.to_datetime(record["date"]) <= asof) & record["close"].notna()]
+    if rows.empty:
         return None
-    return float(on_day.iloc[-1])
+    last = rows.iloc[-1]  # a stored record is sorted by date (``record_from_bytes``)
+    return float(last["close"]), pd.Timestamp(last["date"]).date().isoformat()
 
 
 def _fund_input(
@@ -182,6 +187,7 @@ def _fund_input(
             served=False,
         )
     adjusted = entry.adjusted_through.isoformat() if entry.adjusted_through else ""
+    close = None if record is None else _last_close(record, asof)
     return FundInput(
         id=fund,
         name=entry.name or fund,
@@ -189,7 +195,8 @@ def _fund_input(
         source=entry.source,
         adjusted_through=adjusted,
         fetched_at=entry.fetched_at or f"{adjusted}T00:00:00Z",
-        last_close=None if record is None else _close_on(record, asof),
+        last_close=None if close is None else close[0],
+        last_close_date=None if close is None else close[1],
         served=entry.status == "ok",
         catalog_reason=entry.reason,
     )

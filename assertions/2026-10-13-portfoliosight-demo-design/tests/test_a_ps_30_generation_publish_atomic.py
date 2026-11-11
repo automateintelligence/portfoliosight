@@ -749,6 +749,9 @@ else:
                     assert abs(fund["last_close"] - want) <= 1e-9 * want, (
                         f"{fund['id']}: last_close {fund['last_close']} is not the close on D_G"
                     )
+                    assert fund["last_close_date"] == D_G.isoformat(), (
+                        f"{fund['id']}: last_close_date {fund['last_close_date']} is not D_G"
+                    )
                     funds_checked += 1
         assert len(tensors_b) == 18 and funds_checked >= 100, f"only {funds_checked} funds checked"
 

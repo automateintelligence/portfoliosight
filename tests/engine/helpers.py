@@ -91,6 +91,7 @@ def fixture_inputs(lookback: str = "5y", **changes) -> TensorInputs:
             adjusted_through=meta["funds"][fund]["adjusted_through"],
             fetched_at=meta["funds"][fund]["fetched_at"],
             last_close=meta["funds"][fund]["last_close"],
+            last_close_date=None if meta["funds"][fund]["last_close"] is None else FIXTURE_ASOF,
             served=meta["funds"][fund]["served"],
             catalog_reason=meta["funds"][fund]["catalog_reason"],
         )
