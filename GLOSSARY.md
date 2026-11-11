@@ -4,8 +4,16 @@ PortfolioSight shows long-only investment mixes at a chosen level of risk, and t
 one-year outcomes each mix could have. These are the terms used for how those ranges are
 simulated.
 
+**Portfolio**:
+The funds the page works with, and the limit on each one: a ready-made portfolio, or the funds the
+user entered ("Custom portfolio"). The word a visitor reads everywhere on the page, in errors and
+in the share email.
+_Also called_: menu, in code only (`menu`, `menuMax`, `useMenu`, `MenuPrograms`, `CUSTOM_MENU_NAME`,
+`PS_MENU_MAX_*`, `menu_max`). The stored tensor name `"Custom menu"` is not shown on the page.
+_Avoid_: menu, fund menu (in anything a visitor reads)
+
 **Mix**:
-How money is split across the funds of a menu, as a weight per fund. "Your starting mix" is the
+How money is split across the funds of a portfolio, as a weight per fund. "Your starting mix" is the
 one the user entered.
 _Also called_: allocation (the same thing)
 
@@ -27,7 +35,7 @@ _Avoid_: shape window, fit window, training window
 
 **Shock pool**:
 The days a simulation draws its shocks from: each day's returns divided by that day's estimated
-volatility. It starts at the menu's youngest fund's first price and keeps every crisis since.
+volatility. It starts at the portfolio's youngest fund's first price and keeps every crisis since.
 _Avoid_: residual pool, shape
 
 **Constant-volatility fallback**:

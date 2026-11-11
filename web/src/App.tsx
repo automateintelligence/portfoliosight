@@ -308,7 +308,7 @@ export default function App() {
     notice = (
       <div className="notice" role="status">
         <div className="notice-card">
-          <p>{`This menu does not have enough shared history for the ${lookbackNames[state.lookback].toLowerCase()} view. Try another:`}</p>
+          <p>{`This portfolio does not have enough shared history for the ${lookbackNames[state.lookback].toLowerCase()} view. Try another:`}</p>
           <div className="notice-presets">
             {LOOKBACKS.filter((id) => !state.unavailable[id]).map((id) => (
               <button key={id} type="button" className="btn" onClick={() => dispatch({ type: "setLookback", lookback: id })}>

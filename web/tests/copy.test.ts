@@ -67,11 +67,11 @@ describe("copy (spec 3.6, 3.7)", () => {
     expect([copy.plain.rangeLow, copy.plain.rangeTypical, copy.plain.rangeHigh]).toEqual(["Bad", "Typical", "Good"]);
     expect([copy.plain.riskBad, copy.plain.riskTypical, copy.plain.resultStripSuffix]).toEqual(["Bad year", "Typical year", "over one year"]);
     expect(copy.plain.frontier).toBe("Best return at each level of risk");
-    expect(copy.plain.ghosts).toBe("Same menu, different years of history");
+    expect(copy.plain.ghosts).toBe("Same portfolio, different years of history");
     expect(copy.plain.currentMix).toBe("Your starting mix");
-    expect(copy.plain.building).toBe("Give us a moment: computing this menu (about 30 seconds)");
+    expect(copy.plain.building).toBe("Give us a moment: computing this portfolio (about 30 seconds)");
     expect(copy.plain.advice).toBe("Historical math, not investment advice.");
-    expect(copy.capsRule("25", 23)).toBe("No single fund above 25% (menu of 23)");
+    expect(copy.capsRule("25", 23)).toBe("No single fund above 25% (portfolio of 23)");
     expect(copy.stressLine("−31%")).toBe("What this mix did: −31% (Selected mix)");
     expect(copy.stressGap(2, 18, "11")).toBe("2 of 18 funds (11% of the mix) didn't exist yet; result is for the rest.");
   });
@@ -86,7 +86,7 @@ describe("copy (spec 3.6, 3.7)", () => {
     // nothing on the page speaks of six months any more
     const all = JSON.stringify({ plain: copy.plain, technical: { ...copy.technical, bellCurve: "", cellPlace: "" } });
     expect(all).not.toMatch(/six|6 months|six-month/i);
-    expect(copy.enbLine("3.8", "5.1")).toBe("spreads risk over the equivalent of 3.8 independent bets; highest found on this menu: 5.1");
+    expect(copy.enbLine("3.8", "5.1")).toBe("spreads risk over the equivalent of 3.8 independent bets; highest found on this portfolio: 5.1");
   });
 
   it("carries the compliance copy verbatim", () => {

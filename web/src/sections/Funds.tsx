@@ -132,7 +132,7 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
   const remove = (id: string) => edit(list.filter((r) => r.id !== id));
   const add = (sym: { id: string; name?: string | null }) => {
     setQuery("");
-    if (list.some((r) => r.id === sym.id)) return setAddError(`${sym.id} is already in the menu.`);
+    if (list.some((r) => r.id === sym.id)) return setAddError(`${sym.id} is already in the portfolio.`);
     if (list.length >= menuMax) return setAddError(menuFull(menuMax));
     setAddError("");
     const plotted = rows.find((r) => r.id === sym.id);

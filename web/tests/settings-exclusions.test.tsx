@@ -43,7 +43,7 @@ it("shows a small Admin tag only in admin mode", () => {
   cleanup();
   view(100);
   expect(screen.getByTestId("admin-tag").textContent).toBe("Admin");
-  expect(screen.getByText("Admin mode: menus of up to 100 funds.")).toBeTruthy();
+  expect(screen.getByText("Admin mode: portfolios of up to 100 funds.")).toBeTruthy();
 });
 
 it("keeps the limit of a fund this view sets aside when the limit of another fund is edited", () => {

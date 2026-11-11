@@ -412,7 +412,7 @@ export function createStore(init: { search: string }): Store {
       const list = Array.isArray(answer.details?.symbols) ? (answer.details.symbols as unknown[]).map(String) : [];
       set({
         lookback: state.tensorLookback ?? state.lookback,
-        menuError: list.length ? `No verified current data for ${list.join(", ")}. Remove ${list.length > 1 ? "them" : "it"} to continue.` : "This menu has a fund we cannot find.",
+        menuError: list.length ? `No verified current data for ${list.join(", ")}. Remove ${list.length > 1 ? "them" : "it"} to continue.` : "This portfolio has a fund we cannot find.",
         build: { status: state.tensor ? "ready" : "idle", error: null, position: null },
       });
       return;
@@ -420,7 +420,7 @@ export function createStore(init: { search: string }): Store {
     if (answer.status === 422 || answer.status === 400) {
       set({
         lookback: state.tensorLookback ?? state.lookback,
-        menuError: answer.message || reason || "This menu cannot be computed as entered.",
+        menuError: answer.message || reason || "This portfolio cannot be computed as entered.",
         build: { status: state.tensor ? "ready" : "idle", error: null, position: null },
       });
       return;

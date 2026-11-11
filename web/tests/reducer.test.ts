@@ -524,7 +524,7 @@ describe("store: menu size by access tier (engines spec 6.2)", () => {
   it("a public visitor's link with 31 funds is refused whole: the default view and the message, no request for it", async () => {
     const store = await boot(link(31));
     const s = store.getState();
-    expect(s.linkError).toBe("This menu has more funds than this site allows (30).");
+    expect(s.linkError).toBe("This portfolio has more funds than this site allows (30).");
     expect(posted()).toEqual([]);
     expect(s.preset).toBe("guide2017");
     expect(s.rows.length).toBe(IDS.length);
@@ -550,7 +550,7 @@ describe("store: menu size by access tier (engines spec 6.2)", () => {
     expect((await boot(link(100))).getState().linkError).toBeNull();
     expect(posted()).toEqual([31, 100]);
     const refused = await boot(link(101));
-    expect(refused.getState().linkError).toBe("This menu has more funds than this site allows (100).");
+    expect(refused.getState().linkError).toBe("This portfolio has more funds than this site allows (100).");
     expect(posted()).toEqual([31, 100]);
   });
 

@@ -147,8 +147,8 @@ def test_only_the_most_recently_used_models_are_kept(store, built, api_env, monk
 @pytest.mark.parametrize(
     ("change", "where"),
     [
-        ({"weights": [0.5, 0.5]}, "this menu has 3 funds; 2 weights were sent"),
-        ({"weights": [0.5, 0.2, 0.2, 0.1]}, "this menu has 3 funds; 4 weights were sent"),
+        ({"weights": [0.5, 0.5]}, "this portfolio has 3 funds; 2 weights were sent"),
+        ({"weights": [0.5, 0.2, 0.2, 0.1]}, "this portfolio has 3 funds; 4 weights were sent"),
         ({"weights": [0.5, 0.3, 0.1]}, "the weights add up to 0.9; they must add up to 1"),
         ({"weights": [0.5, 0.3, 0.2 + 2e-6]}, "they must add up to 1"),
         ({"weights": [0.6, 0.6, -0.2]}, "weights.2"),

@@ -40,7 +40,7 @@ from .windows import WindowSelection, renormalize_allocation, select_window
 SCHEMA_VERSION = 2
 TELEMETRY_FIELDS = ("built_at", "build_seconds")
 NOTES = (
-    "Expected returns are a 50/50 blend of the sample mean and a menu-beta heuristic.",
+    "Expected returns are a 50/50 blend of the sample mean and a portfolio-beta heuristic.",
     "Every mix below the frontier has exactly its column's risk and is the most diversified "
     "mix found at that risk for its return level: a local search from several starting points, "
     "not a proof that no better mix exists.",

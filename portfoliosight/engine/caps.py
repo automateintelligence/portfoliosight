@@ -41,7 +41,7 @@ def requested_caps(
         if not isinstance(fund, str):
             raise CapsError("every cap entry needs a fund id")
         if fund not in menu:
-            raise CapsError(f"{fund}: not a fund of this menu")
+            raise CapsError(f"{fund}: not a fund of this portfolio")
         if fund in by_id:
             raise CapsError(f"{fund}: capped more than once")
         low, high = _bound(fund, "min", entry.get("min")), _bound(fund, "max", entry.get("max"))
@@ -62,10 +62,10 @@ def resolve_bounds(
     """
     ids = list(ids)
     if len(ids) < MIN_FUNDS:
-        raise CapsError(f"a menu needs at least {MIN_FUNDS} funds; this one has {len(ids)}")
+        raise CapsError(f"a portfolio needs at least {MIN_FUNDS} funds; this one has {len(ids)}")
     if len(set(ids)) != len(ids):
         repeated = sorted({fund for fund in ids if ids.count(fund) > 1})
-        raise CapsError(f"{', '.join(repeated)}: listed more than once in the menu")
+        raise CapsError(f"{', '.join(repeated)}: listed more than once in the portfolio")
     by_id = requested_caps(ids, requested)
     lo = np.zeros(len(ids))
     hi = np.full(len(ids), default_max(len(ids)))

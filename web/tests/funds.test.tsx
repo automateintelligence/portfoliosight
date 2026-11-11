@@ -264,7 +264,7 @@ it("holds up to the tier's limit: the 31st fund refused for the public, accepted
   open(menu(30), 30);
   expect(screen.getByTestId("funds-limit").textContent).toContain("Up to 30 funds.");
   addZznew();
-  expect(screen.getByRole("alert").textContent).toBe("A menu holds up to 30 funds.");
+  expect(screen.getByRole("alert").textContent).toBe("A portfolio holds up to 30 funds.");
   expect(screen.queryByTestId("use-menu")).toBeNull();
   expect(screen.queryByTestId("fund-row-ZZNEW")).toBeNull();
   cleanup();
@@ -282,7 +282,7 @@ it("holds up to the tier's limit: the 31st fund refused for the public, accepted
   // admin: 100 is full; the 101st is refused
   open(menu(100), 100);
   addZznew();
-  expect(screen.getByRole("alert").textContent).toBe("A menu holds up to 100 funds.");
+  expect(screen.getByRole("alert").textContent).toBe("A portfolio holds up to 100 funds.");
   expect(screen.queryByTestId("fund-row-ZZNEW")).toBeNull();
 });
 
@@ -483,7 +483,7 @@ it("refuses a file with a bad amount, naming the row and the fund", async () => 
 it("refuses a file with fewer than two served funds, with the usual sentence, and still reports what it skipped", async () => {
   const calls = openUpload();
   chooseFile(`ticker\n${C}\nXYZ\n`);
-  expect((await screen.findByTestId("upload-error")).textContent).toBe("A menu needs at least 2 funds.");
+  expect((await screen.findByTestId("upload-error")).textContent).toBe("A portfolio needs at least 2 funds.");
   expect(screen.getByTestId("upload-skipped").textContent).toBe("Not added (no data for these yet): XYZ.");
   expect(calls.onRequestTickers).toHaveBeenCalledWith(["XYZ"], "csv");
   expect(screen.queryByTestId("use-menu")).toBeNull();
@@ -492,7 +492,7 @@ it("refuses a file with fewer than two served funds, with the usual sentence, an
 it("refuses a file with more served funds than the menu holds, and cuts nothing", async () => {
   const calls = openUpload({ menuMax: 3 });
   chooseFile(`ticker\n${A}\n${B}\n${C}\n${D}\n`);
-  expect((await screen.findByTestId("upload-error")).textContent).toBe("A menu holds up to 3 funds.");
+  expect((await screen.findByTestId("upload-error")).textContent).toBe("A portfolio holds up to 3 funds.");
   expect(screen.queryByTestId(`fund-row-${C}`)).toBeNull();
   expect(calls.onUseMenu).not.toHaveBeenCalled();
 });

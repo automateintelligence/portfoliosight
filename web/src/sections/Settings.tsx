@@ -156,7 +156,7 @@ export function Settings({ tensor, lookback, ghosts, caps, unavailable, details,
       <div className="set-block" style={{ gridColumn: "1 / -1" }}>
         <h3 className="heading">Limits per fund</h3>
         <p className="acc-lead">
-          {capsRule(pctPlain(defMax), funds.length)}. A small menu gets a higher ceiling, so it stays usable; change any limit below.
+          {capsRule(pctPlain(defMax), funds.length)}. A small portfolio gets a higher ceiling, so it stays usable; change any limit below.
           {details ? ` ${technical.caps}.` : ""}
         </p>
         {problem && (

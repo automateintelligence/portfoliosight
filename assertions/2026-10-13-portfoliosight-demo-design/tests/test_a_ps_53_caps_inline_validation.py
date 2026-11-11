@@ -8,7 +8,7 @@ carries VTI with `min` null and `max` 0.10 and every other fund null/null (an ab
 null), lookback 5y; the address gets `c=VTI::10` and the chart is back. Reset: after the valid edit
 `caps-reset` sends one more POST with an all-null policy, every `cap-max-{ID}` reads the rule value
 `clamp(3/N, 0.25, 1)` in percent and every `cap-min-{ID}` reads 0, `c` is cleared, and Settings
-states "No single fund above P% (menu of N)" with P the resolved maximum and N the tensor's
+states "No single fund above P% (portfolio of N)" with P the resolved maximum and N the tensor's
 included fund count or included + excluded count.
 
 The Playwright spec mocks /api/* itself (page.route) from web/fixtures/guide2017_5y.json and
@@ -331,7 +331,7 @@ async function advanceTheme(page: Page): Promise<string> {
 // ---------------------------------------------------------------------------------------------
 // A-PS-53
 // ---------------------------------------------------------------------------------------------
-const RULE_RE = /No single fund above (\d+(?:\.\d+)?)% \(menu of (\d+)\)/;
+const RULE_RE = /No single fund above (\d+(?:\.\d+)?)% \(portfolio of (\d+)\)/;
 const orNull = (v: any) => (v === undefined ? null : v);
 
 function ruleMax(tensor: any): number {
@@ -386,7 +386,7 @@ async function capErrorText(page: Page): Promise<string> {
 async function ruleSentence(page: Page, tensor: any): Promise<void> {
   const text = norm((await page.getByTestId("section-settings").textContent()) ?? "");
   const m = text.match(RULE_RE);
-  expect(m, 'Settings must state the rule as "No single fund above P% (menu of N)"').not.toBeNull();
+  expect(m, 'Settings must state the rule as "No single fund above P% (portfolio of N)"').not.toBeNull();
   expect(Math.abs(Number(m![1]) - ruleMax(tensor) * 100), `rule percentage ${m![1]}`).toBeLessThanOrEqual(0.05);
   const included = tensor.universe.funds.length;
   const excluded = (tensor.universe.excluded ?? []).length;

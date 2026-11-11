@@ -11,7 +11,7 @@ export const plain = {
   riskSlider: "Best-return mix at this risk",
   riskBad: "Bad year",
   riskTypical: "Typical year",
-  riskDisabled: "this menu has only one sensible risk level",
+  riskDisabled: "this portfolio has only one sensible risk level",
   resultStrip: "Selected mix",
   resultStripSuffix: "over one year",
   rangeLow: "Bad",
@@ -25,7 +25,7 @@ export const plain = {
   optimized: "Optimized",
   resetOptimized: "Back to Optimized",
   frontier: "Best return at each level of risk",
-  ghosts: "Same menu, different years of history",
+  ghosts: "Same portfolio, different years of history",
   noLimits: "No limits",
   noLimitsLine: "Same funds, no limit on any one fund",
   /** The legend's and the line's name for the No limits curve (owner direction 2026-10-13). */
@@ -48,9 +48,9 @@ export const plain = {
   cardHoldings: "Largest holdings",
   details: "Details",
   advice: "Historical math, not investment advice.",
-  building: "Give us a moment: computing this menu (about 30 seconds)",
-  buildFailed: "We couldn't compute this menu",
-  buildFailedFinal: "We couldn't compute this menu after three tries. The ready-made portfolios still work:",
+  building: "Give us a moment: computing this portfolio (about 30 seconds)",
+  buildFailed: "We couldn't compute this portfolio",
+  buildFailedFinal: "We couldn't compute this portfolio after three tries. The ready-made portfolios still work:",
   retry: "Retry",
   shareCopy: "Copy link",
   shareEmail: "Send this view by email",
@@ -95,7 +95,7 @@ export const plain = {
 
 export const technical = {
   xAxis: "Standard deviation of yearly return",
-  yAxis: "Shrunk expected return (50/50 sample mean and menu-beta heuristic), annualized",
+  yAxis: "Shrunk expected return (50/50 sample mean and portfolio-beta heuristic), annualized",
   heatLegend: "ENB (minimum torsion) of the most diversified mix found at each risk that earns at least each return",
   riskSlider:
     "2.5th percentile and median of the frontier mix's one-year return over 2,000 one-year paths resampled in blocks from this window's own daily history (stationary block bootstrap, mean block 21 days)",
@@ -178,7 +178,7 @@ export const forbiddenDefault = [
 ] as const;
 
 // ── Sentence builders (all default copy) ─────────────────────────────────────
-export const capsRule = (maxPct: string, n: number) => `No single fund above ${maxPct}% (menu of ${n})`;
+export const capsRule = (maxPct: string, n: number) => `No single fund above ${maxPct}% (portfolio of ${n})`;
 export const excludedFund = (fund: string, date: string, window: string) =>
   `${fund}: history starts ${date}, not enough for the ${window} view`;
 export const stressLine = (pct: string) => `What this mix did: ${pct} (${plain.selectedMix})`;
@@ -187,20 +187,20 @@ export const stressGap = (n: number, m: number, pct: string) =>
 /** The running total of percentages while it is not exactly 100%: "Total: 92%, 8% to go". */
 /** The menu limit of this browser's access tier (engines spec 6.2). */
 export const fundsUpTo = (n: number) => `Up to ${n} funds.`;
-export const menuFull = (n: number) => `A menu holds up to ${n} funds.`;
-export const menuNeedsMore = (n: number) => `A menu needs at least ${n} funds.`;
+export const menuFull = (n: number) => `A portfolio holds up to ${n} funds.`;
+export const menuNeedsMore = (n: number) => `A portfolio needs at least ${n} funds.`;
 /** A shared link with more funds than this browser's tier allows is refused whole, never cut. */
-export const linkTooManyFunds = (n: number) => `This menu has more funds than this site allows (${n}).`;
+export const linkTooManyFunds = (n: number) => `This portfolio has more funds than this site allows (${n}).`;
 export const adminTag = "Admin";
-export const adminLine = (n: number) => `Admin mode: menus of up to ${n} funds.`;
+export const adminLine = (n: number) => `Admin mode: portfolios of up to ${n} funds.`;
 export const fundsTotal = (total: string, gap: string, over: boolean) => `Total: ${total}%, ${gap}% ${over ? "over" : "to go"}`;
 export const staleLine = (asof: string) => `Prices through ${asof}; the nightly refresh has not run since then.`;
 // Behind the details toggle only (it names the technical measure).
 export const enbLine = (n: string, m: string) =>
-  `spreads risk over the equivalent of ${n} independent bets; highest found on this menu: ${m}`;
+  `spreads risk over the equivalent of ${n} independent bets; highest found on this portfolio: ${m}`;
 /** The strip's bar, spoken: it is drawn on one scale for every mix of this menu and history window. */
 export const rangeBarLabel = (from: string, to: string, low: string, typical: string, high: string) =>
-  `One-year range on a fixed scale from ${from} to ${to}, the same for every mix of this menu and history window: ${plain.rangeLow} ${low}, ${plain.rangeTypical} ${typical}, ${plain.rangeHigh} ${high}`;
+  `One-year range on a fixed scale from ${from} to ${to}, the same for every mix of this portfolio and history window: ${plain.rangeLow} ${low}, ${plain.rangeTypical} ${typical}, ${plain.rangeHigh} ${high}`;
 /** The strip's subtitle when its figures are in dollars: "over one year on your $98,900". */
 export const stripOnTotal = (total: string) => `${plain.resultStripSuffix} on your ${total}`;
 /** A strip figure spoken with both values: "Bad year: −$10,681, −10.8%". */

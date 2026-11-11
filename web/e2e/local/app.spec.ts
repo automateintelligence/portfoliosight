@@ -129,7 +129,7 @@ test("a failed build offers Retry, and Retry sends the same request", async ({ p
   await request.post("/__mock/config", { data: { build409: 1 } });
   await page.goto("/?f=SGOV:50,VTIP:50&unit=pct");
   await expect(page.getByTestId("build-retry")).toBeVisible();
-  await expect(page.getByTestId("building-notice")).toContainText("We couldn't compute this menu");
+  await expect(page.getByTestId("building-notice")).toContainText("We couldn't compute this portfolio");
   await expect(page.getByTestId("building-notice")).toContainText("build_failed");
   await page.getByTestId("build-retry").click();
   await expect(page.getByTestId("chart-canvas")).toBeVisible();
@@ -969,7 +969,7 @@ test("the funds picker: the 31st fund is refused for the public and accepted for
   await expect(page.getByTestId("funds-limit")).toContainText("Up to 30 funds.");
   const before = (await posts(page)).length;
   await addFund(page, "MOCKF031");
-  await expect(page.getByTestId("section-funds").getByRole("alert")).toHaveText("A menu holds up to 30 funds.");
+  await expect(page.getByTestId("section-funds").getByRole("alert")).toHaveText("A portfolio holds up to 30 funds.");
   await expect(page.getByTestId("fund-row-MOCKF031")).toHaveCount(0);
   await expect(page.getByTestId("use-menu")).toHaveCount(0);
   expect((await posts(page)).length, "no request for a 31st fund").toBe(before);
@@ -996,14 +996,14 @@ test("the funds picker: an admin's 101st fund is refused", async ({ page, reques
   expect((await posts(page)).at(-1)!.funds.length).toBe(100);
   await section(page, "funds");
   await addFund(page, "MOCKF101");
-  await expect(page.getByTestId("section-funds").getByRole("alert")).toHaveText("A menu holds up to 100 funds.");
+  await expect(page.getByTestId("section-funds").getByRole("alert")).toHaveText("A portfolio holds up to 100 funds.");
   await expect(page.getByTestId("fund-row-MOCKF101")).toHaveCount(0);
 });
 
 test("a shared link over the public limit is refused with a message and the default view opens", async ({ page, request }) => {
   await request.post("/__mock/config", { data: { manySymbols: true } });
   await open(page, `f=${mockFunds(31).join(",")}&lb=5y`);
-  await expect(page.getByTestId("link-refused")).toHaveText("This menu has more funds than this site allows (30).");
+  await expect(page.getByTestId("link-refused")).toHaveText("This portfolio has more funds than this site allows (30).");
   expect(await posts(page), "nothing is built for the refused menu").toEqual([]);
   await expect(page.getByTestId("preset-menu")).toHaveAccessibleName(/Example Portfolio/);
   await expect.poll(() => page.url()).not.toContain("MOCKF");
@@ -1333,7 +1333,7 @@ test("tickers left out of a file are listed even when the file is refused for ha
   await open(page, "f=SGOV:50,VTIP:50&unit=pct");
   await section(page, "funds");
   await page.getByTestId("funds-file").setInputFiles(csvFile("ticker\nVTI\nXYZ\nABC\n"));
-  await expect(page.getByTestId("upload-error")).toHaveText("A menu needs at least 2 funds.");
+  await expect(page.getByTestId("upload-error")).toHaveText("A portfolio needs at least 2 funds.");
   await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): XYZ, ABC.");
   await expect(page.getByTestId("fund-row-SGOV")).toBeVisible();
   await expect.poll(async () => (await tickerRequests(page)).length).toBe(1);
