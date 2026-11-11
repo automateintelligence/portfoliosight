@@ -355,6 +355,49 @@ By risk setting (descriptive, means, no intervals):
 
 Housekeeping: 128,654 main-pool rows that break a fund's bounds were left out; no allowed row lacked a model measure. A mix counts as "same risk line" when it was recorded in the wide band under that cell's own risk setting.
 
+## EXPLORATORY: other safety measures (addendum of 2026-11-11)
+
+Written by hand from `fr-run-v3/analysis/safety_check.json` (SHA-256 `906a702ebcc2...`, code at commit `8dca129`); `v3-report` does not regenerate this section. Specification, with ten readings fixed before the run: `docs/plans/2026-11-11-fixed-risk-v3-safety-measures-check.md`. It reuses the mixes this run recorded; nothing was simulated again. This is the fourth look at the same 234 origins, so nothing here is a finding.
+
+**Question.** Every test above judged a mix by its average fall and return over the following year. Is the more diversified mix safer than the frontier mix on a measure of safety not yet looked at, for about the same return? Only the outcome measure changes. The more diversified mix is the app's Optimized point (arm 6); the comparison is against the frontier mix (arm 1) at the same risk setting, averaged over the six risk settings.
+
+**Outcome: decision rule 3, closed.** All four tests fixed in advance came out "no". On none of the four measures did the app's Optimized point do better than the frontier mix by the bar, and on three of the four its average was worse.
+
+Four tests, so each interval is 98.75%. The difference is signed so that positive means the app's Optimized point did better (fell less, was under water for less time, surprised less).
+
+| Test | Measure | Frontier mix | App's Optimized point | Difference | 98.75% interval | Bar | Label |
+|---|---|---|---|---|---|---|---|
+| P1 | Deepest fall within 5 years | 20.56% | 21.56% | -0.99 pp | [-4.66, +0.36] | +1.0 pp | no |
+| P2 | Longest time below an earlier peak within 5 years | 18.67 months | 18.84 months | -0.17 months | [-2.64, +1.27] | +3.0 months | no |
+| P3 | Worst years: average fall in the worst 10% of one-year periods | 24.80% | 27.65% | -2.85 pp | [-4.49, +0.85] | +1.0 pp | no |
+| P4 | Return surprise: average gap between the year's return and the model's promise, sign ignored | 8.03 pp | 7.86 pp | +0.16 pp | [-0.68, +0.91] | +0.5 pp | no |
+
+- **Start months used.** P1 and P2 need five full years of prices after the origin: the first 186 origins, 2006-04 to 2021-09 (the floor fixed in advance was 120). P3 and P4 use all 234 origins, 2006-04 to 2025-09.
+- **Return conditions** (they could not change a "no"). Over 5 years the app's Optimized point earned 42.11% against 38.62%, +3.49 pp, one-sided 95% lower bound +0.79 pp, so the condition for P1 and P2 (not below -2.5 pp) held. Over one year the returns were equal (+1 bp) but the lower bound was -87 bp, below the -50 bp line for P3 and P4.
+- **P4 and the lower promise.** The app's Optimized point promised less: model return 9.80% against the frontier mix's 10.70%, 0.90 pp lower. Both earned 7.4%. So the frontier mix fell short of its promise by 3.31 pp on average and the app's Optimized point by 2.39 pp, and all of that 0.92 pp comes from the lower promise. The surprise with the sign ignored moved only 0.16 pp because the year-to-year swing around the promise (about 8 pp either way) is far larger than the promise gap.
+
+**Other mixes and measures (description, no test).** Differences against the frontier mix with 95% intervals; positive means the mix did better. Return columns are mix minus frontier, with the one-sided 95% lower bound in brackets.
+
+| Mix | Fall within 5 years, pp | Longest time below a peak within 5 years, months | Worst-years fall, pp | Return surprise, pp | 5-year return, pp | 1-year return, bp |
+|---|---|---|---|---|---|---|
+| App's Optimized point (arm 6) | -0.99 [-3.35, +0.25] | -0.17 [-1.69, +0.94] | -2.85 [-4.38, +0.31] | +0.16 [-0.49, +0.73] | +3.49 [+0.79] | +1 [-87] |
+| U1 mix (arm 2) | +0.07 [-0.80, +0.56] | -0.51 [-1.70, +0.31] | -0.21 [-1.00, +2.90] | +0.22 [-0.10, +0.52] | -0.84 [-2.32] | -43 [-72] |
+| Lowest simulated drawdown (arm 3) | -1.03 [-3.12, +0.18] | -1.89 [-3.86, -0.28] | -2.78 [-5.97, +3.26] | +0.20 [-0.49, +1.10] | -5.01 [-7.42] | -236 [-327] |
+| Crash penalty (arm 4) | +0.73 [-0.74, +1.88] | -0.04 [-1.55, +0.89] | -0.09 [-1.09, +3.84] | +0.12 [-0.23, +0.47] | +2.25 [-1.33] | -6 [-52] |
+| Most loss contributors (arm 5) | -0.40 [-1.47, +0.13] | -0.45 [-1.82, +0.69] | -0.57 [-1.21, +0.50] | +0.39 [-0.01, +0.76] | +0.66 [-1.77] | -7 [-49] |
+| Region check's highest-ENB pick | -0.31 [-1.36, +0.26] | -0.35 [-1.43, +0.65] | -0.91 [-1.15, +0.13] | +0.42 [-0.00, +0.82] | +2.04 [+0.36] | +11 [-37] |
+| Yardstick L: frontier at a lower risk (five settings) | +1.36 [+0.89, +1.81] | +0.13 [-0.32, +0.72] | +2.17 [+0.59, +3.28] | no model figures | -1.90 [-3.18] | -33 [-65] |
+
+Reading it:
+
+- The only row that fell less over five years and in the worst years, with intervals above zero, is L: the frontier mix at a lower risk setting, for 33 bp of return a year. That is the risk slider again. No diversified mix at the same risk did it.
+- The app's Optimized point fell 2.85 pp more than the frontier mix in the worst 10% of years, and its lowest 10% of yearly returns averaged -15.43% against -12.93%. Both intervals include zero, so this is not evidence that it is less safe, but there is no sign that it protects in the worst years.
+- The app's Optimized point earned 3.49 pp more over five years, 95% interval [+0.26, +6.45]. This is a return observation, not a safety one, it is no pass/fail test, and 186 overlapping five-year windows hold about three or four independent five-year periods.
+- Over 3 years (210 origins) the picture is the same: the app's Optimized point fell 0.83 pp more [-2.80, +0.31], was under water 0.12 months less [-0.91, +1.14] and earned 0.42 pp more [-1.84, +2.37].
+- Volatility surprise (gap between realized and model volatility, sign ignored): 4.88 pp for the app's Optimized point against 4.62 pp, difference -0.26 pp [-0.85, +0.25].
+
+Limits of this check: the worst 10% is 24 of 234 origins per risk setting, and neighbouring origins share most of their year, so those averages rest on few separate episodes and their intervals are lopsided. Five-year intervals are rough for the reason given above. One menu, one lookback, the replay engine. Outcomes are before costs. Housekeeping: 128,654 main-pool rows that break a fund's bounds were left out, as in the region check; the bootstrap used 2,000 resamples with blocks of 24 origins for one-year measures, 36 for 3-year and 60 for 5-year.
+
 ## Limits stated by the protocol
 
 - **What preregistration covers (§1).** v3 reuses the frozen history of v2, and its arms were chosen after the owner saw v2's realized results. The thresholds (1 pp, 50 bp, 95%) were chosen after v2's realized intervals on these years were seen; v2's realized-support rule used a 99% lower bound.
