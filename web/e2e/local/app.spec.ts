@@ -1192,7 +1192,7 @@ test("details on: the legend, the axis titles and their technical lines do not o
         // the long technical lines are under the chart, in the details; the slider's method opens
         await expect(page.locator(".legend-tech")).toHaveCount(0);
         await expect(page.locator(".y-title .tech")).toHaveCount(0);
-        await expect(page.getByTestId("details-chart")).toContainText("Shrunk expected return");
+        await expect(page.getByTestId("details-chart")).toContainText("half each fund's own history");
         await expect(page.getByTestId("details-chart")).toContainText("Standard deviation of yearly return");
         await expect(page.getByTestId("details-chart")).toContainText("minimum torsion");
         const method = page.getByTestId("risk-method");
