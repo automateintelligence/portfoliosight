@@ -2,12 +2,12 @@ import { Download, Eraser, Percent, Plus, Upload, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SymbolEntry } from "../api/http";
 import type { Tensor } from "../api/tensor";
-import { TICKER_SHAPE, type TickerSource } from "../api/tickerShape";
+import type { TickerSource } from "../api/tickerShape";
 import { fundsCount, fundsTotal, fundsUpTo, menuFull, menuNeedsMore, plain, uploadCatalogLoading, uploadSkipped, uploadTooBig, uploadUnreadable } from "../copy";
 import { amountText, money, parseAmount, pct } from "../format";
 import { amountsToWeights, fundsWithPrices, percentShown, percentTotal, scaleTo100 } from "../math/amounts";
 import { MIN_FUNDS, type Row, type Unit, type UploadReport } from "../state/store";
-import { MAX_FILE_BYTES, normalizeTicker, parseFundsCsv, resolveUpload, TEMPLATE_CSV, TEMPLATE_FILENAME } from "./fundsCsv";
+import { MAX_FILE_BYTES, parseFundsCsv, requestedTicker, resolveUpload, servedTicker, TEMPLATE_CSV, TEMPLATE_FILENAME } from "./fundsCsv";
 import { matchGroup, rankSymbols } from "./symbolSearch";
 import { downloadCsv } from "./tradesCsv";
 
@@ -148,13 +148,14 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
   }, [listOpen, matches.length]);
   const tryAddTyped = () => {
     if (!q) return;
-    // A class share typed as BRK/B or BRK.B is the served BRK-B.
-    const ticker = normalizeTicker(query);
-    const exact = symbols?.find((s) => s.id === ticker) ?? (matches[0] && matchGroup(matches[0], q) === 1 ? matches[0] : undefined) ?? (matches.length === 1 ? matches[0] : undefined);
+    // The ticker as typed when it is served, else a class share typed as BRK/B or BRK.B is the served BRK-B.
+    const id = servedIds ? servedTicker(query, (t) => servedIds.has(t)) : null;
+    const exact = symbols?.find((s) => s.id === id) ?? (matches[0] && matchGroup(matches[0], q) === 1 ? matches[0] : undefined) ?? (matches.length === 1 ? matches[0] : undefined);
     if (exact) return add(exact);
     setAddError(`${query.trim().toUpperCase()} isn't offered: no verified current data for it.`);
     // Committed (not merely typed), shaped like a ticker and matching nothing served: someone wants a ticker we do not have.
-    if (symbols !== null && matches.length === 0 && TICKER_SHAPE.test(ticker)) onRequestTickers([ticker], "picker");
+    const asked = requestedTicker(query);
+    if (symbols !== null && matches.length === 0 && asked !== null) onRequestTickers([asked], "picker");
   };
 
   /** A CSV file replaces the fund list: the draft, as adding funds makes it, with the file's amounts and unit. */

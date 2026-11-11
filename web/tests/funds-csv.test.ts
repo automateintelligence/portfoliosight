@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { menuFull, menuNeedsMore } from "../src/copy";
 import {
   dollarsVsShares,
-  normalizeTicker,
   parseFundsCsv,
   parseNumber,
   percentVsDollars,
@@ -75,22 +74,6 @@ describe("parseNumber", () => {
   });
 });
 
-describe("normalizeTicker", () => {
-  it("writes a class separator, a slash or a dot between letters, as the served list does: a hyphen", () => {
-    expect(normalizeTicker("BRK/B")).toBe("BRK-B");
-    expect(normalizeTicker("BRK.B")).toBe("BRK-B");
-    expect(normalizeTicker("BF.B")).toBe("BF-B");
-    expect(normalizeTicker("PBR/A")).toBe("PBR-A");
-  });
-  it("trims and upper-cases, as before", () => {
-    expect(normalizeTicker("  brk/b ")).toBe("BRK-B");
-    expect(normalizeTicker("vti")).toBe("VTI");
-  });
-  it("leaves a ticker that has no such separator as it is", () => {
-    for (const ticker of ["BRK-B", "TSP-L2030", "ACHR-WT", "VTI", "BRK.2", "1.5", "A.", "/B", ""]) expect(normalizeTicker(ticker), ticker).toBe(ticker);
-  });
-});
-
 describe("parseFundsCsv", () => {
   it("reads header names without regard to case or surrounding spaces, in any order and any subset", () => {
     expect(lines(" PERCENT , Ticker \n40,vti\n60,bnd\n")).toEqual([line("VTI", null, null, 40), line("BND", null, null, 60)]);
@@ -102,8 +85,14 @@ describe("parseFundsCsv", () => {
   it("trims and upper-cases tickers", () => {
     expect(lines("ticker\n  brk-b  \n")[0].ticker).toBe("BRK-B");
   });
-  it("writes class shares with a hyphen whichever separator the file uses, and adds the rows of one fund", () => {
-    expect(lines("ticker,shares\nBRK/B,1\nbf.b,3\nBRK.B,2\nBRK-B,4\n")).toEqual([line("BRK-B", 7, null, null), line("BF-B", 3, null, null)]);
+  it("keeps each ticker as the file writes it, separators and all, and adds the rows of one spelling", () => {
+    expect(lines("ticker,shares\nBRK/B,1\nbf.b,3\nBRK.B,2\nBRK-B,4\nbrk/b,5\nry.to,6\n")).toEqual([
+      line("BRK/B", 6, null, null),
+      line("BF.B", 3, null, null),
+      line("BRK.B", 2, null, null),
+      line("BRK-B", 4, null, null),
+      line("RY.TO", 6, null, null),
+    ]);
   });
   it("names a class share in a row's refusal as the file wrote it", () => {
     expect(failure("ticker,shares\nVTI,1\nBRK/B,ten\n")).toBe('Row 3 (BRK/B): "ten" in the shares column is not a number.');
@@ -266,6 +255,27 @@ describe("resolveUpload: tickers that are not served, and the limits", () => {
     const out = resolveUpload(lines("ticker\nVTI\nBRK/B\nbf.b\nXYZ/B\n"), catalog("VTI", "BRK-B", "BF-B"), LIMITS);
     expect(out.ok && out.plan.rows.map((r) => r.id)).toEqual(["VTI", "BRK-B", "BF-B"]);
     expect(out.ok && out.plan.skipped).toEqual(["XYZ-B"]);
+  });
+  it("adds the rows of one served class share whichever way the file writes it, under the served id", () => {
+    const out = resolveUpload(lines("ticker,shares\nBRK/B,1\nVTI,5\nbrk.b,2\nBRK-B,4\n"), catalog("VTI", "BRK-B"), LIMITS);
+    expect(out.ok && out.plan.rows.map((r) => [r.id, r.amount])).toEqual([["BRK-B", 7], ["VTI", 5]]);
+    expect(out.ok && out.plan.skipped).toEqual([]);
+  });
+  it("serves a ticker the catalog serves as the file writes it, dot and all, before its class-share form", () => {
+    const out = resolveUpload(lines("ticker,shares\nVTI,1\nbrk.b,2\nBRK/B,3\nry.to,4\n"), catalog("VTI", "BRK.B", "BRK-B", "RY.TO"), LIMITS);
+    expect(out.ok && out.plan.rows.map((r) => [r.id, r.amount])).toEqual([["VTI", 1], ["BRK.B", 2], ["BRK-B", 3], ["RY.TO", 4]]);
+    expect(out.ok && out.plan.skipped).toEqual([]);
+  });
+  it("skips an exchange suffix or a ticker of several parts as the file writes it, and never as a hyphenated id", () => {
+    const file = lines("ticker\nVTI\nBND\nry.to\nBMW.DE\na.b.c\nBRK.B\nXYZ/BB\nA/B/C\n");
+    // served ids that the over-broad rewriting would have reached: a suffix is not a share class
+    const out = resolveUpload(file, catalog("VTI", "BND", "RY-TO", "BMW-DE", "A-B-C"), LIMITS);
+    expect(out.ok && out.plan.rows.map((r) => r.id)).toEqual(["VTI", "BND"]);
+    expect(out.ok && out.plan.skipped).toEqual(["RY.TO", "BMW.DE", "A.B.C", "BRK.B", "XYZ/BB", "A/B/C"]);
+  });
+  it("names a fund in the no-common-column refusal as the file wrote it", () => {
+    const out = resolveUpload(lines("ticker,shares,dollars\nbrk/b,1,\nVTI,,5\n"), catalog("VTI", "BRK-B"), LIMITS);
+    expect(!out.ok && out.error).toContain("BRK/B has only shares; VTI has only dollars.");
   });
   it("has nothing skipped when every ticker is served", () => {
     const out = resolveUpload([line("VTI", null, null, null), line("BND", null, null, null)], catalog("VTI", "BND"), LIMITS);

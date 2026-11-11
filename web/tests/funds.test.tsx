@@ -493,9 +493,29 @@ it("serves class shares a file writes with a slash or a dot, and tells the page 
   await screen.findByTestId("use-menu");
   expect(screen.getByTestId("fund-row-BRK-B")).toBeTruthy();
   expect(screen.getByTestId("fund-row-BF-B")).toBeTruthy();
-  expect(screen.getByTestId("upload-skipped").textContent).toBe("2 tickers not added (no data for these yet): XYZ-B, ABC-D.");
+  // ABC.D is a valid ticker as written; only the slash of XYZ/B is not
+  expect(screen.getByTestId("upload-skipped").textContent).toBe("2 tickers not added (no data for these yet): XYZ-B, ABC.D.");
   expect(calls.onRequestTickers).toHaveBeenCalledTimes(1);
-  expect(calls.onRequestTickers).toHaveBeenCalledWith(["XYZ-B", "ABC-D"], "csv");
+  expect(calls.onRequestTickers).toHaveBeenCalledWith(["XYZ-B", "ABC.D"], "csv");
+});
+
+it("tells the page an exchange suffix or a ticker of several parts as the file writes it", async () => {
+  const calls = openUpload({ plotted: [A, B], symbols: [...catalog, { id: "RY-TO", name: "Not Royal Bank" }] });
+  chooseFile(`ticker\n${C}\n${D}\nry.to\nBMW.DE\na.b.c\n`);
+  await screen.findByTestId("use-menu");
+  expect(screen.queryByTestId("fund-row-RY-TO")).toBeNull();
+  expect(screen.getByTestId("upload-skipped").textContent).toBe("3 tickers not added (no data for these yet): RY.TO, BMW.DE, A.B.C.");
+  expect(calls.onRequestTickers).toHaveBeenCalledWith(["RY.TO", "BMW.DE", "A.B.C"], "csv");
+});
+
+it("adds a fund the site serves under a dotted id when the file writes that id", async () => {
+  const calls = openUpload({ plotted: [A, B], symbols: [...catalog, { id: "RY.TO", name: "Royal Bank of Canada" }, { id: "BRK.B", name: "Berkshire Hathaway Inc" }] });
+  chooseFile(`ticker,dollars\n${C},1000\nry.to,2000\nBRK.B,500\n`);
+  await screen.findByTestId("use-menu");
+  expect(screen.getByTestId("fund-row-RY.TO")).toBeTruthy();
+  expect(screen.getByTestId("fund-row-BRK.B")).toBeTruthy();
+  expect(screen.queryByTestId("upload-skipped")).toBeNull();
+  expect(calls.onRequestTickers).not.toHaveBeenCalled();
 });
 
 it("sends nothing about the tickers when every one of them is served", async () => {
@@ -638,12 +658,25 @@ describe("a ticker typed into the picker that nothing matches", () => {
     typeAndEnter(A.slice(0, 1));
     expect(calls.onRequestTickers).not.toHaveBeenCalled();
   });
-  it("is reported under its hyphen form when it is a class share written with a slash or a dot, and the message shows what was typed", () => {
+  it("is reported under its hyphen form when it is a class share written with a slash, and the message shows what was typed", () => {
     const calls = openUpload();
     typeAndEnter("zzqj/b");
     expect(screen.getByRole("alert").textContent).toBe("ZZQJ/B isn't offered: no verified current data for it.");
-    typeAndEnter("zzqk.b");
-    expect(calls.onRequestTickers.mock.calls).toEqual([[["ZZQJ-B"], "picker"], [["ZZQK-B"], "picker"]]);
+    expect(calls.onRequestTickers.mock.calls).toEqual([[["ZZQJ-B"], "picker"]]);
+  });
+  it("is reported as typed when it is a valid ticker with a dot: a class share, an exchange suffix or several parts", () => {
+    const calls = openUpload();
+    for (const text of ["zzqk.b", "ry.to", "BMW.DE", "a.b.c"]) typeAndEnter(text);
+    expect(calls.onRequestTickers.mock.calls).toEqual([[["ZZQK.B"], "picker"], [["RY.TO"], "picker"], [["BMW.DE"], "picker"], [["A.B.C"], "picker"]]);
+  });
+  it("adds a fund served under a dotted id as typed, before its class-share form", () => {
+    const calls = openUpload({ symbols: [...catalog, { id: "BRK.B", name: "Berkshire dotted" }, { id: "BRK-B", name: "Berkshire Hathaway Inc" }] });
+    typeAndEnter("brk.b");
+    expect(screen.getByTestId("fund-row-BRK.B")).toBeTruthy();
+    expect(screen.queryByTestId("fund-row-BRK-B")).toBeNull();
+    typeAndEnter("BRK/B");
+    expect(screen.getByTestId("fund-row-BRK-B")).toBeTruthy();
+    expect(calls.onRequestTickers).not.toHaveBeenCalled();
   });
   it("adds a served class share typed with a slash or a dot, and reports nothing", () => {
     const calls = openUpload({ symbols: [...catalog, { id: "BRK-B", name: "Berkshire Hathaway Inc" }, { id: "BRKB", name: "Another Fund" }] });

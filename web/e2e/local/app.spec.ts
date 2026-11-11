@@ -1368,13 +1368,13 @@ test("tickers left out of a file are listed even when the file is refused for ha
   expect(await tickerRequests(page)).toEqual([{ tickers: ["XYZ", "ABC"], source: "csv" }]);
 });
 
-test("a class share a file writes with a slash or a dot is reported, when the site has none, with a hyphen", async ({ page }) => {
+test("a class share a file writes with a slash is reported, when the site has none, with a hyphen; one with a dot as written", async ({ page }) => {
   await open(page, "f=SGOV:50,VTIP:50&unit=pct");
   await section(page, "funds");
   await page.getByTestId("funds-file").setInputFiles(csvFile("ticker\nVTI\nBND\nXYZ/B\nabc.d\n"));
-  await expect(page.getByTestId("upload-skipped")).toHaveText("2 tickers not added (no data for these yet): XYZ-B, ABC-D.");
+  await expect(page.getByTestId("upload-skipped")).toHaveText("2 tickers not added (no data for these yet): XYZ-B, ABC.D.");
   await expect.poll(async () => (await tickerRequests(page)).length).toBe(1);
-  expect(await tickerRequests(page)).toEqual([{ tickers: ["XYZ-B", "ABC-D"], source: "csv" }]);
+  expect(await tickerRequests(page)).toEqual([{ tickers: ["XYZ-B", "ABC.D"], source: "csv" }]);
 });
 
 test("the list of skipped tickers stays when the funds panel is closed and opened again @desktop-only", async ({ page }) => {
