@@ -293,7 +293,8 @@ def cmd_v3_safety(args: argparse.Namespace) -> int:
     parent, inputs, callables = _v3_inputs(args)
     job = parent["jobs"][args.job]
     job_dir = Path(args.run_dir) / args.job
-    out = Path(args.out) if args.out else Path(args.run_dir) / "analysis" / "safety_check.json"
+    out = safety3.output_path(Path(args.run_dir), job_dir, Path(args.out) if args.out else None,
+                              restricted=args.months is not None)  # fmt: skip
     spec = inputs.menu(job["menu"])  # pyright: ignore[reportAttributeAccessIssue]
     body = safety3.safety_job(
         job_dir, parent, job["menu"], job["engine"], callables[0], callables[1],
@@ -435,7 +436,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--snapshot", required=True)
     p.add_argument("--job", default="research2003_replay")
     p.add_argument("--analysis", help="the recorded analysis file (default: the record's)")
-    p.add_argument("--out", help="default: <run-dir>/analysis/safety_check.json")
+    p.add_argument("--out", help="default: <run-dir>/analysis/safety_check.json, or "
+                   "safety_check_partial.json with --months; replaces no other file")  # fmt: skip
     p.add_argument("--months", nargs="*", help="restrict the start months (a smoke run; the "
                    "output is then not recorded)")  # fmt: skip
     p.set_defaults(func=cmd_v3_safety)

@@ -32,6 +32,7 @@ intervals) and the decision (`decide`).
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -63,6 +64,8 @@ LEVEL = 0.95
 LOWER_LEVEL = 0.90  # its interval's lower end is the one-sided 95% lower bound
 TEST_LEVEL = 0.9875  # four tests, each with a two-sided 98.75% interval
 MIN_FIVE_YEAR_MONTHS = 120
+FULL_FILE = "safety_check.json"
+PARTIAL_FILE = "safety_check_partial.json"  # a run restricted to some start months
 
 F, E = "F", "E"
 REGION_ENB = "region_enb"
@@ -565,6 +568,37 @@ def record_safety(job_dir: Path, safety_path: Path) -> dict[str, Any]:
     record["safety"] = ENS._entry(safety_path)
     ENS._write_record(job_dir, record)
     return record
+
+
+def _own_output(path: Path, restricted: bool) -> bool:
+    """Whether `path` holds an earlier result of this check of the same kind (full or
+    restricted)."""
+    try:
+        body = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    return (isinstance(body, dict) and body.get("spec") == SPEC
+            and body.get("months_restricted") is restricted)  # fmt: skip
+
+
+def output_path(run_dir: Path, job_dir: Path, out: Path | None, *, restricted: bool) -> Path:
+    """Where a run writes its result: `out`, or `<run-dir>/analysis/safety_check.json` (a run
+    restricted to some start months: `safety_check_partial.json`). A ValueError unless the path
+    is free or holds this check's own earlier result of the same kind: no other file is ever
+    replaced, the job's analysis record least of all, and a restricted run never writes the
+    full run's file."""
+    folder = Path(run_dir) / "analysis"
+    full = folder / FULL_FILE
+    path = Path(out) if out is not None else folder / (PARTIAL_FILE if restricted else FULL_FILE)
+    target = path.resolve()
+    if restricted and target == full.resolve():
+        raise ValueError(f"{path} is the full run's file; a restricted run does not write it")
+    record = (Path(job_dir) / ENS.RECORD_FILE).resolve()
+    if target == record or (target.exists() and not _own_output(target, restricted)):
+        kind = "restricted" if restricted else "full"
+        raise ValueError(f"the safety check refuses to replace {path}: it is not an earlier "
+                         f"{kind} result of this check")  # fmt: skip
+    return path
 
 
 def _definitions(resamples: int) -> dict[str, Any]:

@@ -5,10 +5,12 @@ label boundary of the four pass/fail tests, the three decision rules and determi
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 from collections.abc import Mapping
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -18,6 +20,7 @@ import pytest
 
 from portfoliosight.research import evidence
 from portfoliosight.research.fixedrisk import analysis3 as A
+from portfoliosight.research.fixedrisk import cli
 from portfoliosight.research.fixedrisk import contracts as C
 from portfoliosight.research.fixedrisk import ensemble3 as ENS
 from portfoliosight.research.fixedrisk import realized as R
@@ -238,6 +241,63 @@ def test_the_worst_years_rank_each_mix_on_its_own_outcomes_per_setting():
         draws.append(np.mean(per))
     want = np.percentile(draws, [2.5, 97.5])
     assert tail["interval_95"] == pytest.approx(want.tolist(), abs=1e-12)
+
+
+def test_the_worst_years_tail_is_recomputed_inside_every_resample():
+    k = 60  # more start months than a block, so the resamples differ
+    rng = np.random.default_rng(5)
+    dd_f = rng.uniform(0.02, 0.50, size=(6, k))
+    dd_e = rng.uniform(0.02, 0.50, size=(6, k))
+    dd_e[2, 7:19] = np.nan  # E has no outcome in 12 start months of one setting
+    rows = []
+    for o, month in enumerate(month_labels(k)):
+        for j, rf in enumerate(A.RFS):
+            rows.append({"month": month, "rf": rf, "mix": S.F, **BASE_F, "dd_1y": dd_f[j, o]})
+            rows.append({"month": month, "rf": rf, "mix": S.E, **BASE_E, "dd_1y": dd_e[j, o]})
+    out = _assemble(pd.DataFrame(rows), k)
+
+    def tail(values):  # the mean of the largest tenth, rounded up
+        return np.sort(values)[-math.ceil(len(values) / 10) :].mean()
+
+    def difference(row):  # per setting on the start months both have, then over the settings
+        per = []
+        for gf, ge in zip(dd_f, dd_e, strict=True):
+            both = np.isfinite(ge[row])
+            per.append(tail(gf[row][both]) - tail(ge[row][both]))
+        return float(np.mean(per))
+
+    index = evidence.resample_index(k, 24, 50, evidence.BOOTSTRAP_SEED)
+    draws = [difference(row) for row in index]
+    assert np.ptp(draws) > 0.01  # the tails move with the resample
+    e = out["mixes"][S.E]["tail_fall"]
+    assert e["difference"] == pytest.approx(difference(np.arange(k)), abs=1e-12)
+    assert e["cells"] == 6 * k - 12 and e["start_months"] == k
+    assert e["interval_95"] == pytest.approx(np.percentile(draws, [2.5, 97.5]).tolist(),
+                                             abs=1e-12)  # fmt: skip
+    p3 = out["pass_fail"]["P3"]["interval_98_75"]
+    assert p3 == pytest.approx(np.percentile(draws, [0.625, 99.375]).tolist(), abs=1e-12)
+
+
+def test_the_return_lower_bound_and_the_three_year_block():
+    k = 130
+    table = _table(k)
+    rng = np.random.default_rng(13)
+    r1, f3 = rng.normal(0.0, 0.02, size=k), rng.normal(0.0, 0.02, size=k)
+    for o, month in enumerate(month_labels(k)):
+        here = (table["mix"] == S.E) & (table["month"] == month)
+        table.loc[here, "ret_1y"] = 0.08 + r1[o]
+        table.loc[here, "fall_3y"] = 0.28 + f3[o]
+    out = _assemble(table, k)
+    one = (0.03 + r1)[evidence.resample_index(k, 24, 50, evidence.BOOTSTRAP_SEED)].mean(axis=1)
+    lower = float(np.percentile(one, 5.0))  # the one-sided 95% lower bound
+    assert lower < float(np.percentile(one, 50.0)) - 1e-4
+    assert out["mixes"][S.E]["return_1y"]["lower_95"] == pytest.approx(lower, abs=1e-12)
+    assert out["pass_fail"]["P3"]["return_lower_95"] == pytest.approx(lower, abs=1e-12)
+    assert out["pass_fail"]["P4"]["return_lower_95"] == pytest.approx(lower, abs=1e-12)
+    three = (0.02 - f3)[evidence.resample_index(k, 36, 50, evidence.BOOTSTRAP_SEED)].mean(axis=1)
+    want = np.percentile(three, [2.5, 97.5])
+    assert want[1] - want[0] > 1e-4
+    assert out["mixes"][S.E]["fall_3y"]["interval_95"] == pytest.approx(want.tolist(), abs=1e-12)
 
 
 # ------------------------------------------------------------------ the pass/fail tests
@@ -666,3 +726,102 @@ def test_record_safety_adds_its_digest_after_the_analysis(tmp_path):
     record = json.loads((job / ENS.RECORD_FILE).read_text())
     assert set(record) == {"analysis", "safety"}
     assert ENS.verified_entry(job, "safety") == path.resolve()
+
+
+# ------------------------------------------------------------------------ the output file
+
+
+def _own(path: Path, *, restricted: bool) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"spec": S.SPEC, "months_restricted": restricted}))
+
+
+def test_the_output_path_defaults(tmp_path):
+    job = _job(tmp_path, month_labels(1))
+    run = tmp_path / "run"
+    assert S.output_path(run, job, None, restricted=False) == run / "analysis" / "safety_check.json"
+    partial = S.output_path(run, job, None, restricted=True)
+    assert partial == run / "analysis" / "safety_check_partial.json"
+    assert S.output_path(run, job, tmp_path / "x.json", restricted=True) == tmp_path / "x.json"
+
+
+def test_the_output_path_never_replaces_a_file_that_is_not_this_checks_own(tmp_path):
+    job = _job(tmp_path, month_labels(1))
+    run = tmp_path / "run"
+    analysis = run / "analysis" / "analysis.json"
+    alias = tmp_path / "alias.json"
+    alias.symlink_to(analysis)
+    other = run / "analysis" / "region_check.json"
+    other.write_text(json.dumps({"label": "EXPLORATORY"}))
+    binary = run / "analysis" / "ensemble_picks.parquet"
+    binary.write_bytes(b"PAR1\xff\xfe\x00")
+    for out in (analysis, alias, job / ENS.RECORD_FILE, other, binary):
+        for restricted in (False, True):
+            with pytest.raises(ValueError, match="refuses to replace"):
+                S.output_path(run, job, out, restricted=restricted)
+
+
+def test_a_restricted_run_never_writes_the_full_runs_file(tmp_path):
+    job = _job(tmp_path, month_labels(1))
+    run = tmp_path / "run"
+    full = run / "analysis" / "safety_check.json"
+    with pytest.raises(ValueError, match="restricted"):  # even before a full run exists
+        S.output_path(run, job, full, restricted=True)
+    _own(full, restricted=False)
+    assert S.output_path(run, job, None, restricted=False) == full  # a full run redoes its own
+    elsewhere = tmp_path / "full_copy.json"
+    _own(elsewhere, restricted=False)
+    with pytest.raises(ValueError, match="refuses to replace"):
+        S.output_path(run, job, elsewhere, restricted=True)
+    partial = run / "analysis" / "safety_check_partial.json"
+    _own(partial, restricted=True)
+    assert S.output_path(run, job, None, restricted=True) == partial
+    with pytest.raises(ValueError, match="refuses to replace"):
+        S.output_path(run, job, partial, restricted=False)
+
+
+def _command(monkeypatch, tmp_path, schedule, **kw) -> int:
+    """`v3-safety` on the small recorded job, the snapshot's inputs replaced by made-up ones."""
+    parent = {**_parent(schedule, schedule),
+              "jobs": {"research2003_replay": {"menu": MENU, "engine": ENGINE}}}  # fmt: skip
+    inputs = SimpleNamespace(menu=lambda name: SimpleNamespace(lower=BOUNDS[0], upper=BOUNDS[1]))
+    callables = _callables(dict.fromkeys(schedule, N5))
+    monkeypatch.setattr(cli, "_v3_inputs", lambda args: (parent, inputs, callables))
+    monkeypatch.setattr(cli.manifest, "code_head", lambda: "c0ffee")
+    args = {"run_dir": str(tmp_path / "run"), "snapshot": "unused", "job": "research2003_replay",
+            "analysis": None, "out": None, "months": None, **kw}  # fmt: skip
+    return cli.cmd_v3_safety(argparse.Namespace(**args))
+
+
+def test_the_command_leaves_the_recorded_files_as_they_were(tmp_path, monkeypatch):
+    months = month_labels(2)
+    job = _job(tmp_path, months)
+    analysis = tmp_path / "run" / "analysis" / "analysis.json"
+    record = job / ENS.RECORD_FILE
+    before = (analysis.read_bytes(), record.read_bytes())
+    for out in (analysis, record):
+        for chosen in (None, [months[0]]):
+            with pytest.raises(ValueError, match="refuses to replace"):
+                _command(monkeypatch, tmp_path, months, out=str(out), months=chosen)
+    assert (analysis.read_bytes(), record.read_bytes()) == before
+    assert ENS.verified_entry(job, "analysis") == analysis.resolve()
+
+
+def test_a_restricted_command_run_leaves_the_recorded_full_result(tmp_path, monkeypatch):
+    months = month_labels(2)
+    job = _job(tmp_path, months)
+    full = tmp_path / "run" / "analysis" / "safety_check.json"
+    assert _command(monkeypatch, tmp_path, months) == 0
+    assert ENS.verified_entry(job, "safety") == full.resolve()
+    recorded = full.read_bytes()
+    for chosen in ([months[0]], []):
+        assert _command(monkeypatch, tmp_path, months, months=chosen) == 0
+        assert full.read_bytes() == recorded
+        assert ENS.verified_entry(job, "safety") == full.resolve()
+    partial = json.loads((full.parent / "safety_check_partial.json").read_text())
+    assert partial["months_restricted"] is True and partial["months"] == []
+    with pytest.raises(ValueError, match="restricted"):
+        _command(monkeypatch, tmp_path, months, months=[months[0]], out=str(full))
+    assert full.read_bytes() == recorded
+    assert _command(monkeypatch, tmp_path, months) == 0  # a full run may redo its own result
+    assert ENS.verified_entry(job, "safety") == full.resolve()
