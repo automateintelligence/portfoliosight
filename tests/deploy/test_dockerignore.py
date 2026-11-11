@@ -48,6 +48,10 @@ def test_only_the_package_and_committed_data_enter_the_context():
         "portfoliosight/engine/tensor.schema.json",
         "data/presets.json",
         "data/universes/tiers.json",
+        "qse/qse.lock.json",
+        "qse/README.md",
+        "qse/distributions/joint/fhs.py",
+        "qse/exceptions.py",
         CSV,
     ):
         assert not ignored(kept), kept
@@ -69,6 +73,9 @@ def test_only_the_package_and_committed_data_enter_the_context():
         "assertions/x/tests/t.py",
         "scripts/deploy_ks001.sh",
         "portfoliosight/api/__pycache__/app.cpython-312.pyc",
+        "qse/distributions/__pycache__/models.cpython-312.pyc",
+        "tests/test_qse_sync.py",
+        "scripts/sync_qse.py",
         "portfoliosight.egg-info/PKG-INFO",
     ):
         assert ignored(dropped), dropped

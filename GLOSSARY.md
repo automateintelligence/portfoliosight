@@ -43,6 +43,11 @@ A fund simulated without GARCH dynamics because its model would not fit on eithe
 window. It still draws from the shock pool.
 _Avoid_: fit failure (for a fund that is still simulated)
 
+**Volatility cap**:
+The most a fund's simulated daily volatility may reach: 3 times its realized daily volatility over
+the lookback. It holds a GARCH model whose persistence is near 1 from drifting upward without bound.
+_Avoid_: variance clip, return clip
+
 ## Diversification
 
 **Effective number of bets (ENB)**:

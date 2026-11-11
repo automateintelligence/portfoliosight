@@ -1,0 +1,16 @@
+{
+  "commit": "ca8c0445a56712c92dc028e68845b94963fdd590",
+  "files": {
+    "qse/distributions/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "qse/distributions/fitters/garch_t_fitter.py": "d02be4d7d11178a555303fadaadcfdef3c47a5244e0f381480a8186d0799cce9",
+    "qse/distributions/garch_recursion.py": "97c9f7eed011eb8df3db3b3aa8cca685733248ccf92e9b25e6c9b1c68b5e3a69",
+    "qse/distributions/joint/__init__.py": "e2dd0cee15e71c61ab38444f41179b2ca2d8a7317af6ccb75e6cbf55b7b66ef6",
+    "qse/distributions/joint/fhs.py": "7922f81c1dc8f2feadd31482b19118f87e635eaddf1966c1b970301ba5b48ecb",
+    "qse/distributions/joint/panel_fit.py": "077b3abad539857ff9b8e67026732f1215603f1dd40b3d0ce0e73ef96ffb0bd3",
+    "qse/distributions/joint/portfolio.py": "5a0462ae0c06653cf33148aa27128418b34626754fd733474a15ab0e1b50695d",
+    "qse/distributions/models.py": "c4e84c36a0e69261df134b6b69f56bf4a452304d7e658a6e766dcbbcc3576c8b",
+    "qse/distributions/validation/stationarity.py": "932f3c822798e86755eb5992f12c02203d087787149127f9b856835e28e7f27c",
+    "qse/exceptions.py": "f67c482bd96bb31ce9f4b77186d1d07620011ce17a191e2fd8c63afdea19bb77"
+  },
+  "source": "automateintelligence/quant-scenario-engine"
+}

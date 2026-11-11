@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
+import importlib.metadata
 import importlib.util
+import json
 import re
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
-PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
+ROOT = Path(__file__).resolve().parents[1]
+PYPROJECT = ROOT / "pyproject.toml"
 
 RUNTIME_IMPORTS = (
     "numpy",
@@ -26,6 +33,7 @@ RUNTIME_IMPORTS = (
     "exchange_calendars",
     "jsonschema",
     "threadpoolctl",
+    "arch",
     "fastapi",
     "uvicorn",
     "pytest",
@@ -78,3 +86,245 @@ def test_yfinance_absent_from_api_dev_venv() -> None:
 
 def test_requires_python() -> None:
     assert _project()["requires-python"] == ">=3.12"
+
+
+def test_arch_is_pinned_exact() -> None:
+    # Its optimizer decides the fitted parameters, so the tensor bytes (spec 12, Fit library).
+    assert "arch==8.0.0" in _project()["dependencies"]
+
+
+# What QSE's copied files may pull in: numpy, pandas, scipy, statsmodels and arch, and what those
+# declare. QSE's own dependency list carries torch and xgboost; none of them may be needed here.
+QSE_ROOTS = ("numpy", "scipy", "pandas", "statsmodels", "arch")
+NEVER_PULLED = (
+    "torch",
+    "xgboost",
+    "numba",
+    "sklearn",
+    "cvxpy",
+    "matplotlib",
+    "plotly",
+    "pydantic",
+)
+# A fit of a 300-row GARCH(1,1) series runs `arch`'s lazy import. The child runs it twice.
+# Blocked: it starts with only the standard library, this checkout's `qse` and the packages of the
+# closure, every other installed module set to None, so a hard dependency outside the closure fails
+# the fit (sufficiency). Unblocked: nothing is set to None, as in an ordinary import; every
+# distribution that loads must be one the five declare, their optional extras included (pandas
+# soft-imports pyarrow when it is installed, pyarrow cloudpickle, numpy's f2py charset_normalizer:
+# all declared as extras somewhere in the closure), and none of NEVER_PULLED may load. The blocked
+# leg proves the fit needs none of those optional imports. The child imports only the standard
+# library before `qse`, so it loads nothing of NEVER_PULLED itself. It reports every top-level
+# package loaded from site-packages during the import and the fit, and every top-level module
+# name in `sys.modules` at the end.
+QSE_CHILD = """
+import json, sys, sysconfig
+from pathlib import Path
+root, blocked = sys.argv[1], json.loads(sys.argv[2])
+sys.path.insert(0, root)
+for name in blocked:
+    sys.modules.setdefault(name, None)
+before = set(sys.modules)
+import numpy as np
+from qse.distributions.joint import fit_garch_t_panel
+rng = np.random.default_rng(7)
+shocks = rng.standard_t(6, size=300) / np.sqrt(6 / 4)
+omega, alpha, beta = 2e-6, 0.08, 0.9
+variance, series = omega / (1 - alpha - beta), []
+for shock in shocks:
+    series.append(np.sqrt(variance) * shock)
+    variance = omega + alpha * series[-1] ** 2 + beta * variance
+fit = fit_garch_t_panel(np.column_stack([series, series[::-1]]))
+assert "arch" in sys.modules, "the fit did not reach arch"
+sites = {Path(sysconfig.get_paths()[key]).resolve() for key in ("purelib", "platlib")}
+tops = set()
+for name in set(sys.modules) - before:
+    file = getattr(sys.modules[name], "__file__", None)
+    if not file:
+        continue
+    path = Path(file).resolve()
+    tops.update(
+        path.relative_to(site).parts[0].split(".")[0] for site in sites if site in path.parents
+    )
+modules = sorted({name.split(".")[0] for name in sys.modules})
+print(json.dumps({"tops": sorted(tops), "modules": modules, "status": list(fit.status),
+                  "messages": fit.messages}))
+"""
+
+
+def _normalized(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _closure(roots: tuple[str, ...], *, extras: bool = False) -> set[str]:
+    """Normalized names of the roots and of everything they require that is installed.
+
+    With `extras`, a requirement behind one of the package's declared extras counts as declared
+    too (environment markers still apply)."""
+    seen: set[str] = set()
+    todo = [_normalized(name) for name in roots]
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        try:
+            requires = importlib.metadata.requires(name) or []
+            offered = importlib.metadata.metadata(name).get_all("Provides-Extra") or []
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        seen.add(name)
+        environments = [{"extra": ""}] + ([{"extra": e} for e in offered] if extras else [])
+        for text in requires:
+            requirement = Requirement(text)
+            marker = requirement.marker
+            if marker is not None and not any(marker.evaluate(env) for env in environments):
+                continue
+            todo.append(_normalized(requirement.name))
+    return seen
+
+
+def _run_qse_child(blocked: list[str]) -> dict:
+    done = subprocess.run(
+        [sys.executable, "-I", "-c", QSE_CHILD, str(ROOT), json.dumps(blocked)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert done.returncode == 0, done.stderr[-2000:]
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
+def test_qse_import_closure() -> None:
+    owners = importlib.metadata.packages_distributions()
+    allowed = _closure(QSE_ROOTS)
+    assert set(QSE_ROOTS) <= allowed
+    blocked = sorted(
+        module
+        for module, dists in owners.items()
+        if module != "qse" and not any(_normalized(dist) in allowed for dist in dists)
+    )
+    # The probe must really hide what QSE's own dependency list would bring.
+    assert set(NEVER_PULLED) & set(owners) <= set(blocked)
+    report = _run_qse_child(blocked)
+    assert report["status"] == ["garch", "garch"], report["messages"]
+    tops = set(report["tops"])
+    unowned = sorted(tops - set(owners))
+    assert not unowned, f"loaded from site-packages without an installed distribution: {unowned}"
+    imported = {_normalized(dist) for top in tops for dist in owners[top]}
+    assert not sorted(imported - allowed), (
+        f"beyond {QSE_ROOTS} and what they declare: {imported - allowed}"
+    )
+    assert {"numpy", "pandas", "scipy", "arch", "statsmodels"} <= tops
+    assert not set(NEVER_PULLED) & tops
+
+    # An ordinary import, nothing blocked: the same fit, and nothing of NEVER_PULLED loads.
+    plain = _run_qse_child([])
+    assert plain["status"] == report["status"], plain["messages"]
+    assert {"numpy", "pandas", "scipy", "arch", "statsmodels"} <= set(plain["tops"])
+    unowned = sorted(set(plain["tops"]) - set(owners))
+    assert not unowned, f"loaded from site-packages without an installed distribution: {unowned}"
+    declared = _closure(QSE_ROOTS, extras=True)
+    assert allowed <= declared
+    beyond = sorted({_normalized(dist) for top in plain["tops"] for dist in owners[top]} - declared)
+    assert not beyond, f"an ordinary import loads what {QSE_ROOTS} do not declare: {beyond}"
+    loaded = sorted(set(NEVER_PULLED) & (set(plain["modules"]) | set(plain["tops"])))
+    assert not loaded, f"an ordinary import of qse.distributions.joint loads {loaded}"
+
+
+# The research package stays out of the product (plan 6.3; protocol 9): no module of the engine,
+# the API or the jobs reaches `portfoliosight.research`, directly or through another module of
+# the package. The import graph is read from the sources (the AST of every module under
+# `portfoliosight/`), so it needs none of the API's own dependencies and it also sees an import
+# made inside a function. Importing a module runs its parent packages, so they count as edges.
+PACKAGE = ROOT / "portfoliosight"
+PRODUCTION = ("engine", "api", "jobs")
+RESEARCH = "portfoliosight.research"
+
+
+def _module(path: Path) -> str:
+    parts = path.relative_to(ROOT).with_suffix("").parts
+    return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+
+
+def _imported(source: str, path: Path) -> list[str]:
+    """Absolute names a module at ``path`` imports, relative imports resolved."""
+    package = list(path.relative_to(ROOT).with_suffix("").parts[:-1])
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            found += [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = package[: len(package) - node.level + 1] if node.level else []
+            module = ".".join([*base, *(node.module or "").split(".")]).strip(".")
+            found += [module] + [f"{module}.{alias.name}" for alias in node.names]
+    return found
+
+
+def _edges(names: list[str], module: str, modules: set[str]) -> set[str]:
+    """The package modules that importing ``names`` from ``module`` runs."""
+    targets = set()
+    for name in [*names, module]:
+        parts = name.split(".")
+        targets.update(".".join(parts[:k]) for k in range(1, len(parts) + 1))
+    return (targets & modules) - {module}
+
+
+def _import_graph() -> dict[str, set[str]]:
+    paths = {_module(path): path for path in sorted(PACKAGE.rglob("*.py"))}
+    modules = set(paths)
+    return {
+        module: _edges(_imported(path.read_text(encoding="utf-8"), path), module, modules)
+        for module, path in paths.items()
+    }
+
+
+def _reached(graph: dict[str, set[str]], start: str) -> set[str]:
+    seen, todo = set(), [start]
+    while todo:
+        module = todo.pop()
+        if module not in seen:
+            seen.add(module)
+            todo += sorted(graph.get(module, ()))
+    return seen
+
+
+def _research(modules: set[str]) -> set[str]:
+    return {name for name in modules if name == RESEARCH or name.startswith(RESEARCH + ".")}
+
+
+def test_import_graph_scanner_catches_each_route() -> None:
+    planted = PACKAGE / "engine" / "probe.py"
+    modules = {"portfoliosight", "portfoliosight.engine", RESEARCH, f"{RESEARCH}.harness"}
+    for source in (
+        "from ..research import harness",
+        "from .. import research",
+        "import portfoliosight.research.harness as h",
+        "def f():\n    from portfoliosight.research import harness",
+    ):
+        edges = _edges(_imported(source, planted), "portfoliosight.engine.probe", modules)
+        assert _research(edges), source
+    clean = _edges(
+        _imported("from . import stats\nimport numpy", planted),
+        "portfoliosight.engine.probe",
+        modules,
+    )
+    assert clean == {"portfoliosight", "portfoliosight.engine"}
+    # through another module of the package
+    graph = {"a": {"portfoliosight.data.x"}, "portfoliosight.data.x": {f"{RESEARCH}.harness"}}
+    assert _research(_reached(graph, "a")) == {f"{RESEARCH}.harness"}
+
+
+def test_production_packages_never_reach_research() -> None:
+    graph = _import_graph()
+    starts = sorted(
+        module
+        for module in graph
+        if any(module.split(".")[:2] == ["portfoliosight", package] for package in PRODUCTION)
+    )
+    assert len(starts) >= 20
+    for package in PRODUCTION:
+        assert f"portfoliosight.{package}" in starts
+    for module in starts:
+        assert not _research(_reached(graph, module)), module
+    # the graph does follow real edges: the research evaluation reaches engine modules
+    assert "portfoliosight.engine.ranges" in _reached(graph, f"{RESEARCH}.evaluate")

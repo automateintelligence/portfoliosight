@@ -79,12 +79,12 @@ class MenuPrograms:
         return float(np.sqrt(w @ self.cov @ w))
 
     def min_variance(self) -> np.ndarray:
-        return _solve(self._min_variance, self._w, "minimum-variance mix")
+        return solve_with_retries(self._min_variance, self._w, "minimum-variance mix")
 
     def frontier_point(self, x: float) -> np.ndarray:
         """The highest-return mix with risk at most `x`, to the solver's tolerance."""
         self._x.value = x
-        return _solve(self._frontier, self._w, f"frontier point at risk {x!r}")
+        return solve_with_retries(self._frontier, self._w, f"frontier point at risk {x!r}")
 
 
 def frontier(programs: MenuPrograms, nx: int = NX, workers: int = 1) -> Frontier:
@@ -175,7 +175,7 @@ def onto_risk(mix: np.ndarray, top: np.ndarray, x: float, cov: np.ndarray) -> np
     return mix + min(share, 1.0) * step
 
 
-def _solve(problem, variable, what: str) -> np.ndarray:
+def solve_with_retries(problem, variable, what: str) -> np.ndarray:
     """Solve with Clarabel, walking the retry ladder; only an optimal answer is returned."""
     status = "not attempted"
     for extra in RETRY_OPTIONS:

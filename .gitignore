@@ -20,6 +20,7 @@ runs/
 
 # conductor gate run results (rewritten on every assert run)
 assertions/2026-10-13-portfoliosight-demo-design/run/
+/assertions/*/run/
 .bubo/
 .coverage
 
@@ -31,3 +32,6 @@ web/e2e/__gate__/
 deploy/.env
 deploy/.local-store/
 .gstack/
+
+# Local output of the research experiment CLI (portfoliosight/research cli.DEFAULT_OUT)
+.omx/

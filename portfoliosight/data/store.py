@@ -254,6 +254,38 @@ class R2Store:
         return True
 
 
+class ReadOnlyStore:
+    """Another store's reads; every write raises ``PermissionError`` and reaches nothing.
+
+    For a laptop run against the backup mirror (a ``LocalStore`` over ``/mnt/d/...``), which
+    must never be written to.
+    """
+
+    def __init__(self, inner: LocalStore | R2Store):
+        self._inner = inner
+
+    def describe(self) -> str:
+        return f"{self._inner.describe()} (read-only)"
+
+    def get(self, key: str) -> bytes:
+        return self._inner.get(key)
+
+    def exists(self, key: str) -> bool:
+        return self._inner.exists(key)
+
+    def size(self, key: str) -> int | None:
+        return self._inner.size(key)
+
+    def list(self, prefix: str = "") -> list[str]:
+        return self._inner.list(prefix)
+
+    def put(self, key: str, data: bytes) -> None:
+        raise PermissionError(f"{self.describe()}: refused to write {key}")
+
+    def delete(self, key: str) -> None:
+        raise PermissionError(f"{self.describe()}: refused to delete {key}")
+
+
 def _redact_client_logs(values: list[str]) -> None:
     """Keep the R2 keys out of the S3 client's own log lines.
 

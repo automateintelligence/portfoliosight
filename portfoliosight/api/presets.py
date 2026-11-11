@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from typing import Any
 
@@ -12,11 +13,23 @@ from portfoliosight.data.universe import TSP_FUNDS, Preset, load_presets
 from portfoliosight.engine.windows import LOOKBACK_ROWS
 
 LOOKBACKS: tuple[str, ...] = tuple(LOOKBACK_ROWS)
+_SHAPE16 = re.compile(r"[0-9a-f]{16}")
 
 
 def tensor_key(generation: str, uhash: str, lookback: str) -> str:
     """The store key of one tensor (spec 5.3)."""
     return f"tensors/{generation}/{uhash}/{lookback}.json"
+
+
+def model_key(generation: str, shape16: str, name: str) -> str:
+    """The store key of one model file of a generation (engines spec 7).
+
+    ``shape16`` is the first 16 hex digits of the shape panel's digest, which names the fund set
+    and its history; ``name`` is the file, e.g. ``garch.json`` or ``pool.npy``.
+    """
+    if not _SHAPE16.fullmatch(shape16):
+        raise ValueError(f"a shape digest prefix is 16 hex digits, not {shape16!r}")
+    return f"models/{generation}/{shape16}/{name}"
 
 
 def tensor_url(generation: str, uhash: str, lookback: str) -> str:

@@ -6,8 +6,10 @@ FROM python:3.12-slim AS build
 WORKDIR /src
 COPY pyproject.toml README.md ./
 COPY portfoliosight ./portfoliosight
+COPY qse ./qse
 # The dependencies of `.[api]` go to /install. The package itself runs from /app, next to the
-# repository's data files it reads by relative path, so its installed copy is dropped here.
+# repository's data files it reads by relative path, so its installed copy is dropped here;
+# `qse` stays in /install (it runs from site-packages, with its lock file as package data).
 RUN pip install --no-cache-dir --prefix=/install ".[api]" \
     && rm -rf /install/lib/python3.12/site-packages/portfoliosight
 
@@ -26,6 +28,8 @@ ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PS_CACHE_DIR=/app/cache
+# The pulled QSE files and `arch` import in the image that runs, with its runtime environment.
+RUN python -c "import qse.distributions.joint, arch"
 USER app
 EXPOSE 8000
 CMD ["uvicorn", "portfoliosight.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--limit-concurrency", "32"]

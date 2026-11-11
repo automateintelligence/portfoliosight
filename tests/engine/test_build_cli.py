@@ -27,7 +27,10 @@ from tests.engine.helpers import (
 )
 
 TELEMETRY = ("built_at", "build_seconds")
-SMALL = ("--nx", "6", "--ny", "5", "--levels", "3")
+# A quick build for a test about something else: a small grid, History replay only (each CLI
+# build fits the volatility model afresh; the pinned build and the engine tests below do).
+SMALL = ("--nx", "6", "--ny", "5", "--levels", "3", "--engines", "replay")
+SMALL_BOTH = ("--nx", "6", "--ny", "5", "--levels", "3")
 FORBIDDEN_COPY = [
     "bets",
     "knee",
@@ -101,7 +104,9 @@ def test_ui_fixture_has_what_the_page_tests_need(ui):
     excluded = ui["universe"]["excluded"]
     assert excluded == []  # the default view uses all 23 funds of the guide menu
     assert ids == list(amounts) and len(ids) == 23 and "VTI" in ids and "EFA" in ids
-    assert ui["lookback"]["id"] == "5y" and ui["generation"] == "2026-10-12-0.2.0"
+    assert ui["lookback"]["id"] == "5y" and ui["generation"] == "2026-10-12-0.3.0"
+    assert ui["schema"] == 3 and ui["range_default"] == "replay"
+    assert ui["engines"]["garch"]["status"] == "ready" and ui["shape"]["pool_rows"] == 2520
     assert re.fullmatch(r"[0-9a-f]{16}", ui["universe"]["hash"])
     assert ui["universe"]["name"] == "Example Portfolio"
     assert ui["bounds"]["requested"] == [{"min": None, "max": None}] * 23
@@ -329,3 +334,45 @@ def test_last_close_is_only_known_for_the_files_last_day(cli, tmp_path):
     assert [fund["last_close"] for fund in earlier["universe"]["funds"]] == [None] * 23
     code, out = _run(cli, tmp_path, *SMALL, lookback="1y", name="last.json")
     assert all(fund["last_close"] > 0 for fund in json.loads(out.read_text())["universe"]["funds"])
+
+
+def test_engines_option_chooses_what_is_computed(cli, tmp_path, capsys):
+    """Spec 4.2 on the fixture, with the volatility model: two young funds are set aside on
+    2020-12-31 in the ten-year view, and its shape is fitted on the 21 funds the view uses."""
+    code, out = _run(cli, tmp_path, *SMALL_BOTH, lookback="10y", asof="2020-12-31")
+    tensor = json.loads(out.read_text())
+    assert code == 0
+    validate_tensor(tensor)
+    included = [fund["id"] for fund in tensor["universe"]["funds"]]
+    assert len(included) == 21 and "VTIP" not in included
+    assert [fund["id"] for fund in tensor["shape"]["funds"]] == included
+    assert tensor["shape"]["end"] == "2020-12-31"
+    assert tensor["engines"]["garch"]["status"] == "ready"
+    assert set(tensor["ladder"]["ranges"]) == {"replay", "garch"}
+    shared = "--engines", "replay,garch"
+    code, out = _run(cli, tmp_path, *SMALL_BOTH, *shared, lookback="10y", asof="2020-12-31")
+    assert code == 0 and _core(json.loads(out.read_text())) == _core(tensor)  # the default
+    code, out = _run(cli, tmp_path, *SMALL, name="replay.json")
+    replay = json.loads(out.read_text())
+    assert code == 0 and replay["shape"] is None and list(replay["ladder"]["ranges"]) == ["replay"]
+    assert replay["engines"]["garch"]["reason"] == "not computed for this menu"  # a preset
+    for value, message in (("garch", "replay is always built"), ("replay,copula", "'copula'")):
+        with pytest.raises(SystemExit) as caught:
+            _run(cli, tmp_path, "--engines", value, name="refused.json")
+        assert caught.value.code == 2 and message in capsys.readouterr().err
+
+
+def test_a_history_the_volatility_model_cannot_use_exits_with_the_reason(cli, tmp_path, capsys):
+    """OLD moves only before NEW starts: the days they share say nothing about its shocks."""
+    rng = np.random.default_rng(4202)
+    index = pd.bdate_range(end="2026-06-30", periods=240, name="date")
+    old = np.concatenate([rng.normal(0.0, 0.01, 13), np.full(227, 0.001)])
+    new = np.concatenate([np.full(13, np.nan), rng.normal(0.0003, 0.01, 227)])
+    path = tmp_path / "flat.parquet"
+    pd.DataFrame({"OLD": old, "NEW": new}, index=index).to_parquet(path)
+    code, out = _run(cli, tmp_path, *SMALL_BOTH, returns=path, lookback="1y", asof="2026-06-30")
+    printed = capsys.readouterr()
+    assert code == 2 and not out.exists()
+    assert "volatility model" in printed.err and "OLD" in printed.err
+    code, out = _run(cli, tmp_path, *SMALL, returns=path, lookback="1y", asof="2026-06-30")
+    assert code == 0  # History replay alone builds: the menu itself is fine

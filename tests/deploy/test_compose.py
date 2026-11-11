@@ -93,6 +93,13 @@ def test_dockerfile_follows_the_spec():
     text = (DEPLOY / "Dockerfile").read_text(encoding="utf-8")
     assert re.findall(r"(?m)^FROM (\S+)", text) == ["python:3.12-slim", "python:3.12-slim"]
     assert 'pip install --no-cache-dir --prefix=/install ".[api]"' in text
+    # `qse` (the pulled QSE files, spec 3 item 3) is built into /install with the package's
+    # dependencies, and the runtime stage proves it imports with `arch` before the user switch.
+    assert re.findall(r"(?m)^COPY qse \./qse$", text) == ["COPY qse ./qse"]
+    assert text.index("COPY qse ./qse") < text.index("pip install")
+    check = 'RUN python -c "import qse.distributions.joint, arch"'
+    assert check in text and text.index(check) < text.index("USER app")
+    assert text.index(check) > text.index("FROM python:3.12-slim\nRUN groupadd")
     assert "--uid 10001" in text and re.findall(r"(?m)^USER (\S+)", text) == ["app"]
     assert "mkdir -p /app/cache && chown app:app /app/cache" in text
     assert (
