@@ -591,3 +591,62 @@ describe("a ticker typed into the picker that nothing matches", () => {
     expect(calls.onRequestTickers).not.toHaveBeenCalled();
   });
 });
+
+// ── a file with shares and dollars: "Your starting mix" % comes from its dollars ──
+const NEW_ONE = { id: "ZZONE", name: "New Fund One" };
+const NEW_TWO = { id: "ZZTWO", name: "New Fund Two" };
+const withNew = [...catalog, NEW_ONE, NEW_TWO];
+
+it("fills the starting mix % from the file's dollars right after an upload of funds the plotted view has no price for", async () => {
+  openUpload({ plotted: [A, B], unit: "usd", symbols: withNew });
+  chooseFile(`ticker,shares,dollars\n${NEW_ONE.id},10,1000\n${NEW_TWO.id},5,500\n`);
+  await screen.findByTestId("use-menu");
+  expect(cell("entered", NEW_ONE.id)).toBe(pct(2 / 3));
+  expect(cell("entered", NEW_TWO.id)).toBe(pct(1 / 3));
+});
+
+it("uses the file's dollars even for funds the view has a close for", async () => {
+  openUpload({ plotted: [C, D], unit: "usd" });
+  // 10 shares of A are worth 10 x its close at the latest price; the file says $2,000, and $1,000 for B
+  chooseFile(`ticker,shares,dollars\n${A},10,2000\n${B},10,1000\n`);
+  await screen.findByTestId("use-menu");
+  expect(cell("entered", A)).toBe(pct(2 / 3));
+  expect(cell("entered", B)).toBe(pct(1 / 3));
+});
+
+it("keeps the current rules, shares at the latest close, when a fund in the file has no dollars", async () => {
+  openUpload({ plotted: [C, D], unit: "usd" });
+  chooseFile(`ticker,shares,dollars\n${A},10,2000\n${B},10,\n`);
+  await screen.findByTestId("use-menu");
+  const [a, b] = [(funds[0].last_close as number) * 10, (funds[1].last_close as number) * 10];
+  expect(cell("entered", A)).toBe(pct(a / (a + b)));
+  expect(cell("entered", B)).toBe(pct(b / (a + b)));
+});
+
+it("hands the page each row's price, and follows an edited share count at the same price", async () => {
+  const calls = openUpload({ plotted: [A, B], unit: "usd", symbols: withNew });
+  chooseFile(`ticker,shares,dollars\n${NEW_ONE.id},10,1000\n${NEW_TWO.id},5,500\n`);
+  await screen.findByTestId("use-menu");
+  fireEvent.change(screen.getByLabelText(`${NEW_ONE.id} amount in shares`), { target: { value: "30" } });
+  // 30 shares at $100 and 5 at $100
+  expect(cell("entered", NEW_ONE.id)).toBe(pct(3000 / 3500));
+  fireEvent.click(screen.getByTestId("use-menu"));
+  const [rows] = calls.onUseMenu.mock.calls[0] as [Row[]];
+  expect(rows.map((r) => [r.id, r.amount, r.price])).toEqual([[NEW_ONE.id, 30, 100], [NEW_TWO.id, 5, 100]]);
+});
+
+it("leaves the column blank for shares of new funds when the file gave no dollars", async () => {
+  openUpload({ plotted: [A, B], unit: "usd", symbols: withNew });
+  chooseFile(`ticker,shares\n${NEW_ONE.id},10\n${NEW_TWO.id},5\n`);
+  await screen.findByTestId("use-menu");
+  expect(cell("entered", NEW_ONE.id)).toBe("");
+  expect(cell("entered", NEW_TWO.id)).toBe("");
+});
+
+it("fills the column for a plotted fund the service has no close for, from the price its row carries", () => {
+  const lagging = parseTensor({ ...structuredClone(raw), universe: { ...raw.universe, funds: raw.universe.funds.map((f: { id: string }) => (f.id === A ? { ...f, last_close: null } : f)) } });
+  const rows: Row[] = [{ id: A, name: A, amount: 10, price: 100 }, { id: B, name: B, amount: 10, price: 50 }];
+  render(<Funds rows={rows} unit="shares" tensor={lagging} symbols={null} mixStatus="ok" setAside={0} menuError={null} busy={false} menuMax={30} selected={null} onUnit={noop} onAmount={noop} onUseMenu={noop} onNeedSymbols={noop} {...noUpload} />);
+  expect(cell("entered", A)).toBe(pct(1000 / 1500));
+  expect(cell("entered", B)).toBe(pct(500 / 1500));
+});

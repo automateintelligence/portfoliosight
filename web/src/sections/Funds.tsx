@@ -5,7 +5,7 @@ import type { Tensor } from "../api/tensor";
 import { TICKER_SHAPE, type TickerSource } from "../api/tickerShape";
 import { fundsTotal, fundsUpTo, menuFull, menuNeedsMore, plain, uploadCatalogLoading, uploadSkipped, uploadTooBig, uploadUnreadable } from "../copy";
 import { amountText, money, parseAmount, pct } from "../format";
-import { amountsToWeights, percentShown, percentTotal, scaleTo100 } from "../math/amounts";
+import { amountsToWeights, fundsWithPrices, percentShown, percentTotal, scaleTo100 } from "../math/amounts";
 import { MIN_FUNDS, type Row, type Unit, type UploadReport } from "../state/store";
 import { MAX_FILE_BYTES, parseFundsCsv, resolveUpload, TEMPLATE_CSV, TEMPLATE_FILENAME } from "./fundsCsv";
 import { matchGroup, rankSymbols } from "./symbolSearch";
@@ -117,7 +117,9 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
     // after funds are set aside is then scaled up to 100%, as it is for the square on the chart.
     if (unit === "pct" && !percentTotal(list.map((r) => r.amount)).ok) return new Map<string, number>();
     const counted = list.filter((r) => (changed || !tensor ? !excluded.has(r.id) : included.has(r.id)));
-    const res = amountsToWeights(counted.map((r) => r.amount), unit === "shares" ? "shares" : "usd", counted.map((r) => lastClose.get(r.id) ?? null));
+    // shares of an uploaded file with dollars are valued at its own prices, as the chart's square and Trades value them
+    const priced = fundsWithPrices(counted.map((r) => ({ id: r.id, last_close: lastClose.get(r.id) ?? null })), counted);
+    const res = amountsToWeights(counted.map((r) => r.amount), unit === "shares" ? "shares" : "usd", priced.map((f) => f.last_close ?? null));
     return new Map(res.weights ? counted.map((r, i) => [r.id, res.weights[i]]) : []);
   }, [list, changed, tensor, excluded, included, unit, lastClose]);
   const selectedById = useMemo(() => new Map((tensor && selected ? tensor.universe.funds : []).map((f, i) => [f.id, selected?.[i] ?? 0])), [tensor, selected]);
@@ -133,7 +135,8 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
     if (list.some((r) => r.id === sym.id)) return setAddError(`${sym.id} is already in the menu.`);
     if (list.length >= menuMax) return setAddError(menuFull(menuMax));
     setAddError("");
-    edit([...list, { id: sym.id, name: sym.name ?? sym.id, amount: rows.find((r) => r.id === sym.id)?.amount ?? null }]);
+    const plotted = rows.find((r) => r.id === sym.id);
+    edit([...list, { id: sym.id, name: sym.name ?? sym.id, amount: plotted?.amount ?? null, ...(plotted?.price === undefined ? {} : { price: plotted.price }) }]);
   };
   const q = query.trim().toLowerCase();
   const matches = useMemo(() => (q && symbols ? rankSymbols(symbols, q) : []), [q, symbols]);
@@ -174,13 +177,14 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
     const resolved = resolveUpload(parsed.lines, symbols, { min: MIN_FUNDS, max: menuMax });
     if (!resolved.ok) return refuse(resolved.error, resolved.skipped);
     const { plan } = resolved;
-    if (sameIds(plan.rows, rows)) {
+    const fileRows = plan.rows.map((r) => (plan.prices[r.id] === undefined ? r : { ...r, price: plan.prices[r.id] }));
+    if (sameIds(fileRows, rows)) {
       // the funds on screen already: nothing to recalculate, so the amounts and their unit apply now
       setDraft(null);
       setDraftUnit(null);
-      onUseMenu(plan.rows, plan.unit ?? undefined);
+      onUseMenu(fileRows, plan.unit ?? undefined);
     } else {
-      setDraft(plan.rows);
+      setDraft(fileRows);
       setDraftUnit(plan.unit);
     }
     onUpload({ error: null, skipped: plan.skipped, notes: plan.notes, pending: plan.pending, menu: plan.rows.map((r) => r.id) });

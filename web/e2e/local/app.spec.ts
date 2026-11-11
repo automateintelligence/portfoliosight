@@ -1265,11 +1265,11 @@ test("uploading a CSV replaces the fund list, lists what it could not add, and R
   await expect(page.getByTestId("upload-skipped")).toHaveCount(0);
 });
 
-test("a file with shares and dollars that disagree says so once the new menu has prices", async ({ page }) => {
+test("a file whose dollars are not all there and disagree with the shares says so once the new menu has prices", async ({ page }) => {
   await open(page, "f=SGOV:50,VTIP:50&unit=pct");
   await section(page, "funds");
-  // VTI closes at 162.07 and BND at 33.99 in the mock's data: 10 VTI is $1,620.70, not $9,999
-  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker,shares,dollars\nVTI,10,9999\nBND,5,170\n"));
+  // VTI closes at 162.07 in the mock's data: 10 VTI is $1,620.70, not $9,999. BND has no dollars, so the shares are valued at the latest closes and the dollars are not used
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker,shares,dollars\nVTI,10,9999\nBND,5,\n"));
   await expect(page.getByTestId("use-menu")).toBeVisible();
   await expect(page.getByTestId("amount-head")).toHaveText("Shares (Qty)");
   await expect(page.getByTestId("upload-mismatch")).toHaveCount(0);
@@ -1277,6 +1277,39 @@ test("a file with shares and dollars that disagree says so once the new menu has
   await expect(page.getByTestId("upload-mismatch")).toHaveText("Dollars didn't match shares at the latest price for 1 fund and were ignored.");
   await expect(page.getByTestId("mix-entered-VTI")).not.toHaveText("");
   expect(await tickerRequests(page)).toEqual([]);
+});
+
+test("a file with shares and dollars fills Your starting mix from its dollars at once, keeps them after Recalculate, and Trades agrees", async ({ page }) => {
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await section(page, "funds");
+  // VTI and BND are not in the plotted view, so nothing prices them yet. The mock's latest closes
+  // are 162.07 and 33.99; the file's dollars give $200 and $10 a share.
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker,shares,dollars\nVTI,10,2000\nBND,100,1000\n"));
+  await expect(page.getByTestId("use-menu")).toBeVisible();
+  await expect(page.getByTestId("amount-head")).toHaveText("Shares (Qty)");
+  await expect(page.getByTestId("mix-entered-VTI")).toHaveText("66.7%");
+  await expect(page.getByTestId("mix-entered-BND")).toHaveText("33.3%");
+  await page.getByTestId("use-menu").click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("unit")).toBe("shares");
+  await expect(page.getByTestId("use-menu")).toHaveCount(0);
+  // with the new menu's own closes in hand the file's dollars still decide, in the column and on the strip
+  await expect(page.getByTestId("mix-entered-VTI")).toHaveText("66.7%");
+  await expect(page.getByTestId("mix-entered-BND")).toHaveText("33.3%");
+  await expect(page.getByTestId("upload-mismatch")).toHaveCount(0);
+  // Trades reads the same mix, and its shares are at the same prices
+  await section(page, "trades");
+  const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("trades-export").click()]);
+  let csv = "";
+  for await (const chunk of await download.createReadStream()) csv += chunk.toString();
+  const lines = csv.trimEnd().split("\r\n");
+  expect(lines[0]).toBe("Fund,Now %,Selected %,Change (percentage points),Change ($),Change (shares)");
+  const rows = lines.slice(1).map((l) => l.split(","));
+  const price = { VTI: 200, BND: 10 } as Record<string, number>;
+  expect(Number(rows.find((r) => r[0] === "VTI")![1])).toBeCloseTo(66.67, 2);
+  expect(Number(rows.find((r) => r[0] === "BND")![1])).toBeCloseTo(33.33, 2);
+  const held = rows.filter((r) => r[0] in price);
+  expect(held.some((r) => Math.abs(Number(r[5])) >= 5), "a trade big enough to tell the prices apart").toBe(true);
+  for (const r of held) expect(Math.abs(Number(r[5]) - Number(r[4]) / price[r[0]]), r[0]).toBeLessThanOrEqual(0.51);
 });
 
 test("a file whose amounts do not share a column is refused whole, with who has what", async ({ page }) => {

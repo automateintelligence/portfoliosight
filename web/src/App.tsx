@@ -10,6 +10,7 @@ import { RiskSlider } from "./controls/RiskSlider";
 import { ShareDialog } from "./controls/ShareDialog";
 import { ThemeSwitch } from "./controls/ThemeSwitch";
 import { disclaimer, family, lookbackLine, lookbackNames, plain } from "./copy";
+import { fundsWithPrices } from "./math/amounts";
 import { portfolioMath, type YearRange } from "./math/portfolio";
 import { stripScale, tensorBounds } from "./math/stripScale";
 import { atNode, ceilingAt, deriveView, limitsBind, positionOfCeiling } from "./math/view";
@@ -266,6 +267,9 @@ export default function App() {
     return tensor.universe.funds.map((f) => byId.get(f.id) ?? null);
   }, [tensor, state.rows]);
 
+  // The tensor's funds with the uploaded file's prices where it gave them: what Trades values shares at.
+  const pricedFunds = useMemo(() => (tensor ? fundsWithPrices(tensor.universe.funds, state.rows) : []), [tensor, state.rows]);
+
   let notice: ReactNode = null;
   if (state.build.status === "building") {
     notice = (
@@ -515,7 +519,7 @@ export default function App() {
         </Accordion>
         {hasMix && tensor && view && mix?.weights && (
           <Accordion id="trades" title={plain.chips.trades} open={open.trades} onToggle={() => setOpen((p) => ({ ...p, trades: !p.trades }))}>
-            <Trades funds={tensor.universe.funds} wNow={mix.weights} wSel={view.weights} unit={state.unit} amounts={includedAmounts} asof={tensor.asof} />
+            <Trades funds={pricedFunds} wNow={mix.weights} wSel={view.weights} unit={state.unit} amounts={includedAmounts} asof={tensor.asof} />
           </Accordion>
         )}
         <Accordion id="settings" title={plain.chips.settings} open={open.settings} onToggle={() => setOpen((p) => ({ ...p, settings: !p.settings }))}>

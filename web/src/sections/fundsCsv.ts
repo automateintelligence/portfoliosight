@@ -187,6 +187,12 @@ export type UploadPlan = {
   notes: string[];
   /** Checks that wait for the new menu's prices. */
   pending: PendingCheck[];
+  /**
+   * Price per share (the fund's dollars over its shares), by ticker, when shares are the unit and
+   * every fund with shares has dollars: the shares are then valued at the file's own dollars.
+   * Empty otherwise, and the shares are valued at the service's latest closes.
+   */
+  prices: Record<string, number>;
 };
 export type Resolution = { ok: true; plan: UploadPlan } | { ok: false; error: string; skipped: string[] };
 
@@ -209,7 +215,8 @@ function whoHasWhat(withAmount: FundLine[]): string {
 /**
  * The table a file makes. Tickers the catalog does not serve are skipped (and listed). Of the
  * served funds that have any amount, the best column filled for all of them is used (shares, then
- * dollars, then percent); funds with only a ticker load without an amount. A file with fewer than
+ * dollars, then percent); funds with only a ticker load without an amount. When shares are used and
+ * every fund with shares also has dollars, the dollars give each fund's price (`prices`). A file with fewer than
  * `limits.min` or more than `limits.max` served funds, or whose funds with amounts share no column,
  * is refused whole, and what it skipped is still reported.
  */
@@ -228,7 +235,10 @@ export function resolveUpload(lines: FundLine[], catalog: ReadonlyArray<{ id: st
   const rows = served.map((l): Row => ({ id: l.ticker, name: names.get(l.ticker) ?? l.ticker, amount: chosen === null ? null : l[chosen] }));
   const notes: string[] = [];
   const pending: PendingCheck[] = [];
-  if (chosen === "dollars") {
+  const held = chosen === "shares" ? withAmount.filter((l) => (l.shares ?? 0) > 0) : [];
+  const dollarsPrice = held.length > 0 && held.every((l) => (l.dollars ?? 0) > 0);
+  const prices: Record<string, number> = dollarsPrice ? Object.fromEntries(held.map((l) => [l.ticker, (l.dollars as number) / (l.shares as number)])) : {};
+  if (chosen === "dollars" || dollarsPrice) {
     const both = withAmount.flatMap((l) => (l.dollars !== null && l.percent !== null ? [{ dollars: l.dollars, percent: l.percent }] : []));
     const n = percentVsDollars(both);
     if (n > 0) notes.push(uploadMismatch.percentDollars(n));
@@ -238,5 +248,5 @@ export function resolveUpload(lines: FundLine[], catalog: ReadonlyArray<{ id: st
       if (entries.length > 0) pending.push({ against, entries });
     }
   }
-  return { ok: true, plan: { rows, unit: chosen === null ? null : UNIT_OF[chosen], skipped, notes, pending } };
+  return { ok: true, plan: { rows, unit: chosen === null ? null : UNIT_OF[chosen], skipped, notes, pending, prices } };
 }

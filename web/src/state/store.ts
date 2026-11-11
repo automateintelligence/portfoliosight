@@ -22,7 +22,7 @@ import {
 import type { Tensor } from "../api/tensor";
 import { MAX_TICKERS_PER_REQUEST, TICKER_SHAPE, type TickerSource } from "../api/tickerShape";
 import { linkTooManyFunds } from "../copy";
-import { amountsToWeights, amountsValue, percentTotal } from "../math/amounts";
+import { amountsToWeights, amountsValue, fundsWithPrices, percentTotal } from "../math/amounts";
 import { portfolioMath } from "../math/portfolio";
 import { positionOfCeiling } from "../math/view";
 import { settlePending, type PendingCheck } from "../sections/fundsCsv";
@@ -32,7 +32,12 @@ export type Unit = UrlState["unit"];
 export type LookbackId = UrlState["lookback"];
 export type ThemeId = NonNullable<UrlState["theme"]>;
 export type Cap = UrlState["caps"][number];
-export type Row = { id: string; name: string; amount: number | null };
+/**
+ * A fund of the menu and its amount. `price` is the price per share of an uploaded file that gave
+ * shares and dollars (its dollars over its shares); while it is set, the fund's shares are valued
+ * at it in place of the service's latest close. Page state only: it is not part of the address.
+ */
+export type Row = { id: string; name: string; amount: number | null; price?: number };
 /**
  * What the last CSV upload has to tell: why it was refused, the tickers it left out, notes on
  * columns that were not used, and the checks still waiting for the new menu's prices (`menu` is
@@ -174,7 +179,7 @@ export function currentMix(state: Pick<State, "rows" | "unit">, tensor: Tensor):
   setAside: number | null;
 } {
   const byId = new Map(state.rows.map((r) => [r.id, r.amount]));
-  const funds = tensor.universe.funds;
+  const funds = fundsWithPrices(tensor.universe.funds, state.rows);
   const included = funds.map((f) => byId.get(f.id) ?? null);
   const includedIds = new Set(funds.map((f) => f.id));
   const outside = state.rows.filter((r) => !includedIds.has(r.id) && (r.amount ?? 0) > 0);
@@ -205,7 +210,7 @@ export function enteredValue(
   tensor: Tensor,
 ): { status: "usd"; total: number } | { status: "pct" } | { status: "unknown_price"; funds: string[] } {
   const byId = new Map(state.rows.map((r) => [r.id, r.amount]));
-  const funds = tensor.universe.funds;
+  const funds = fundsWithPrices(tensor.universe.funds, state.rows);
   const value = amountsValue(
     funds.map((f) => byId.get(f.id) ?? null),
     state.unit,
