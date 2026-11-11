@@ -95,7 +95,7 @@ export const plain = {
 
 export const technical = {
   xAxis: "Standard deviation of yearly return",
-  yAxis: "Shrunk expected return (50/50 sample mean and portfolio-beta heuristic), annualized",
+  yAxis: "Expected return per year: half each fund's own history, half an estimate from how it moves with an equal-weight mix of all the funds",
   heatLegend: "ENB (minimum torsion) of the most diversified mix found at each risk that earns at least each return",
   riskSlider:
     "2.5th percentile and median of the frontier mix's one-year return over 2,000 one-year paths resampled in blocks from this window's own daily history (stationary block bootstrap, mean block 21 days)",

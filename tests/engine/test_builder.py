@@ -235,7 +235,7 @@ def test_identity_block(fixture_tensor, fixture_frame):
     assert universe["hash"] == hashlib.sha256(canon.encode()).hexdigest()[:16]
     assert re.fullmatch(r"[0-9a-f]{16}", universe["hash"])
     assert t["notes"] == list(builder.NOTES) and len(t["notes"]) == 4
-    assert "50/50 blend of the sample mean and a portfolio-beta heuristic" in t["notes"][0]
+    assert "moves with an equal-weight mix of all the funds" in t["notes"][0]
     assert "exactly its column's risk" in t["notes"][1] and "not a proof" in t["notes"][1]
     assert "diversification stops rising faster than return falls" in t["notes"][2]
     assert "2,000 one-year paths" in t["notes"][3] and "runs averaging 21 days" in t["notes"][3]
