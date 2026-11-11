@@ -130,3 +130,7 @@ seeing a result.
 8. Time under water is sessions divided by 21, not rounded.
 9. The lower bound of a return condition is the one-sided 95% lower bound of the paired difference
    (the 5th percentile of the resamples), not the 98.75% interval.
+10. The command replaces no file. The first full run writes `safety_check.json`; a later full run
+    writes `safety_check_2.json` and so on, and the job's analysis record names the latest. A run
+    restricted to some start months is a smoke run: it writes a new file outside the run directory
+    and is not recorded.

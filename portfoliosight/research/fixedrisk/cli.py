@@ -286,15 +286,17 @@ def cmd_v3_region(args: argparse.Namespace) -> int:
 
 
 def cmd_v3_safety(args: argparse.Namespace) -> int:
-    """The safety-measures check (docs/plans/2026-11-11-fixed-risk-v3-safety-measures-check.md);
-    recorded in the job's analysis record unless `--months` restricts it."""
+    """The safety-measures check (docs/plans/2026-11-11-fixed-risk-v3-safety-measures-check.md).
+    A full run names its own result file and records it; a `--months` run writes `--out`,
+    outside the run directory, unrecorded. No existing file is replaced."""
     from portfoliosight.research.fixedrisk import safety3
 
+    restricted = args.months is not None
+    out = Path(args.out) if args.out else None
+    safety3.check_output(Path(args.run_dir), out, restricted=restricted)
     parent, inputs, callables = _v3_inputs(args)
     job = parent["jobs"][args.job]
     job_dir = Path(args.run_dir) / args.job
-    out = safety3.output_path(Path(args.run_dir), job_dir, Path(args.out) if args.out else None,
-                              restricted=args.months is not None)  # fmt: skip
     spec = inputs.menu(job["menu"])  # pyright: ignore[reportAttributeAccessIssue]
     body = safety3.safety_job(
         job_dir, parent, job["menu"], job["engine"], callables[0], callables[1],
@@ -302,12 +304,9 @@ def cmd_v3_safety(args: argparse.Namespace) -> int:
         analysis_path=Path(args.analysis) if args.analysis else None, months=args.months,
         progress=lambda line: print(line, file=sys.stderr, flush=True),
     )  # fmt: skip
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(body, indent=2, default=str) + "\n")
-    if args.months is None:
-        safety3.record_safety(job_dir, out)
-    print(json.dumps({"out": str(out), "label": body["label"], "cells": body["cells"],
-                      "recorded": args.months is None}))  # fmt: skip
+    path = safety3.write_result(Path(args.run_dir), job_dir, body, out, restricted=restricted)
+    print(json.dumps({"out": str(path), "label": body["label"], "cells": body["cells"],
+                      "recorded": not restricted}))  # fmt: skip
     return 0
 
 
@@ -436,10 +435,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--snapshot", required=True)
     p.add_argument("--job", default="research2003_replay")
     p.add_argument("--analysis", help="the recorded analysis file (default: the record's)")
-    p.add_argument("--out", help="default: <run-dir>/analysis/safety_check.json, or "
-                   "safety_check_partial.json with --months; replaces no other file")  # fmt: skip
-    p.add_argument("--months", nargs="*", help="restrict the start months (a smoke run; the "
-                   "output is then not recorded)")  # fmt: skip
+    p.add_argument("--out", help="with --months only: a new file outside the run directory (a "
+                   "full run writes <run-dir>/analysis/safety_check.json, or the next free "
+                   "safety_check_<n>.json, and records it)")  # fmt: skip
+    p.add_argument("--months", nargs="*", help="restrict the start months (a smoke run; needs "
+                   "--out; the output is not recorded)")  # fmt: skip
     p.set_defaults(func=cmd_v3_safety)
 
     p = sub.add_parser("v3-report", help="the v3 Markdown report (protocol v3 §8.4)")

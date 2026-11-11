@@ -731,53 +731,109 @@ def test_record_safety_adds_its_digest_after_the_analysis(tmp_path):
 # ------------------------------------------------------------------------ the output file
 
 
-def _own(path: Path, *, restricted: bool) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"spec": S.SPEC, "months_restricted": restricted}))
+def test_a_full_run_takes_no_output_path(tmp_path):
+    run = tmp_path / "run"
+    S.check_output(run, None, restricted=False)
+    for out in (tmp_path / "x.json", run / "analysis" / "safety_check.json"):
+        with pytest.raises(ValueError, match="names its own result file"):
+            S.check_output(run, out, restricted=False)
 
 
-def test_the_output_path_defaults(tmp_path):
+def test_a_restricted_run_writes_a_new_file_outside_the_run_directory(tmp_path, monkeypatch):
     job = _job(tmp_path, month_labels(1))
     run = tmp_path / "run"
-    assert S.output_path(run, job, None, restricted=False) == run / "analysis" / "safety_check.json"
-    partial = S.output_path(run, job, None, restricted=True)
-    assert partial == run / "analysis" / "safety_check_partial.json"
-    assert S.output_path(run, job, tmp_path / "x.json", restricted=True) == tmp_path / "x.json"
+    S.check_output(run, tmp_path / "smoke.json", restricted=True)
+    with pytest.raises(ValueError, match="needs an output path"):
+        S.check_output(run, None, restricted=True)
+    alias = tmp_path / "alias"
+    alias.symlink_to(run, target_is_directory=True)
+    inside = (
+        run / "analysis" / "safety_check.json",  # the full run's file, before it exists
+        run / "analysis" / "analysis.json",
+        job / ENS.RECORD_FILE,
+        job / f".{ENS.RECORD_FILE}.tmp",  # the record writer's temporary file
+        tmp_path / "elsewhere" / ".." / "run" / "new.json",
+        alias / "analysis" / "new.json",
+    )
+    for out in inside:
+        with pytest.raises(ValueError, match="inside the run directory"):
+            S.check_output(run, out, restricted=True)
+    monkeypatch.chdir(run)
+    with pytest.raises(ValueError, match="inside the run directory"):
+        S.check_output(run, Path("new.json"), restricted=True)
+    taken = tmp_path / "taken.json"
+    taken.write_text("{}")
+    link = tmp_path / "link.json"  # a link outside the run directory to a recorded file in it
+    link.symlink_to(run / "analysis" / "analysis.json")
+    with pytest.raises(ValueError, match="inside the run directory"):
+        S.check_output(run, link, restricted=True)
+    other = tmp_path / "other.json"
+    other.symlink_to(taken)
+    dangling = tmp_path / "dangling.json"
+    dangling.symlink_to(tmp_path / "nowhere.json")
+    for out in (taken, other, dangling):
+        with pytest.raises(ValueError, match="replaces no file"):
+            S.check_output(run, out, restricted=True)
+    with pytest.raises(ValueError, match="not an existing folder"):
+        S.check_output(run, tmp_path / "missing" / "smoke.json", restricted=True)
+    assert not (tmp_path / "missing").exists()
 
 
-def test_the_output_path_never_replaces_a_file_that_is_not_this_checks_own(tmp_path):
+def test_a_full_result_is_never_written_over(tmp_path):
     job = _job(tmp_path, month_labels(1))
     run = tmp_path / "run"
-    analysis = run / "analysis" / "analysis.json"
-    alias = tmp_path / "alias.json"
-    alias.symlink_to(analysis)
-    other = run / "analysis" / "region_check.json"
-    other.write_text(json.dumps({"label": "EXPLORATORY"}))
-    binary = run / "analysis" / "ensemble_picks.parquet"
-    binary.write_bytes(b"PAR1\xff\xfe\x00")
-    for out in (analysis, alias, job / ENS.RECORD_FILE, other, binary):
-        for restricted in (False, True):
-            with pytest.raises(ValueError, match="refuses to replace"):
-                S.output_path(run, job, out, restricted=restricted)
+    folder = run / "analysis"
+    first = S.write_result(run, job, {"n": 1}, None, restricted=False)
+    assert first == folder / "safety_check.json" and json.loads(first.read_text()) == {"n": 1}
+    assert ENS.verified_entry(job, "safety") == first.resolve()
+    second = S.write_result(run, job, {"n": 2}, None, restricted=False)
+    assert second == folder / "safety_check_2.json" and json.loads(second.read_text()) == {"n": 2}
+    assert json.loads(first.read_text()) == {"n": 1}  # the earlier result stays as it was
+    assert ENS.verified_entry(job, "safety") == second.resolve()
+    assert ENS.verified_entry(job, "analysis") == (folder / "analysis.json").resolve()
+    assert sorted(p.name for p in folder.iterdir()) == ["analysis.json", "safety_check.json",
+                                                        "safety_check_2.json"]  # fmt: skip
 
 
-def test_a_restricted_run_never_writes_the_full_runs_file(tmp_path):
+def test_a_file_already_at_the_result_name_is_left_alone(tmp_path):
     job = _job(tmp_path, month_labels(1))
     run = tmp_path / "run"
-    full = run / "analysis" / "safety_check.json"
-    with pytest.raises(ValueError, match="restricted"):  # even before a full run exists
-        S.output_path(run, job, full, restricted=True)
-    _own(full, restricted=False)
-    assert S.output_path(run, job, None, restricted=False) == full  # a full run redoes its own
-    elsewhere = tmp_path / "full_copy.json"
-    _own(elsewhere, restricted=False)
-    with pytest.raises(ValueError, match="refuses to replace"):
-        S.output_path(run, job, elsewhere, restricted=True)
-    partial = run / "analysis" / "safety_check_partial.json"
-    _own(partial, restricted=True)
-    assert S.output_path(run, job, None, restricted=True) == partial
-    with pytest.raises(ValueError, match="refuses to replace"):
-        S.output_path(run, job, partial, restricted=False)
+    stray = run / "analysis" / "safety_check.json"
+    stray.write_text("not this run's")
+    path = S.write_result(run, job, {"n": 1}, None, restricted=False)
+    assert path == run / "analysis" / "safety_check_2.json"
+    assert stray.read_text() == "not this run's"
+    assert ENS.verified_entry(job, "safety") == path.resolve()
+
+
+def test_a_failed_record_update_leaves_the_recorded_result_valid(tmp_path):
+    job = _job(tmp_path, month_labels(1))
+    run = tmp_path / "run"
+    first = S.write_result(run, job, {"n": 1}, None, restricted=False)
+    record = (job / ENS.RECORD_FILE).read_bytes()
+    job.chmod(0o500)  # the record cannot be rewritten
+    try:
+        with pytest.raises(OSError):
+            S.write_result(run, job, {"n": 2}, None, restricted=False)
+    finally:
+        job.chmod(0o700)
+    assert (job / ENS.RECORD_FILE).read_bytes() == record
+    assert ENS.verified_entry(job, "safety") == first.resolve()
+    assert json.loads(first.read_text()) == {"n": 1}
+
+
+def test_a_restricted_result_is_created_not_replaced_and_not_recorded(tmp_path):
+    job = _job(tmp_path, month_labels(1))
+    run = tmp_path / "run"
+    record = (job / ENS.RECORD_FILE).read_bytes()
+    out = tmp_path / "smoke.json"
+    assert S.write_result(run, job, {"n": 1}, out, restricted=True) == out
+    assert json.loads(out.read_text()) == {"n": 1}
+    assert (job / ENS.RECORD_FILE).read_bytes() == record
+    with pytest.raises(ValueError, match="replaces no file"):
+        S.write_result(run, job, {"n": 2}, out, restricted=True)
+    assert json.loads(out.read_text()) == {"n": 1}
+    assert not (run / "analysis" / "safety_check.json").exists()
 
 
 def _command(monkeypatch, tmp_path, schedule, **kw) -> int:
@@ -799,29 +855,31 @@ def test_the_command_leaves_the_recorded_files_as_they_were(tmp_path, monkeypatc
     analysis = tmp_path / "run" / "analysis" / "analysis.json"
     record = job / ENS.RECORD_FILE
     before = (analysis.read_bytes(), record.read_bytes())
-    for out in (analysis, record):
-        for chosen in (None, [months[0]]):
-            with pytest.raises(ValueError, match="refuses to replace"):
+    for out in (analysis, record, job / f".{ENS.RECORD_FILE}.tmp"):
+        for chosen in (None, [months[0]], []):
+            with pytest.raises(ValueError):
                 _command(monkeypatch, tmp_path, months, out=str(out), months=chosen)
+    with pytest.raises(ValueError, match="needs an output path"):
+        _command(monkeypatch, tmp_path, months, months=[months[0]])
     assert (analysis.read_bytes(), record.read_bytes()) == before
     assert ENS.verified_entry(job, "analysis") == analysis.resolve()
+    assert sorted(p.name for p in analysis.parent.iterdir()) == ["analysis.json"]
 
 
-def test_a_restricted_command_run_leaves_the_recorded_full_result(tmp_path, monkeypatch):
+def test_command_runs_after_a_full_run_leave_its_recorded_result(tmp_path, monkeypatch):
     months = month_labels(2)
     job = _job(tmp_path, months)
     full = tmp_path / "run" / "analysis" / "safety_check.json"
     assert _command(monkeypatch, tmp_path, months) == 0
     assert ENS.verified_entry(job, "safety") == full.resolve()
     recorded = full.read_bytes()
-    for chosen in ([months[0]], []):
-        assert _command(monkeypatch, tmp_path, months, months=chosen) == 0
+    for n, chosen in enumerate(([months[0]], [])):
+        out = tmp_path / f"smoke{n}.json"
+        assert _command(monkeypatch, tmp_path, months, months=chosen, out=str(out)) == 0
+        smoke = json.loads(out.read_text())
+        assert smoke["months_restricted"] is True and smoke["months"] == chosen
         assert full.read_bytes() == recorded
         assert ENS.verified_entry(job, "safety") == full.resolve()
-    partial = json.loads((full.parent / "safety_check_partial.json").read_text())
-    assert partial["months_restricted"] is True and partial["months"] == []
-    with pytest.raises(ValueError, match="restricted"):
-        _command(monkeypatch, tmp_path, months, months=[months[0]], out=str(full))
+    assert _command(monkeypatch, tmp_path, months) == 0  # a second full run gets its own file
     assert full.read_bytes() == recorded
-    assert _command(monkeypatch, tmp_path, months) == 0  # a full run may redo its own result
-    assert ENS.verified_entry(job, "safety") == full.resolve()
+    assert ENS.verified_entry(job, "safety") == (full.parent / "safety_check_2.json").resolve()

@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import secrets
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -64,8 +66,7 @@ LEVEL = 0.95
 LOWER_LEVEL = 0.90  # its interval's lower end is the one-sided 95% lower bound
 TEST_LEVEL = 0.9875  # four tests, each with a two-sided 98.75% interval
 MIN_FIVE_YEAR_MONTHS = 120
-FULL_FILE = "safety_check.json"
-PARTIAL_FILE = "safety_check_partial.json"  # a run restricted to some start months
+FULL_STEM = "safety_check"  # a full run's result: safety_check.json, then safety_check_2.json
 
 F, E = "F", "E"
 REGION_ENB = "region_enb"
@@ -570,34 +571,64 @@ def record_safety(job_dir: Path, safety_path: Path) -> dict[str, Any]:
     return record
 
 
-def _own_output(path: Path, restricted: bool) -> bool:
-    """Whether `path` holds an earlier result of this check of the same kind (full or
-    restricted)."""
+def check_output(run_dir: Path, out: Path | None, *, restricted: bool) -> None:
+    """A ValueError unless the run may write where it is asked to, checked before anything is
+    computed. A full run takes no output path: `write_result` names its file. A run restricted
+    to some start months needs one: a new file in an existing folder outside the run directory."""
+    if not restricted:
+        if out is not None:
+            raise ValueError("a full run names its own result file in <run-dir>/analysis; an "
+                             "output path is for a run restricted to start months")  # fmt: skip
+        return
+    if out is None:
+        raise ValueError("a run restricted to some start months needs an output path")
+    path = Path(out)
+    if path.resolve().is_relative_to(Path(run_dir).resolve()):
+        raise ValueError(f"{path} is inside the run directory; a restricted run writes outside it")
+    if path.exists() or path.is_symlink():
+        raise ValueError(f"{path} exists; the safety check replaces no file")
+    if not path.parent.is_dir():
+        raise ValueError(f"{path.parent} is not an existing folder")
+
+
+def _publish(folder: Path, text: str) -> Path:
+    """Write `text` under the first free name of `folder` (safety_check.json, then
+    safety_check_2.json, ...): complete or absent, and never in place of an existing file."""
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = folder / f".{FULL_STEM}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
+    with tmp.open("x") as handle:
+        handle.write(text)
     try:
-        body = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return False
-    return (isinstance(body, dict) and body.get("spec") == SPEC
-            and body.get("months_restricted") is restricted)  # fmt: skip
+        number = 1
+        while True:
+            path = folder / (f"{FULL_STEM}.json" if number == 1 else f"{FULL_STEM}_{number}.json")
+            try:
+                os.link(tmp, path)  # fails when the name is taken; never replaces
+                return path
+            except FileExistsError:
+                number += 1
+    finally:
+        tmp.unlink()
 
 
-def output_path(run_dir: Path, job_dir: Path, out: Path | None, *, restricted: bool) -> Path:
-    """Where a run writes its result: `out`, or `<run-dir>/analysis/safety_check.json` (a run
-    restricted to some start months: `safety_check_partial.json`). A ValueError unless the path
-    is free or holds this check's own earlier result of the same kind: no other file is ever
-    replaced, the job's analysis record least of all, and a restricted run never writes the
-    full run's file."""
-    folder = Path(run_dir) / "analysis"
-    full = folder / FULL_FILE
-    path = Path(out) if out is not None else folder / (PARTIAL_FILE if restricted else FULL_FILE)
-    target = path.resolve()
-    if restricted and target == full.resolve():
-        raise ValueError(f"{path} is the full run's file; a restricted run does not write it")
-    record = (Path(job_dir) / ENS.RECORD_FILE).resolve()
-    if target == record or (target.exists() and not _own_output(target, restricted)):
-        kind = "restricted" if restricted else "full"
-        raise ValueError(f"the safety check refuses to replace {path}: it is not an earlier "
-                         f"{kind} result of this check")  # fmt: skip
+def write_result(
+    run_dir: Path, job_dir: Path, body: Mapping[str, Any], out: Path | None, *, restricted: bool
+) -> Path:
+    """Write a run's result and hand back its path; no existing file is replaced. A full run's
+    result gets the first free name in `<run-dir>/analysis` and is then recorded
+    (`record_safety`), so the record names a file whose bytes never change afterward and an
+    earlier recorded result stays as it was. A restricted run's result goes to `out`, created
+    exclusively, and is not recorded."""
+    check_output(run_dir, out, restricted=restricted)
+    text = json.dumps(body, indent=2, default=str) + "\n"
+    if restricted:
+        assert out is not None
+        path = Path(out)
+        with path.open("x") as handle:
+            handle.write(text)
+        return path
+    path = _publish(Path(run_dir) / "analysis", text)
+    record_safety(job_dir, path)
     return path
 
 
