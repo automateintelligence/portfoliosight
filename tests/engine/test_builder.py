@@ -334,7 +334,7 @@ def test_identity_block(fixture_tensor, fixture_frame):
     assert re.fullmatch(r"[0-9a-f]{16}", universe["hash"])
     assert builder.HASH_SCHEMA == 2 and builder.SCHEMA_VERSION == 3
     assert t["notes"] == [*builder.NOTES, builder.ENGINE_NOTES["garch"]] and len(t["notes"]) == 5
-    assert "50/50 blend of the sample mean and a menu-beta heuristic" in t["notes"][0]
+    assert "moves with an equal-weight mix of all the funds" in t["notes"][0]
     assert "exactly its column's risk" in t["notes"][1] and "not a proof" in t["notes"][1]
     assert "diversification stops rising faster than return falls" in t["notes"][2]
     assert "2,000 one-year paths" in t["notes"][3] and "runs averaging 21 days" in t["notes"][3]
@@ -817,7 +817,7 @@ def test_requested_caps_are_recorded_and_respected():
 @pytest.mark.parametrize(
     ("requested", "message"),
     [
-        ([{"id": "ZZZ", "max": 0.5}], "ZZZ: not a fund of this menu"),
+        ([{"id": "ZZZ", "max": 0.5}], "ZZZ: not a fund of this portfolio"),
         ([{"id": "VTI", "max": 0.5}, {"id": "VTI", "max": 0.4}], "VTI: capped more than once"),
         ([{"max": 0.5}], "every cap entry needs a fund id"),
         ([{"id": "VTI", "min": 0.3}], "VTI"),  # above the default maximum of this window

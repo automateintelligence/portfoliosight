@@ -9,7 +9,7 @@ tensor (spec 4.6); computed font-size <= 14 px; computed colour equals the compu
 which equals the spec 3.5 value; before details no visible text matches the ENB patterns, no
 neighbour of the word carries a digit and `details-enb` is hidden; after `details-toggle` the
 `details-enb` line matches "spreads risk over the equivalent of N independent bets; highest found on
-this menu: M" with N and M equal to the recomputed values at the shown precision, N/M inside the
+this portfolio: M" with N and M equal to the recomputed values at the shown precision, N/M inside the
 band of the shown word, and the technical name visible.
 Unit leg: the seven boundary values and a seeded sweep of 600 values.
 
@@ -390,7 +390,7 @@ for (const theme of THEMES) {
       const detail = page.getByTestId("details-enb");
       await expect(detail).toBeVisible();
       const line = norm((await detail.textContent()) ?? "");
-      const m = line.match(/spreads risk over the equivalent of (\d+(?:\.\d+)?) independent bets; highest found on this menu: (\d+(?:\.\d+)?)/);
+      const m = line.match(/spreads risk over the equivalent of (\d+(?:\.\d+)?) independent bets; highest found on this portfolio: (\d+(?:\.\d+)?)/);
       expect(m, `details-enb text "${line}"`).not.toBeNull();
       const shownN = Number(m![1]);
       const shownM = Number(m![2]);

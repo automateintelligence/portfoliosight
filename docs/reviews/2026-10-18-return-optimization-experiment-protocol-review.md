@@ -20,7 +20,7 @@ Initial review snapshot SHA-256: `de423f49d4a1df28b4168d0630fdfafc1f752b5a435dec
 - Example Portfolio: 23 fixed funds, zero minimum weights and uniform 25% caps. VWOB limits the common start: 3,363 common return dates beginning 2013-06-05, through 2026-10-16.
 - Both saved five-year tensors report 1,260 rows. Calendar-year-end coverage candidates with five years of training and a full subsequent 252-row horizon are 2008–2024 for TSP and 2018–2024 for Example. These counts are coverage evidence, not independent statistical sample sizes; 252-row horizons can extend past the next calendar year-end.
 - Current membership and adjusted-price vintages are not historical point-in-time membership/vintage archives. The protocol explicitly limits the inference accordingly.
-- The owner identified an existing library of 1,000+ tickers. The protocol includes a separately bounded, predefined exploratory extension. More tickers can broaden menus, but cannot manufacture independent years or extend the history of the same 23-fund menu.
+- The owner identified an existing library of 1,000+ tickers. The protocol includes a separately bounded, predefined exploratory extension. More tickers can broaden menus, but cannot manufacture independent years or extend the history of the same 23-fund portfolio.
 
 This inventory read metadata and date columns only. It did not estimate new outcomes or search portfolios.
 

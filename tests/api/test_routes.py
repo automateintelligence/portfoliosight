@@ -99,7 +99,7 @@ def test_presets_are_composed_when_the_generation_has_no_stored_body(
     client = make_client(start_worker=False)
     body = client.get("/v1/presets", headers=headers()).json()
     assert body["generation"] == generation and body["asof"] == d_g.isoformat()
-    assert [preset["id"] for preset in body["presets"]] == ["guide2017", "tsp"]
+    assert [preset["id"] for preset in body["presets"]] == ["guide2017", "tsp", "research2003"]
     assert "/v1/" not in json.dumps(body)
 
 

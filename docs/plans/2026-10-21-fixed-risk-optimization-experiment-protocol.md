@@ -94,7 +94,7 @@ In words, for one menu at one origin:
 How many mixes are in these sets: they are continuous regions, so infinitely many. With `n` funds
 the allowed mixes form an `(n−1)`-dimensional region; the risk band and `F(r, d)` are thin slabs of
 the same dimension `n−1` around the exact surfaces `σ(w) = r` (dimension `n−2`) and
-`σ(w) = r, M(w) = M(r, d)` (dimension `n−3`). On a 5%-step weight grid the 11-fund menu
+`σ(w) = r, M(w) = M(r, d)` (dimension `n−3`). On a 5%-step weight grid the 11-fund portfolio
 has ≈ 30 million mixes; a mid-table risk band holds on the order of 1% of them and the slider band
 a few percent of those. Both counts collapse toward zero at the lowest and highest attainable
 risks, which is why collapsed columns are counted (§2 end) and starts are labelled, never

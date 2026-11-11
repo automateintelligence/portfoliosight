@@ -1,6 +1,6 @@
 # PortfolioSight
 
-A free, one-screen portfolio tool at `portfoliosight.ai`: pick a fund menu (a 401(k) menu, the
+A free, one-screen portfolio tool at `portfoliosight.ai`: pick a portfolio (a 401(k) menu, the
 TSP funds, any served tickers), see its best mixes at each level of risk over a map of how spread
 out each mix is, and move one risk slider and one diversification slider. Educational, historical
 math, not investment advice. The site is in **private preview** for now. 
@@ -49,13 +49,16 @@ Settings, hosts and secrets are `KEY=value` lines in `~/.secrets/portfoliosight.
   `/mnt/d/tft-quantile-forecaster` is only QSE's mirror of it, and nothing here writes to either.
 - After the seed, prices come from Tiingo (close, dividends, splits; total return is rebuilt from
   those) and from tsp.gov for the TSP funds, each behind the provider Protocol. The nightly job on
-  KS-001 refreshes within the measured request budget, rebuilds the two ready-made menus for six
-  lookbacks, and publishes a new generation only when all twelve tensors exist.
+  KS-001 refreshes within the measured request budget, rebuilds the three ready-made menus
+  (`data/presets.json`) for six lookbacks, and publishes a new generation only when every one of
+  those tensors exists.
 - Stocks (and any fund no provider has refreshed) come from the owner's repaired QSE lake instead:
   `scripts/sync_lake.py`, a laptop cron job on weekdays, uploads each symbol the lake vouches as
   current once QSE's 06:45 PT run is complete, marks it `source: lake` in the manifest, and the
   nightly spends no Tiingo request on it. Tiingo and tsp.gov stay the source of the ready-made
-  menus' funds. Entries whose recent dividends come from yfinance carry `relies_on_yfinance`;
+  menus' funds, except the eight stocks of Example Portfolio 2, which are tier 3 symbols: a stock
+  not served on a given night is left out of that generation's tensors and listed as set aside.
+  Entries whose recent dividends come from yfinance carry `relies_on_yfinance`;
   they are reviewed before public launch (spec §5.4).
 
 ## Deployment

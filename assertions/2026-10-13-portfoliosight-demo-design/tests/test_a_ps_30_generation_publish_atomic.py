@@ -1,7 +1,7 @@
 """A-PS-30 — a generation is published only when complete, and never half-visible.
 
 Claim: the nightly writes meta/{G}/generation.json once, builds each missing preset tensor with
-D_G passed in, switches meta/current.json only after all 12 keys exist, resumes an interrupted run
+D_G passed in, switches meta/current.json only after all 18 keys exist, resumes an interrupted run
 without rewriting anything under meta/{G}/, skips to the post-publication steps when current.json
 already points at G, deletes generations older than the previous one, and marks TSP stale (not
 failed) when the tsp.gov fetch breaks.
@@ -22,7 +22,9 @@ Pinned interface (the product must provide exactly this):
   signature is assumed. An exception that is not an `Exception` subclass (a dying process)
   must propagate out of `run`, or at least stop the run from publishing.
 - Preset tensor keys are `tensors/{G}/{universe hash of the preset's funds, all defaults}/{lb}.json`
-  for the 23 Step 2 symbols and for TSP-G/F/C/S/I, six lookbacks each.
+  for the 23 Step 2 symbols and for TSP-G/F/C/S/I, six lookbacks each; and, for research2003 (its
+  19 holdings with the limits of data/presets.json: funds at most 40%, stocks at most 10%), the
+  hash of that requested policy.
 - Provider budget: the run honours `meta/provider_limits.json` (spec §5.2) and the
   `PS_PROVIDER_*` variables, so with the large limits set here it never sleeps. Scratch files go
   under `PS_CACHE_DIR`. `meta/status.json` carries an `errors` entry (spec §5.3).
@@ -35,7 +37,7 @@ Which leg uses which builder:
 - interrupt, resume, skip, prune, first run, TSP failure: a fast fake `build_fn` (placeholder
   tensors); these legs are about orchestration only.
 - asof / "no row after D_G" leg: real builds. Store B (every record carries an extra, fully
-  adjusted row dated D_G + 1 with a 3x price) runs with `build_fn=None`, all 12 tensors real.
+  adjusted row dated D_G + 1 with a 3x price) runs with `build_fn=None`, all 18 tensors real.
   Store A (no extra row) builds two keys for real (guide2017 1y, tsp ew) and the rest fake; the
   two must equal B's after dropping build telemetry and the manifest's per-fund dates.
 """
@@ -323,8 +325,27 @@ def _guide_ids() -> list[str]:
 
 
 def _preset_hashes() -> dict:
-    """Independent universe hashes of the two presets (requested policy: all defaults)."""
-    return {"guide2017": _uhash(_menu(_guide_ids())), "tsp": _uhash(_menu(TSP_CORE))}
+    """Independent universe hashes of the three presets (requested policy: all defaults for the
+    first two, research2003's own limits for the third)."""
+    return {
+        "guide2017": _uhash(_menu(_guide_ids())),
+        "tsp": _uhash(_menu(TSP_CORE)),
+        "research2003": _uhash(_research_policy()),
+    }
+
+
+RESEARCH_FUNDS = ["SPY", "IWM", "IWD", "EFA", "EEM", "IYR", "TLT", "IEF", "SHY", "LQD", "VIPSX"]
+RESEARCH_STOCKS = ["GE", "MSFT", "XOM", "PFE", "C", "WMT", "AIG", "INTC"]
+
+
+def _research_ids() -> list[str]:
+    return RESEARCH_FUNDS + RESEARCH_STOCKS
+
+
+def _research_policy() -> list[dict]:
+    """research2003's requested policy: each fund at most 40%, each stock at most 10%."""
+    limits = {i: (None, 0.4) for i in RESEARCH_FUNDS} | {i: (None, 0.1) for i in RESEARCH_STOCKS}
+    return _menu(_research_ids(), **limits)
 
 
 def _expected_keys(g: str) -> set:
@@ -542,7 +563,7 @@ else:
         assert len(prev_keys) == 4 and len(store.list(f"tensors/{g_old}/")) == 2
         pointer_before = store.get("meta/current.json")
         expected = _expected_keys(g)
-        assert len(expected) == 12
+        assert len(expected) == 18
         start = len(store.calls)
 
         # (1) interrupted after the 5th preset tensor
@@ -564,18 +585,18 @@ else:
         assert gen["generation"] == g and gen["asof"] == D_G.isoformat()
         assert gen["engine_version"] == version
         assert not store.exists(f"meta/{g}/presets.json"), (
-            "presets.json exists after 5 of 12 tensors"
+            "presets.json exists after 5 of 18 tensors"
         )
         assert store.get("meta/current.json") == pointer_before, (
             "current.json changed in a half-built run"
         )
         assert json.loads(store.get("meta/current.json"))["generation"] != g
 
-        # (2) rerun: 7 more, presets.json once, pointer switched last
+        # (2) rerun: 13 more, presets.json once, pointer switched last
         second = _Builder(store, g, D_G)
         _run_nightly(store, _providers(frames), second)
-        assert len(second.calls) == 7, (
-            f"the rerun built {len(second.calls)} tensors, expected the 7 missing"
+        assert len(second.calls) == 13, (
+            f"the rerun built {len(second.calls)} tensors, expected the 13 missing"
         )
         assert not (set(second.calls) & set(first.calls)), (
             "the rerun rebuilt a tensor that already existed"
@@ -598,12 +619,12 @@ else:
         assert switches, "no put of meta/current.json pointing at the new generation"
         last_needed = max(max(_put_index(store, k)) for k in expected | {f"meta/{g}/presets.json"})
         assert min(switches) > last_needed, (
-            "current.json was switched before the 12th tensor / presets.json"
+            "current.json was switched before the 18th tensor / presets.json"
         )
         removed = [c[1] for c in store.calls if c[0] == "delete"]
         assert not [k for k in removed if k.startswith((f"meta/{g}/", f"tensors/{g}/"))]
         presets = json.loads(store.get(f"meta/{g}/presets.json"))
-        assert presets["generation"] == g and len(presets["presets"]) == 2
+        assert presets["generation"] == g and len(presets["presets"]) == 3
 
         # (5) prune: the oldest generation is gone, the previous one is intact
         assert store.list(f"meta/{g_old}/") == [] and store.list(f"tensors/{g_old}/") == [], (
@@ -678,14 +699,14 @@ else:
         assert not builder.unreadable
         assert set(store.list(f"tensors/{g}/")) == _expected_keys(g)
         assert json.loads(store.get("meta/current.json"))["generation"] == g, (
-            "current.json was not switched although all 12 keys exist"
+            "current.json was not switched although all 18 keys exist"
         )
 
     def test_every_tensor_is_pinned_to_d_g_and_ignores_later_rows(tmp_path, monkeypatch):
         np = _need("numpy")
         pd = _need("pandas")
         g = _generation_id()
-        ids = _guide_ids() + TSP_CORE
+        ids = _guide_ids() + TSP_CORE + [i for i in _research_ids() if i not in _guide_ids()]
         dates = _sessions(D_G, N_ROWS)
         next_day = pd.Timestamp(D_G) + pd.Timedelta(days=1)  # Thursday 2026-10-08
         hashes = _preset_hashes()
@@ -700,14 +721,16 @@ else:
             frames_b["VTI"]["date"].iloc[-1] == next_day
             and frames_b["VTI"]["date"].iloc[-2] == dates[-1]
         )
-        _run_nightly(store_b, _providers(frames_b), None)  # default builder: 12 real tensors
+        _run_nightly(store_b, _providers(frames_b), None)  # default builder: 18 real tensors
         assert set(store_b.list(f"tensors/{g}/")) == _expected_keys(g)
         assert json.loads(store_b.get("meta/current.json"))["generation"] == g
         assert json.loads(store_b.get(f"meta/{g}/generation.json"))["asof"] == D_G.isoformat()
         close_on_dg = {s: float(f["close"].iloc[-2]) for s, f in frames_b.items()}
         tensors_b, funds_checked = {}, 0
         for preset, h in hashes.items():
-            members = set(TSP_CORE if preset == "tsp" else _guide_ids())
+            members = set(
+                {"tsp": TSP_CORE, "research2003": _research_ids()}.get(preset, _guide_ids())
+            )
             for lb in LOOKBACKS:
                 t = json.loads(store_b.get(f"tensors/{g}/{h}/{lb}.json"))
                 tensors_b[(h, lb)] = t
@@ -727,7 +750,7 @@ else:
                         f"{fund['id']}: last_close {fund['last_close']} is not the close on D_G"
                     )
                     funds_checked += 1
-        assert len(tensors_b) == 12 and funds_checked >= 100, f"only {funds_checked} funds checked"
+        assert len(tensors_b) == 18 and funds_checked >= 100, f"only {funds_checked} funds checked"
 
         store_a = _new_store(tmp_path, "store_a")
         _nightly_env(store_a, monkeypatch, tmp_path)

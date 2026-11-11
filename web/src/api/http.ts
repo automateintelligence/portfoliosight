@@ -2,6 +2,7 @@
 // origin. Importing this module has no side effects and needs no DOM.
 import { z } from "zod";
 import { parseTensor, type Tensor } from "./tensor";
+import type { TickerSource } from "./tickerShape";
 
 /** Thrown when a response carries `cf-mitigated: challenge` (spec 3.2, 9.4). */
 export class ChallengeError extends Error {
@@ -27,6 +28,8 @@ const presetSchema = z
     name: z.string(),
     hash: z.string().optional(),
     funds: z.array(z.object({ id: z.string(), name: z.string().nullish() }).passthrough()),
+    /** The limits the preset declares, as fractions of 1 (a request's `funds` shape); none for most. */
+    caps: z.array(z.object({ id: z.string(), min: z.number().nullish(), max: z.number().nullish() }).passthrough()).default([]),
     allocation: z.record(z.string(), z.number()).nullish(),
     allocation_unit: z.string().nullish(),
     lookbacks: z.record(z.string(), lookbackEntry).default({}),
@@ -199,4 +202,17 @@ export async function postShare(to: string, url: string): Promise<ShareResult> {
     return code === "invalid_url" ? "invalid_url" : "invalid_recipient";
   }
   return "failed";
+}
+
+/**
+ * `POST /api/ticker-requests`: tickers asked for that the site does not serve, so they can be
+ * considered. Nothing else is sent. Fire and forget: it never throws and its answer is ignored,
+ * so a failure is invisible and never holds anything up.
+ */
+export async function postTickerRequests(tickers: string[], source: TickerSource): Promise<void> {
+  try {
+    await call("/api/ticker-requests", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tickers, source }) });
+  } catch {
+    // silent by design
+  }
 }

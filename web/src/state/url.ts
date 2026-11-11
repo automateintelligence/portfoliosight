@@ -6,13 +6,14 @@
 export const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"] as const;
 export type Lookback = (typeof LOOKBACKS)[number];
 
-const PRESETS = ["guide2017", "tsp"] as const;
+/** The ready-made portfolios a link may name with `u` (the ids of data/presets.json). */
+export const PRESET_IDS = ["guide2017", "tsp", "research2003"] as const;
 const UNITS = ["pct", "usd", "shares"] as const;
 const THEMES = ["ks-dark", "light", "hud", "grid"] as const;
 
 export type UrlState = {
   /** `u`; `null` is a custom menu. */
-  preset: (typeof PRESETS)[number] | null;
+  preset: (typeof PRESET_IDS)[number] | null;
   /** `f` as `ID:amount`, the amount optional; always `[]` with a preset. */
   funds: { id: string; amount: number | null }[];
   /** `unit`; left out of the address when `pct`. */
@@ -53,7 +54,7 @@ const writeDecimal = (x: number): string => String(Number(x.toFixed(6)));
 /** Reads the query string into a state; with `domain`, `r` is clamped into it. */
 export function decode(search: string, domain?: Domain): UrlState {
   const params = new URLSearchParams(search);
-  const preset = oneOf(PRESETS, params.get("u"));
+  const preset = oneOf(PRESET_IDS, params.get("u"));
   const d = readDecimal(params.get("d"));
   const state: UrlState = {
     preset,

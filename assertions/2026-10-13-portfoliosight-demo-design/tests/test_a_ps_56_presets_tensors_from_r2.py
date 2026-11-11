@@ -1,6 +1,6 @@
 """A-PS-56 — presets and tensors are served from R2 and a POST for the default preset resolves to the same tensor.
 
-Claim: `GET /api/presets` carries `x-ps-source: r2`, a `generation`, and both presets with all six
+Claim: `GET /api/presets` carries `x-ps-source: r2`, a `generation`, and the three presets with all six
 lookbacks `ready` and `/api/...` URLs; the `guide2017` 5y URL returns a tensor that validates
 against the shipped contract its own `schema` field names
 (`portfoliosight/engine/tensor.schema.json` for schema 3, `tensor.schema.v2.json` for schema 2)
@@ -266,8 +266,8 @@ else:
         presets = body.get("presets")
         assert isinstance(presets, list), "/api/presets has no presets list"
         ids = [p.get("id") for p in presets if isinstance(p, dict)]
-        assert sorted(ids) == ["guide2017", "tsp"], (
-            f"preset ids are {ids}, expected guide2017 and tsp"
+        assert sorted(ids) == ["guide2017", "research2003", "tsp"], (
+            f"preset ids are {ids}, expected guide2017, research2003 and tsp"
         )
         hashes = set()
         urls = set()
@@ -291,8 +291,8 @@ else:
                 )
                 assert "/v1/" not in url, f"{pid}/{lookback}: url exposes the service path"
                 urls.add(url)
-        assert len(hashes) == 2, "the two presets share one hash"
-        assert len(urls) == 12, f"expected 12 distinct preset tensor URLs, found {len(urls)}"
+        assert len(hashes) == 3, "the three presets share a hash"
+        assert len(urls) == 18, f"expected 18 distinct preset tensor URLs, found {len(urls)}"
 
     def test_guide2017_5y_tensor_is_schema_valid_immutable_and_from_r2():
         resp, body, preset = _guide_tensor()

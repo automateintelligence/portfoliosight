@@ -4,9 +4,11 @@
 
 Steps: (1) ``D_G`` and ``G``; a generation already published skips to step 4. (2) Refresh
 tier 1. (3) Write ``meta/{G}/generation.json`` if absent, build every preset tensor whose key is
-missing, and only when all twelve exist write ``meta/{G}/presets.json`` and switch
-``meta/current.json``. (4) Refresh tiers 2 and 3 within the provider budget, stopping between
-symbols at the deadline, by default 30 minutes before the next scheduled start
+missing, and only when all of them exist (every preset in ``data/presets.json`` at each of the
+six lookbacks) write ``meta/{G}/presets.json`` and switch ``meta/current.json``. A preset fund
+the catalog does not serve (say ``pending``) does not stop a build: the tensor lists it as set
+aside. (4) Refresh tiers 2 and 3 within the provider budget, stopping between symbols at the
+deadline, by default 30 minutes before the next scheduled start
 (``PS_NIGHTLY_DEADLINE_MINUTES_BEFORE_NEXT``), so that start is never skipped; ``status.json``
 records ``deadline`` and ``stopped``, and the walk resumes on the next run. (5) Delete every
 generation older than the previous one (its metadata, tensors and models), except those

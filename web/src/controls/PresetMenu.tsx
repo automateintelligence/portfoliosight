@@ -32,7 +32,7 @@ export function PresetMenu({ presets, active, compact, onSelect, onCustom }: Pro
     };
   }, [open]);
 
-  const label = current ? current.name : "Custom menu";
+  const label = current ? current.name : "Custom portfolio";
   return (
     <div className="preset" ref={root}>
       <button

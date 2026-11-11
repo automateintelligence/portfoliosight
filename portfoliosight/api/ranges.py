@@ -79,7 +79,7 @@ def range_body(models: RangeModels, key: Key, weights: Sequence[float]) -> dict:
         raise ApiError(409, "range_unavailable", str(exc)) from None
     funds = len(model.mu_s)
     if len(weights) != funds:
-        raise invalid_request(f"this menu has {funds} funds; {len(weights)} weights were sent")
+        raise invalid_request(f"this portfolio has {funds} funds; {len(weights)} weights were sent")
     try:
         ranges = one_year_ranges(model, mix)
     except ValueError as exc:

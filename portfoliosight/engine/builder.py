@@ -76,7 +76,8 @@ CONTRACTS = {2: "tensor.schema.v2.json", SCHEMA_VERSION: "tensor.schema.json"}  
 HASH_SCHEMA = 2  # the universe hash's own version: a menu keeps its key across tensor schemas
 TELEMETRY_FIELDS = ("built_at", "build_seconds")
 NOTES = (
-    "Expected returns are a 50/50 blend of the sample mean and a menu-beta heuristic.",
+    "Expected returns blend each fund's own historical average (half) with an estimate from "
+    "how the fund moves with an equal-weight mix of all the funds (half).",
     "Every mix below the frontier has exactly its column's risk and is the most diversified "
     "mix found at that risk for its return level: a local search from several starting points, "
     "not a proof that no better mix exists.",

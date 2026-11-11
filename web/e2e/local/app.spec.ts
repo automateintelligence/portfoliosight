@@ -129,7 +129,7 @@ test("a failed build offers Retry, and Retry sends the same request", async ({ p
   await request.post("/__mock/config", { data: { build409: 1 } });
   await page.goto("/?f=SGOV:50,VTIP:50&unit=pct");
   await expect(page.getByTestId("build-retry")).toBeVisible();
-  await expect(page.getByTestId("building-notice")).toContainText("We couldn't compute this menu");
+  await expect(page.getByTestId("building-notice")).toContainText("We couldn't compute this portfolio");
   await expect(page.getByTestId("building-notice")).toContainText("build_failed");
   await page.getByTestId("build-retry").click();
   await expect(page.getByTestId("chart-canvas")).toBeVisible();
@@ -391,7 +391,7 @@ test("every frontier line is named at its right end and the names do not collide
 test("the square and the open circle show the same card as the selected mix", async ({ page }, testInfo) => {
   await open(page);
   const card = page.getByTestId("mix-card");
-  const titles: Record<string, string> = { selected: "Selected mix", current: "The mix you entered", div: "Optimized" };
+  const titles: Record<string, string> = { selected: "Selected mix", current: "Your starting mix", div: "Optimized" };
   if (isPhone(testInfo.project.name)) {
     // at rest on Optimized the selected point sits on the open circle, and a tap there reaches the
     // point (it pins its card); move the point off the circle first
@@ -598,7 +598,7 @@ test("stress cards name the selected mix and set the entered mix in bold", async
   for (let i = 0; i < 3; i++) {
     await expect(cards.nth(i).locator(".big")).toHaveText(/^What this mix did: [+−]?\d+\.\d% \(Selected mix\)$/);
     const entered = cards.nth(i).locator("strong");
-    await expect(entered).toHaveText(/^The mix you entered: [+−]?\d+\.\d%$/);
+    await expect(entered).toHaveText(/^Your starting mix: [+−]?\d+\.\d%$/);
     expect(Number(await entered.evaluate((el) => getComputedStyle(el).fontWeight))).toBeGreaterThanOrEqual(700);
     expect(Number(await entered.locator(".num").evaluate((el) => getComputedStyle(el).fontWeight))).toBeGreaterThanOrEqual(700);
   }
@@ -969,7 +969,7 @@ test("the funds picker: the 31st fund is refused for the public and accepted for
   await expect(page.getByTestId("funds-limit")).toContainText("Up to 30 funds.");
   const before = (await posts(page)).length;
   await addFund(page, "MOCKF031");
-  await expect(page.getByTestId("section-funds").getByRole("alert")).toHaveText("A menu holds up to 30 funds.");
+  await expect(page.getByTestId("section-funds").getByRole("alert")).toHaveText("A portfolio holds up to 30 funds.");
   await expect(page.getByTestId("fund-row-MOCKF031")).toHaveCount(0);
   await expect(page.getByTestId("use-menu")).toHaveCount(0);
   expect((await posts(page)).length, "no request for a 31st fund").toBe(before);
@@ -996,14 +996,14 @@ test("the funds picker: an admin's 101st fund is refused", async ({ page, reques
   expect((await posts(page)).at(-1)!.funds.length).toBe(100);
   await section(page, "funds");
   await addFund(page, "MOCKF101");
-  await expect(page.getByTestId("section-funds").getByRole("alert")).toHaveText("A menu holds up to 100 funds.");
+  await expect(page.getByTestId("section-funds").getByRole("alert")).toHaveText("A portfolio holds up to 100 funds.");
   await expect(page.getByTestId("fund-row-MOCKF101")).toHaveCount(0);
 });
 
 test("a shared link over the public limit is refused with a message and the default view opens", async ({ page, request }) => {
   await request.post("/__mock/config", { data: { manySymbols: true } });
   await open(page, `f=${mockFunds(31).join(",")}&lb=5y`);
-  await expect(page.getByTestId("link-refused")).toHaveText("This menu has more funds than this site allows (30).");
+  await expect(page.getByTestId("link-refused")).toHaveText("This portfolio has more funds than this site allows (30).");
   expect(await posts(page), "nothing is built for the refused menu").toEqual([]);
   await expect(page.getByTestId("preset-menu")).toHaveAccessibleName(/Example Portfolio/);
   await expect.poll(() => page.url()).not.toContain("MOCKF");
@@ -1192,7 +1192,7 @@ test("details on: the legend, the axis titles and their technical lines do not o
         // the long technical lines are under the chart, in the details; the slider's method opens
         await expect(page.locator(".legend-tech")).toHaveCount(0);
         await expect(page.locator(".y-title .tech")).toHaveCount(0);
-        await expect(page.getByTestId("details-chart")).toContainText("Shrunk expected return");
+        await expect(page.getByTestId("details-chart")).toContainText("half each fund's own history");
         await expect(page.getByTestId("details-chart")).toContainText("Standard deviation of yearly return");
         await expect(page.getByTestId("details-chart")).toContainText("minimum torsion");
         const method = page.getByTestId("risk-method");
@@ -1211,4 +1211,224 @@ test("details on: the legend, the axis titles and their technical lines do not o
     await press(page, phone, dot.x + dot.width / 2, dot.y + dot.height / 2);
     await expect(page.getByTestId(`fund-label-${id}`)).toBeVisible();
   }
+});
+
+// ── CSV upload and the download template (Funds & amounts) ───────────────────
+const template = "ticker,shares,dollars,percent\nVTI,,10000,40\nVXUS,,5000,20\nBND,,7500,30\nVNQ,,2500,10\n";
+const csvFile = (text: string, name = "mix.csv") => ({ name, mimeType: "text/csv", buffer: Buffer.from(text) });
+const tickerRequests = async (page: Page) => (await (await page.request.get("/__mock/ticker-requests")).json()) as { tickers: string[]; source: string }[];
+
+test("the template downloads as portfoliosight-template.csv with the four example funds", async ({ page }) => {
+  await open(page);
+  await section(page, "funds");
+  const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("funds-template").click()]);
+  expect(download.suggestedFilename()).toBe("portfoliosight-template.csv");
+  const chunks: Buffer[] = [];
+  for await (const chunk of await download.createReadStream()) chunks.push(chunk as Buffer);
+  expect(Buffer.concat(chunks).toString("utf8")).toBe(template);
+});
+
+test("uploading a CSV replaces the fund list, lists what it could not add, and Recalculate sends the new funds", async ({ page }) => {
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await section(page, "funds");
+  const before = (await posts(page)).length;
+  // the template, as the upload button's own file picker takes it back: VXUS is not served by the mock
+  const [chooser] = await Promise.all([page.waitForEvent("filechooser"), page.getByTestId("funds-upload").click()]);
+  await chooser.setFiles(csvFile(template, "portfoliosight-template.csv"));
+  await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): VXUS.");
+  await expect(page.getByTestId("upload-skipped")).toBeVisible();
+  // the fund list on screen is the file's, in dollars; the menu in use has not changed yet
+  for (const id of ["VTI", "BND", "VNQ"]) await expect(page.getByTestId(`fund-row-${id}`)).toBeVisible();
+  await expect(page.getByTestId("fund-row-SGOV")).toHaveCount(0);
+  await expect(page.getByTestId("amount-head")).toHaveText("Amount ($)");
+  await expect(page.getByLabel("VTI amount in dollars")).toHaveValue("10000");
+  await expect(page.getByLabel("VNQ amount in dollars")).toHaveValue("2500");
+  await expect(page.getByTestId("upload-mismatch")).toHaveCount(0);
+  expect((await posts(page)).length, "nothing is computed before the button is pressed").toBe(before);
+  // the address still describes the menu in use (percent, which the address leaves out)
+  expect(new URL(page.url()).searchParams.get("unit")).toBeNull();
+  expect(new URL(page.url()).searchParams.get("f")).toBe("SGOV:50,VTIP:50");
+  await page.getByTestId("use-menu").click();
+  await expect.poll(async () => (await posts(page)).length).toBe(before + 1);
+  expect((await posts(page)).at(-1)!.funds.map((f) => f.id).sort()).toEqual(["BND", "VNQ", "VTI"]);
+  await expect.poll(() => new URL(page.url()).searchParams.get("unit")).toBe("usd");
+  await expect.poll(() => new URL(page.url()).searchParams.get("f")).toBe("VTI:10000,BND:7500,VNQ:2500");
+  await expect(page.getByTestId("mix-entered-VTI")).toHaveText("50.0%");
+  // what could not be added is still said, and was reported to us without any amounts
+  await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): VXUS.");
+  expect(await tickerRequests(page)).toEqual([{ tickers: ["VXUS"], source: "csv" }]);
+  // neither the file's contents nor the report reach the address
+  const address = decodeURIComponent(page.url());
+  for (const text of ["VXUS", "Not added", "upload", "10000,40"]) expect(address).not.toContain(text);
+  // dismissed
+  await page.getByTestId("upload-dismiss").click();
+  await expect(page.getByTestId("upload-skipped")).toHaveCount(0);
+});
+
+test("a file whose dollars are not all there and disagree with the shares says so once the new menu has prices", async ({ page }) => {
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await section(page, "funds");
+  // VTI closes at 162.07 in the mock's data: 10 VTI is $1,620.70, not $9,999. BND has no dollars, so the shares are valued at the latest closes and the dollars are not used
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker,shares,dollars\nVTI,10,9999\nBND,5,\n"));
+  await expect(page.getByTestId("use-menu")).toBeVisible();
+  await expect(page.getByTestId("amount-head")).toHaveText("Shares (Qty)");
+  await expect(page.getByTestId("upload-mismatch")).toHaveCount(0);
+  await page.getByTestId("use-menu").click();
+  await expect(page.getByTestId("upload-mismatch")).toHaveText("Dollars didn't match shares at the latest price for 1 fund and were ignored.");
+  await expect(page.getByTestId("mix-entered-VTI")).not.toHaveText("");
+  expect(await tickerRequests(page)).toEqual([]);
+});
+
+test("a file with shares and dollars fills Your starting mix from its dollars at once, keeps them after Recalculate, and Trades agrees", async ({ page }) => {
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await section(page, "funds");
+  // VTI and BND are not in the plotted view, so nothing prices them yet. The mock's latest closes
+  // are 162.07 and 33.99; the file's dollars give $200 and $10 a share.
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker,shares,dollars\nVTI,10,2000\nBND,100,1000\n"));
+  await expect(page.getByTestId("use-menu")).toBeVisible();
+  await expect(page.getByTestId("amount-head")).toHaveText("Shares (Qty)");
+  await expect(page.getByTestId("mix-entered-VTI")).toHaveText("66.7%");
+  await expect(page.getByTestId("mix-entered-BND")).toHaveText("33.3%");
+  await page.getByTestId("use-menu").click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("unit")).toBe("shares");
+  await expect(page.getByTestId("use-menu")).toHaveCount(0);
+  // with the new menu's own closes in hand the file's dollars still decide, in the column and on the strip
+  await expect(page.getByTestId("mix-entered-VTI")).toHaveText("66.7%");
+  await expect(page.getByTestId("mix-entered-BND")).toHaveText("33.3%");
+  await expect(page.getByTestId("upload-mismatch")).toHaveCount(0);
+  // Trades reads the same mix, and its shares are at the same prices
+  await section(page, "trades");
+  const [download] = await Promise.all([page.waitForEvent("download"), page.getByTestId("trades-export").click()]);
+  let csv = "";
+  for await (const chunk of await download.createReadStream()) csv += chunk.toString();
+  const lines = csv.trimEnd().split("\r\n");
+  expect(lines[0]).toBe("Fund,Now %,Selected %,Change (percentage points),Change ($),Change (shares)");
+  const rows = lines.slice(1).map((l) => l.split(","));
+  const price = { VTI: 200, BND: 10 } as Record<string, number>;
+  expect(Number(rows.find((r) => r[0] === "VTI")![1])).toBeCloseTo(66.67, 2);
+  expect(Number(rows.find((r) => r[0] === "BND")![1])).toBeCloseTo(33.33, 2);
+  const held = rows.filter((r) => r[0] in price);
+  expect(held.some((r) => Math.abs(Number(r[5])) >= 5), "a trade big enough to tell the prices apart").toBe(true);
+  for (const r of held) expect(Math.abs(Number(r[5]) - Number(r[4]) / price[r[0]]), r[0]).toBeLessThanOrEqual(0.51);
+});
+
+test("a file whose amounts do not share a column is refused whole, with who has what", async ({ page }) => {
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await section(page, "funds");
+  const before = (await posts(page)).length;
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker,shares,percent\nVTI,10,\nBND,,40\n"));
+  await expect(page.getByTestId("upload-error")).toHaveText(
+    "Every fund with an amount needs the same column filled in (shares, dollars or percent). VTI has only shares; BND has only percent.",
+  );
+  await expect(page.getByTestId("fund-row-SGOV")).toBeVisible();
+  await expect(page.getByTestId("fund-row-VTI")).toHaveCount(0);
+  await expect(page.getByTestId("use-menu")).toHaveCount(0);
+  expect((await posts(page)).length).toBe(before);
+  // a file that cannot be read as numbers is refused too, naming the row
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker,dollars\nVTI,1000\nBND,lots\n"));
+  await expect(page.getByTestId("upload-error")).toHaveText('Row 3 (BND): "lots" in the dollars column is not a number.');
+});
+
+test("tickers left out of a file are listed even when the file is refused for having too few funds", async ({ page }) => {
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await section(page, "funds");
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker\nVTI\nXYZ\nABC\n"));
+  await expect(page.getByTestId("upload-error")).toHaveText("A portfolio needs at least 2 funds.");
+  await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): XYZ, ABC.");
+  await expect(page.getByTestId("fund-row-SGOV")).toBeVisible();
+  await expect.poll(async () => (await tickerRequests(page)).length).toBe(1);
+  expect(await tickerRequests(page)).toEqual([{ tickers: ["XYZ", "ABC"], source: "csv" }]);
+});
+
+test("the list of skipped tickers stays when the funds panel is closed and opened again @desktop-only", async ({ page }) => {
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await section(page, "funds");
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker\nVTI\nBND\nXYZ\n"));
+  await expect(page.getByTestId("upload-skipped")).toBeVisible();
+  await page.getByTestId("funds-toggle").click();
+  await expect(page.getByTestId("upload-skipped")).toHaveCount(0);
+  await page.getByTestId("funds-toggle").click();
+  await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): XYZ.");
+});
+
+test("a ticker typed into the picker that the site does not have is reported once Enter is pressed, once per visit", async ({ page }) => {
+  await open(page);
+  await section(page, "funds");
+  const field = page.getByTestId("fund-add");
+  await field.fill("zzqj");
+  expect(await tickerRequests(page), "typing alone reports nothing").toEqual([]);
+  await field.press("Enter");
+  await expect(page.getByText("ZZQJ isn't offered")).toBeVisible();
+  await expect.poll(async () => (await tickerRequests(page)).length).toBe(1);
+  expect(await tickerRequests(page)).toEqual([{ tickers: ["ZZQJ"], source: "picker" }]);
+  await field.fill("ZZQJ");
+  await field.press("Enter");
+  await field.fill("not a ticker at all");
+  await field.press("Enter");
+  await field.fill("VTI");
+  await field.press("Enter");
+  await expect(page.getByTestId("fund-row-VTI")).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(await tickerRequests(page)).toEqual([{ tickers: ["ZZQJ"], source: "picker" }]);
+});
+
+// ── Example Portfolio 2: a preset that declares its own limits ───────────────────────────────
+type MockPreset = { id: string; caps: { id: string; min: number | null; max: number | null }[] };
+const limitedPreset = async (page: Page) => {
+  const body = (await (await page.request.get("/api/presets")).json()) as { presets: MockPreset[] };
+  const preset = body.presets.find((p) => p.id === "research2003")!;
+  const percent = (id: string) => String(Math.round(preset.caps.find((c) => c.id === id)!.max! * 100));
+  return { first: preset.caps[0].id, last: preset.caps[preset.caps.length - 1].id, percent };
+};
+
+test("Example Portfolio 2 opens with its own limits in Settings, builds nothing and keeps them out of the link", async ({ page }) => {
+  const own = await limitedPreset(page);
+  await open(page, "u=research2003&lb=5y");
+  await expect(page.getByTestId("preset-menu")).toHaveAccessibleName(/Example Portfolio 2/);
+  expect(await posts(page), "its declared tensor is fetched; nothing is built").toEqual([]);
+  expect(new URL(page.url()).searchParams.get("u")).toBe("research2003");
+  expect(new URL(page.url()).searchParams.has("c"), "its own limits are not written into the link").toBe(false);
+  await section(page, "settings");
+  await expect(page.getByTestId(`cap-max-${own.first}`)).toHaveValue(own.percent(own.first));
+  await expect(page.getByTestId(`cap-max-${own.last}`)).toHaveValue(own.percent(own.last));
+  expect(own.percent(own.first)).not.toBe(own.percent(own.last));
+  await expect(page.getByTestId(`cap-min-${own.first}`)).toHaveValue("0");
+});
+
+test("choosing Example Portfolio 2 from the menu shows its limits, and choosing another portfolio takes them away", async ({ page }) => {
+  const own = await limitedPreset(page);
+  await open(page);
+  await page.getByTestId("preset-menu").click();
+  await page.getByRole("menuitemradio", { name: /Example Portfolio 2/ }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("u")).toBe("research2003");
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  expect(await posts(page)).toEqual([]);
+  await section(page, "settings");
+  await expect(page.getByTestId(`cap-max-${own.first}`)).toHaveValue(own.percent(own.first));
+  await page.getByTestId("preset-menu").click();
+  await page.getByRole("menuitemradio", { name: "Example Portfolio", exact: true }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("u")).toBe("guide2017");
+  await expect(page.getByTestId(`cap-max-${own.first}`)).not.toHaveValue(own.percent(own.first));
+});
+
+test("an edited limit on Example Portfolio 2 is sent with the others, goes in the link, and the link reopens it", async ({ page }) => {
+  const own = await limitedPreset(page);
+  await open(page, "u=research2003&lb=5y");
+  await section(page, "settings");
+  const field = page.getByTestId(`cap-max-${own.first}`);
+  await field.fill("30");
+  await field.blur();
+  await expect.poll(async () => (await posts(page)).length).toBe(1);
+  const sent = (await posts(page))[0].funds as { id: string; min: number | null; max: number | null }[];
+  expect(sent.find((f) => f.id === own.first)).toEqual({ id: own.first, min: null, max: 0.3 });
+  expect(sent.find((f) => f.id === own.last)).toEqual({ id: own.last, min: null, max: Number(own.percent(own.last)) / 100 });
+  await expect.poll(() => new URL(page.url()).searchParams.get("c") ?? "").toContain(`${own.first}::30`);
+  expect(new URL(page.url()).searchParams.get("u")).toBe("research2003");
+  const link = page.url();
+  await page.goto(link);
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  await section(page, "settings");
+  await expect(page.getByTestId(`cap-max-${own.first}`)).toHaveValue("30");
+  await expect(page.getByTestId(`cap-max-${own.last}`)).toHaveValue(own.percent(own.last));
+  await expect(page.getByTestId("preset-menu")).toHaveAccessibleName(/Example Portfolio 2/);
 });

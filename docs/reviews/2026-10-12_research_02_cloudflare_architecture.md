@@ -16,7 +16,7 @@ Note added after the user's reply: the user already has four Contabo VPS, a paid
 
 **(d) Entirely in-browser.** Pyodide core ~6.4 MB plus numpy/scipy wheels (tens of MB); too heavy for a landing page. The JS/WASM route is cheap: `quadprog` (MIT, pure JS port of R's Goldfarb-Idnani dual method, strictly convex QPs with linear inequalities); `scs-solver` (WASM SCS conic solver) for general convex cases; `glpk.js`/`highs-js` are LP/MILP only, useful for CVaR/MAD variants. For long-only budget-constrained min-variance with n ≤ 100, a Goldfarb-Idnani solve is sub-millisecond; 100 frontier points plus a max-Sharpe search runs well under a second. Max-Sharpe reduces to a QP via the Cornuejols-Tütüncü transform (y = w/(μᵀw − rf)); "diversification-optimized" can be max-diversification-ratio (same transform) or equal-risk-contribution (projected gradient).
 
-**Bottom line:** the QP is small enough that the browser is the cheapest and fastest place for it, and that removes per-request compute cost from the free tier. Keep scipy on the server for a daily batch that precomputes canonical frontiers for popular fund menus and validates the JS solver.
+**Bottom line:** the QP is small enough that the browser is the cheapest and fastest place for it, and that removes per-request compute cost from the free tier. Keep scipy on the server for a daily batch that precomputes canonical frontiers for popular portfolios and validates the JS solver.
 
 ## 2. Market data (adjusted daily closes, commercial site)
 
@@ -39,7 +39,7 @@ Per-ticker 5 y of daily adjusted closes is ~1,260 floats (~10-20 KB JSON, ~5 KB 
 
 - **KV:** Free 100k reads/day, 1k writes/day, 1 GB; Paid 10M reads/mo then $0.50/M, $0.50/GB-mo. Eventually consistent, fine for daily data. Best for `prices:{TICKER}` blobs and hot per-menu covariance matrices.
 - **D1:** Free 5M rows read/day, 5 GB; Paid 25B reads included. Use for ticker metadata, request logs, lead capture, popular-menu stats.
-- **R2:** 10 GB and 10M Class B free; $0.015/GB-mo; zero egress. Canonical daily snapshot per ticker and precomputed frontier JSON for the top N fund menus, served straight to the browser.
+- **R2:** 10 GB and 10M Class B free; $0.015/GB-mo; zero egress. Canonical daily snapshot per ticker and precomputed frontier JSON for the top N portfolios, served straight to the browser.
 - **Cron Triggers:** 5 per account Free, 250 Paid. One nightly cron after fund NAVs post refreshes only tickers seen in the last 30 days, writes R2 then KV, bumps a version key. Serialize refreshes per ticker through a Durable Object to avoid duplicate vendor calls.
 
 ## 4. Charting
@@ -61,7 +61,7 @@ Common practice: Portfolio Visualizer's FAQ states "Educational only. Not invest
 1. Static front end on Cloudflare Pages/Workers Assets (TS, D3 or ECharts, ~100 kB gz). All interactive math client-side: covariance precomputed per ticker set, slider to mean/variance in under 1 ms, frontier via `quadprog` for n ≤ 100, max-Sharpe via the convex transform, ERC/max-diversification via projected gradient.
 2. One JS Worker serving `GET /returns?tickers=...`: reads KV, falls back to R2, misses go through a Durable Object that de-duplicates vendor fetches, then writes R2+KV. Response is a compact Float32 returns matrix.
 3. Nightly Cron Trigger refreshes active tickers from EODHD after NAV posting; canonical history in R2, hot copies in KV, metadata/leads in D1.
-4. No Python in the request path. scipy/skfolio run only from the cron (Cloudflare Container or the existing VPS) to precompute frontiers for top fund menus and unit-test the JS solver nightly.
+4. No Python in the request path. scipy/skfolio run only from the cron (Cloudflare Container or the existing VPS) to precompute frontiers for top portfolios and unit-test the JS solver nightly.
 5. Reasoning: the problem is a 100×100 QP, so the browser is both fastest and cheapest; the only real recurring cost is the data license.
 6. Compliance: Portfolio-Visualizer-style disclaimers, impersonal framing, generic CTA.
 

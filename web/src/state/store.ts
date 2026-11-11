@@ -11,6 +11,7 @@ import {
   fetchTier,
   getTensor,
   postTensor,
+  postTickerRequests,
   PUBLIC_TIER,
   type Preset,
   type PresetsBody,
@@ -19,17 +20,30 @@ import {
   type Tier,
 } from "../api/http";
 import type { Tensor } from "../api/tensor";
+import { MAX_TICKERS_PER_REQUEST, TICKER_SHAPE, type TickerSource } from "../api/tickerShape";
 import { linkTooManyFunds } from "../copy";
-import { amountsToWeights, amountsValue, percentTotal } from "../math/amounts";
+import { amountsToWeights, amountsValue, fundsWithPrices, percentTotal } from "../math/amounts";
 import { portfolioMath } from "../math/portfolio";
 import { positionOfCeiling } from "../math/view";
+import { settlePending, type PendingCheck } from "../sections/fundsCsv";
 import { decode, encode, type UrlState } from "./url";
 
 export type Unit = UrlState["unit"];
 export type LookbackId = UrlState["lookback"];
 export type ThemeId = NonNullable<UrlState["theme"]>;
 export type Cap = UrlState["caps"][number];
-export type Row = { id: string; name: string; amount: number | null };
+/**
+ * A fund of the menu and its amount. `price` is the price per share of an uploaded file that gave
+ * shares and dollars (its dollars over its shares); while it is set, the fund's shares are valued
+ * at it in place of the service's latest close. Page state only: it is not part of the address.
+ */
+export type Row = { id: string; name: string; amount: number | null; price?: number };
+/**
+ * What the last CSV upload has to tell: why it was refused, the tickers it left out, notes on
+ * columns that were not used, and the checks still waiting for the new menu's prices (`menu` is
+ * the fund list they wait for). Page state only: it is not part of the address.
+ */
+export type UploadReport = { error: string | null; skipped: string[]; notes: string[]; pending: PendingCheck[]; menu: string[] };
 export type BuildStatus = "idle" | "building" | "ready" | "build-retry" | "build-failed-final";
 
 export const LOOKBACKS: LookbackId[] = ["1y", "2y", "3y", "5y", "10y", "ew"];
@@ -71,6 +85,8 @@ export type State = {
   /** One-sentence problem with the requested menu (unknown symbols, refused request). */
   menuError: string | null;
   loadError: string | null;
+  /** The last CSV upload's report, until it is dismissed or the next upload replaces it. */
+  upload: UploadReport | null;
 };
 
 export type Action =
@@ -90,7 +106,10 @@ export type Action =
   | { type: "challenged" }
   | { type: "setUnit"; unit: Unit }
   | { type: "setAmount"; id: string; amount: number | null }
-  | { type: "useMenu"; rows: Row[] }
+  | { type: "useMenu"; rows: Row[]; unit?: Unit }
+  | { type: "setUpload"; report: UploadReport }
+  | { type: "dismissUpload" }
+  | { type: "requestTickers"; tickers: string[]; source: TickerSource }
   | { type: "setCaps"; caps: Cap[] };
 
 export type Store = {
@@ -123,13 +142,26 @@ const unitOfPreset = (preset: Preset): Unit | null =>
 const rowsOfPreset = (preset: Preset): Row[] =>
   preset.funds.map((f) => ({ id: f.id, name: f.name ?? f.id, amount: preset.allocation ? (preset.allocation[f.id] ?? null) : null }));
 
-/** The URL description of a state (spec 8.1). A preset is named by `u`; its rows are not repeated. */
+const fractionToPercent = (x: number | null | undefined): number | null => (x === null || x === undefined ? null : Number((x * 100).toFixed(6)));
+
+/** The limits a preset declares, as the page holds limits: whole percents, blank for the default rule. */
+const capsOfPreset = (preset: Preset): Cap[] => preset.caps.map((c) => ({ id: c.id, min: fractionToPercent(c.min), max: fractionToPercent(c.max) }));
+
+const capList = (caps: Cap[]) => [...caps].sort((a, b) => a.id.localeCompare(b.id)).map((c) => [c.id, c.min, c.max]);
+/** Whether two sets of limits are the same, whatever their order. */
+const sameCaps = (a: Cap[], b: Cap[]) => JSON.stringify(capList(a)) === JSON.stringify(capList(b));
+
+/**
+ * The URL description of a state (spec 8.1). A preset is named by `u`; its rows are not repeated,
+ * and neither are its own limits: a link to a preset without `c` means the limits it declares.
+ */
 export function toUrlState(state: State, haveR: boolean): UrlState {
+  const own = state.preset ? state.presets?.presets.find((p) => p.id === state.preset) : undefined;
   return {
     preset: state.preset as UrlState["preset"],
     funds: state.preset ? [] : state.rows.map((r) => ({ id: r.id, amount: r.amount })),
     unit: state.unit,
-    caps: state.caps,
+    caps: own && sameCaps(state.caps, capsOfPreset(own)) ? [] : state.caps,
     lookback: state.lookback,
     ghosts: state.ghosts,
     r: haveR ? state.s : null,
@@ -147,7 +179,7 @@ export function currentMix(state: Pick<State, "rows" | "unit">, tensor: Tensor):
   setAside: number | null;
 } {
   const byId = new Map(state.rows.map((r) => [r.id, r.amount]));
-  const funds = tensor.universe.funds;
+  const funds = fundsWithPrices(tensor.universe.funds, state.rows);
   const included = funds.map((f) => byId.get(f.id) ?? null);
   const includedIds = new Set(funds.map((f) => f.id));
   const outside = state.rows.filter((r) => !includedIds.has(r.id) && (r.amount ?? 0) > 0);
@@ -178,7 +210,7 @@ export function enteredValue(
   tensor: Tensor,
 ): { status: "usd"; total: number } | { status: "pct" } | { status: "unknown_price"; funds: string[] } {
   const byId = new Map(state.rows.map((r) => [r.id, r.amount]));
-  const funds = tensor.universe.funds;
+  const funds = fundsWithPrices(tensor.universe.funds, state.rows);
   const value = amountsValue(
     funds.map((f) => byId.get(f.id) ?? null),
     state.unit,
@@ -187,8 +219,7 @@ export function enteredValue(
   return value.status === "unknown_price" ? { status: "unknown_price", funds: value.unknownPrice.map((i) => funds[i].id) } : value;
 }
 
-const menuKey = (rows: Row[], caps: Cap[]) =>
-  JSON.stringify([rows.map((r) => r.id).sort(), [...caps].sort((a, b) => a.id.localeCompare(b.id)).map((c) => [c.id, c.min, c.max])]);
+const menuKey = (rows: Row[], caps: Cap[]) => JSON.stringify([rows.map((r) => r.id).sort(), capList(caps)]);
 
 export function createStore(init: { search: string }): Store {
   const url = decode(init.search);
@@ -221,6 +252,7 @@ export function createStore(init: { search: string }): Store {
     staleness: null,
     menuError: null,
     loadError: null,
+    upload: null,
   };
 
   const listeners = new Set<() => void>();
@@ -234,6 +266,7 @@ export function createStore(init: { search: string }): Store {
   let failures = 0;
   let lastPost: { key: string; body: string } | null = null;
   let symbolsAsked = false;
+  const requestedTickers = new Set<string>();
 
   const emit = () => listeners.forEach((l) => l());
   const set = (patch: Partial<State>, writeUrl = true) => {
@@ -288,7 +321,7 @@ export function createStore(init: { search: string }): Store {
   /** How to ask for this menu's tensor at `lookback`: the preset's declared URL, or a POST body. */
   function requestFor(lookback: LookbackId, post = false): { get: string } | { post: string } | { unavailable: string } {
     const preset = activePreset();
-    if (preset && state.caps.length === 0 && !post) {
+    if (preset && sameCaps(state.caps, capsOfPreset(preset)) && !post) {
       const entry = preset.lookbacks[lookback];
       if (entry && entry.status === "ready" && entry.url) return { get: entry.url };
       if (entry && entry.status === "unavailable") return { unavailable: NOT_ENOUGH_HISTORY };
@@ -334,6 +367,20 @@ export function createStore(init: { search: string }): Store {
       menuError: null,
       ghosts: state.ghosts.filter((g) => g !== lookback),
     });
+    settleUpload();
+  }
+
+  /**
+   * The upload's checks that need prices run once the menu on screen is the file's menu and its
+   * tensor is here (shares against the file's dollars or percent at the tensor's latest closes).
+   */
+  function settleUpload() {
+    const report = state.upload;
+    if (report === null || report.pending.length === 0 || state.tensor === null) return;
+    const ids = (list: string[]) => [...list].sort().join(",");
+    if (ids(state.rows.map((r) => r.id)) !== ids(report.menu)) return;
+    const notes = settlePending(report.pending, state.tensor.universe.funds);
+    set({ upload: { ...report, notes: [...report.notes, ...notes], pending: [] } }, false);
   }
 
   function fail(error: string, retryable: boolean) {
@@ -365,7 +412,7 @@ export function createStore(init: { search: string }): Store {
       const list = Array.isArray(answer.details?.symbols) ? (answer.details.symbols as unknown[]).map(String) : [];
       set({
         lookback: state.tensorLookback ?? state.lookback,
-        menuError: list.length ? `No verified current data for ${list.join(", ")}. Remove ${list.length > 1 ? "them" : "it"} to continue.` : "This menu has a fund we cannot find.",
+        menuError: list.length ? `No verified current data for ${list.join(", ")}. Remove ${list.length > 1 ? "them" : "it"} to continue.` : "This portfolio has a fund we cannot find.",
         build: { status: state.tensor ? "ready" : "idle", error: null, position: null },
       });
       return;
@@ -373,7 +420,7 @@ export function createStore(init: { search: string }): Store {
     if (answer.status === 422 || answer.status === 400) {
       set({
         lookback: state.tensorLookback ?? state.lookback,
-        menuError: answer.message || reason || "This menu cannot be computed as entered.",
+        menuError: answer.message || reason || "This portfolio cannot be computed as entered.",
         build: { status: state.tensor ? "ready" : "idle", error: null, position: null },
       });
       return;
@@ -513,12 +560,14 @@ export function createStore(init: { search: string }): Store {
     set({ staleness: age > 4 ? { asof: presetsAsof } : null }, false);
   }
 
-  function adoptPreset(preset: Preset, keepUnit: boolean) {
+  /** Makes `preset` the menu: its rows, its unit and its own limits (or the limits a link carried, with `keepCaps`). */
+  function adoptPreset(preset: Preset, keepUnit: boolean, keepCaps = false) {
     state = {
       ...state,
       preset: preset.id,
       rows: rowsOfPreset(preset),
       unit: keepUnit ? state.unit : (unitOfPreset(preset) ?? "pct"),
+      caps: keepCaps ? state.caps : capsOfPreset(preset),
     };
   }
 
@@ -587,7 +636,8 @@ export function createStore(init: { search: string }): Store {
       }
       const preset = state.presets.presets.find((p) => p.id === state.preset) ?? state.presets.presets[0];
       if (!preset) return;
-      adoptPreset(preset, unitInUrl);
+      // A link's own limits (`c`) win; without any, a preset opens with the limits it declares.
+      adoptPreset(preset, unitInUrl, state.caps.length > 0);
       // An explicit percent unit on a preset that arrives in another unit cannot be written back
       // with `u=` (the address omits unit=pct), so it is kept as a custom menu instead.
       if (state.unit === "pct" && (unitOfPreset(preset) ?? "pct") !== "pct") state = { ...state, preset: null };
@@ -643,7 +693,7 @@ export function createStore(init: { search: string }): Store {
         failures = 0;
         adoptPreset(preset, false);
         // A new menu starts at its own default position (spec 4.9), with the suggested point.
-        state = { ...state, tensor: null, tensorLookback: null, caps: [], t: "auto" };
+        state = { ...state, tensor: null, tensorLookback: null, t: "auto" };
         menuChanged({});
         return;
       }
@@ -691,22 +741,46 @@ export function createStore(init: { search: string }): Store {
         // The funds table never offers more than the tier allows; a longer list is refused, not cut.
         const rows = action.rows;
         if (rows.length < MIN_FUNDS || rows.length > state.tier.menuMax) return;
+        // A unit that comes with the list (a CSV upload) is taken in the same step as its amounts,
+        // so the plotted menu never reads amounts in another unit.
+        const unit = action.unit ?? state.unit;
         const sameFunds = menuKey(rows, []) === menuKey(state.rows, []);
         if (sameFunds) {
-          set({ rows, preset: null });
+          set({ rows, unit, preset: null });
+          settleUpload();
           return;
         }
         failures = 0;
         const ids = new Set(rows.map((r) => r.id));
         state = { ...state, tensor: null, tensorLookback: null, t: "auto" };
-        menuChanged({ rows, preset: null, caps: state.caps.filter((c) => ids.has(c.id)) });
+        menuChanged({ rows, unit, preset: null, caps: state.caps.filter((c) => ids.has(c.id)) });
+        return;
+      }
+      case "setUpload":
+        set({ upload: action.report }, false);
+        settleUpload();
+        return;
+      case "dismissUpload":
+        set({ upload: null }, false);
+        return;
+      case "requestTickers": {
+        // Tickers asked for that the site does not serve; each goes once per visit, and a failure is silent.
+        const fresh = [...new Set(action.tickers.map((t) => t.trim().toUpperCase()).filter((t) => TICKER_SHAPE.test(t) && !requestedTickers.has(t)))].slice(0, MAX_TICKERS_PER_REQUEST);
+        if (fresh.length === 0 || halted) return;
+        for (const ticker of fresh) requestedTickers.add(ticker);
+        void postTickerRequests(fresh, action.source);
         return;
       }
       case "setCaps": {
         failures = 0;
         if (menuKey(state.rows, action.caps) === menuKey(state.rows, state.caps)) return;
+        // A link to a preset without `c` means the limits the preset declares, so every limit
+        // back at the default rule, on a preset that declares some, can only be written out as a
+        // custom menu (as a changed unit is, above).
+        const own = activePreset();
+        const custom = own !== null && action.caps.length === 0 && capsOfPreset(own).length > 0;
         // Caps change the tensor but not the menu: keep the view while the new one loads.
-        set({ caps: action.caps, ghostTensors: {}, unavailable: {}, menuError: null });
+        set({ caps: action.caps, ...(custom ? { preset: null } : {}), ghostTensors: {}, unavailable: {}, menuError: null });
         // A cap policy is always sent, the all-default one included, so the server is the judge.
         void load(state.lookback, { previous: state.tensorLookback, fresh: true });
         for (const g of state.ghosts) void loadGhost(g);

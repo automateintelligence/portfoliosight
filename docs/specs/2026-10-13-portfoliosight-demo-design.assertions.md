@@ -196,7 +196,7 @@ why it is load-bearing.
   application part)
 - **A-PS-56 — presets and tensors are served from R2 and a POST for the default preset resolves to
   the same tensor.** (DoD 21)
-- **A-PS-57 — the nightly is fresh: `asof` equals `D_G`, the run finished clean, twelve tensors
+- **A-PS-57 — the nightly is fresh: `asof` equals `D_G`, the run finished clean, eighteen tensors
   exist, the cache is under its cap, and the page says which date it shows.** (S20, F13, M5, DoD 23)
 - **A-PS-58 — the store is verified, seeded, mirrored, and the cron is installed once.** (S21,
   DoD 28 second half)
@@ -688,12 +688,12 @@ Phase 1 · unit
   `Σmin > 1`, `Σmax < 1`, and `N < 2`; the greedy endpoint fill allocates every minimum first;
   on the 23-fund fixture no computed weight exceeds 0.25 + 1e-6; and the uncapped reference
   frontier (`frontier_uncapped`) lies on or above the capped one.
-- **Setup.** The caps module; the fixture tensor; a 4-fund menu with `min = (0.3, 0.3, 0, 0)` and
+- **Setup.** The caps module; the fixture tensor; a 4-fund portfolio with `min = (0.3, 0.3, 0, 0)` and
   `max = (0.3, 0.3, 0.4, 0.4)`; the five invalid inputs.
 - **Observation.** `max(N)` for N = 2..30 equals the closed form (spot values: N = 2, 3 → 1.0;
   5 → 0.6; 10 → 0.3; 12 → 0.25; 23 → 0.25; 30 → 0.25); each invalid input raises the validation
   error that the API maps to 422, with a message naming the fund or the sum; the greedy fill on
-  the 4-fund menu gives exactly 0.3, 0.3 to the first two before any remainder is placed; every
+  the 4-fund portfolio gives exactly 0.3, 0.3 to the first two before any remainder is placed; every
   weight in the fixture tensor (same set as A-PS-17) is ≤ 0.25 + 1e-6; the tensor's
   `bounds.rule` string is `"max(0.25, 3/N)"` and `bounds.requested` holds `null` for defaults
   while `bounds.min/max` hold the resolved numbers; the uncapped frontier starts at no higher a
@@ -862,7 +862,7 @@ Phase 2 · unit
 ### A-PS-30 — a generation is published only when complete, and never half-visible
 Phase 2 · api/unit
 - **Claim.** The nightly writes `meta/{G}/generation.json` once, builds each missing preset
-  tensor with `D_G` passed in, switches `meta/current.json` only after all 12 keys exist,
+  tensor with `D_G` passed in, switches `meta/current.json` only after all 18 keys exist,
   resumes an interrupted run without rewriting anything under `meta/{G}/`, skips to the
   post-publication steps when `current.json` already points at G, deletes generations older
   than the previous one, and marks TSP `stale` (not failed) when the tsp.gov fetch breaks.
@@ -878,18 +878,19 @@ Phase 2 · api/unit
   `mu_sample` yields the same tensor as without it). (4) A third run with `current.json`
   already at G performs zero builds. (5) With three generations present, the oldest is deleted
   and the previous kept. (6) TSP fetch failure: the run finishes, TSP symbols are `stale`,
-  `meta/status.json` records the error, and `current.json` is still switched when the 12 keys
-  exist. **Must-not-contain:** a `current.json` switch before the 12th key; any rewrite of a
+  `meta/status.json` records the error, and `current.json` is still switched when the 18 keys
+  exist. **Must-not-contain:** a `current.json` switch before the 18th key; any rewrite of a
   `meta/{G}/` key; a tensor with `asof ≠ D_G`. Fail = any leg.
 - **Kind.** property (interrupt/resume/skip/prune/TSP-failure paths).
 
 ### A-PS-31 — presets and health bodies match `data/presets.json` and the holdings CSV
 Phase 2 · api
-- **Claim.** `GET /v1/presets` returns the two presets of `data/presets.json` with the §6 shape,
+- **Claim.** `GET /v1/presets` returns the three presets of `data/presets.json` with the §6 shape,
   where `guide2017.allocation` is `Qty × Price` per symbol from
   `data/holdings/holdings_guide2017_step2.csv` in `"$"` with 18 non-zero of 23 entries and
-  `tsp.allocation` is `null`; `GET /v1/health` returns the §6 fields.
-- **Setup.** `TestClient`, `LocalStore` with a published generation whose 12 tensors exist
+  `tsp.allocation` is `null`, and `research2003` is "Example Portfolio 2" with its 19 holdings, their
+  limits and an equal mix in `"%"` adding up to 100; `GET /v1/health` returns the §6 fields.
+- **Setup.** `TestClient`, `LocalStore` with a published generation whose 18 tensors exist
   (A-PS-30's result); the CSV read independently by the test.
 - **Observation.** `presets[0].id == "guide2017"`, name `"Example Portfolio"`, 23 fund ids
   equal to the CSV's symbols, `allocation_unit == "$"`, `allocation[s] == round(Qty × Price, 2)`
@@ -1415,7 +1416,7 @@ Phase 4 · prod
 
 ### A-PS-56 — presets and tensors are served from R2 and a POST for the default preset resolves to the same tensor
 Phase 4 · prod
-- **Claim.** `GET /api/presets` carries `x-ps-source: r2`, a `generation`, and both presets with
+- **Claim.** `GET /api/presets` carries `x-ps-source: r2`, a `generation`, and the three presets with
   all six lookbacks `ready` and `/api/…` URLs; the `guide2017` 5y URL returns a tensor that
   validates against the shipped contract its own `schema` field names
   (`portfoliosight/engine/tensor.schema.json` for schema 3, `tensor.schema.v2.json` for schema 2)
@@ -1439,11 +1440,11 @@ Phase 4 · prod
   funds in use; a fund set aside in the default tensor. Fail = any.
 - **Kind.** example.
 
-### A-PS-57 — the nightly is fresh: `asof` equals `D_G`, the run finished clean, twelve tensors exist, the cache is under its cap, and the page says which date it shows
+### A-PS-57 — the nightly is fresh: `asof` equals `D_G`, the run finished clean, eighteen tensors exist, the cache is under its cap, and the page says which date it shows
 Phase 4 · prod (run at or after 08:00 PT)
 - **Claim.** The current generation's `asof` equals the test's own `D_G` for the check day
   (A-PS-08's rule with the scheduled start 02:00 PT), `meta/status.json` as exposed by
-  `/api/health.nightly` shows that run finished with zero errors, the generation holds the 12
+  `/api/health.nightly` shows that run finished with zero errors, the generation holds the 18
   preset tensors, the KS-001 cache volume is ≤ 300 MB, the timer is enabled, and the page's
   details line "prices through {asof}" shows the same date.
 - **Setup.** Header-bearing client; `exchange_calendars` locally; ssh to `$PS_KS001_SSH_HOST`; Playwright

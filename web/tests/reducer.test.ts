@@ -12,6 +12,7 @@ const TENSOR = parseTensor(structuredClone(RAW));
 const G = RAW.generation as string;
 const H1 = RAW.universe.hash as string;
 const H2 = "00000000000000aa";
+const H3 = "00000000000000bb";
 const IDS: string[] = RAW.universe.funds.map((f: { id: string }) => f.id);
 const LBS = ["1y", "2y", "3y", "5y", "10y", "ew"];
 const DOMAIN = portfolioMath(TENSOR).riskSliderDomain();
@@ -22,18 +23,24 @@ let replaced: string[] = [];
 let health: () => Response;
 let tensorRoute: (call: Call) => Response;
 let tierRoute: () => Response;
+let tickerRoute: () => Response | Promise<Response>;
 let presetsAsof = RAW.asof as string;
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
 const lookbacks = (hash: string) => Object.fromEntries(LBS.map((lb) => [lb, { status: "ready", url: `/api/tensors/${G}/${hash}/${lb}` }]));
 const allocation = Object.fromEntries(IDS.slice(0, 6).map((id, i) => [id, 1000 * (i + 1)]));
+// A preset that declares its own limits (as fractions) and a starting mix in percent.
+const limitedFunds = IDS.slice(0, 6);
+const limitedCaps = limitedFunds.map((id, i) => ({ id, min: null, max: i < 4 ? 0.4 : 0.1 }));
+const limitedMix = Object.fromEntries(limitedFunds.map((id, i) => [id, i < 4 ? 16.67 : 16.66]));
 const presetsBody = () => ({
   generation: G,
   asof: presetsAsof,
   presets: [
     { id: "guide2017", name: "Example Portfolio", hash: H1, funds: RAW.universe.funds.map((f: { id: string; name: string }) => ({ id: f.id, name: f.name })), allocation, allocation_unit: "$", lookbacks: lookbacks(H1) },
     { id: "tsp", name: "TSP (G, F, C, S, I)", hash: H2, funds: RAW.universe.funds.slice(0, 5).map((f: { id: string; name: string }) => ({ id: f.id, name: f.name })), allocation: null, allocation_unit: null, lookbacks: lookbacks(H2) },
+    { id: "research2003", name: "Example Portfolio 2", hash: H3, funds: limitedFunds.map((id) => ({ id, name: id })), caps: limitedCaps, allocation: limitedMix, allocation_unit: "%", lookbacks: lookbacks(H3) },
   ],
 });
 const tensorFor = (lookback: string, patch: (t: typeof RAW) => void = () => undefined) => {
@@ -67,6 +74,7 @@ beforeEach(() => {
   presetsAsof = RAW.asof;
   health = () => json(200, { asof: RAW.asof, asof_trading_days_behind: 0 });
   tierRoute = () => json(404, {});
+  tickerRoute = () => new Response(null, { status: 204 });
   tensorRoute = (call) => (call.method === "POST" ? json(200, { status: "ready", url: `/api/tensors/${G}/${H1}/${JSON.parse(call.body as string).lookback}` }) : json(200, tensorFor(call.path.split("/").pop() as string)));
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   vi.setSystemTime(new Date(`${RAW.asof}T20:00:00Z`));
@@ -78,6 +86,7 @@ beforeEach(() => {
     if (url.pathname === "/api/symbols") return json(200, { symbols: IDS.map((id) => ({ id, name: id })) });
     if (url.pathname === "/api/health") return health();
     if (url.pathname === "/api/tier") return tierRoute();
+    if (url.pathname === "/api/ticker-requests") return tickerRoute();
     if (url.pathname.startsWith("/api/tensors")) return tensorRoute(call);
     return json(404, {});
   });
@@ -394,6 +403,110 @@ describe("store: transitions", () => {
   });
 });
 
+describe("store: a preset that declares its own limits", () => {
+  const OWN = limitedCaps.map((c) => ({ id: c.id, min: null, max: c.max * 100 }));
+  const lastSearch = () => new URL(replaced[replaced.length - 1], "https://portfoliosight.ai").search;
+  const posts = () => tensorCalls().filter((c) => c.method === "POST");
+  const settle = async () => {
+    await flush();
+    await advance(500);
+  };
+
+  it("opens with its limits in place and its starting mix in percent, loads its declared tensor and keeps the limits out of the address", async () => {
+    const store = await boot("?u=research2003");
+    const s = store.getState();
+    expect(s.preset).toBe("research2003");
+    expect(s.unit).toBe("pct");
+    expect(s.rows.map((r) => r.amount)).toEqual(limitedFunds.map((id) => limitedMix[id]));
+    expect(s.caps).toEqual(OWN);
+    expect(tensorCalls().map((c) => `${c.method} ${c.path}`)).toEqual([`GET /api/tensors/${G}/${H3}/5y`]);
+    const state = decode(lastSearch());
+    expect(state.preset).toBe("research2003");
+    expect(state.caps).toEqual([]);
+    expect(state.funds).toEqual([]);
+  });
+
+  it("choosing it from the menu puts its limits in place, and choosing another preset takes them away", async () => {
+    const store = await boot("");
+    expect(store.getState().caps).toEqual([]);
+    calls = [];
+    store.dispatch({ type: "selectPreset", id: "research2003" });
+    await settle();
+    expect(store.getState().caps).toEqual(OWN);
+    expect(tensorCalls().map((c) => `${c.method} ${c.path}`)).toEqual([`GET /api/tensors/${G}/${H3}/5y`]);
+    store.dispatch({ type: "selectPreset", id: "tsp" });
+    await settle();
+    expect(store.getState().caps).toEqual([]);
+    expect(posts()).toEqual([]);
+  });
+
+  it("an edited limit is posted with all of the menu's limits and travels in the address, and the address reopens it", async () => {
+    const store = await boot("?u=research2003");
+    const edited = [{ id: IDS[0], min: null, max: 30 }, ...OWN.slice(1)];
+    store.dispatch({ type: "setCaps", caps: edited });
+    await settle();
+    const body = JSON.parse(posts().pop()!.body as string);
+    expect(body.funds).toEqual(limitedFunds.map((id, i) => ({ id, min: null, max: i === 0 ? 0.3 : i < 4 ? 0.4 : 0.1 })));
+    expect(store.getState().preset).toBe("research2003");
+    const search = lastSearch();
+    const state = decode(search);
+    expect(state.preset).toBe("research2003");
+    expect(state.caps).toEqual(edited);
+    calls = [];
+    const again = await boot(search);
+    expect(again.getState().preset).toBe("research2003");
+    expect(again.getState().caps).toEqual(edited);
+    expect(JSON.parse(posts()[0].body as string).funds[0]).toEqual({ id: IDS[0], min: null, max: 0.3 });
+  });
+
+  it("limits put back to the preset's own are the preset again: a clean address and no limits in the link", async () => {
+    const store = await boot("?u=research2003");
+    store.dispatch({ type: "setCaps", caps: [{ id: IDS[0], min: null, max: 30 }, ...OWN.slice(1)] });
+    await settle();
+    store.dispatch({ type: "setCaps", caps: OWN });
+    await settle();
+    expect(store.getState().preset).toBe("research2003");
+    expect(decode(lastSearch()).caps).toEqual([]);
+    // the request it sent names the preset's own key: the same policy the nightly built
+    const body = JSON.parse(posts().pop()!.body as string);
+    expect(body.funds.map((f: { max: number }) => f.max)).toEqual(limitedCaps.map((c) => c.max));
+  });
+
+  it("the order of the limits does not make a menu another one", async () => {
+    const store = await boot("?u=research2003");
+    store.dispatch({ type: "setCaps", caps: [...OWN].reverse() });
+    await settle();
+    expect(store.getState().preset).toBe("research2003");
+    expect(posts()).toEqual([]);
+    expect(decode(lastSearch()).caps).toEqual([]);
+  });
+
+  it("every limit back at the default rule is a custom menu, because an address without limits would mean the preset's", async () => {
+    const store = await boot("?u=research2003");
+    store.dispatch({ type: "setCaps", caps: [] });
+    await settle();
+    const s = store.getState();
+    expect(s.preset).toBeNull();
+    expect(s.caps).toEqual([]);
+    expect(s.rows.map((r) => r.id)).toEqual(limitedFunds);
+    const state = decode(lastSearch());
+    expect(state.preset).toBeNull();
+    expect(state.funds.map((f) => f.id)).toEqual(limitedFunds);
+    expect(state.caps).toEqual([]);
+    expect(JSON.parse(posts().pop()!.body as string).funds.every((f: { min: unknown; max: unknown }) => f.min === null && f.max === null)).toBe(true);
+  });
+
+  it("a preset without limits still treats an empty set of limits as itself", async () => {
+    const store = await boot("?u=tsp");
+    store.dispatch({ type: "setCaps", caps: [{ id: IDS[0], min: null, max: 30 }] });
+    await settle();
+    store.dispatch({ type: "setCaps", caps: [] });
+    await settle();
+    expect(store.getState().preset).toBe("tsp");
+    expect(decode(lastSearch()).preset).toBe("tsp");
+  });
+});
+
 describe("store: menu size by access tier (engines spec 6.2)", () => {
   const link = (n: number) => `?f=${Array.from({ length: n }, (_, i) => `${IDS[i % IDS.length]}${i < IDS.length ? "" : `X${i}`}`).join(",")}&lb=5y&r=20&d=0.3`;
   const posted = () => tensorCalls().filter((c) => c.method === "POST").map((c) => (JSON.parse(c.body as string) as { funds: unknown[] }).funds.length);
@@ -411,7 +524,7 @@ describe("store: menu size by access tier (engines spec 6.2)", () => {
   it("a public visitor's link with 31 funds is refused whole: the default view and the message, no request for it", async () => {
     const store = await boot(link(31));
     const s = store.getState();
-    expect(s.linkError).toBe("This menu has more funds than this site allows (30).");
+    expect(s.linkError).toBe("This portfolio has more funds than this site allows (30).");
     expect(posted()).toEqual([]);
     expect(s.preset).toBe("guide2017");
     expect(s.rows.length).toBe(IDS.length);
@@ -437,7 +550,7 @@ describe("store: menu size by access tier (engines spec 6.2)", () => {
     expect((await boot(link(100))).getState().linkError).toBeNull();
     expect(posted()).toEqual([31, 100]);
     const refused = await boot(link(101));
-    expect(refused.getState().linkError).toBe("This menu has more funds than this site allows (100).");
+    expect(refused.getState().linkError).toBe("This portfolio has more funds than this site allows (100).");
     expect(posted()).toEqual([31, 100]);
   });
 
@@ -467,5 +580,151 @@ describe("store: staleness (expectation F13)", () => {
     expect((await boot("")).getState().staleness).toEqual({ asof: "2026-10-01" });
     presetsAsof = RAW.asof;
     expect((await boot("")).getState().staleness).toBeNull();
+  });
+});
+
+describe("store: a fund list from a CSV file", () => {
+  const FUNDS = TENSOR.universe.funds;
+  const [A, B, C] = FUNDS;
+  const row = (id: string, amount: number | null) => ({ id, name: id, amount });
+  const report = (patch: Partial<NonNullable<ReturnType<Store["getState"]>["upload"]>> = {}) => ({ error: null, skipped: [], notes: [], pending: [], menu: [], ...patch });
+  const posts = () => calls.filter((c) => c.method === "POST" && c.path.startsWith("/api/tensors"));
+
+  it("carries the unit with the menu, in one step, and recalculates for a new fund list", async () => {
+    const store = await boot("");
+    expect(store.getState().unit).toBe("usd");
+    store.dispatch({ type: "useMenu", rows: [row(A.id, 10), row(B.id, 5), row(C.id, null)], unit: "shares" });
+    const s = store.getState();
+    expect(s.unit).toBe("shares");
+    expect(s.rows.map((r) => [r.id, r.amount])).toEqual([[A.id, 10], [B.id, 5], [C.id, null]]);
+    expect(s.preset).toBeNull();
+    expect(s.tensor).toBeNull();
+    await flush();
+    expect(posts().map((c) => JSON.parse(c.body as string).funds.map((f: { id: string }) => f.id))).toEqual([[A.id, B.id, C.id]]);
+  });
+
+  it("changes the unit and the amounts of the same funds together, without a request", async () => {
+    const store = await boot("");
+    const ids = store.getState().rows.map((r) => r.id);
+    const before = calls.length;
+    store.dispatch({ type: "useMenu", rows: ids.map((id, i) => row(id, i === 0 ? 40 : i === 1 ? 60 : null)), unit: "pct" });
+    const s = store.getState();
+    expect(s.unit).toBe("pct");
+    expect(s.rows.filter((r) => r.amount !== null).map((r) => r.amount)).toEqual([40, 60]);
+    expect(s.tensor).not.toBeNull();
+    await flush();
+    expect(calls.length).toBe(before);
+  });
+
+  it("leaves the unit alone when none is given, and when the list is refused", async () => {
+    const store = await boot("");
+    store.dispatch({ type: "useMenu", rows: [row(A.id, 1), row(B.id, 2)] });
+    expect(store.getState().unit).toBe("usd");
+    store.dispatch({ type: "useMenu", rows: [row(A.id, 1)], unit: "shares" });
+    expect(store.getState().unit).toBe("usd");
+    expect(store.getState().rows.map((r) => r.id)).toEqual([A.id, B.id]);
+  });
+
+  it("holds the report until dismissed, and replaces it with the next one", async () => {
+    const store = await boot("");
+    expect(store.getState().upload).toBeNull();
+    store.dispatch({ type: "setUpload", report: report({ skipped: ["XYZ"] }) });
+    expect(store.getState().upload?.skipped).toEqual(["XYZ"]);
+    store.dispatch({ type: "setUpload", report: report({ error: "refused" }) });
+    expect(store.getState().upload).toMatchObject({ error: "refused", skipped: [] });
+    store.dispatch({ type: "dismissUpload" });
+    expect(store.getState().upload).toBeNull();
+  });
+
+  it("never puts the report in the address", async () => {
+    const store = await boot("");
+    store.dispatch({ type: "setUpload", report: report({ skipped: ["ZZUNKNOWN"], notes: ["a note"], pending: [{ against: "dollars", entries: [{ id: A.id, shares: 7777, value: 8888 }] }], menu: [A.id, B.id] }) });
+    store.dispatch({ type: "flushUrl" });
+    await advance(500);
+    const last = replaced[replaced.length - 1];
+    for (const secret of ["ZZUNKNOWN", "note", "7777", "8888", "pending", "upload"]) expect(last).not.toContain(secret);
+  });
+
+  describe("checks that wait for prices", () => {
+    // 10 shares at the latest close is worth `shares * last_close`; the file's dollars are 50% too high
+    const off = (id: string, close: number | null) => ({ id, shares: 10, value: (close ?? 0) * 10 * 1.5 });
+    const pendingFor = (...ids: string[]) => ({ against: "dollars" as const, entries: ids.map((id) => off(id, FUNDS.find((f) => f.id === id)?.last_close ?? null)) });
+
+    it("are made once the new menu's tensor arrives, with its latest closes, and then dropped", async () => {
+      const store = await boot("?f=" + [A.id, B.id].join(","));
+      store.dispatch({ type: "setUpload", report: report({ pending: [pendingFor(A.id, B.id, C.id)], menu: [A.id, B.id, C.id] }) });
+      expect(store.getState().upload?.notes).toEqual([]);
+      store.dispatch({ type: "useMenu", rows: [row(A.id, 10), row(B.id, 10), row(C.id, 10)], unit: "shares" });
+      expect(store.getState().upload?.notes).toEqual([]);
+      await flush();
+      await advance(500);
+      expect(store.getState().tensor).not.toBeNull();
+      expect(store.getState().upload).toMatchObject({ notes: ["Dollars didn't match shares at the latest price for 3 funds and were ignored."], pending: [] });
+    });
+
+    it("are made at once when the file's funds are the menu already on screen", async () => {
+      const store = await boot("?f=" + [A.id, B.id].join(","));
+      expect(store.getState().tensor).not.toBeNull();
+      store.dispatch({ type: "useMenu", rows: [row(A.id, 10), row(B.id, 10)], unit: "shares" });
+      store.dispatch({ type: "setUpload", report: report({ notes: ["first"], pending: [pendingFor(A.id, B.id)], menu: [A.id, B.id] }) });
+      expect(store.getState().upload).toMatchObject({ notes: ["first", "Dollars didn't match shares at the latest price for 2 funds and were ignored."], pending: [] });
+    });
+
+    it("say nothing when the shares agree with the file's dollars", async () => {
+      const store = await boot("?f=" + [A.id, B.id].join(","));
+      const agree = { against: "dollars" as const, entries: [A, B].map((f) => ({ id: f.id, shares: 10, value: (f.last_close ?? 0) * 10 })) };
+      store.dispatch({ type: "setUpload", report: report({ pending: [agree], menu: [A.id, B.id] }) });
+      expect(store.getState().upload).toMatchObject({ notes: [], pending: [] });
+    });
+
+    it("wait while the menu on screen is not the file's menu", async () => {
+      const store = await boot("?f=" + [A.id, B.id].join(","));
+      store.dispatch({ type: "setUpload", report: report({ pending: [pendingFor(A.id, B.id, C.id)], menu: [A.id, B.id, C.id] }) });
+      expect(store.getState().upload?.pending).toHaveLength(1);
+      expect(store.getState().upload?.notes).toEqual([]);
+    });
+  });
+
+  describe("tickers asked for", () => {
+    const requests = () => calls.filter((c) => c.path === "/api/ticker-requests").map((c) => ({ method: c.method, body: JSON.parse(c.body as string) as unknown }));
+
+    it("are posted with their source, once per ticker in a visit", async () => {
+      const store = await boot("");
+      store.dispatch({ type: "requestTickers", tickers: ["XYZ", "ABC"], source: "csv" });
+      store.dispatch({ type: "requestTickers", tickers: ["XYZ", "NEW"], source: "picker" });
+      store.dispatch({ type: "requestTickers", tickers: ["XYZ"], source: "csv" });
+      await flush();
+      expect(requests()).toEqual([
+        { method: "POST", body: { tickers: ["XYZ", "ABC"], source: "csv" } },
+        { method: "POST", body: { tickers: ["NEW"], source: "picker" } },
+      ]);
+    });
+
+    it("send only what the server would accept, and at most 100", async () => {
+      const store = await boot("");
+      store.dispatch({ type: "requestTickers", tickers: ["bad one", "TOOLONGTICKER", "", "OK.B"], source: "csv" });
+      store.dispatch({ type: "requestTickers", tickers: ["!!!"], source: "csv" });
+      store.dispatch({ type: "requestTickers", tickers: Array.from({ length: 150 }, (_, i) => `T${i}`), source: "csv" });
+      await flush();
+      const sent = requests().map((r) => (r.body as { tickers: string[] }).tickers);
+      expect(sent[0]).toEqual(["OK.B"]);
+      expect(sent).toHaveLength(2);
+      expect(sent[1]).toHaveLength(100);
+    });
+
+    it("fail silently: no error in the view, and the page goes on", async () => {
+      const store = await boot("");
+      const before = JSON.stringify({ ...store.getState(), upload: null });
+      const routes: [string, () => Response | Promise<Response>][] = [["FAILA", () => new Response("nope", { status: 503 })], ["FAILB", () => Promise.reject(new Error("offline"))]];
+      for (const [ticker, route] of routes) {
+        tickerRoute = route;
+        store.dispatch({ type: "requestTickers", tickers: [ticker], source: "picker" });
+        await flush();
+      }
+      expect(requests()).toHaveLength(2);
+      expect(JSON.stringify({ ...store.getState(), upload: null })).toBe(before);
+      expect(store.getState().menuError).toBeNull();
+      expect(store.getState().loadError).toBeNull();
+    });
   });
 });

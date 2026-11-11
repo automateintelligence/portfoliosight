@@ -17,6 +17,7 @@ import {
 
 const GUIDE_NAME = "Example Portfolio";
 const TSP_NAME = "TSP (G, F, C, S, I)";
+const RESEARCH_NAME = "Example Portfolio 2";
 const TSP_IDS = ["TSP-C", "TSP-F", "TSP-G", "TSP-I", "TSP-S"];
 const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
 const THEME_BG: Record<string, string> = { "ks-dark": "#141417", light: "#F3F3F3", hud: "#080506", grid: "#04070B" };
@@ -55,7 +56,7 @@ async function shownPercent(page: import("@playwright/test").Page, testId: strin
 /** The two figures of the details line: this mix's measure and the highest found on the menu. */
 async function shownMeasure(page: import("@playwright/test").Page): Promise<{ enb: number; best: number }> {
   const line = await page.getByTestId("details-enb").innerText();
-  return { enb: Number(/equivalent of (\d+(?:\.\d+)?) independent/.exec(line)?.[1]), best: Number(/menu: (\d+(?:\.\d+)?)/.exec(line)?.[1]) };
+  return { enb: Number(/equivalent of (\d+(?:\.\d+)?) independent/.exec(line)?.[1]), best: Number(/portfolio: (\d+(?:\.\d+)?)/.exec(line)?.[1]) };
 }
 /** Equal to one decimal, as a figure printed with one decimal can be. */
 const near = (shown: number, own: number) => Math.abs(shown - own) <= 0.051;
@@ -491,7 +492,7 @@ test("DoD-11 TSP preset: five funds, 60% ceiling, no entered mix, L 2050 offered
 
   await openSection(page, "settings");
   for (const id of TSP_IDS) await expect(page.getByTestId(`cap-max-${id}`)).toHaveValue("60");
-  await expect(page.getByTestId("section-settings")).toContainText("No single fund above 60% (menu of 5)");
+  await expect(page.getByTestId("section-settings")).toContainText("No single fund above 60% (portfolio of 5)");
   await expect(page.getByTestId("point-current")).toHaveCount(0);
   await expect(page.getByTestId("section-trades")).toHaveCount(0);
   await expect(page.getByTestId("chip-trades")).toHaveCount(0);
@@ -552,7 +553,7 @@ test("DoD-12 custom menu: four served funds build within 120 s; failure, unknown
     const sent = api.tensorPosts().length;
     await page.goto(`/?f=${pair.join(",")}`);
     await expect(page.getByTestId("build-retry")).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByTestId("building-notice")).toContainText("We couldn't compute this menu");
+    await expect(page.getByTestId("building-notice")).toContainText("We couldn't compute this portfolio");
     await expect(page.getByTestId("building-notice")).toContainText("build_failed");
     await page.getByTestId("build-retry").click();
     await expect(page.getByTestId("build-retry")).toHaveCount(0, { timeout: 150_000 });
@@ -569,7 +570,7 @@ test("DoD-12 custom menu: four served funds build within 120 s; failure, unknown
     await expect(page.getByTestId("fund-add")).toBeVisible();
     const present = await fundRowIds(page);
     const spare = symbols.filter((symbol) => !present.includes(symbol.id) && !/\b30\b/.test(`${symbol.id} ${symbol.name}`)).map((symbol) => symbol.id);
-    expect(present.length + spare.length, "served symbols available for a 31-fund menu").toBeGreaterThanOrEqual(31);
+    expect(present.length + spare.length, "served symbols available for a 31-fund portfolio").toBeGreaterThanOrEqual(31);
     const sent = api.tensorPosts().length;
     let next = 0;
     while ((await fundRowIds(page)).length < 30) {
@@ -1077,9 +1078,10 @@ test("DoD-21 presets and tensors come from R2, and a build request for the defau
   expect(answer.headers()["x-ps-source"], "presets are read from R2").toBe("r2");
   const presets = (await answer.json()) as Presets;
   expect(presets.generation).toMatch(/^\d{4}-\d{2}-\d{2}-[0-9.]+$/);
-  expect(presets.presets.map((preset) => preset.id).sort()).toEqual(["guide2017", "tsp"]);
+  expect(presets.presets.map((preset) => preset.id).sort()).toEqual(["guide2017", "research2003", "tsp"]);
   expect(presets.presets.find((preset) => preset.id === "guide2017")!.name).toBe(GUIDE_NAME);
   expect(presets.presets.find((preset) => preset.id === "tsp")!.name).toBe(TSP_NAME);
+  expect(presets.presets.find((preset) => preset.id === "research2003")!.name).toBe(RESEARCH_NAME);
   for (const preset of presets.presets) {
     expect(Object.keys(preset.lookbacks).sort(), `${preset.id}: lookbacks`).toEqual([...LOOKBACKS].sort());
     for (const lookback of LOOKBACKS) {

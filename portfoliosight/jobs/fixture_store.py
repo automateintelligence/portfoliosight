@@ -1,9 +1,11 @@
 """A small local store for tests and the local container run (plan task 4.8).
 
 It turns the synthetic returns fixture ``tests/fixtures/synthetic_23.parquet`` into canonical
-records for the 23 guide funds, adds five synthetic TSP funds and the catalog's one converted
-fund (FIENX, whose data ended on 2024-10-30 and which is not served), and writes the catalog as
-it stands on the fixture's last day. Nothing in it is market data.
+records for the 23 guide funds, adds five synthetic TSP funds, the funds of the research menu
+that the guide menu does not already hold, and the catalog's one converted fund (FIENX, whose
+data ended on 2024-10-30 and which is not served), and writes the catalog as it stands on the
+fixture's last day. Every fund of every preset is in it, so a nightly run builds each preset
+tensor. Nothing in it is market data.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ import pyarrow.parquet as pq
 from portfoliosight.data import manifest as manifest_mod
 from portfoliosight.data import store as store_mod
 from portfoliosight.data.manifest import Manifest, ManifestEntry
-from portfoliosight.data.universe import REPO_ROOT, TSP_FUNDS, load_tiers
+from portfoliosight.data.universe import REPO_ROOT, TSP_FUNDS, load_presets, load_tiers
 
 FIXTURE_RETURNS = REPO_ROOT / "tests" / "fixtures" / "synthetic_23.parquet"
 METADATA_KEY = b"portfoliosight"
@@ -40,6 +42,34 @@ _MOMENTS = {
     "TSP-I": (0.060, 0.170),
     CONVERTED_FUND: (0.060, 0.170),
 }
+# The research menu's funds that the guide menu lacks, with the name, kind, annual drift and
+# annual volatility of the synthetic record each gets (the seeds are the symbols themselves, so
+# a fund's record never depends on another's).
+_PRESET_FUNDS: dict[str, tuple[str, str, float, float]] = {
+    "SPY": ("SPDR S&P 500 ETF Trust", "etf", 0.080, 0.165),
+    "IWM": ("iShares Russell 2000 ETF", "etf", 0.085, 0.215),
+    "IWD": ("iShares Russell 1000 Value ETF", "etf", 0.075, 0.170),
+    "EEM": ("iShares MSCI Emerging Markets ETF", "etf", 0.070, 0.230),
+    "IYR": ("iShares U.S. Real Estate ETF", "etf", 0.070, 0.220),
+    "TLT": ("iShares 20+ Year Treasury Bond ETF", "etf", 0.035, 0.140),
+    "IEF": ("iShares 7-10 Year Treasury Bond ETF", "etf", 0.030, 0.065),
+    "SHY": ("iShares 1-3 Year Treasury Bond ETF", "etf", 0.020, 0.015),
+    "VIPSX": (
+        "Vanguard Inflation-Protected Securities Fund Investor Shares",
+        "mutual_fund",
+        0.030,
+        0.055,
+    ),
+    "GE": ("General Electric Co", "stock", 0.050, 0.290),
+    "MSFT": ("Microsoft Corp", "stock", 0.130, 0.260),
+    "XOM": ("Exxon Mobil Corp", "stock", 0.070, 0.230),
+    "PFE": ("Pfizer Inc", "stock", 0.050, 0.210),
+    "C": ("Citigroup Inc", "stock", 0.040, 0.340),
+    "WMT": ("Walmart Inc", "stock", 0.090, 0.180),
+    "AIG": ("American International Group Inc", "stock", 0.040, 0.330),
+    "INTC": ("Intel Corp", "stock", 0.060, 0.300),
+}
+_MOMENTS.update({symbol: (drift, vol) for symbol, (_, _, drift, vol) in _PRESET_FUNDS.items()})
 _TRADING_DAYS = 252
 _DEFAULT_CLOSE = 100.0
 
@@ -130,6 +160,23 @@ def write_fixture_store(
             status="ok",
             fetched_at=CATALOG_AT.isoformat(),
         )
+    tiers = load_tiers().info()
+    for symbol, (name, kind, _, _) in _PRESET_FUNDS.items():
+        if symbol in manifest.symbols:  # a fund the synthetic file already holds
+            continue
+        record = _record(calendar, _seeded_returns(symbol, len(calendar)), None)
+        store_mod.put_record(store, symbol, record)
+        manifest.symbols[symbol] = ManifestEntry(
+            name=name,
+            kind=kind,
+            tier=tiers[symbol].tier,
+            source="tiingo",  # a lake source needs a lake overlay, which this store has none of
+            first_date=_day(record["date"].iloc[0]),
+            last_date=_day(calendar[-1]),
+            adjusted_through=_day(calendar[-1]),
+            status="ok",
+            fetched_at=CATALOG_AT.isoformat(),
+        )
     ended = pd.DatetimeIndex(calendar[calendar <= pd.Timestamp(CONVERTED_LAST_DAY)])
     record = _record(ended, _seeded_returns(CONVERTED_FUND, len(ended)), None)
     store_mod.put_record(store, CONVERTED_FUND, record)
@@ -149,5 +196,8 @@ def write_fixture_store(
         converted, converted.status, _day(calendar[-1]), known.note
     )
     manifest.symbols[CONVERTED_FUND] = converted
+    absent = sorted({f for preset in load_presets() for f in preset.funds} - set(manifest.symbols))
+    if absent:
+        raise ValueError(f"the fixture store has no record for preset fund(s) {absent}")
     manifest_mod.write_catalog(store, manifest, CATALOG_AT)
     return store

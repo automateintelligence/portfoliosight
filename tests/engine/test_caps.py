@@ -166,7 +166,7 @@ def test_requested_caps_are_checked_fund_by_fund_whatever_the_window():
         ({"id": "AAA", "min": 0.6, "max": 0.4}, "AAA: min 0.6 is above max 0.4"),
         ({"id": "AAA", "max": 1.0000001}, "AAA: max must be a number between 0 and 1"),
         ({"id": "AAA", "min": float("inf")}, "AAA"),
-        ({"id": "ZZZ", "max": 0.5}, "ZZZ: not a fund of this menu"),
+        ({"id": "ZZZ", "max": 0.5}, "ZZZ: not a fund of this portfolio"),
         ({"max": 0.5}, "fund id"),
     ):
         with pytest.raises(CapsError, match=token):

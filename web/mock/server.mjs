@@ -2,16 +2,19 @@
 // and local development. It serves the UI fixture for every tensor key and never talks to
 // anything outside this process.
 //
-//   GET  /api/presets, /api/symbols, /api/health, /api/tensors/{G}/{hash}/{lookback}
+//   GET  /api/presets (three presets, the third with its own per-fund limits and a starting mix in
+//        percent), /api/symbols, /api/health, /api/tensors/{G}/{hash}/{lookback}
 //   GET  /api/tier               {"tier": "public", "menu_max": 30}, or admin and 100 while the
 //                                "tier" switch is "admin"
 //   POST /api/tensors            (bodies are recorded)
 //   POST /api/share              (always 202; nothing is sent)
+//   POST /api/ticker-requests    (bodies are recorded; always 204)
 //   POST /api/range              409 range_unavailable (the page keeps its own figure), or the
 //                                stand-in one-year range of the posted weights (below) while the
 //                                "ranges" switch is on
 //   GET  /__mock/posts           recorded POST /api/tensors bodies
 //   GET  /__mock/ranges          recorded POST /api/range bodies
+//   GET  /__mock/ticker-requests recorded POST /api/ticker-requests bodies
 //   POST /__mock/config          {"stale": 3, "unavailable": "10y", "challenge": 1, "build409": 2, "ranges": true,
 //                                 "noGeneration": true, "tier": "admin", "manySymbols": true, "stocks": true}
 //                                (manySymbols adds 120 served stand-ins MOCKF001 ... MOCKF120;
@@ -26,6 +29,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PS_MOCK_PORT || 8791);
 const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
 const SECOND_NAME = "TSP (G, F, C, S, I) [mock-7f3]";
+const THIRD_NAME = "Example Portfolio 2 [mock-c91]";
 
 const fixture = JSON.parse(fs.readFileSync(path.join(here, "..", "fixtures", "guide2017_5y.json"), "utf8"));
 const G = fixture.generation;
@@ -33,6 +37,7 @@ const H1 = fixture.universe.hash;
 const shift = (hash, by) => hash.split("").map((c) => ((parseInt(c, 16) + by) % 16).toString(16)).join("");
 const H2 = shift(H1, 1);
 const H3 = shift(H1, 2);
+const H4 = shift(H1, 3);
 
 function holdings() {
   const file = path.join(here, "..", "..", "data", "holdings", "holdings_guide2017_step2.csv");
@@ -50,12 +55,23 @@ const guideFunds = holdings().map((h) => ({ id: h.id, name: names.get(h.id) ?? h
 const allocation = Object.fromEntries(holdings().map((h) => [h.id, h.amount]));
 const lookbacks = (hash) => Object.fromEntries(LOOKBACKS.map((lb) => [lb, { status: "ready", url: `/api/tensors/${G}/${hash}/${lb}` }]));
 
+// The third preset declares its own limits, as the service does: the first eleven funds at most 40%,
+// the rest at most 10%. Its starting mix is an equal share in percent, in hundredths that add up
+// to exactly 100.
+const limitedCaps = guideFunds.map((f, i) => ({ id: f.id, min: null, max: i < 11 ? 0.4 : 0.1 }));
+const equalPercent = (ids) => {
+  const base = Math.floor(10000 / ids.length);
+  const extra = 10000 - base * ids.length;
+  return Object.fromEntries(ids.map((id, i) => [id, (base + (i < extra ? 1 : 0)) / 100]));
+};
+
 const presets = {
   generation: G,
   asof: fixture.asof,
   presets: [
-    { id: "guide2017", name: "Example Portfolio", hash: H1, funds: guideFunds, allocation, allocation_unit: "$", lookbacks: lookbacks(H1) },
-    { id: "tsp", name: SECOND_NAME, hash: H2, funds: guideFunds, allocation: null, allocation_unit: null, lookbacks: lookbacks(H2) },
+    { id: "guide2017", name: "Example Portfolio", hash: H1, funds: guideFunds, caps: [], allocation, allocation_unit: "$", lookbacks: lookbacks(H1) },
+    { id: "tsp", name: SECOND_NAME, hash: H2, funds: guideFunds, caps: [], allocation: null, allocation_unit: null, lookbacks: lookbacks(H2) },
+    { id: "research2003", name: THIRD_NAME, hash: H4, funds: guideFunds, caps: limitedCaps, allocation: equalPercent(guideFunds.map((f) => f.id)), allocation_unit: "%", lookbacks: lookbacks(H4) },
   ],
 };
 
@@ -235,6 +251,8 @@ function tensorFor(hash, lookback) {
   }
   if (hash === H2) {
     copy.universe = { ...copy.universe, hash: H2, preset_id: "tsp", name: SECOND_NAME };
+  } else if (hash === H4) {
+    copy.universe = { ...copy.universe, hash: H4, preset_id: "research2003", name: THIRD_NAME };
   } else if (hash !== H1) {
     copy.universe = { ...copy.universe, hash, preset_id: null, name: "Custom menu" };
   }
@@ -267,6 +285,7 @@ const windowUnavailable = (lookback) => ({ status: "failed", error: "window_unav
 const noGeneration = { error: { code: "no_generation", message: "No generation has been published yet.", details: null } };
 let posts = [];
 let rangePosts = [];
+let tickerRequests = [];
 
 // The service resamples the menu's daily history; the mock has none, so its stand-in for the
 // one-year range of a mix is mu -+ 1.96 sigma around mu, from the tensor's own moments. It is
@@ -304,10 +323,12 @@ const server = http.createServer(async (req, res) => {
 
   if (where === "/__mock/posts" && method === "GET") return send(res, 200, posts);
   if (where === "/__mock/ranges" && method === "GET") return send(res, 200, rangePosts);
+  if (where === "/__mock/ticker-requests" && method === "GET") return send(res, 200, tickerRequests);
   if (where === "/__mock/reset" && method === "POST") {
     config = { ...DEFAULTS };
     posts = [];
     rangePosts = [];
+    tickerRequests = [];
     return send(res, 200, { ok: true });
   }
   if (where === "/__mock/config" && method === "POST") {
@@ -365,6 +386,15 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, { status: "ready", generation: G, hash, url: `/api/tensors/${G}/${hash}/${lookback}` });
   }
   if (method === "POST" && where === "/api/share") return send(res, 202, { ok: true });
+  if (method === "POST" && where === "/api/ticker-requests") {
+    try {
+      tickerRequests.push(JSON.parse(await readBody(req)));
+    } catch {
+      return send(res, 400, { error: { code: "invalid_request", message: "body is not JSON", details: null } });
+    }
+    res.writeHead(204, { "cache-control": "no-store", "x-ps-preview": "1" });
+    return res.end();
+  }
   if (method === "POST" && where === "/api/range") {
     let body = null;
     try {

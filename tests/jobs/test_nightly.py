@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pytest
 
+from portfoliosight.api import presets as presets_mod
 from portfoliosight.api.hashing import universe_hash
 from portfoliosight.api.presets import LOOKBACKS, preset_definitions, preset_funds, tensor_key
 from portfoliosight.data import download
@@ -153,7 +154,7 @@ def test_interrupted_run_publishes_nothing_and_the_rerun_resumes(unpublished, ge
 
     second = _FastBuild()
     status = nightly.run(store=store, now=NOW, providers=_providers(), build_fn=second)
-    assert len(second.calls) == 7
+    assert len(second.calls) == 13  # 18 keys, 5 built before the interruption
     assert not {call[:2] for call in second.calls} & {call[:2] for call in first.calls}
     assert set(store.list(f"tensors/{generation}/")) == _expected_keys(generation)
     assert store.puts.count(f"meta/{generation}/generation.json") == 1
@@ -165,7 +166,7 @@ def test_interrupted_run_publishes_nothing_and_the_rerun_resumes(unpublished, ge
     assert switch > max(i for i, key in enumerate(store.puts) if key in needed)
     assert store_mod.get_json(store, "meta/current.json")["generation"] == generation
     presets = store_mod.get_json(store, f"meta/{generation}/presets.json")
-    assert [preset["id"] for preset in presets["presets"]] == ["guide2017", "tsp"]
+    assert [preset["id"] for preset in presets["presets"]] == ["guide2017", "tsp", "research2003"]
     assert all(
         entry["status"] == "ready"
         for preset in presets["presets"]
@@ -184,9 +185,14 @@ def test_interrupted_run_publishes_nothing_and_the_rerun_resumes(unpublished, ge
     assert status == store_mod.get_json(store, "meta/status.json")
     assert status["D_G"] == d_g.isoformat() and status["generation"] == generation
     assert status["started"] == "2026-10-13T09:00:00+00:00" and status["finished"] is not None
-    assert status["preset_tensors_built"] == {"guide2017": 1, "tsp": 6}
-    assert set(status["preset_build_seconds"]) == {"guide2017", "tsp"}
-    assert second.calls[-1][2] == {"universe_name": "TSP (G, F, C, S, I)", "preset_id": "tsp"}
+    assert status["preset_tensors_built"] == {"guide2017": 1, "tsp": 6, "research2003": 6}
+    assert set(status["preset_build_seconds"]) == {"guide2017", "tsp", "research2003"}
+    named = {call[2]["preset_id"]: call[2]["universe_name"] for call in second.calls}
+    assert named == {
+        "guide2017": "Example Portfolio",
+        "tsp": "TSP (G, F, C, S, I)",
+        "research2003": "Example Portfolio 2",
+    }
 
     # A third run finds the generation published: no build, nothing under it touched.
     store.puts.clear()
@@ -258,7 +264,7 @@ def test_a_build_that_fails_keeps_the_generation_unpublished_until_it_builds(
     refusal = BuildRefused("window_unavailable", "the 10y window is unavailable")
     broken = _FastBuild(fail={"10y": refusal, "ew": RuntimeError("solver fault")})
     status = nightly.run(store=store, now=NOW, providers=_providers(), build_fn=broken)
-    assert len(broken.calls) == 12  # one failure does not stop the other keys
+    assert len(broken.calls) == 18  # one failure does not stop the other keys
     assert status["published"] is False and not store.exists("meta/current.json")
     assert not store.exists(f"meta/{generation}/presets.json")
     build_errors = [error for error in status["errors"] if error["step"] == "build"]
@@ -267,17 +273,19 @@ def test_a_build_that_fails_keeps_the_generation_unpublished_until_it_builds(
         ("guide2017", "ew"),
         ("tsp", "10y"),
         ("tsp", "ew"),
+        ("research2003", "10y"),
+        ("research2003", "ew"),
     ]
     assert build_errors[0]["error"].startswith("window_unavailable: ")
     assert build_errors[1]["error"] == "build_failed: RuntimeError: solver fault"
     assert {"step": "publish", "error": "not every preset tensor exists; not published"} in (
         status["errors"]
     )
-    assert status["preset_tensors_built"] == {"guide2017": 4, "tsp": 4}
+    assert status["preset_tensors_built"] == {"guide2017": 4, "tsp": 4, "research2003": 4}
     assert status["error_count"] == len(status["errors"])
     fixed = _FastBuild()
     status = nightly.run(store=store, now=NOW, providers=_providers(), build_fn=fixed)
-    assert len(fixed.calls) == 4 and status["published"] is True
+    assert len(fixed.calls) == 6 and status["published"] is True
 
 
 def test_tsp_fetch_failure_marks_tsp_stale_and_is_not_a_failed_run(unpublished, generation, d_g):
@@ -389,7 +397,7 @@ def test_the_lower_tier_walk_stops_at_the_deadline_and_publication_is_untouched(
     status = nightly.run(
         store=store, now=clock.now, providers=providers, build_fn=build, clock=clock
     )
-    assert len(build.calls) == 12 and status["published"] is True
+    assert len(build.calls) == 18 and status["published"] is True
     assert store_mod.get_json(store, "meta/current.json")["generation"] == generation
     # Tier 1 (the TSP L funds the fixture leaves behind) runs to the end, past the deadline.
     assert build.before is not None and len(build.before) == 11
@@ -601,7 +609,14 @@ def test_entry_point_publishes_real_tensors_offline(unpublished, generation, mon
         assert tensor["generation"] == generation and tensor["asof"] == "2026-10-12"
     guide = json.loads(store.get(sorted(k for k in _expected_keys(generation) if "/5y" in k)[0]))
     names = {guide["universe"]["name"], guide["universe"]["preset_id"]}
-    assert names <= {"Example Portfolio", "guide2017", "TSP (G, F, C, S, I)", "tsp"}
+    assert names <= {
+        "Example Portfolio",
+        "guide2017",
+        "TSP (G, F, C, S, I)",
+        "tsp",
+        "Example Portfolio 2",
+        "research2003",
+    }
     # a preset that comes with an allocation has it built in as the entered mix, in every view
     presets = {preset.id: preset for preset in preset_definitions()}
     for key in _expected_keys(generation):
@@ -619,21 +634,121 @@ def test_entry_point_publishes_real_tensors_offline(unpublished, generation, mon
         assert spread["bad"] < spread["typical"] < spread["good"]
     status = store_mod.get_json(store, "meta/status.json")
     assert status["published"] is True and status["finished"]
-    assert status["preset_tensors_built"] == {"guide2017": 6, "tsp": 6}
+    assert status["preset_tensors_built"] == {"guide2017": 6, "tsp": 6, "research2003": 6}
     # One volatility model per fund set: every view of a preset shares its fit (engines spec 7).
     shapes = {
         json.loads(store.get(key))["shape"]["sample_sha256"][:16]
         for key in _expected_keys(generation)
     }
     models = store.list(f"models/{generation}/")
-    assert len(shapes) == 2 and {key.split("/")[2] for key in models} == shapes
-    assert len(models) == 4  # a pool and its description each
+    assert len(shapes) == 3 and {key.split("/")[2] for key in models} == shapes
+    assert len(models) == 6  # a pool and its description each
     # The recorded tsp.gov slice ends in March: the L funds it adds are behind, not a failure.
     catalog = manifest_mod.load_manifest(store).symbols
     assert catalog["TSP-L2030"].status == "stale" and catalog["TSP-G"].status == "ok"
     cached = [p for p in Path(unpublished.root.parent / "cache").rglob("*") if p.is_file()]
     assert sum(p.stat().st_size for p in cached) <= 200_000
     assert nightly.main() == 0  # already published
+
+
+def _only_the_research_preset(monkeypatch) -> None:
+    """The presets the nightly sees: research2003 alone, to build one menu's tensors for real."""
+    everything = presets_mod.load_presets()
+    monkeypatch.setattr(
+        presets_mod, "load_presets", lambda: [p for p in everything if p.id == "research2003"]
+    )
+
+
+def _set_wmt(store, *, served: bool) -> None:
+    """WMT as the live catalog has it today (a seed not yet refreshed: ``pending``), or served."""
+    catalog = manifest_mod.load_manifest(store)
+    entry = catalog.symbols["WMT"]
+    entry.source, entry.status = ("tiingo", "ok") if served else ("seed", "pending")
+    entry.reason = None if served else f"corporate actions not yet verified after {entry.last_date}"
+    manifest_mod.write_catalog(store, catalog, NOW)
+
+
+def test_a_preset_fund_the_catalog_does_not_serve_is_set_aside_and_the_run_still_publishes(
+    unpublished, generation, monkeypatch
+):
+    """WMT is ``pending`` in the live manifest: the nightly must not fail on it, and the next
+    generation after it is served must use it (a published generation is never rewritten)."""
+    store = unpublished
+    _only_the_research_preset(monkeypatch)
+    research = {p.id: p for p in preset_definitions()}["research2003"]
+    uhash = universe_hash(preset_funds(research))
+    _set_wmt(store, served=False)
+
+    first = nightly.run(store=store, now=NOW, providers=_providers())
+    problems = [e for e in first["errors"] if e["step"] in ("build", "publish")]
+    assert problems == [] and first["published"] is True
+    assert first["preset_tensors_built"] == {"research2003": 6}
+    assert store_mod.get_json(store, "meta/current.json")["generation"] == generation
+    held = [fund for fund in research.funds if fund != "WMT"]
+    for lookback in LOOKBACKS:
+        tensor = json.loads(store.get(tensor_key(generation, uhash, lookback)))
+        validate_tensor(tensor)
+        universe = tensor["universe"]
+        assert [fund["id"] for fund in universe["funds"]] == held, (lookback, universe["excluded"])
+        assert [fund["id"] for fund in universe["excluded"]] == ["WMT"]
+        assert universe["excluded"][0]["reason"].startswith("corporate actions not yet verified")
+        assert universe["hash"] == uhash and universe["preset_id"] == "research2003"
+        # its limit stays in the policy the hash covers; the view just has no use for it
+        assert len(tensor["bounds"]["requested"]) == 18
+        assert set(tensor["bounds"]["max"]) == {0.4, 0.1}
+        # the share of the starting mix held in WMT is reported as set aside
+        assert tensor["entered"]["set_aside"] == pytest.approx(0.0526)
+    body = store_mod.get_json(store, f"meta/{generation}/presets.json")
+    assert [preset["id"] for preset in body["presets"]] == ["research2003"]
+    assert all(entry["status"] == "ready" for entry in body["presets"][0]["lookbacks"].values())
+    wmt_put = next(fund for fund in body["presets"][0]["funds"] if fund["id"] == "WMT")
+    assert wmt_put["name"] == "Walmart Inc"  # still named in the menu
+
+    # The data is fixed: the next generation's tensors include WMT, under the same key hash.
+    _set_wmt(store, served=True)
+    later = NOW + timedelta(days=1)
+    day = pd.Timestamp("2026-10-13")  # the new D_G: every fund of the menu has a session
+    rows = {
+        fund: (day, float(store_mod.get_record(store, fund).iloc[-1]["close"]))
+        for fund in research.funds
+    }
+    providers = {"tiingo": _Tail("tiingo", rows), "tsp": _NoData("tsp")}
+    second = nightly.run(store=store, now=later, providers=providers)
+    assert second["published"] is True and second["generation"] != generation
+    assert [e for e in second["errors"] if e["step"] in ("build", "publish")] == []
+    for lookback in LOOKBACKS:
+        tensor = json.loads(store.get(tensor_key(second["generation"], uhash, lookback)))
+        assert [fund["id"] for fund in tensor["universe"]["funds"]] == list(research.funds)
+        assert tensor["universe"]["excluded"] == []
+        assert tensor["entered"]["set_aside"] == pytest.approx(0.0, abs=1e-12)
+    # and the generation built while WMT was pending still serves it as it was built
+    old = json.loads(store.get(tensor_key(generation, uhash, "5y")))
+    assert [fund["id"] for fund in old["universe"]["excluded"]] == ["WMT"]
+
+
+def test_every_preset_tensor_ends_on_the_generation_day_with_each_served_funds_close(
+    unpublished, generation, d_g
+):
+    """The provider has the D_G session of every preset fund the store is one session behind
+    on. The tensors are built from it, whatever tier the universe files put a fund in; WMT,
+    ``pending`` and set aside, is not checked."""
+    store = unpublished
+    _set_wmt(store, served=False)
+    funds = list(dict.fromkeys(fund for preset in preset_definitions() for fund in preset.funds))
+    rows = _one_session_behind(store, [fund for fund in funds if fund != "WMT"], d_g)
+    assert {day.date() for day, _ in rows.values()} == {d_g}
+    providers = {"tiingo": _Tail("tiingo", rows), "tsp": _Tail("tsp", rows)}
+    status = nightly.run(store=store, now=NOW, providers=providers)
+    assert status["published"] is True and status["generation"] == generation
+    excluded: set[str] = set()
+    for key in _expected_keys(generation):
+        tensor = json.loads(store.get(key))
+        universe = tensor["universe"]
+        assert tensor["lookback"]["end"] == d_g.isoformat(), (universe["preset_id"], key)
+        unpriced = [fund["id"] for fund in universe["funds"] if fund["last_close"] is None]
+        assert unpriced == [], (universe["preset_id"], key)
+        excluded.update(fund["id"] for fund in universe["excluded"])
+    assert excluded == {"WMT"}
 
 
 @pytest.mark.parametrize(

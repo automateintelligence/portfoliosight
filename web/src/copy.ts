@@ -11,7 +11,7 @@ export const plain = {
   riskSlider: "Best-return mix at this risk",
   riskBad: "Bad year",
   riskTypical: "Typical year",
-  riskDisabled: "this menu has only one sensible risk level",
+  riskDisabled: "this portfolio has only one sensible risk level",
   resultStrip: "Selected mix",
   resultStripSuffix: "over one year",
   rangeLow: "Bad",
@@ -25,13 +25,13 @@ export const plain = {
   optimized: "Optimized",
   resetOptimized: "Back to Optimized",
   frontier: "Best return at each level of risk",
-  ghosts: "Same menu, different years of history",
+  ghosts: "Same portfolio, different years of history",
   noLimits: "No limits",
   noLimitsLine: "Same funds, no limit on any one fund",
   /** The legend's and the line's name for the No limits curve (owner direction 2026-10-13). */
   noAllocationLimits: "No allocation limits",
   resetLimits: "Reset limits",
-  currentMix: "The mix you entered",
+  currentMix: "Your starting mix",
   selectedMix: "Selected mix",
   cellMix: "The mix at this spot",
   /** The selected mix's card: how to keep it open, and how to let it go once pinned. */
@@ -48,9 +48,9 @@ export const plain = {
   cardHoldings: "Largest holdings",
   details: "Details",
   advice: "Historical math, not investment advice.",
-  building: "Give us a moment: computing this menu (about 30 seconds)",
-  buildFailed: "We couldn't compute this menu",
-  buildFailedFinal: "We couldn't compute this menu after three tries. The ready-made portfolios still work:",
+  building: "Give us a moment: computing this portfolio (about 30 seconds)",
+  buildFailed: "We couldn't compute this portfolio",
+  buildFailedFinal: "We couldn't compute this portfolio after three tries. The ready-made portfolios still work:",
   retry: "Retry",
   shareCopy: "Copy link",
   shareEmail: "Send this view by email",
@@ -63,14 +63,23 @@ export const plain = {
   sharePreview: "PortfolioSight is in private preview: the link opens for invited testers only until the site is public.",
   custom: "Custom…",
   symbolsHelp: "Only funds and stocks with verified current data are offered.",
-  trades: "Moves to get from the mix you entered to the selected mix.",
+  trades: "Moves to get from your starting mix to the selected mix.",
   tradesExport: "Export CSV",
   fundsRecalculate: "Recalculate with these funds",
   fundsAsYouType: "Amounts apply as you type.",
+  /** Mix and allocation name the same thing (owner direction 2026-11-07). */
+  mixMeans: "A mix, also called an allocation, is how your money is split across funds.",
   fundsChanged: "The fund list has changed: recalculate to see it on the chart.",
   fundsNone: "No amounts entered: tickers only.",
   fundsClear: "Clear all",
   fundsClearHint: "Clear every amount; the funds stay in the list",
+  fundsTemplate: "Download template",
+  fundsTemplateHint: "A sample CSV file to fill in: a ticker column, then shares, dollars or percent",
+  fundsUpload: "Upload CSV",
+  fundsUploadHint: "Replace the fund list with the funds in a CSV file",
+  /** What leaves the browser when a file is uploaded: nothing of the file, only the tickers we do not have. */
+  fundsUploadPrivacy: "Your file is read in this browser and is not uploaded. Tickers we don't have are sent to us, without any amounts, so we can look at adding them.",
+  uploadDismiss: "Dismiss",
   fundsScale: "Scale to 100%",
   fundsScaleHint: "Scale the amounts in proportion so they add up to exactly 100%",
   fundsOpen: "Show funds & amounts",
@@ -79,14 +88,14 @@ export const plain = {
   colSelected: "Selected mix %",
   stressSentinel: "Not enough of this mix existed then to say.",
   notEnoughHistory: "not enough shared history",
-  allSetAside: "The mix you entered uses only funds set aside in this view",
+  allSetAside: "Your starting mix uses only funds set aside in this view",
   lowRisk: "there is little risk here, but it may all be in one place",
   chips: { funds: "Funds & amounts", trades: "Trades", stress: "Stress tests", settings: "Settings" },
 } as const;
 
 export const technical = {
   xAxis: "Standard deviation of yearly return",
-  yAxis: "Shrunk expected return (50/50 sample mean and menu-beta heuristic), annualized",
+  yAxis: "Expected return per year: half each fund's own history, half an estimate from how it moves with an equal-weight mix of all the funds",
   heatLegend: "ENB (minimum torsion) of the most diversified mix found at each risk that earns at least each return",
   riskSlider:
     "2.5th percentile and median of the frontier mix's one-year return over 2,000 one-year paths resampled in blocks from this window's own daily history (stationary block bootstrap, mean block 21 days)",
@@ -169,7 +178,7 @@ export const forbiddenDefault = [
 ] as const;
 
 // ── Sentence builders (all default copy) ─────────────────────────────────────
-export const capsRule = (maxPct: string, n: number) => `No single fund above ${maxPct}% (menu of ${n})`;
+export const capsRule = (maxPct: string, n: number) => `No single fund above ${maxPct}% (portfolio of ${n})`;
 export const excludedFund = (fund: string, date: string, window: string) =>
   `${fund}: history starts ${date}, not enough for the ${window} view`;
 export const stressLine = (pct: string) => `What this mix did: ${pct} (${plain.selectedMix})`;
@@ -178,20 +187,20 @@ export const stressGap = (n: number, m: number, pct: string) =>
 /** The running total of percentages while it is not exactly 100%: "Total: 92%, 8% to go". */
 /** The menu limit of this browser's access tier (engines spec 6.2). */
 export const fundsUpTo = (n: number) => `Up to ${n} funds.`;
-export const menuFull = (n: number) => `A menu holds up to ${n} funds.`;
-export const menuNeedsMore = (n: number) => `A menu needs at least ${n} funds.`;
+export const menuFull = (n: number) => `A portfolio holds up to ${n} funds.`;
+export const menuNeedsMore = (n: number) => `A portfolio needs at least ${n} funds.`;
 /** A shared link with more funds than this browser's tier allows is refused whole, never cut. */
-export const linkTooManyFunds = (n: number) => `This menu has more funds than this site allows (${n}).`;
+export const linkTooManyFunds = (n: number) => `This portfolio has more funds than this site allows (${n}).`;
 export const adminTag = "Admin";
-export const adminLine = (n: number) => `Admin mode: menus of up to ${n} funds.`;
+export const adminLine = (n: number) => `Admin mode: portfolios of up to ${n} funds.`;
 export const fundsTotal = (total: string, gap: string, over: boolean) => `Total: ${total}%, ${gap}% ${over ? "over" : "to go"}`;
 export const staleLine = (asof: string) => `Prices through ${asof}; the nightly refresh has not run since then.`;
 // Behind the details toggle only (it names the technical measure).
 export const enbLine = (n: string, m: string) =>
-  `spreads risk over the equivalent of ${n} independent bets; highest found on this menu: ${m}`;
+  `spreads risk over the equivalent of ${n} independent bets; highest found on this portfolio: ${m}`;
 /** The strip's bar, spoken: it is drawn on one scale for every mix of this menu and history window. */
 export const rangeBarLabel = (from: string, to: string, low: string, typical: string, high: string) =>
-  `One-year range on a fixed scale from ${from} to ${to}, the same for every mix of this menu and history window: ${plain.rangeLow} ${low}, ${plain.rangeTypical} ${typical}, ${plain.rangeHigh} ${high}`;
+  `One-year range on a fixed scale from ${from} to ${to}, the same for every mix of this portfolio and history window: ${plain.rangeLow} ${low}, ${plain.rangeTypical} ${typical}, ${plain.rangeHigh} ${high}`;
 /** The strip's subtitle when its figures are in dollars: "over one year on your $98,900". */
 export const stripOnTotal = (total: string) => `${plain.resultStripSuffix} on your ${total}`;
 /** A strip figure spoken with both values: "Bad year: −$10,681, −10.8%". */
@@ -199,3 +208,30 @@ export const stripFigure = (cap: string, money: string, percent: string) => `${c
 /** Why the strip stays in percent although shares are entered (details). */
 export const stripNoPrice = (funds: string[]) =>
   `Shown in percent: ${funds.length === 1 ? `${funds[0]} has` : `${funds.slice(0, -1).join(", ")} and ${funds[funds.length - 1]} have`} no latest price, so the shares entered cannot be valued in dollars.`;
+
+// ── CSV upload in Funds & amounts (owner direction 2026-11-08) ───────────────
+/** Why a file is refused whole (nothing is loaded). */
+export const uploadNoTicker = "The file needs a column named ticker.";
+export const uploadNoFunds = "The file has no funds in it.";
+export const uploadUnreadable = "The file could not be read as a CSV.";
+export const uploadTooBig = "That file is too big to be a fund list.";
+export const uploadCatalogLoading = "The list of funds we have is still loading. Try again in a moment.";
+export const uploadTwoColumns = (column: string) => `The file has two columns named ${column}.`;
+export const uploadBadNumber = (row: number, ticker: string, column: string, text: string) =>
+  `Row ${row} (${ticker}): "${text.length > 24 ? `${text.slice(0, 24)}…` : text}" in the ${column} column is not a number.`;
+export const uploadNegative = (row: number, ticker: string, column: string) => `Row ${row} (${ticker}): the ${column} column can't be negative.`;
+export const uploadNoTickerOnRow = (row: number) => `Row ${row} has an amount but no ticker.`;
+/** A row longer than the header: an unquoted thousands comma (1,000) splits one number into two cells. */
+export const uploadTooManyValues = (row: number) =>
+  `Row ${row} has more values than the header has columns. Put numbers that contain commas in quotes or remove those commas, and remove any extra comma at the end of a row.`;
+/** The funds with amounts share no column: `who` is the sentence naming which fund has which columns. */
+export const uploadNoCommonColumn = (who: string) => `Every fund with an amount needs the same column filled in (shares, dollars or percent). ${who}`;
+/** After an upload: every ticker that was left out, so no one assumes it made it in. */
+export const uploadSkipped = (tickers: string[]) => `Not added (no data for these yet): ${tickers.join(", ")}.`;
+const fundsOf = (n: number) => `${n} ${n === 1 ? "fund" : "funds"}`;
+/** A column that was not used because it does not agree with the one that was. */
+export const uploadMismatch = {
+  percentDollars: (n: number) => `Percent didn't match dollars for ${fundsOf(n)} and was ignored.`,
+  dollarsShares: (n: number) => `Dollars didn't match shares at the latest price for ${fundsOf(n)} and were ignored.`,
+  percentShares: (n: number) => `Percent didn't match shares at the latest price for ${fundsOf(n)} and was ignored.`,
+};

@@ -117,7 +117,7 @@ def parse_tensor_request(body: bytes, *, max_funds: int) -> TensorRequest:
     ids = [fund.id for fund in request.funds]
     repeated = sorted({fund for fund in ids if ids.count(fund) > 1})
     if repeated:
-        raise invalid_request(f"{', '.join(repeated)}: listed more than once in the menu")
+        raise invalid_request(f"{', '.join(repeated)}: listed more than once in the portfolio")
     try:
         resolve_bounds(ids, request.policy())
     except CapsError as exc:
