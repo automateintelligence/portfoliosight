@@ -105,7 +105,7 @@ Each line gives the assertion, traceability, and the silent failure it prevents.
 - **A-SE-14 — Phase 1 validation evidence.** S8/F8/M3: a polished report must derive its conclusions from the prescribed experiment.
 - **A-SE-15 — Bad-year seed stability.** S4/S8/F7: reported differences must not be unexamined simulation noise.
 - **A-SE-16 — Phase 1 measured budgets.** S11/M6: performance success must use the full calculation on the target host.
-- **A-SE-17 — DR² identities and qualified bound.** S6/F2: a correlated fund menu must not turn one holding into many risks.
+- **A-SE-17 — DR² identities and qualified bound.** S6/F2: a correlated portfolio must not turn one holding into many risks.
 - **A-SE-18 — Sacrifice-ladder semantics (rewritten 2026-10-18).** S6/S13/S14/F2/F10: a ladder that holds risk exactly, breaks a guard, or lands anywhere but `w_R` by default would reintroduce the TSP 5y default of 2026-10-18.
 - **A-SE-19 — ENLC attribution and loser-only entropy.** S6/S7/F7/M5: hedges, zero holdings and undefined loss shares must not produce invented diversification.
 - **A-SE-20 — Measure and engine selection and shared state (rewritten 2026-10-18).** S7/S10/S12/F4/F9: the selected word, map, holdings and loss details must obey their distinct stated meanings, and selecting a measure or engine must select its actual holdings.
@@ -163,7 +163,7 @@ a default switch, including a report that meets the proposed numerical rule.
    request ranges on the switch requires reconciliation before a universal no-request claim.
 7. **One-fund splice comparison.** The splice rule needs other included funds' residuals;
    the median of an empty comparison set is unspecified. A-SE-06 uses a nonempty peer set
-   and does not invent acceptance or rejection for a one-fund menu.
+   and does not invent acceptance or rejection for a one-portfolio.
 8. **Entered allocations in validation.** The inherited preset/tensor contract makes an
    entered mix optional, and the presets carry no allocation. A-SE-14 checks an entered
    portfolio when an allocation is explicitly supplied; otherwise the report must identify
@@ -494,7 +494,7 @@ Phase 1 · ks001 · S11, M6; §9, §11
 - **Claim.** The specified KS-001 workload meets its build, nightly and warm range budgets
   while computing the full replay/GARCH simulations.
 - **Setup.** KS-001's four-vCPU container with recorded revision/configuration and frozen stored
-  inputs, an idle build queue, the real 23-fund menu/lookback, the two-preset/six-lookback nightly,
+  inputs, an idle build queue, the real 23-portfolio/lookback, the two-preset/six-lookback nightly,
   and interpolated requests after the first request for a tensor. Include a build requiring
   its fit rather than timing only a warm artifact hit.
 - **Observation.** Measure actual build execution at no more than 30 seconds, the complete
