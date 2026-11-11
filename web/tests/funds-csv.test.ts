@@ -362,3 +362,43 @@ describe("resolveUpload: notes for the columns that were not used", () => {
     expect(out.ok && out.plan.notes).toEqual([]);
   });
 });
+
+describe("resolveUpload: shares valued at the file's own dollars", () => {
+  const resolve = (parsed: FundLine[], ids: string[] = parsed.map((l) => l.ticker)) => {
+    const out = resolveUpload(parsed, catalog(...ids), LIMITS);
+    if (!out.ok) throw new Error(out.error);
+    return out.plan;
+  };
+  it("gives each fund a price per share (its dollars over its shares) when every fund with shares has dollars", () => {
+    expect(resolve([line("VTI", 10, 1500, 60), line("BND", 4, 100, 40)]).prices).toEqual({ VTI: 150, BND: 25 });
+  });
+  it("gives no price to a fund with no shares, and does not need its dollars", () => {
+    expect(resolve([line("VTI", 10, 1500, null), line("BND", 0, null, null), line("VNQ", null, null, null)]).prices).toEqual({ VTI: 150 });
+  });
+  it("gives no price at all when any fund with shares has no dollars, so the whole upload keeps the current rules", () => {
+    expect(resolve([line("VTI", 10, 1500, null), line("BND", 4, null, null)]).prices).toEqual({});
+    expect(resolve([line("VTI", 10, 1500, null), line("BND", 4, 0, null)]).prices).toEqual({});
+  });
+  it("gives no price when shares are not the unit used", () => {
+    expect(resolve([line("VTI", null, 1000, null), line("BND", null, 500, null)]).prices).toEqual({});
+    expect(resolve([line("VTI", 10, null, 60), line("BND", null, 500, 40)]).prices).toEqual({});
+    expect(resolve([line("VTI", 10, null, null), line("BND", 5, null, null)]).prices).toEqual({});
+  });
+  it("does not let a fund that is not served decide whether the dollars are complete", () => {
+    expect(resolve([line("VTI", 10, 1000, null), line("BND", 5, 500, null), line("ZZZ", 1, null, null)], ["VTI", "BND"]).prices).toEqual({ VTI: 100, BND: 100 });
+  });
+  it("holds no check of the dollars against the shares when the dollars are the basis, and checks the percent against them at once", () => {
+    const out = resolve([line("VTI", 10, 7000, 50), line("BND", 5, 3000, 50)]);
+    expect(out.pending).toEqual([]);
+    expect(out.notes).toEqual(["Percent didn't match dollars for 2 funds and was ignored."]);
+    expect(resolve([line("VTI", 10, 7000, 70), line("BND", 5, 3000, 30)]).notes).toEqual([]);
+  });
+  it("keeps the shares checks, as before, when the dollars are not the basis", () => {
+    const out = resolve([line("VTI", 10, 1000, 60), line("BND", 5, null, 40)]);
+    expect(out.prices).toEqual({});
+    expect(out.pending).toEqual([
+      { against: "dollars", entries: [{ id: "VTI", shares: 10, value: 1000 }] },
+      { against: "percent", entries: [{ id: "VTI", shares: 10, value: 60 }, { id: "BND", shares: 5, value: 40 }] },
+    ]);
+  });
+});

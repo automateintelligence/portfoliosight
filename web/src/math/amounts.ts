@@ -79,6 +79,17 @@ export function scaleTo100(amounts: Amount[], decimals = AMOUNT_DECIMALS): Amoun
 }
 
 /**
+ * `funds` with the price of each row that has one (`price`, the price per share the uploaded
+ * file's own dollars give) in place of the service's latest close. Funds without a row price are
+ * left as they are. Every place that values shares (the starting mix, the strip, Trades) reads its
+ * prices through this, so they agree.
+ */
+export function fundsWithPrices<F extends { id: string; last_close?: Price }>(funds: F[], rows: { id: string; price?: number | null }[]): F[] {
+  const filePrice = new Map(rows.flatMap((r) => (r.price === undefined || r.price === null ? [] : [[r.id, r.price] as const])));
+  return funds.map((f) => (filePrice.has(f.id) ? { ...f, last_close: filePrice.get(f.id) } : f));
+}
+
+/**
  * The current mix from entered amounts. `empty`: nothing entered, or it adds up to nothing.
  * `invalid_total`: percentages outside 100 +- 0.05. `unknown_price`: shares of a fund without a
  * last close, whose indices are in `unknownPrice`. Otherwise `ok` with weights summing to 1.
