@@ -104,6 +104,11 @@ const listOf = (item: string, max: number) => new RegExp(`^${item}(?:,${item}){0
 
 type Shape = (value: string) => boolean;
 const matching = (pattern: RegExp): Shape => (value) => pattern.test(value);
+// `p`: one `ID:price` per fund, each a number of at most 12 digits and 6 decimals that is above zero
+const priceList = (maxFunds: number): Shape => {
+  const shape = listOf(`${FUND_ID}:\\d{1,12}(?:\\.\\d{1,6})?`, maxFunds);
+  return (value) => shape.test(value) && value.split(",").every((item) => Number(item.split(":")[1]) > 0);
+};
 // a theme is one the page's own codec keeps, so the mailed themes cannot drift from the page's
 const pageTheme: Shape = (value) => decode(new URLSearchParams([["t", value]]).toString()).theme === value;
 
@@ -113,6 +118,7 @@ const pageTheme: Shape = (value) => decode(new URLSearchParams([["t", value]]).t
 const urlKeys = (maxFunds: number): ReadonlyArray<readonly [string, Shape]> => [
   ["u", matching(new RegExp(`^(?:${PRESET_IDS.join("|")})$`))],
   ["f", matching(listOf(`${FUND_ID}(?::\\d{1,12}(?:\\.\\d{1,6})?)?`, maxFunds))],
+  ["p", priceList(maxFunds)],
   ["unit", matching(/^(?:pct|usd|shares)$/)],
   ["c", matching(listOf(`${FUND_ID}:(?:\\d{1,3})?:(?:\\d{1,3})?`, maxFunds))],
   ["lb", matching(new RegExp(`^${LOOKBACK}$`))],

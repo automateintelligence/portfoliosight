@@ -1340,6 +1340,43 @@ test("a file with shares and dollars fills Your starting mix from its dollars at
   for (const r of held) expect(Math.abs(Number(r[5]) - Number(r[4]) / price[r[0]]), r[0]).toBeLessThanOrEqual(0.51);
 });
 
+test("a file's prices stay in the address: a reload and the same link in a new page show the same starting mix", async ({ page }) => {
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await section(page, "funds");
+  // the mock's latest closes are 162.07 (VTI) and 33.99 (BND); the file's dollars give $200 and $10 a share
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker,shares,dollars\nVTI,10,2000\nBND,100,1000\n"));
+  await page.getByTestId("use-menu").click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("p")).toBe("VTI:200,BND:10");
+  await expect(page.getByTestId("mix-entered-VTI")).toHaveText("66.7%");
+  await expect(page.getByTestId("mix-entered-BND")).toHaveText("33.3%");
+  const link = page.url();
+  expect(new URL(link).searchParams.get("f")).toBe("VTI:10,BND:100");
+  // reload: the same starting mix, not the one the service's closes would give
+  await page.reload();
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  await section(page, "funds");
+  await expect(page.getByTestId("mix-entered-VTI")).toHaveText("66.7%");
+  await expect(page.getByTestId("mix-entered-BND")).toHaveText("33.3%");
+  expect(new URL(page.url()).searchParams.get("p")).toBe("VTI:200,BND:10");
+  // the link opened by someone else
+  const other = await page.context().newPage();
+  await other.goto(link);
+  await expect(other.getByTestId("point-selected")).toBeVisible();
+  await section(other, "funds");
+  await expect(other.getByTestId("mix-entered-VTI")).toHaveText("66.7%");
+  await expect(other.getByTestId("mix-entered-BND")).toHaveText("33.3%");
+  await other.close();
+  // leaving the Shares unit drops the prices from the address
+  await page.getByTestId("unit-toggle").getByRole("radio", { name: "$" }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("unit")).toBe("usd");
+  expect(new URL(page.url()).searchParams.has("p")).toBe(false);
+  // the same shares with no prices in the link are valued at the closes (10 x 162.07 against 100 x 33.99)
+  await page.goto("/?f=VTI:10,BND:100&unit=shares");
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  await section(page, "funds");
+  await expect(page.getByTestId("mix-entered-VTI")).toHaveText("32.3%");
+});
+
 test("a file whose amounts do not share a column is refused whole, with who has what", async ({ page }) => {
   await open(page, "f=SGOV:50,VTIP:50&unit=pct");
   await section(page, "funds");
