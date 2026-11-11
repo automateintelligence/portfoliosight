@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { menuFull, menuNeedsMore } from "../src/copy";
 import {
   dollarsVsShares,
+  normalizeTicker,
   parseFundsCsv,
   parseNumber,
   percentVsDollars,
@@ -74,6 +75,22 @@ describe("parseNumber", () => {
   });
 });
 
+describe("normalizeTicker", () => {
+  it("writes a class separator, a slash or a dot between letters, as the served list does: a hyphen", () => {
+    expect(normalizeTicker("BRK/B")).toBe("BRK-B");
+    expect(normalizeTicker("BRK.B")).toBe("BRK-B");
+    expect(normalizeTicker("BF.B")).toBe("BF-B");
+    expect(normalizeTicker("PBR/A")).toBe("PBR-A");
+  });
+  it("trims and upper-cases, as before", () => {
+    expect(normalizeTicker("  brk/b ")).toBe("BRK-B");
+    expect(normalizeTicker("vti")).toBe("VTI");
+  });
+  it("leaves a ticker that has no such separator as it is", () => {
+    for (const ticker of ["BRK-B", "TSP-L2030", "ACHR-WT", "VTI", "BRK.2", "1.5", "A.", "/B", ""]) expect(normalizeTicker(ticker), ticker).toBe(ticker);
+  });
+});
+
 describe("parseFundsCsv", () => {
   it("reads header names without regard to case or surrounding spaces, in any order and any subset", () => {
     expect(lines(" PERCENT , Ticker \n40,vti\n60,bnd\n")).toEqual([line("VTI", null, null, 40), line("BND", null, null, 60)]);
@@ -84,6 +101,13 @@ describe("parseFundsCsv", () => {
   });
   it("trims and upper-cases tickers", () => {
     expect(lines("ticker\n  brk-b  \n")[0].ticker).toBe("BRK-B");
+  });
+  it("writes class shares with a hyphen whichever separator the file uses, and adds the rows of one fund", () => {
+    expect(lines("ticker,shares\nBRK/B,1\nbf.b,3\nBRK.B,2\nBRK-B,4\n")).toEqual([line("BRK-B", 7, null, null), line("BF-B", 3, null, null)]);
+  });
+  it("names a class share in a row's refusal as the file wrote it", () => {
+    expect(failure("ticker,shares\nVTI,1\nBRK/B,ten\n")).toBe('Row 3 (BRK/B): "ten" in the shares column is not a number.');
+    expect(failure("ticker,percent\nbrk.b,-5\n")).toBe("Row 2 (BRK.B): the percent column can't be negative.");
   });
   it("ignores blank lines and rows of nothing but commas, and a missing final newline", () => {
     expect(lines("ticker,shares\n\nVTI,1\n,\n   ,  \n\nBND,2")).toEqual([line("VTI", 1, null, null), line("BND", 2, null, null)]);
@@ -237,6 +261,11 @@ describe("resolveUpload: tickers that are not served, and the limits", () => {
     const out = resolveUpload(lines("ticker\nVTI\nXYZ\nBND\nABC\nxyz\n"), catalog("VTI", "BND"), LIMITS);
     expect(out.ok && out.plan.skipped).toEqual(["XYZ", "ABC"]);
     expect(out.ok && out.plan.rows.map((r) => r.id)).toEqual(["VTI", "BND"]);
+  });
+  it("serves a class share the file writes with a slash or a dot, and skips an unserved one under its hyphen form", () => {
+    const out = resolveUpload(lines("ticker\nVTI\nBRK/B\nbf.b\nXYZ/B\n"), catalog("VTI", "BRK-B", "BF-B"), LIMITS);
+    expect(out.ok && out.plan.rows.map((r) => r.id)).toEqual(["VTI", "BRK-B", "BF-B"]);
+    expect(out.ok && out.plan.skipped).toEqual(["XYZ-B"]);
   });
   it("has nothing skipped when every ticker is served", () => {
     const out = resolveUpload([line("VTI", null, null, null), line("BND", null, null, null)], catalog("VTI", "BND"), LIMITS);

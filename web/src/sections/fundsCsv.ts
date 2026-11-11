@@ -61,6 +61,15 @@ export function parseNumber(text: string): Cell {
   return negative && value > 0 ? { ok: false, reason: "negative" } : { ok: true, value };
 }
 
+/**
+ * A ticker as the site writes it: trimmed and upper case, with the separator of a share class, a
+ * slash or a dot between letters (a brokerage's "BRK/B" or "BRK.B"), written as the served list
+ * writes it, a hyphen ("BRK-B"). Anything else is left as it is.
+ */
+export function normalizeTicker(text: string): string {
+  return text.trim().toUpperCase().replace(/([A-Z])[./](?=[A-Z])/g, "$1-");
+}
+
 /** The delimiter of the header line: comma, tab or semicolon, whichever it holds most of (comma when none). */
 function delimiterOf(text: string): string {
   const head = text.split(/\r?\n/).find((l) => l.trim() !== "") ?? "";
@@ -99,14 +108,15 @@ export function parseFundsCsv(text: string): Parsed {
     if (cells.every((cell) => cell.trim() === "")) continue;
     // an unquoted 1,000 is two cells and would shift every column after it; a row may not outrun the header
     if (cells.length > header.length) return { ok: false, error: uploadTooManyValues(row) };
-    const ticker = (cells[tickerAt] ?? "").trim().toUpperCase();
+    const typed = (cells[tickerAt] ?? "").trim().toUpperCase(); // as the file wrote it, for the messages about this row
+    const ticker = normalizeTicker(typed);
     const amounts: Record<Column, number | null> = { shares: null, dollars: null, percent: null };
     for (const column of COLUMNS) {
       const index = at.get(column);
       if (index === undefined) continue;
       const raw = cells[index] ?? "";
       const cell = parseNumber(raw);
-      if (!cell.ok) return { ok: false, error: cell.reason === "negative" ? uploadNegative(row, ticker || "no ticker", column) : uploadBadNumber(row, ticker || "no ticker", column, raw.trim()) };
+      if (!cell.ok) return { ok: false, error: cell.reason === "negative" ? uploadNegative(row, typed || "no ticker", column) : uploadBadNumber(row, typed || "no ticker", column, raw.trim()) };
       amounts[column] = cell.value;
     }
     if (ticker === "") {

@@ -2102,6 +2102,11 @@ button {
   flex: 1 1 auto;
 }
 
+/* Funds: the number of funds in the list on screen, above the toolbar that holds the running total. */
+.funds-count {
+  margin-bottom: 6px;
+}
+
 /* Funds: the live region of the total line takes no room while it is empty (it stays mounted). */
 .funds-live:empty {
   position: absolute;

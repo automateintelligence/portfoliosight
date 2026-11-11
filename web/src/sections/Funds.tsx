@@ -3,11 +3,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { SymbolEntry } from "../api/http";
 import type { Tensor } from "../api/tensor";
 import { TICKER_SHAPE, type TickerSource } from "../api/tickerShape";
-import { fundsTotal, fundsUpTo, menuFull, menuNeedsMore, plain, uploadCatalogLoading, uploadSkipped, uploadTooBig, uploadUnreadable } from "../copy";
+import { fundsCount, fundsTotal, fundsUpTo, menuFull, menuNeedsMore, plain, uploadCatalogLoading, uploadSkipped, uploadTooBig, uploadUnreadable } from "../copy";
 import { amountText, money, parseAmount, pct } from "../format";
 import { amountsToWeights, fundsWithPrices, percentShown, percentTotal, scaleTo100 } from "../math/amounts";
 import { MIN_FUNDS, type Row, type Unit, type UploadReport } from "../state/store";
-import { MAX_FILE_BYTES, parseFundsCsv, resolveUpload, TEMPLATE_CSV, TEMPLATE_FILENAME } from "./fundsCsv";
+import { MAX_FILE_BYTES, normalizeTicker, parseFundsCsv, resolveUpload, TEMPLATE_CSV, TEMPLATE_FILENAME } from "./fundsCsv";
 import { matchGroup, rankSymbols } from "./symbolSearch";
 import { downloadCsv } from "./tradesCsv";
 
@@ -148,12 +148,13 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
   }, [listOpen, matches.length]);
   const tryAddTyped = () => {
     if (!q) return;
-    const exact = (matches[0] && matchGroup(matches[0], q) === 1 ? matches[0] : undefined) ?? (matches.length === 1 ? matches[0] : undefined);
+    // A class share typed as BRK/B or BRK.B is the served BRK-B.
+    const ticker = normalizeTicker(query);
+    const exact = symbols?.find((s) => s.id === ticker) ?? (matches[0] && matchGroup(matches[0], q) === 1 ? matches[0] : undefined) ?? (matches.length === 1 ? matches[0] : undefined);
     if (exact) return add(exact);
-    const typed = query.trim().toUpperCase();
-    setAddError(`${typed} isn't offered: no verified current data for it.`);
+    setAddError(`${query.trim().toUpperCase()} isn't offered: no verified current data for it.`);
     // Committed (not merely typed), shaped like a ticker and matching nothing served: someone wants a ticker we do not have.
-    if (symbols !== null && matches.length === 0 && TICKER_SHAPE.test(typed)) onRequestTickers([typed], "picker");
+    if (symbols !== null && matches.length === 0 && TICKER_SHAPE.test(ticker)) onRequestTickers([ticker], "picker");
   };
 
   /** A CSV file replaces the fund list: the draft, as adding funds makes it, with the file's amounts and unit. */
@@ -226,6 +227,9 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
 
   return (
     <div>
+      <p className="hint funds-count" data-testid="funds-count">
+        {fundsCount(list.length)}
+      </p>
       <div className="toolbar">
         <div className="seg" data-testid="unit-toggle" role="radiogroup" aria-label="Amounts are in">
           {UNITS.map((u) => (
