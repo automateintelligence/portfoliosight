@@ -109,3 +109,24 @@ description. Nothing in them changes the decision.
 
 `fr-run-v3/analysis/safety_check.json` from a new command `v3-safety`, and a hand-written section
 in the v3 report.
+
+## Readings fixed on 2026-11-11, after the code was written and before any run on real data
+
+The text above left these open. Each is fixed here as the code reads it; none was chosen after
+seeing a result.
+
+1. A mix's mean and its difference against F use only the cells where both have the outcome. F's
+   own entry uses every cell F has.
+2. The usable start months of a test are the start months with at least one cell where E and F
+   both have the test's outcome.
+3. The worst-years tail is taken per risk setting over the start months both mixes have, then
+   averaged over the settings that have any (five for L).
+4. L has no recorded model return or risk, so it has no surprise and no signed gap.
+5. A signed gap is realized minus model. Its difference against F is mix minus F.
+6. A 98.75% interval whose lower end is exactly 0 includes 0. A test without any paired cell is
+   inconclusive.
+7. The bootstrap resamples the job's whole schedule of start months, as the region check does; each
+   block length draws its own resamples from the seed.
+8. Time under water is sessions divided by 21, not rounded.
+9. The lower bound of a return condition is the one-sided 95% lower bound of the paired difference
+   (the 5th percentile of the resamples), not the 98.75% interval.
