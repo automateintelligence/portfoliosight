@@ -4,7 +4,8 @@
       "tier": 1,
       "name": "presets",
       "holdings": "data/holdings/holdings_guide2017_step2.csv",
-      "tsp": true
+      "tsp": true,
+      "presets": "data/presets.json"
     },
     {
       "tier": 2,

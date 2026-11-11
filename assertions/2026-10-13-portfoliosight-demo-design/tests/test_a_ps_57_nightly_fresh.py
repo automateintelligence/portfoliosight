@@ -1,8 +1,8 @@
-"""A-PS-57 — the nightly is fresh: `asof` equals `D_G`, the run finished clean, twelve tensors exist, the cache is under its cap, and the page says which date it shows.
+"""A-PS-57 — the nightly is fresh: `asof` equals `D_G`, the run finished clean, eighteen tensors exist, the cache is under its cap, and the page says which date it shows.
 
 Claim: the current generation's `asof` equals the test's own `D_G` for the check day (the most
 recent XNYS session whose close is at least 6 hours before 02:00 America/Los_Angeles of the check
-day), `/api/health.nightly` shows that run finished with zero errors, the generation holds the 12
+day), `/api/health.nightly` shows that run finished with zero errors, the generation holds the 18
 preset tensors, the KS-001 cache volume is at most 300 MB, the timer is enabled, and the page's
 details line "prices through {asof}" shows the same date.
 
@@ -15,8 +15,8 @@ Pinned interface (the product must provide exactly this):
 - `GET https://portfoliosight.ai/api/health` -> 200 `{"generation", "asof": "YYYY-MM-DD",
   "asof_trading_days_behind": int, "nightly": {"finished": ISO-8601 instant with offset or "Z",
   "D_G": "YYYY-MM-DD", "errors": [] | 0 | {}}}` (`nightly` = `meta/status.json`, spec §5.3, §6).
-- `GET https://portfoliosight.ai/api/presets` -> two presets x six lookbacks, each `ready` with a
-  `url`; `HEAD https://portfoliosight.ai{url}` -> 200 for all 12.
+- `GET https://portfoliosight.ai/api/presets` -> three presets x six lookbacks, each `ready` with a
+  `url`; `HEAD https://portfoliosight.ai{url}` -> 200 for all 18.
 - KS-001 over ssh: container `portfoliosight-api` with the cache at `/app/cache`; systemd unit
   `portfoliosight-nightly.timer`.
 - Page: clicking `data-testid="details-toggle"` turns details on; only then the page text contains
@@ -486,7 +486,7 @@ else:
             f"nightly.D_G {nightly.get('D_G')!r} is not the reference D_G {d_g.isoformat()}"
         )
 
-    def test_generation_holds_the_twelve_preset_tensors():
+    def test_generation_holds_the_eighteen_preset_tensors():
         _env("PS_GATE_SECRET")
         d_g, _ = _reference_sessions(_check_day())
         resp = _http("GET", f"{SITE}/api/presets")
@@ -509,8 +509,8 @@ else:
                     f"{preset.get('id')}/{lookback}: url {url!r} is not in generation {generation}"
                 )
                 urls.append(url)
-        assert len(urls) == 12 and len(set(urls)) == 12, (
-            f"expected 12 distinct ready preset tensor URLs, found {len(set(urls))}"
+        assert len(urls) == 18 and len(set(urls)) == 18, (
+            f"expected 18 distinct ready preset tensor URLs, found {len(set(urls))}"
         )
         missing = []
         for url in urls:

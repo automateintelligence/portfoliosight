@@ -1,8 +1,10 @@
 """A-PS-31 — presets and health bodies match data/presets.json and the holdings CSV.
 
-Claim: GET /v1/presets returns the two presets of data/presets.json with the spec §6 shape, where
+Claim: GET /v1/presets returns the three presets of data/presets.json with the spec §6 shape, where
 guide2017.allocation is Qty x Price per symbol from data/holdings/holdings_guide2017_step2.csv in
-"$" with 18 non-zero of 23 entries and tsp.allocation is null; GET /v1/health returns the §6 fields.
+"$" with 18 non-zero of 23 entries, tsp.allocation is null, and research2003 is "Example Portfolio 2"
+(19 holdings, limits of 40% on its 11 funds and 10% on its 8 stocks, an equal mix in "%" that adds up
+to 100); GET /v1/health returns the §6 fields.
 
 Pinned interface (the product must provide exactly this):
 - `portfoliosight.api.app.create_app(*, store, clock, build_fn, start_worker)` (shared pin);
@@ -16,7 +18,8 @@ Pinned interface (the product must provide exactly this):
   carry `id` and `name`.
 - `GET /v1/presets` serves `meta/{G}/presets.json` of the current generation; `nightly` in
   `GET /v1/health` is the content of `meta/status.json`.
-- A preset's `hash` is the spec §6 universe hash of its funds with every cap `null`.
+- A preset's `hash` is the spec §6 universe hash of its funds with every cap `null`, except that
+  research2003's is the hash of its requested policy (the limits above).
 """
 
 from __future__ import annotations
@@ -335,8 +338,27 @@ def _guide_ids() -> list[str]:
 
 
 def _preset_hashes() -> dict:
-    """Independent universe hashes of the two presets (requested policy: all defaults)."""
-    return {"guide2017": _uhash(_menu(_guide_ids())), "tsp": _uhash(_menu(TSP_CORE))}
+    """Independent universe hashes of the three presets (requested policy: all defaults for the
+    first two, research2003's own limits for the third)."""
+    return {
+        "guide2017": _uhash(_menu(_guide_ids())),
+        "tsp": _uhash(_menu(TSP_CORE)),
+        "research2003": _uhash(_research_policy()),
+    }
+
+
+RESEARCH_FUNDS = ["SPY", "IWM", "IWD", "EFA", "EEM", "IYR", "TLT", "IEF", "SHY", "LQD", "VIPSX"]
+RESEARCH_STOCKS = ["GE", "MSFT", "XOM", "PFE", "C", "WMT", "AIG", "INTC"]
+
+
+def _research_ids() -> list[str]:
+    return RESEARCH_FUNDS + RESEARCH_STOCKS
+
+
+def _research_policy() -> list[dict]:
+    """research2003's requested policy: each fund at most 40%, each stock at most 10%."""
+    limits = {i: (None, 0.4) for i in RESEARCH_FUNDS} | {i: (None, 0.1) for i in RESEARCH_STOCKS}
+    return _menu(_research_ids(), **limits)
 
 
 def _expected_keys(g: str) -> set:
@@ -560,7 +582,7 @@ else:
         )
         assert body["generation"] == g and body["asof"] == D_G.isoformat()
         presets = body["presets"]
-        assert [p["id"] for p in presets] == ["guide2017", "tsp"]
+        assert [p["id"] for p in presets] == ["guide2017", "tsp", "research2003"]
         assert {p["id"]: p["name"] for p in presets} == declared, (
             "presets differ from data/presets.json"
         )
@@ -586,6 +608,18 @@ else:
         assert [f["id"] for f in second["funds"]] == TSP_CORE
         assert second["allocation"] is None, "the TSP preset must not carry an allocation"
         assert second["allocation_unit"] is None
+
+        third = presets[2]
+        assert third["name"] == "Example Portfolio 2"
+        assert [f["id"] for f in third["funds"]] == _research_ids()
+        assert third["caps"] == [
+            {"id": i, "min": None, "max": 0.4 if i in RESEARCH_FUNDS else 0.1}
+            for i in _research_ids()
+        ], "research2003 must carry its limits"
+        assert third["allocation_unit"] == "%"
+        assert set(third["allocation"]) == set(_research_ids())
+        assert all(isinstance(v, float) and v > 0 for v in third["allocation"].values())
+        assert abs(sum(third["allocation"].values()) - 100) <= 0.05
 
         for preset in presets:
             h = preset["hash"]

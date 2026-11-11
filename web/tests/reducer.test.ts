@@ -12,6 +12,7 @@ const TENSOR = parseTensor(structuredClone(RAW));
 const G = RAW.generation as string;
 const H1 = RAW.universe.hash as string;
 const H2 = "00000000000000aa";
+const H3 = "00000000000000bb";
 const IDS: string[] = RAW.universe.funds.map((f: { id: string }) => f.id);
 const LBS = ["1y", "2y", "3y", "5y", "10y", "ew"];
 const DOMAIN = portfolioMath(TENSOR).riskSliderDomain();
@@ -29,12 +30,17 @@ const json = (status: number, body: unknown, headers: Record<string, string> = {
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
 const lookbacks = (hash: string) => Object.fromEntries(LBS.map((lb) => [lb, { status: "ready", url: `/api/tensors/${G}/${hash}/${lb}` }]));
 const allocation = Object.fromEntries(IDS.slice(0, 6).map((id, i) => [id, 1000 * (i + 1)]));
+// A preset that declares its own limits (as fractions) and a starting mix in percent.
+const limitedFunds = IDS.slice(0, 6);
+const limitedCaps = limitedFunds.map((id, i) => ({ id, min: null, max: i < 4 ? 0.4 : 0.1 }));
+const limitedMix = Object.fromEntries(limitedFunds.map((id, i) => [id, i < 4 ? 16.67 : 16.66]));
 const presetsBody = () => ({
   generation: G,
   asof: presetsAsof,
   presets: [
     { id: "guide2017", name: "Example Portfolio", hash: H1, funds: RAW.universe.funds.map((f: { id: string; name: string }) => ({ id: f.id, name: f.name })), allocation, allocation_unit: "$", lookbacks: lookbacks(H1) },
     { id: "tsp", name: "TSP (G, F, C, S, I)", hash: H2, funds: RAW.universe.funds.slice(0, 5).map((f: { id: string; name: string }) => ({ id: f.id, name: f.name })), allocation: null, allocation_unit: null, lookbacks: lookbacks(H2) },
+    { id: "research2003", name: "Example Portfolio 2", hash: H3, funds: limitedFunds.map((id) => ({ id, name: id })), caps: limitedCaps, allocation: limitedMix, allocation_unit: "%", lookbacks: lookbacks(H3) },
   ],
 });
 const tensorFor = (lookback: string, patch: (t: typeof RAW) => void = () => undefined) => {
@@ -394,6 +400,110 @@ describe("store: transitions", () => {
     expect(localStorage.getItem("ps.theme")).toBe("light");
     const again = createStore({ search: "" });
     expect(again.getState().theme).toBe("light");
+  });
+});
+
+describe("store: a preset that declares its own limits", () => {
+  const OWN = limitedCaps.map((c) => ({ id: c.id, min: null, max: c.max * 100 }));
+  const lastSearch = () => new URL(replaced[replaced.length - 1], "https://portfoliosight.ai").search;
+  const posts = () => tensorCalls().filter((c) => c.method === "POST");
+  const settle = async () => {
+    await flush();
+    await advance(500);
+  };
+
+  it("opens with its limits in place and its starting mix in percent, loads its declared tensor and keeps the limits out of the address", async () => {
+    const store = await boot("?u=research2003");
+    const s = store.getState();
+    expect(s.preset).toBe("research2003");
+    expect(s.unit).toBe("pct");
+    expect(s.rows.map((r) => r.amount)).toEqual(limitedFunds.map((id) => limitedMix[id]));
+    expect(s.caps).toEqual(OWN);
+    expect(tensorCalls().map((c) => `${c.method} ${c.path}`)).toEqual([`GET /api/tensors/${G}/${H3}/5y`]);
+    const state = decode(lastSearch());
+    expect(state.preset).toBe("research2003");
+    expect(state.caps).toEqual([]);
+    expect(state.funds).toEqual([]);
+  });
+
+  it("choosing it from the menu puts its limits in place, and choosing another preset takes them away", async () => {
+    const store = await boot("");
+    expect(store.getState().caps).toEqual([]);
+    calls = [];
+    store.dispatch({ type: "selectPreset", id: "research2003" });
+    await settle();
+    expect(store.getState().caps).toEqual(OWN);
+    expect(tensorCalls().map((c) => `${c.method} ${c.path}`)).toEqual([`GET /api/tensors/${G}/${H3}/5y`]);
+    store.dispatch({ type: "selectPreset", id: "tsp" });
+    await settle();
+    expect(store.getState().caps).toEqual([]);
+    expect(posts()).toEqual([]);
+  });
+
+  it("an edited limit is posted with all of the menu's limits and travels in the address, and the address reopens it", async () => {
+    const store = await boot("?u=research2003");
+    const edited = [{ id: IDS[0], min: null, max: 30 }, ...OWN.slice(1)];
+    store.dispatch({ type: "setCaps", caps: edited });
+    await settle();
+    const body = JSON.parse(posts().pop()!.body as string);
+    expect(body.funds).toEqual(limitedFunds.map((id, i) => ({ id, min: null, max: i === 0 ? 0.3 : i < 4 ? 0.4 : 0.1 })));
+    expect(store.getState().preset).toBe("research2003");
+    const search = lastSearch();
+    const state = decode(search);
+    expect(state.preset).toBe("research2003");
+    expect(state.caps).toEqual(edited);
+    calls = [];
+    const again = await boot(search);
+    expect(again.getState().preset).toBe("research2003");
+    expect(again.getState().caps).toEqual(edited);
+    expect(JSON.parse(posts()[0].body as string).funds[0]).toEqual({ id: IDS[0], min: null, max: 0.3 });
+  });
+
+  it("limits put back to the preset's own are the preset again: a clean address and no limits in the link", async () => {
+    const store = await boot("?u=research2003");
+    store.dispatch({ type: "setCaps", caps: [{ id: IDS[0], min: null, max: 30 }, ...OWN.slice(1)] });
+    await settle();
+    store.dispatch({ type: "setCaps", caps: OWN });
+    await settle();
+    expect(store.getState().preset).toBe("research2003");
+    expect(decode(lastSearch()).caps).toEqual([]);
+    // the request it sent names the preset's own key: the same policy the nightly built
+    const body = JSON.parse(posts().pop()!.body as string);
+    expect(body.funds.map((f: { max: number }) => f.max)).toEqual(limitedCaps.map((c) => c.max));
+  });
+
+  it("the order of the limits does not make a menu another one", async () => {
+    const store = await boot("?u=research2003");
+    store.dispatch({ type: "setCaps", caps: [...OWN].reverse() });
+    await settle();
+    expect(store.getState().preset).toBe("research2003");
+    expect(posts()).toEqual([]);
+    expect(decode(lastSearch()).caps).toEqual([]);
+  });
+
+  it("every limit back at the default rule is a custom menu, because an address without limits would mean the preset's", async () => {
+    const store = await boot("?u=research2003");
+    store.dispatch({ type: "setCaps", caps: [] });
+    await settle();
+    const s = store.getState();
+    expect(s.preset).toBeNull();
+    expect(s.caps).toEqual([]);
+    expect(s.rows.map((r) => r.id)).toEqual(limitedFunds);
+    const state = decode(lastSearch());
+    expect(state.preset).toBeNull();
+    expect(state.funds.map((f) => f.id)).toEqual(limitedFunds);
+    expect(state.caps).toEqual([]);
+    expect(JSON.parse(posts().pop()!.body as string).funds.every((f: { min: unknown; max: unknown }) => f.min === null && f.max === null)).toBe(true);
+  });
+
+  it("a preset without limits still treats an empty set of limits as itself", async () => {
+    const store = await boot("?u=tsp");
+    store.dispatch({ type: "setCaps", caps: [{ id: IDS[0], min: null, max: 30 }] });
+    await settle();
+    store.dispatch({ type: "setCaps", caps: [] });
+    await settle();
+    expect(store.getState().preset).toBe("tsp");
+    expect(decode(lastSearch()).preset).toBe("tsp");
   });
 });
 

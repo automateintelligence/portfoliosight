@@ -1338,3 +1338,64 @@ test("a ticker typed into the picker that the site does not have is reported onc
   await page.waitForTimeout(300);
   expect(await tickerRequests(page)).toEqual([{ tickers: ["ZZQJ"], source: "picker" }]);
 });
+
+// ── Example Portfolio 2: a preset that declares its own limits ───────────────────────────────
+type MockPreset = { id: string; caps: { id: string; min: number | null; max: number | null }[] };
+const limitedPreset = async (page: Page) => {
+  const body = (await (await page.request.get("/api/presets")).json()) as { presets: MockPreset[] };
+  const preset = body.presets.find((p) => p.id === "research2003")!;
+  const percent = (id: string) => String(Math.round(preset.caps.find((c) => c.id === id)!.max! * 100));
+  return { first: preset.caps[0].id, last: preset.caps[preset.caps.length - 1].id, percent };
+};
+
+test("Example Portfolio 2 opens with its own limits in Settings, builds nothing and keeps them out of the link", async ({ page }) => {
+  const own = await limitedPreset(page);
+  await open(page, "u=research2003&lb=5y");
+  await expect(page.getByTestId("preset-menu")).toHaveAccessibleName(/Example Portfolio 2/);
+  expect(await posts(page), "its declared tensor is fetched; nothing is built").toEqual([]);
+  expect(new URL(page.url()).searchParams.get("u")).toBe("research2003");
+  expect(new URL(page.url()).searchParams.has("c"), "its own limits are not written into the link").toBe(false);
+  await section(page, "settings");
+  await expect(page.getByTestId(`cap-max-${own.first}`)).toHaveValue(own.percent(own.first));
+  await expect(page.getByTestId(`cap-max-${own.last}`)).toHaveValue(own.percent(own.last));
+  expect(own.percent(own.first)).not.toBe(own.percent(own.last));
+  await expect(page.getByTestId(`cap-min-${own.first}`)).toHaveValue("0");
+});
+
+test("choosing Example Portfolio 2 from the menu shows its limits, and choosing another portfolio takes them away", async ({ page }) => {
+  const own = await limitedPreset(page);
+  await open(page);
+  await page.getByTestId("preset-menu").click();
+  await page.getByRole("menuitemradio", { name: /Example Portfolio 2/ }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("u")).toBe("research2003");
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  expect(await posts(page)).toEqual([]);
+  await section(page, "settings");
+  await expect(page.getByTestId(`cap-max-${own.first}`)).toHaveValue(own.percent(own.first));
+  await page.getByTestId("preset-menu").click();
+  await page.getByRole("menuitemradio", { name: "Example Portfolio", exact: true }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("u")).toBe("guide2017");
+  await expect(page.getByTestId(`cap-max-${own.first}`)).not.toHaveValue(own.percent(own.first));
+});
+
+test("an edited limit on Example Portfolio 2 is sent with the others, goes in the link, and the link reopens it", async ({ page }) => {
+  const own = await limitedPreset(page);
+  await open(page, "u=research2003&lb=5y");
+  await section(page, "settings");
+  const field = page.getByTestId(`cap-max-${own.first}`);
+  await field.fill("30");
+  await field.blur();
+  await expect.poll(async () => (await posts(page)).length).toBe(1);
+  const sent = (await posts(page))[0].funds as { id: string; min: number | null; max: number | null }[];
+  expect(sent.find((f) => f.id === own.first)).toEqual({ id: own.first, min: null, max: 0.3 });
+  expect(sent.find((f) => f.id === own.last)).toEqual({ id: own.last, min: null, max: Number(own.percent(own.last)) / 100 });
+  await expect.poll(() => new URL(page.url()).searchParams.get("c") ?? "").toContain(`${own.first}::30`);
+  expect(new URL(page.url()).searchParams.get("u")).toBe("research2003");
+  const link = page.url();
+  await page.goto(link);
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  await section(page, "settings");
+  await expect(page.getByTestId(`cap-max-${own.first}`)).toHaveValue("30");
+  await expect(page.getByTestId(`cap-max-${own.last}`)).toHaveValue(own.percent(own.last));
+  await expect(page.getByTestId("preset-menu")).toHaveAccessibleName(/Example Portfolio 2/);
+});

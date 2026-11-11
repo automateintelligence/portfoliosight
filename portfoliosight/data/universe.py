@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+
+from portfoliosight.engine.caps import CapsError, resolve_bounds
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TIERS_FILE = REPO_ROOT / "data" / "universes" / "tiers.json"
@@ -48,12 +51,13 @@ class SymbolInfo:
 
 @dataclass(frozen=True)
 class Tiers:
-    tier1: tuple[str, ...]  # the 23 Step 2 funds, then the 16 TSP funds
+    tier1: tuple[str, ...]  # the 23 Step 2 funds, the 16 TSP funds, then the other preset funds
     tier2: tuple[str, ...]  # file order
     tier3: tuple[str, ...]  # file order across its files, repeats dropped, tier 2 symbols kept
     income: frozenset[str]
     starter_slice: int
     notes: Mapping[str, str] = field(default_factory=dict)
+    preset_funds: tuple[str, ...] = ()  # the funds tier 1 adds from the presets, in its order
 
     def tier3_only(self) -> tuple[str, ...]:
         """Tier 3 symbols that are not already in tier 2, in file order."""
@@ -61,7 +65,13 @@ class Tiers:
         return tuple(s for s in self.tier3 if s not in tier2)
 
     def info(self) -> dict[str, SymbolInfo]:
-        """Every symbol of every tier with its lowest tier."""
+        """Every symbol of every tier with its lowest tier.
+
+        A symbol whose lowest tier in the universe files is 3 is a stock, also when a preset
+        lifts it to tier 1.
+        """
+        listed1 = set(self.tier1) - set(self.preset_funds)
+        stocks = {s for s in self.tier3_only() if s not in listed1}
         out: dict[str, SymbolInfo] = {}
         for tier, symbols in ((1, self.tier1), (2, self.tier2), (3, self.tier3)):
             for symbol in symbols:
@@ -69,7 +79,7 @@ class Tiers:
                     continue
                 if is_tsp(symbol):
                     kind = "tsp"
-                elif tier == 3:
+                elif symbol in stocks:
                     kind = "stock"
                 else:
                     kind = None
@@ -81,11 +91,16 @@ class Tiers:
 
 @dataclass(frozen=True)
 class Preset:
+    """A ready-made menu. ``caps`` holds the per-fund limits it declares, as fractions of 1:
+    ``{fund: {"min": float | None, "max": float | None}}``; a fund it does not list, and a bound
+    that is ``None``, take the default rule (spec 4.4)."""
+
     id: str
     name: str
     funds: tuple[str, ...]
     allocation: dict[str, float] | None
     allocation_unit: str | None
+    caps: dict[str, dict[str, float | None]] = field(default_factory=dict)
 
 
 def is_tsp(symbol: str) -> bool:
@@ -143,6 +158,10 @@ def load_tiers(tiers_file: Path = TIERS_FILE) -> Tiers:
     tier1 = _holdings_symbols(holdings)
     if by_tier[1].get("tsp"):
         tier1 += list(TSP_FUNDS)
+    added: dict[str, None] = {}  # every preset's funds, refreshed before the presets are built
+    if by_tier[1].get("presets"):
+        for preset in load_presets(root / by_tier[1]["presets"]):
+            added.update((fund, None) for fund in preset.funds if fund not in tier1)
     income: set[str] = set()
     files: dict[int, tuple[str, ...]] = {}
     for tier in (2, 3):
@@ -154,12 +173,13 @@ def load_tiers(tiers_file: Path = TIERS_FILE) -> Tiers:
             income.update(symbol for symbol, tagged in lines if tagged)
         files[tier] = tuple(joined)
     return Tiers(
-        tier1=_unique(tier1, holdings),
+        tier1=_unique(tier1, holdings) + tuple(added),
         tier2=files[2],
         tier3=files[3],
         income=frozenset(income),
         starter_slice=int(by_tier[3].get("starter_slice", 130)),
         notes={str(k).upper(): str(v) for k, v in config.get("notes", {}).items()},
+        preset_funds=tuple(added),
     )
 
 
@@ -211,21 +231,111 @@ def _allocation_from_holdings(path: Path, funds: tuple[str, ...]) -> dict[str, f
     return {fund: amounts[fund] for fund in funds}
 
 
+ALLOCATION_UNITS = ("$", "%")
+PERCENT_TOLERANCE = 0.05  # the page accepts percentages that add up to 100 within this
+CAP_KEYS = frozenset({"min", "max"})
+
+
+def _declared_caps(item: Mapping[str, Any], funds: tuple[str, ...]) -> dict[str, dict[str, Any]]:
+    """The ``caps`` of a preset entry, each bound checked as the engine would check a request.
+
+    ``{"SPY": {"max": 0.4}, ...}``: fractions of 1, a missing bound is the default rule. The
+    declared limits go through ``resolve_bounds`` with the whole menu, so a bound outside [0, 1],
+    a minimum above its maximum or limits that cannot add up to 100% refuse the file here and not
+    the nightly build.
+    """
+    declared = item.get("caps")
+    if declared is None:
+        return {}
+    where = f"preset {item['id']!r}"
+    if not isinstance(declared, dict):
+        raise ValueError(f"{where}: caps must be an object of fund id to {{min, max}}")
+    caps: dict[str, dict[str, Any]] = {}
+    for fund, bounds in declared.items():
+        fund = str(fund).upper()
+        if not isinstance(bounds, dict):
+            raise ValueError(f"{where}: caps for {fund} must be an object with min and/or max")
+        unknown = sorted(set(bounds) - CAP_KEYS)
+        if unknown:
+            raise ValueError(f"{where}: caps for {fund} has unknown key(s) {unknown}")
+        caps[fund] = {"min": bounds.get("min"), "max": bounds.get("max")}
+    try:
+        resolve_bounds(funds, [{"id": fund, **bounds} for fund, bounds in caps.items()])
+    except CapsError as exc:
+        raise ValueError(f"{where}: {exc}") from exc
+    return {
+        fund: {name: None if bound is None else float(bound) for name, bound in bounds.items()}
+        for fund, bounds in caps.items()
+    }
+
+
+def _declared_allocation(item: Mapping[str, Any], funds: tuple[str, ...]) -> dict[str, float]:
+    """The ``allocation`` written in a preset entry: an amount for every fund, in ``$`` or ``%``.
+
+    Percentages must add up to 100 within the page's tolerance, so the page accepts them as the
+    mix entered.
+    """
+    where = f"preset {item['id']!r}"
+    amounts = item["allocation"]
+    unit = item.get("allocation_unit")
+    if unit not in ALLOCATION_UNITS:
+        raise ValueError(f"{where}: allocation_unit must be one of {list(ALLOCATION_UNITS)}")
+    if not isinstance(amounts, dict):
+        raise ValueError(f"{where}: allocation must be an object of fund id to amount")
+    allocation: dict[str, float] = {}
+    for fund, amount in amounts.items():
+        fund = str(fund).upper()
+        if isinstance(amount, bool) or not isinstance(amount, int | float):
+            raise ValueError(f"{where}: the amount for {fund} must be a number")
+        if not math.isfinite(amount) or amount < 0:
+            raise ValueError(f"{where}: the amount for {fund} must not be negative")
+        allocation[fund] = float(amount)
+    unlisted = [fund for fund in funds if fund not in allocation]
+    if unlisted:
+        raise ValueError(f"{where}: allocation has no amount for fund(s) {unlisted}")
+    extra = sorted(set(allocation) - set(funds))
+    if extra:
+        raise ValueError(f"{where}: allocation names fund(s) {extra} that are not in the menu")
+    total = sum(allocation.values())
+    if total <= 0:
+        raise ValueError(f"{where}: allocation adds up to nothing")
+    if unit == "%" and abs(total - 100.0) > PERCENT_TOLERANCE + 1e-9:
+        raise ValueError(f"{where}: percentages add up to {total:g}, not 100")
+    return {fund: allocation[fund] for fund in funds}
+
+
 def load_presets(presets_file: Path = PRESETS_FILE) -> list[Preset]:
+    """The presets of ``data/presets.json``, each entry checked as the nightly will use it.
+
+    An entry has ``id``, ``name``, ``funds`` and optionally ``caps`` (per-fund limits, above),
+    and at most one source of a starting mix: ``allocation_source`` (a holdings CSV, dollars as
+    Qty x Price) or ``allocation`` with ``allocation_unit`` (``"$"`` or ``"%"``).
+    """
     root = presets_file.resolve().parents[1]
     config = json.loads(presets_file.read_text(encoding="utf-8"))
     presets: list[Preset] = []
     for item in config["presets"]:
         funds = tuple(str(fund).upper() for fund in item["funds"])
         source = item.get("allocation_source")
-        allocation = _allocation_from_holdings(root / source, funds) if source else None
+        written = item.get("allocation")
+        if source and written is not None:
+            raise ValueError(
+                f"preset {item['id']!r}: give allocation_source or allocation, not both"
+            )
+        allocation: dict[str, float] | None = None
+        unit: str | None = None
+        if source:
+            allocation, unit = _allocation_from_holdings(root / source, funds), "$"
+        elif written is not None:
+            allocation, unit = _declared_allocation(item, funds), item["allocation_unit"]
         presets.append(
             Preset(
                 id=item["id"],
                 name=item["name"],
                 funds=funds,
                 allocation=allocation,
-                allocation_unit="$" if allocation is not None else None,
+                allocation_unit=unit,
+                caps=_declared_caps(item, funds),
             )
         )
     return presets

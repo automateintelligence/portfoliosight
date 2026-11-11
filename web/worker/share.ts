@@ -11,7 +11,7 @@
 // only and nothing is imported from `cloudflare:*`.
 
 import { secretEquals } from "./preview";
-import { decode, encode } from "../src/state/url";
+import { PRESET_IDS, decode, encode } from "../src/state/url";
 
 export interface ShareEnv {
   SHARE_FROM?: string;
@@ -111,7 +111,7 @@ const pageTheme: Shape = (value) => decode(new URLSearchParams([["t", value]]).t
 // take. A value is mailed only if it matches, so a link cannot carry free text. A menu holds at
 // most `maxFunds` funds, the sender's own limit.
 const urlKeys = (maxFunds: number): ReadonlyArray<readonly [string, Shape]> => [
-  ["u", matching(/^(?:guide2017|tsp)$/)],
+  ["u", matching(new RegExp(`^(?:${PRESET_IDS.join("|")})$`))],
   ["f", matching(listOf(`${FUND_ID}(?::\\d{1,12}(?:\\.\\d{1,6})?)?`, maxFunds))],
   ["unit", matching(/^(?:pct|usd|shares)$/)],
   ["c", matching(listOf(`${FUND_ID}:(?:\\d{1,3})?:(?:\\d{1,3})?`, maxFunds))],

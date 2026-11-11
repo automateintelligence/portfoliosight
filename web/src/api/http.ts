@@ -28,6 +28,8 @@ const presetSchema = z
     name: z.string(),
     hash: z.string().optional(),
     funds: z.array(z.object({ id: z.string(), name: z.string().nullish() }).passthrough()),
+    /** The limits the preset declares, as fractions of 1 (a request's `funds` shape); none for most. */
+    caps: z.array(z.object({ id: z.string(), min: z.number().nullish(), max: z.number().nullish() }).passthrough()).default([]),
     allocation: z.record(z.string(), z.number()).nullish(),
     allocation_unit: z.string().nullish(),
     lookbacks: z.record(z.string(), lookbackEntry).default({}),
