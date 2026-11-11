@@ -1009,6 +1009,30 @@ test("a shared link over the public limit is refused with a message and the defa
   await expect.poll(() => page.url()).not.toContain("MOCKF");
 });
 
+test("the risk slider says why it stops at its left end, clear of its readouts, and the note is described to a screen reader", async ({ page }) => {
+  const wording = "Less risk here would mean a lower return and a worse bad year";
+  for (const query of ["", "x=1"]) {
+    await open(page, query);
+    const note = page.getByTestId("risk-limit");
+    await expect(note).toHaveText(wording);
+    const slider = page.getByTestId("risk-slider");
+    const noteId = await slider.getAttribute("aria-describedby");
+    expect(noteId, "the slider points at the note").toBe(await note.getAttribute("id"));
+    // thumb at the left limit, where the readouts are nearest the note, then at the right end
+    for (const key of ["Home", "End"]) {
+      await slider.focus();
+      await page.keyboard.press(key);
+      await expect(slider).toHaveAttribute("aria-valuenow", await slider.getAttribute(key === "Home" ? "aria-valuemin" : "aria-valuemax") ?? "");
+      const [n, readout, rail] = [await boxOf(page, "risk-limit"), (await page.locator(".risk .readout").boundingBox())!, await boxOf(page, "risk-slider")];
+      expect(overlap(n, readout), `${query || "default"} ${key}: the note and the readouts`).toBe(false);
+      expect(overlap(n, rail), `${query || "default"} ${key}: the note and the slider`).toBe(false);
+      expect(n.x, "the note starts on the page").toBeGreaterThanOrEqual(0);
+      expect(n.x + n.width, "the note ends on the page").toBeLessThanOrEqual(page.viewportSize()!.width);
+      expect(n.y, "the note is under the slider").toBeGreaterThan(rail.y + rail.height - 1);
+    }
+  }
+});
+
 // ── The pinned card (owner direction 2026-10-16) ─────────────────────────────────────────────
 type Box = { x: number; y: number; width: number; height: number };
 const overlap = (a: Box, b: Box) => a.x < b.x + b.width - 0.5 && b.x < a.x + a.width - 0.5 && a.y < b.y + b.height - 0.5 && b.y < a.y + a.height - 0.5;

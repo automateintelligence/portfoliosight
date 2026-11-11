@@ -12,6 +12,8 @@ export const plain = {
   riskBad: "Bad year",
   riskTypical: "Typical year",
   riskDisabled: "this portfolio has only one sensible risk level",
+  /** At the slider's left end when the curve runs on to the left of it (the tensor's frontier.s_safe is above 0). */
+  riskLimit: "Less risk here would mean a lower return and a worse bad year",
   resultStrip: "Selected mix",
   resultStripSuffix: "over one year",
   rangeLow: "Bad",
