@@ -207,6 +207,26 @@ def test_the_mean_and_difference_use_the_cells_both_mixes_have():
     assert out["mixes"][S.F]["fall_3y"]["start_months"] == 30
 
 
+def test_the_settings_of_a_start_month_are_averaged_before_the_start_months():
+    table = _table(30)
+    months = month_labels(30)
+    e_fall = {  # E's 3-year fall by setting where it has one; F is 0.30 everywhere
+        months[0]: {0: 0.10, 1: 0.20},  # differences 0.20 and 0.10: a month mean of 0.15
+        months[1]: {3: 0.25, 4: 0.26, 5: 0.27},  # differences 0.05, 0.04, 0.03: mean 0.04
+    }
+    for month, values in e_fall.items():
+        for j, rf in enumerate(A.RFS):
+            here = (table["mix"] == S.E) & (table["month"] == month) & (table["rf"] == rf)
+            table.loc[here, "fall_3y"] = values.get(j, np.nan)
+    e = _assemble(table, 30)["mixes"][S.E]["fall_3y"]
+    # month by month: (0.15 + 0.04 + 28 * 0.02) / 30; all 173 cells pooled would give 3.78 / 173
+    assert e["difference"] == pytest.approx(0.025, abs=1e-12)
+    # (0.15 + 0.26 + 28 * 0.28) / 30; pooled it would be 48.12 / 173
+    assert e["mean"] == pytest.approx(0.275, abs=1e-12)
+    assert e["mean_F"] == pytest.approx(0.30, abs=1e-12)
+    assert e["start_months"] == 30 and e["cells"] == 2 + 3 + 28 * 6
+
+
 def test_the_worst_years_rank_each_mix_on_its_own_outcomes_per_setting():
     k = 20  # two of 20 start months per setting
     months = month_labels(k)
@@ -562,6 +582,25 @@ def test_the_mixes_of_a_month(tmp_path):
         assert math.isnan(by[(rf, S.L)]["mu"]) and math.isnan(by[(rf, S.L)]["sigma"])
 
 
+def test_a_row_without_a_usable_label_is_no_mix(tmp_path):
+    month = "2010-03"
+    job = _job(tmp_path, [month], record=False)
+    pool = G.read_month_pool(job / "tasks" / "pool" / f"{MENU}_{month}_{ENGINE}.parquet")
+    sel = _selections(month)
+    rfs = C.RISK_FRACTIONS
+    sel.loc[sel["sel_id"] == f"{month}|{rfs[2]}|{C.ENB_KNEE}", "status"] = C.SEARCH_FAILED
+    sel.loc[sel["sel_id"] == f"{month}|{rfs[3]}|{C.ENB_KNEE}", "status"] = C.KNEE_COLLAPSED
+    mixes = S.month_mixes(pool, A.locked_rows(sel), month)
+    by = {(m["rf"], m["mix"]): m for m in mixes}
+    assert (A.RFS[2], S.E) not in by  # its search failed: no mix
+    assert len(mixes) == 6 * 7 + 5 - 1
+    for j, rf in enumerate(A.RFS):
+        for name in (*S.ARMS, S.REGION_ENB):
+            assert ((rf, name) in by) == (name != S.E or j != 2), (rf, name)
+    # a collapsed knee is a usable label: E keeps its mix there
+    assert by[(A.RFS[3], S.E)]["weights"] == pytest.approx([_a(3) - 0.1, 1.1 - _a(3)])
+
+
 def test_the_enb_pick_and_the_left_tip_are_the_region_checks(tmp_path):
     month = "2010-03"
     job = _job(tmp_path, [month], record=False)
@@ -718,6 +757,35 @@ def test_safety_job_restricted_to_some_months(tmp_path):
                      bounds=BOUNDS, commit="c0ffee", months=[months[3]])  # fmt: skip
 
 
+def test_safety_job_reads_only_the_main_settings_rows(tmp_path):
+    months = month_labels(2)
+    job = _job(tmp_path, months)
+    for month in months:  # rows of other settings, each listed after the arm's locked row
+        sel = _selections(month)  # already holds arm 2's own program row, [1, 0]
+        extra = []
+        for rf in C.RISK_FRACTIONS:
+            here = sel.loc[sel["r_fraction"] == rf].set_index("arm")
+            extra.append({**here.loc[C.FRONTIER].to_dict(), "arm": C.FRONTIER,
+                          "sel_id": f"{month}|{rf}|F-5y", "lookback": "5y",
+                          "weights": [1.0, 0.0]})  # fmt: skip
+            arm4 = here.loc[C.CRASH_PENALTY].to_dict()
+            extra.append({**arm4, "arm": C.CRASH_PENALTY, "sel_id": f"{month}|{rf}|side",
+                          "kind": "side_lambda", "lam": C.LAMBDA_SIDE[1],
+                          "weights": [0.0, 1.0]})  # fmt: skip
+        _write(job / "tasks" / f"{MENU}_{month}_{ENGINE}.parquet",
+               pd.concat([sel, pd.DataFrame(extra)], ignore_index=True))  # fmt: skip
+    horizon, span = _callables(dict.fromkeys(months, N5))
+    out = S.safety_job(job, _parent(months, months), MENU, ENGINE, horizon, span,
+                       bounds=BOUNDS, commit="c0ffee", resamples=50)  # fmt: skip
+    for name, arm in S.ARMS.items():
+        a = [_a(j) - SHIFT[arm] for j in range(6)]  # the arm's locked weight of fund 0
+        ret = np.mean([[_direct(a[j], m, 252)[0] for j in range(6)] for m in months])
+        fall = np.mean([[_direct(a[j], m, N5)[1] for j in range(6)] for m in months])
+        assert out["mixes"][name]["return_1y"]["mean"] == pytest.approx(ret, abs=1e-12), name
+        assert out["mixes"][name]["fall_5y"]["mean"] == pytest.approx(fall, abs=1e-12), name
+        assert out["mixes"][name]["return_1y"]["cells"] == 12, name
+
+
 def test_record_safety_adds_its_digest_after_the_analysis(tmp_path):
     job = _job(tmp_path, month_labels(1))
     path = tmp_path / "safety_check.json"
@@ -834,6 +902,41 @@ def test_a_restricted_result_is_created_not_replaced_and_not_recorded(tmp_path):
         S.write_result(run, job, {"n": 2}, out, restricted=True)
     assert json.loads(out.read_text()) == {"n": 1}
     assert not (run / "analysis" / "safety_check.json").exists()
+
+
+def test_a_full_result_takes_a_free_name_even_when_a_check_misses_the_file(tmp_path, monkeypatch):
+    job = _job(tmp_path, month_labels(1))
+    run = tmp_path / "run"
+    stray = run / "analysis" / "safety_check.json"
+    stray.write_text("not this run's")
+    before = stray.read_bytes()
+
+    def blind(real):  # a result file seems absent to a look-before-write check
+        def check(self, *args, **kwargs):
+            return False if self.name.startswith("safety_check") else real(self, *args, **kwargs)
+
+        return check
+
+    with monkeypatch.context() as m:
+        m.setattr(Path, "exists", blind(Path.exists))
+        m.setattr(Path, "is_symlink", blind(Path.is_symlink))
+        path = S.write_result(run, job, {"n": 1}, None, restricted=False)
+    assert stray.read_bytes() == before
+    assert path == run / "analysis" / "safety_check_2.json"
+    assert json.loads(path.read_text()) == {"n": 1}
+    assert ENS.verified_entry(job, "safety") == path.resolve()
+
+
+def test_a_restricted_result_is_created_exclusively(tmp_path, monkeypatch):
+    job = _job(tmp_path, month_labels(1))
+    run = tmp_path / "run"
+    out = tmp_path / "smoke.json"
+    out.write_text("an earlier smoke run's")
+    before = out.read_bytes()
+    monkeypatch.setattr(S, "check_output", lambda *args, **kwargs: None)  # a check that misses it
+    with pytest.raises(FileExistsError):
+        S.write_result(run, job, {"n": 1}, out, restricted=True)
+    assert out.read_bytes() == before
 
 
 def _command(monkeypatch, tmp_path, schedule, **kw) -> int:
