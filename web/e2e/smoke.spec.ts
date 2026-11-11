@@ -570,7 +570,7 @@ test("DoD-12 custom menu: four served funds build within 120 s; failure, unknown
     await expect(page.getByTestId("fund-add")).toBeVisible();
     const present = await fundRowIds(page);
     const spare = symbols.filter((symbol) => !present.includes(symbol.id) && !/\b30\b/.test(`${symbol.id} ${symbol.name}`)).map((symbol) => symbol.id);
-    expect(present.length + spare.length, "served symbols available for a 31-fund menu").toBeGreaterThanOrEqual(31);
+    expect(present.length + spare.length, "served symbols available for a 31-fund portfolio").toBeGreaterThanOrEqual(31);
     const sent = api.tensorPosts().length;
     let next = 0;
     while ((await fundRowIds(page)).length < 30) {

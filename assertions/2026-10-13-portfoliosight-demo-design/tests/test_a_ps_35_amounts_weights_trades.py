@@ -27,7 +27,7 @@ Pinned interface (`web/src/math/amounts.ts`; arrays are in `universe.funds` orde
 Nearest-faithful encoding: "sum of dShares * last_close within one share's price of sum of d$"
 cannot hold for an arbitrary number of funds (N rounding errors of up to half a share each), so the
 test asserts the per-fund bound (`|dShares * last_close - d$| <= last_close / 2`) for every vector
-and the aggregate "within the price of the dearest share" on two-fund menus, where it is a theorem.
+and the aggregate "within the price of the dearest share" on two-fund portfolios, where it is a theorem.
 """
 
 from __future__ import annotations
@@ -237,7 +237,7 @@ describe("A-PS-35", () => {
       checked += 1;
     }
     expect(checked).toBe(100);
-    // two-fund menus: the share trades net out to within one share's price of the dollar trades
+    // two-fund portfolios: the share trades net out to within one share's price of the dollar trades
     let pairs = 0;
     for (let i = 0; i < 100; i++) {
       const a = Math.floor(rnd() * n);

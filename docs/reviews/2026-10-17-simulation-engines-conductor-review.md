@@ -48,7 +48,7 @@ Verdict on the final saved plan: pass for substance, no outstanding P0/P1/P2 fin
 No product tests were run; this is plan review, not implementation approval.
 
 The reviewer found one P2 omission: the extra ENB peak random starts required for
-100-fund menus. Task 7.7 now covers bounded deterministic extra starts without
+100-fund portfolios. Task 7.7 now covers bounded deterministic extra starts without
 changing small-menu baselines; task 9.5 measures both large-menu solvers. The
 reviewer verified the final saved update, scope coverage, preserved branches,
 acyclic assertion ownership, source math, explicit unresolved-decision checkpoints,

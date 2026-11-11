@@ -33,7 +33,7 @@ class _Counting:
 
 @pytest.fixture
 def built(store, generation, api_env) -> dict:
-    """A real tensor of the three-fund menu, written to the store the client reads."""
+    """A real tensor of the three-fund portfolio, written to the store the client reads."""
     funds = [{"id": fund, "min": None, "max": None} for fund in MENU]
     uhash = universe_hash(funds)
     build_job(store, generation, uhash, "1y", funds)

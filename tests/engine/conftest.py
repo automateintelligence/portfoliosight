@@ -16,5 +16,5 @@ def fixture_frame() -> pd.DataFrame:
 
 @pytest.fixture(scope="session")
 def fixture_tensor() -> dict:
-    """The fixture tensor: the synthetic 23-fund menu, 5y, full 48 x 32 grid."""
+    """The fixture tensor: the synthetic 23-fund portfolio, 5y, full 48 x 32 grid."""
     return build_tensor(fixture_inputs("5y"))

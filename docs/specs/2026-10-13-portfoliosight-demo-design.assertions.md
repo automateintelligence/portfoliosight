@@ -688,12 +688,12 @@ Phase 1 · unit
   `Σmin > 1`, `Σmax < 1`, and `N < 2`; the greedy endpoint fill allocates every minimum first;
   on the 23-fund fixture no computed weight exceeds 0.25 + 1e-6; and the uncapped reference
   frontier (`frontier_uncapped`) lies on or above the capped one.
-- **Setup.** The caps module; the fixture tensor; a 4-fund menu with `min = (0.3, 0.3, 0, 0)` and
+- **Setup.** The caps module; the fixture tensor; a 4-fund portfolio with `min = (0.3, 0.3, 0, 0)` and
   `max = (0.3, 0.3, 0.4, 0.4)`; the five invalid inputs.
 - **Observation.** `max(N)` for N = 2..30 equals the closed form (spot values: N = 2, 3 → 1.0;
   5 → 0.6; 10 → 0.3; 12 → 0.25; 23 → 0.25; 30 → 0.25); each invalid input raises the validation
   error that the API maps to 422, with a message naming the fund or the sum; the greedy fill on
-  the 4-fund menu gives exactly 0.3, 0.3 to the first two before any remainder is placed; every
+  the 4-fund portfolio gives exactly 0.3, 0.3 to the first two before any remainder is placed; every
   weight in the fixture tensor (same set as A-PS-17) is ≤ 0.25 + 1e-6; the tensor's
   `bounds.rule` string is `"max(0.25, 3/N)"` and `bounds.requested` holds `null` for defaults
   while `bounds.min/max` hold the resolved numbers; the uncapped frontier starts at no higher a

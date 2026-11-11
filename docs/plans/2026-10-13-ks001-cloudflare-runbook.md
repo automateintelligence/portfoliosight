@@ -633,11 +633,11 @@ not establish KS-001 performance acceptance or authorize generation publication.
 - Grid in effect: NX = 48, NY = 32. The fallback was not needed and was not applied.
 - Builds on worker processes, 2026-10-15, image `7661840` (PR #103), `api` at `cpus: "4"`
   (`cpu.max` `400000 100000`, so 4 workers; host load average 3.5 to 4.8). Through the API at
-  the origin, custom 23-fund menus (the default preset's funds, `max = 0.2` and then `0.21` on
+  the origin, custom 23-fund portfolios (the default preset's funds, `max = 0.2` and then `0.21` on
   VTI, `5y`): the first build after the deploy 8.4 s `build_seconds` (this includes starting the
   fork server and its 4 workers, about 4 s); the second 3.2 s, and 8.2 s from POST to the
   first 200. With `scripts/bench_build.py` run inside the API container: a 23-fund synthetic
-  menu 10.6 s on 1 worker (first build of the process) and 3.9 s on 4; a 100-fund menu 87.2 s on
+  menu 10.6 s on 1 worker (first build of the process) and 3.9 s on 4; a 100-fund portfolio 87.2 s on
   1 worker and 31.4 s on 4. The container peaked at 566 MiB of its 1536 MiB during the 100-fund
   build and holds about 530 MiB with the API's pool started.
 - Six-lookback preset build time (target: three minutes): `guide2017` 15.8 and `tsp` 7.5, in

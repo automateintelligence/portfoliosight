@@ -4,7 +4,7 @@ Date: 2026-10-21. Sources: `README.md`, `ROADMAP.md`, `docs/specs/2026-10-13-por
 
 ## What it is
 
-PortfolioSight (`portfoliosight.ai`) is a free, one-screen web tool for people choosing among a fixed portfolio: a 401(k), the TSP (federal employees' retirement plan), or a brokerage list. It is educational, uses historical math, and is not advice. The site is in private preview until the owner buys the commercial Tiingo data license.
+PortfolioSight (`portfoliosight.ai`) is a free, one-screen web tool for people choosing among the funds of a fixed plan: a 401(k), the TSP (federal employees' retirement plan), or a brokerage list. It is educational, uses historical math, and is not advice. The site is in private preview until the owner buys the commercial Tiingo data license.
 
 The first screen holds:
 - a **chart** with the efficient frontier ("best return at each level of risk") over a colored **map of how spread out each mix is**;

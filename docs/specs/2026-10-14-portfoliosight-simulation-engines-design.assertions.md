@@ -163,7 +163,7 @@ a default switch, including a report that meets the proposed numerical rule.
    request ranges on the switch requires reconciliation before a universal no-request claim.
 7. **One-fund splice comparison.** The splice rule needs other included funds' residuals;
    the median of an empty comparison set is unspecified. A-SE-06 uses a nonempty peer set
-   and does not invent acceptance or rejection for a one-portfolio.
+   and does not invent acceptance or rejection for a one-fund portfolio.
 8. **Entered allocations in validation.** The inherited preset/tensor contract makes an
    entered mix optional, and the presets carry no allocation. A-SE-14 checks an entered
    portfolio when an allocation is explicitly supplied; otherwise the report must identify
@@ -494,7 +494,7 @@ Phase 1 · ks001 · S11, M6; §9, §11
 - **Claim.** The specified KS-001 workload meets its build, nightly and warm range budgets
   while computing the full replay/GARCH simulations.
 - **Setup.** KS-001's four-vCPU container with recorded revision/configuration and frozen stored
-  inputs, an idle build queue, the real 23-portfolio/lookback, the two-preset/six-lookback nightly,
+  inputs, an idle build queue, the real 23-fund portfolio/lookback, the two-preset/six-lookback nightly,
   and interpolated requests after the first request for a tensor. Include a build requiring
   its fit rather than timing only a warm artifact hit.
 - **Observation.** Measure actual build execution at no more than 30 seconds, the complete

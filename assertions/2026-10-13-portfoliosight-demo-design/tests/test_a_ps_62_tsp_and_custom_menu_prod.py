@@ -427,7 +427,7 @@ test("a 31st fund is refused with a message and no POST", async ({ page }) => {
   await loadDefault(page);
   const present = await openCustom(page);
   const spare = plain.filter((id) => !present.includes(id));
-  expect(present.length + spare.length, "served symbols available for a 31-fund menu").toBeGreaterThanOrEqual(31);
+  expect(present.length + spare.length, "served symbols available for a 31-fund portfolio").toBeGreaterThanOrEqual(31);
   let next = 0;
   while ((await rowIds(page)).length < 30) {
     await addFund(page, spare[next]);
@@ -444,7 +444,7 @@ test("a 31st fund is refused with a message and no POST", async ({ page }) => {
   expect(rows <= 30 || disabled, "the 31st fund is not accepted into a usable menu").toBe(true);
   expect(disabled || says30, 'use-menu disabled, or a message containing "30"').toBe(true);
   expect(rows).not.toBeGreaterThan(31);
-  expect(tensorPosts(api).length, "POST /api/tensors for a 31-fund menu").toBe(0);
+  expect(tensorPosts(api).length, "POST /api/tensors for a 31-fund portfolio").toBe(0);
 });
 """
 EXPECTED_TITLES = {
