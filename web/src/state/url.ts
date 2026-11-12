@@ -26,8 +26,8 @@ export type UrlState = {
   ghosts: Lookback[];
   /** `r`, the risk position `s`; `null` when the address has none. */
   r: number | null;
-  /** `d`, the diversification position in [0, 1]; always written. */
-  d: "auto" | number;
+  /** `d`, the diversification position in [0, 1]; always written. A link without one, or with the old `d=auto`, reads as 0, the best-return mix. */
+  d: number;
   /** `t`; `null` when the address has none, so the stored preference applies. */
   theme: (typeof THEMES)[number] | null;
   /** `x=1`. */
@@ -69,7 +69,7 @@ export function decode(search: string, domain?: Domain): UrlState {
     lookback: oneOf(LOOKBACKS, params.get("lb")) ?? "5y",
     ghosts: [...new Set(list(params.get("g")))].flatMap((id) => oneOf(LOOKBACKS, id) ?? []),
     r: readDecimal(params.get("r")),
-    d: d === null ? "auto" : Math.min(Math.max(d, 0), 1),
+    d: d === null ? 0 : Math.min(Math.max(d, 0), 1),
     theme: oneOf(THEMES, params.get("t")),
     details: params.get("x") === "1",
   };
@@ -87,7 +87,7 @@ export function encode(state: UrlState): string {
   pairs.push(`lb=${state.lookback}`);
   if (state.ghosts.length > 0) pairs.push(`g=${state.ghosts.join(",")}`);
   if (state.r !== null) pairs.push(`r=${writeDecimal(state.r)}`);
-  pairs.push(`d=${state.d === "auto" ? "auto" : writeDecimal(state.d)}`);
+  pairs.push(`d=${writeDecimal(state.d)}`);
   if (state.theme) pairs.push(`t=${state.theme}`);
   if (state.details) pairs.push("x=1");
   return `?${pairs.join("&")}`;

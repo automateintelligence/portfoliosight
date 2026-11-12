@@ -121,7 +121,7 @@ describe("store: default view", () => {
     const want = Math.min(DOMAIN.s_max, Math.max(DOMAIN.s_safe, s.s));
     expect(s.s).toBe(want);
     if (sigma > ceilingAt(TENSOR, DOMAIN.s_safe) && sigma < ceilingAt(TENSOR, DOMAIN.s_max)) expect(ceilingAt(TENSOR, s.s)).toBeCloseTo(sigma, 12);
-    expect(s.t).toBe("auto");
+    expect(s.t, "the page opens on the best-return mix (owner direction 2026-11-11)").toBe(0);
 
     const withR = await boot("?u=guide2017&r=30.5&d=0.25");
     expect(withR.getState().s).toBe(30.5);
@@ -141,21 +141,21 @@ describe("store: default view", () => {
     const state = decode(last.search);
     expect(state.preset).toBe("guide2017");
     expect(state.unit).toBe("usd");
-    expect(state.d).toBe("auto");
+    expect(state.d).toBe(0);
     expect(state.theme).toBe("ks-dark");
     expect(typeof state.r).toBe("number");
   });
 });
 
 describe("store: transitions", () => {
-  it("a position outside the tensor's domain is clamped and the diversification position returns to suggested", async () => {
+  it("a position outside the tensor's domain is clamped and the diversification position returns to the best-return mix", async () => {
     expect(DOMAIN.s_safe).toBeGreaterThan(0.1);
     const outside = await boot("?u=guide2017&r=0.1&d=0.5");
     expect(outside.getState().s).toBe(DOMAIN.s_safe);
-    expect(outside.getState().t).toBe("auto");
+    expect(outside.getState().t).toBe(0);
     const above = await boot("?u=guide2017&r=99&d=0.5");
     expect(above.getState().s).toBe(DOMAIN.s_max);
-    expect(above.getState().t).toBe("auto");
+    expect(above.getState().t).toBe(0);
     // inside the domain both are kept, also across a lookback switch (clamped on every tensor load)
     const inside = await boot("?u=guide2017&r=20&d=0.5");
     inside.dispatch({ type: "setLookback", lookback: "1y" });
@@ -165,6 +165,31 @@ describe("store: transitions", () => {
     expect(inside.getState().tensor!.lookback.id).toBe("1y");
     expect(inside.getState().s).toBe(20);
     expect(inside.getState().t).toBe(0.5);
+  });
+
+  it("a link without d, or with the old d=auto, opens on the best-return mix; an explicit d is kept (owner direction 2026-11-11)", async () => {
+    for (const search of ["?u=guide2017&r=30.5", "?u=guide2017&r=30.5&d=auto"]) {
+      expect((await boot(search)).getState().t, search).toBe(0);
+    }
+    expect((await boot("?u=guide2017&r=30.5&d=0.25")).getState().t).toBe(0.25);
+  });
+
+  it("the risk slider leaves the diversification position alone, and resetDiv returns it to the best-return mix", async () => {
+    const store = await boot("?u=guide2017&r=20&d=0.4");
+    store.dispatch({ type: "riskSlider", s: 25 });
+    expect(store.getState().t).toBe(0.4);
+    store.dispatch({ type: "divSlider", t: 0.7 });
+    expect(store.getState().t).toBe(0.7);
+    store.dispatch({ type: "resetDiv" });
+    expect(store.getState().t).toBe(0);
+  });
+
+  it("choosing another portfolio starts again on the best-return mix", async () => {
+    const store = await boot("?u=guide2017&r=20&d=0.4");
+    store.dispatch({ type: "selectPreset", id: "tsp" });
+    await flush();
+    expect(store.getState().preset).toBe("tsp");
+    expect(store.getState().t).toBe(0);
   });
 
   it("a 422 for one window marks only that window and keeps the view", async () => {
@@ -531,7 +556,7 @@ describe("store: menu size by access tier (engines spec 6.2)", () => {
     expect(s.build.status).toBe("ready");
     expect(tensorCalls().map((c) => `${c.method} ${c.path}`)).toEqual([`GET /api/tensors/${G}/${H1}/5y`]);
     // the refused link's position is not carried over to the default view
-    expect(s.t).toBe("auto");
+    expect(s.t).toBe(0);
     // choosing a menu clears the message
     store.dispatch({ type: "selectPreset", id: "tsp" });
     await flush();

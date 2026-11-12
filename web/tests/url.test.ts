@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LOOKBACKS, clampR, decode, encode, scheduleUrlWrite, writeUrl, type UrlState } from "../src/state/url";
 
-const EMPTY: UrlState = { preset: null, funds: [], unit: "pct", caps: [], lookback: "5y", ghosts: [], r: null, d: "auto", theme: null, details: false };
+const EMPTY: UrlState = { preset: null, funds: [], unit: "pct", caps: [], lookback: "5y", ghosts: [], r: null, d: 0, theme: null, details: false };
 const GUIDE: UrlState = { ...EMPTY, preset: "guide2017" };
 const KEYS = ["u", "f", "unit", "c", "lb", "g", "r", "d", "t", "x"];
 const keysOf = (search: string) => Array.from(new URLSearchParams(search).keys());
@@ -12,7 +12,7 @@ const valueOf = (search: string, key: string) => new URLSearchParams(search).get
 
 describe("encode and decode", () => {
   it("round-trips the spec's two examples character for character", () => {
-    const preset = "?u=guide2017&lb=5y&r=19.25&d=auto&t=hud";
+    const preset = "?u=guide2017&lb=5y&r=19.25&d=0&t=hud";
     expect(decode(preset)).toEqual({ ...GUIDE, r: 19.25, theme: "hud" });
     expect(encode(decode(preset))).toBe(preset);
 
@@ -34,8 +34,24 @@ describe("encode and decode", () => {
 
   it("reads an empty query as the defaults and writes lb and d even then", () => {
     for (const search of ["", "?", "?zz=1"]) expect(decode(search), `"${search}"`).toEqual(EMPTY);
-    expect(encode(EMPTY)).toBe("?lb=5y&d=auto");
+    expect(encode(EMPTY)).toBe("?lb=5y&d=0");
     expect(encode({ ...EMPTY, unit: "pct", details: false, theme: null })).not.toMatch(/unit|x=|t=/);
+  });
+
+  it("a link with no d opens at position 0, the best-return mix, and so does the old d=auto (owner direction 2026-11-11)", () => {
+    for (const search of ["?u=guide2017&lb=5y&r=19.25", "?u=guide2017&lb=5y&r=19.25&d=auto", "?u=guide2017&lb=5y&r=19.25&d=", "?u=guide2017&lb=5y&r=19.25&d=abc"]) {
+      expect(decode(search).d, search).toBe(0);
+    }
+    // the position is written back as a number, so the address never carries the retired token again
+    expect(encode(decode("?u=guide2017&lb=5y&r=19.25&d=auto"))).toBe("?u=guide2017&lb=5y&r=19.25&d=0");
+  });
+
+  it("a link with an explicit d keeps it, clamped into [0, 1]", () => {
+    expect(decode("?u=guide2017&d=0.25").d).toBe(0.25);
+    expect(decode("?u=guide2017&d=1").d).toBe(1);
+    expect(decode("?u=guide2017&d=0").d).toBe(0);
+    expect(decode("?u=guide2017&d=7").d).toBe(1);
+    expect(decode("?u=guide2017&d=-3").d).toBe(0);
   });
 
   it("writes every key once, in the order u f unit c lb g r d t x", () => {
@@ -116,7 +132,7 @@ describe("encode and decode", () => {
     expect(state.funds).toEqual([{ id: "VTI", amount: 60 }, { id: "BND", amount: 40 }, { id: "VNQ", amount: null }]);
     expect(state.caps).toEqual([{ id: "VTI", min: null, max: 10 }]);
     expect(state.ghosts).toEqual(["1y", "10y"]);
-    expect(encode(state)).toBe("?f=VTI:60,BND:40,VNQ&c=VTI::10&lb=3y&g=1y,10y&d=auto");
+    expect(encode(state)).toBe("?f=VTI:60,BND:40,VNQ&c=VTI::10&lb=3y&g=1y,10y&d=0");
   });
 
   it("ignores unknown keys, takes the first of a repeated key and never writes either back", () => {
@@ -130,16 +146,16 @@ describe("encode and decode", () => {
 
   it("a preset carries no fund list", () => {
     expect(decode("?u=tsp&f=VTI:60,BND:40")).toEqual({ ...EMPTY, preset: "tsp" });
-    expect(encode({ ...EMPTY, preset: "tsp", funds: [{ id: "VTI", amount: 60 }] })).toBe("?u=tsp&lb=5y&d=auto");
+    expect(encode({ ...EMPTY, preset: "tsp", funds: [{ id: "VTI", amount: 60 }] })).toBe("?u=tsp&lb=5y&d=0");
     // caps and the unit do travel with a preset
-    const capped = "?u=guide2017&unit=shares&c=VTI::10&lb=5y&d=auto";
+    const capped = "?u=guide2017&unit=shares&c=VTI::10&lb=5y&d=0";
     expect(encode(decode(capped))).toBe(capped);
   });
 
   it("reads and writes the third ready-made portfolio, and still refuses a preset it does not know", () => {
     expect(decode("?u=research2003")).toEqual({ ...EMPTY, preset: "research2003" });
-    expect(encode({ ...EMPTY, preset: "research2003" })).toBe("?u=research2003&lb=5y&d=auto");
-    const edited = "?u=research2003&c=SPY::30,GE::5&lb=5y&d=auto";
+    expect(encode({ ...EMPTY, preset: "research2003" })).toBe("?u=research2003&lb=5y&d=0");
+    const edited = "?u=research2003&c=SPY::30,GE::5&lb=5y&d=0";
     expect(encode(decode(edited))).toBe(edited);
     expect(decode("?u=research2004").preset).toBeNull();
   });
@@ -172,7 +188,7 @@ describe("encode and decode", () => {
         lookback: pick(LOOKBACKS),
         ghosts: LOOKBACKS.filter(() => rnd() < 0.3),
         r: rnd() < 0.2 ? null : Math.round(rnd() * 47e6) / 1e6,
-        d: rnd() < 0.4 ? "auto" : Math.round(rnd() * 1e6) / 1e6,
+        d: rnd() < 0.4 ? 0 : Math.round(rnd() * 1e6) / 1e6,
         theme: pick([null, "ks-dark", "light", "hud", "grid"] as const),
         details: rnd() < 0.5,
       };
@@ -256,7 +272,7 @@ describe("scheduleUrlWrite and writeUrl", () => {
       expect(replaceState).not.toHaveBeenCalled();
       vi.advanceTimersByTime(1);
       expect(replaceState).toHaveBeenCalledTimes(1);
-      expect(replaceState).toHaveBeenCalledWith({ kept: true }, "", "/?u=guide2017&lb=5y&r=11&d=auto");
+      expect(replaceState).toHaveBeenCalledWith({ kept: true }, "", "/?u=guide2017&lb=5y&r=11&d=0");
       vi.advanceTimersByTime(60_000);
       expect(replaceState).toHaveBeenCalledTimes(1);
       expect(vi.getTimerCount()).toBe(0);
@@ -266,7 +282,7 @@ describe("scheduleUrlWrite and writeUrl", () => {
       vi.stubGlobal("location", { pathname: "/preview/", search: "", hash: "#funds" });
       scheduleUrlWrite(at(3));
       vi.advanceTimersByTime(250);
-      expect(replaceState).toHaveBeenCalledWith({ kept: true }, "", "/preview/?u=guide2017&lb=5y&r=3&d=auto#funds");
+      expect(replaceState).toHaveBeenCalledWith({ kept: true }, "", "/preview/?u=guide2017&lb=5y&r=3&d=0#funds");
     });
 
     it("writeUrl writes at once and replaces a pending write", () => {
@@ -274,7 +290,7 @@ describe("scheduleUrlWrite and writeUrl", () => {
       vi.advanceTimersByTime(100);
       writeUrl(at(20));
       expect(replaceState).toHaveBeenCalledTimes(1);
-      expect(replaceState).toHaveBeenLastCalledWith({ kept: true }, "", "/?u=guide2017&lb=5y&r=20&d=auto");
+      expect(replaceState).toHaveBeenLastCalledWith({ kept: true }, "", "/?u=guide2017&lb=5y&r=20&d=0");
       vi.advanceTimersByTime(60_000);
       expect(replaceState).toHaveBeenCalledTimes(1);
       expect(vi.getTimerCount()).toBe(0);

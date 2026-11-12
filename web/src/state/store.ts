@@ -1,4 +1,4 @@
-// The single store (spec 8): menu, allocation, lookback, ghosts, s, t | "auto", theme, caps and
+// The single store (spec 8): menu, allocation, lookback, ghosts, s, t, theme, caps and
 // build status, plus the effects that load tensors. Slider actions never touch the network.
 // Runs in plain node: `fetch`, `history`, `location` and `localStorage` are read only inside
 // functions, never at import time.
@@ -63,7 +63,8 @@ export type State = {
   lookback: LookbackId;
   ghosts: LookbackId[];
   s: number;
-  t: number | "auto";
+  /** The diversification position: 0 is the best-return mix, where the page opens. */
+  t: number;
   theme: ThemeId;
   details: boolean;
   presets: PresetsBody | null;
@@ -345,9 +346,9 @@ export function createStore(init: { search: string }): Store {
     let t = state.t;
     if (pendingUrlR || state.tensor !== null) {
       // A position exists already (from the URL or the previous tensor): keep it, clamped into the
-      // new domain; a clamp moves the point, so the diversification position returns to suggested.
+      // new domain; a clamp moves the point, so the diversification position returns to the best-return mix.
       s = clamp(state.s);
-      if (Math.abs(s - state.s) > 1e-12) t = "auto";
+      if (Math.abs(s - state.s) > 1e-12) t = 0;
     } else {
       const mix = currentMix(state, tensor);
       s = mix.weights ? positionOfCeiling(tensor, math.stats(mix.weights).sigma) : (domain.s_safe + domain.s_max) / 2;
@@ -590,7 +591,7 @@ export function createStore(init: { search: string }): Store {
     pendingUrlR = false;
     haveR = false;
     unitInUrl = false;
-    state = { ...state, preset: null, rows: [], caps: [], s: 0, t: "auto", linkError: linkTooManyFunds(state.tier.menuMax) };
+    state = { ...state, preset: null, rows: [], caps: [], s: 0, t: 0, linkError: linkTooManyFunds(state.tier.menuMax) };
     emit();
   }
 
@@ -662,8 +663,7 @@ export function createStore(init: { search: string }): Store {
       case "riskSlider": {
         if (!Number.isFinite(action.s)) return;
         haveR = true;
-        // Review focus 4: when the position leaves an "auto" neighbourhood nothing else changes;
-        // the diversification default follows s by itself because t stays "auto".
+        // The diversification position is its own setting: moving the risk leaves it where it is.
         set({ s: action.s });
         return;
       }
@@ -672,7 +672,7 @@ export function createStore(init: { search: string }): Store {
         set({ t: Math.min(1, Math.max(0, action.t)) });
         return;
       case "resetDiv":
-        set({ t: "auto" });
+        set({ t: 0 });
         return;
       case "setLookback": {
         if (!LOOKBACKS.includes(action.lookback) || state.unavailable[action.lookback]) return;
@@ -692,8 +692,8 @@ export function createStore(init: { search: string }): Store {
         if (!preset) return;
         failures = 0;
         adoptPreset(preset, false);
-        // A new menu starts at its own default position (spec 4.9), with the suggested point.
-        state = { ...state, tensor: null, tensorLookback: null, t: "auto" };
+        // A new menu starts at its own default position (spec 4.9), on the best-return mix.
+        state = { ...state, tensor: null, tensorLookback: null, t: 0 };
         menuChanged({});
         return;
       }
@@ -752,7 +752,7 @@ export function createStore(init: { search: string }): Store {
         }
         failures = 0;
         const ids = new Set(rows.map((r) => r.id));
-        state = { ...state, tensor: null, tensorLookback: null, t: "auto" };
+        state = { ...state, tensor: null, tensorLookback: null, t: 0 };
         menuChanged({ rows, unit, preset: null, caps: state.caps.filter((c) => ids.has(c.id)) });
         return;
       }
