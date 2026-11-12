@@ -408,9 +408,7 @@ test("the square shows the same card as the selected mix, and no third marker ex
     } else {
       await page.mouse.move(5, 5);
       await expect(card).toHaveCount(0);
-      // the square can sit on top of the selected point: keyboard focus picks one exactly (a focus
-      // within a second of the page's start is taken for the one a tap brings, so let that pass)
-      await page.waitForFunction(() => performance.now() > 1500);
+      // the square can sit on top of the selected point: keyboard focus picks one exactly
       await mark.focus();
     }
     await expect(card).toHaveCount(1);
