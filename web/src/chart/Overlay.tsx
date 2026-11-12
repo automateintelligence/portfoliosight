@@ -137,7 +137,9 @@ export function Overlay({ scales, phone, ceiling, selected, current, funds, sele
   // `fromMark`: the press began on the square, so it is a tap on that marker unless it moves far
   // enough to be a drag of the selected point.
   const drag = useRef<{ x0: number; y0: number; grabDx: number; axis: "x" | "y" | null; fromMark: boolean } | null>(null);
-  const tapped = useRef(0); // when a tap on the selected point last pinned or unpinned: the focus it brings opens no card
+  // When a tap on the selected point last pinned or unpinned (event time): the focus it brings opens
+  // no card. -Infinity means never tapped, so a focus early in the page's life still opens the card.
+  const tapped = useRef(-Infinity);
   const [dragging, setDragging] = useState(false);
   const [tip, setTip] = useState<MarkId | null>(null);
   const [cardH, setCardH] = useState(250);
