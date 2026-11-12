@@ -14,7 +14,10 @@ the spec 3.5 value; no neighbour of the line carries a digit; none of Average / 
 page text; before details the technical name "effective number of bets, minimum torsion" and
 `details-enb` are absent; after `details-toggle` `details-enb` is visible and the technical name is on
 the page.
-Unit leg: the word function is gone from `web/src/math/portfolio.ts`.
+Unit leg: `diversificationLine(enb, enbRef)` from `web/src/copy.ts` returns that sentence for the
+frontier and most diversified mixes of three columns (N within half a shown unit of their ENB
+recomputed here, M of enb_ref) and, over a seeded sweep of 600 (ENB, highest) pairs, always the
+sentence with no grade word and no "Optimized".
 
 The Playwright spec mocks /api/* itself (page.route) from web/fixtures/guide2017_5y.json and
 data/holdings/holdings_guide2017_step2.csv: GET /api/presets (guide2017 with its "$" allocation and
@@ -28,7 +31,8 @@ as given (it may leave the URL untouched or rewrite the same values).
 Pinned interface (beyond the shared pins)
 - `div-word` holds the diversification line as its whole text (preceded by a caption sibling that
   carries no digit); `details-enb` is absent or hidden until `details-toggle` is clicked.
-- `web/src/math/portfolio.ts` exports no `diversificationWord`.
+- `web/src/copy.ts` exports `diversificationLine(enb: number, enbRef: number): string`, the line's
+  text.
 """
 
 # ruff: noqa: E501
@@ -401,18 +405,83 @@ EXPECTED_TITLES = {"div line ks-dark", "div line light", "div line hud", "div li
 
 # The vitest leg (pure function, no browser). Written to web/tests/__gate__/ for the run.
 VITEST_TS = r"""
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
+const LINE = /^This mix spreads risk over the equivalent of (\d+(?:\.\d+)?) independent bets; highest found on this portfolio: (\d+(?:\.\d+)?)\.$/;
+const GRADE = /\b(Good|Average|Fair|Poor)\b|optimi[sz]ed/i;
+const halfUnit = (shown: string) => 0.5 * Math.pow(10, -((shown.split(".")[1] ?? "").length)) + 1e-9;
+
+const tensor = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "fixtures", "guide2017_5y.json"), "utf8"));
+
+// Spec 4.6: b = T^{-T} w, p_i = Lambda_i b_i^2 / (w' Sigma w), ENB = exp(-sum p ln p).
+function enbOf(w: number[]): number {
+  const n = w.length;
+  let variance = 0;
+  for (let i = 0; i < n; i++) for (let k = 0; k < n; k++) variance += w[i] * tensor.cov[i][k] * w[k];
+  let entropy = 0;
+  for (let i = 0; i < n; i++) {
+    let b = 0;
+    for (let k = 0; k < n; k++) b += tensor.torsion_inv_t[i][k] * w[k];
+    const p = (tensor.torsion_lambda[i] * b * b) / variance;
+    if (p > 0) entropy -= p * Math.log(p);
+  }
+  return Math.exp(entropy);
+}
+
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function checkLine(out: unknown, enb: number, ref: number, where: string): void {
+  expect(typeof out, `${where}: the line is text`).toBe("string");
+  const m = String(out).match(LINE);
+  expect(m, `${where}: "${out}" is the line`).not.toBeNull();
+  expect(Math.abs(Number(m![1]) - enb), `${where}: N=${m![1]} vs ENB ${enb}`).toBeLessThanOrEqual(halfUnit(m![1]));
+  expect(Math.abs(Number(m![2]) - ref), `${where}: M=${m![2]} vs ${ref}`).toBeLessThanOrEqual(halfUnit(m![2]));
+  expect(String(out), `${where}: no grade word`).not.toMatch(GRADE);
+}
+
 describe("A-PS-47", () => {
-  it("the word function is gone from the math module", async () => {
-    const mod: any = await import("../../src/math/portfolio");
-    expect(typeof mod.portfolioMath, "web/src/math/portfolio.ts must still export portfolioMath").toBe("function");
-    expect(Object.keys(mod), "no function turns a ratio into Good / Average / Fair / Poor").not.toContain("diversificationWord");
+  it("the line states each mix's own ENB and the highest found, from the tensor", async () => {
+    const copy: any = await import("../../src/copy");
+    expect(typeof copy.diversificationLine, "web/src/copy.ts must export diversificationLine(enb, enbRef)").toBe("function");
+    const hi = tensor.frontier.w.length - 1;
+    const lo = Math.min(hi, Math.ceil(tensor.frontier.s_safe));
+    const columns = [...new Set([lo, Math.round((lo + hi) / 2), hi])];
+    const mixes: [string, number[]][] = [
+      ...columns.map((j): [string, number[]] => [`frontier.w[${j}]`, tensor.frontier.w[j]]),
+      ...columns.map((j): [string, number[]] => [`grid.w_div[${j}]`, tensor.grid.w_div[j]]),
+    ];
+    for (const [where, w] of mixes) {
+      const enb = enbOf(w);
+      checkLine(copy.diversificationLine(enb, tensor.enb_ref), enb, tensor.enb_ref, where);
+    }
+  });
+
+  it("the line holds no grade word over a seeded sweep of measures", async () => {
+    const copy: any = await import("../../src/copy");
+    expect(typeof copy.diversificationLine).toBe("function");
+    const random = mulberry32(47);
+    for (let i = 0; i < 600; i++) {
+      const ref = 1 + random() * 9;
+      const enb = 1 + random() * (ref - 1);
+      checkLine(copy.diversificationLine(enb, ref), enb, ref, `enb=${enb} ref=${ref}`);
+    }
   });
 });
 """
 VITEST_TITLES = {
-    "the word function is gone from the math module",
+    "the line states each mix's own ENB and the highest found, from the tensor",
+    "the line holds no grade word over a seeded sweep of measures",
 }
 
 

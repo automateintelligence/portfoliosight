@@ -371,7 +371,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-47
-    claim: "div-word reads This mix spreads risk over the equivalent of N independent bets; highest found on this portfolio: M. with the mix's own ENB and enb_ref, at 14 px or less in the theme's --muted colour, no grade word (Good/Average/Fair/Poor) stands for diversification, the technical name effective number of bets, minimum torsion is absent until details-toggle is on, and the word function is gone (owner direction 2026-11-11)."
+    claim: "div-word reads This mix spreads risk over the equivalent of N independent bets; highest found on this portfolio: M. with the mix's own ENB and enb_ref, at 14 px or less in the theme's --muted colour, no grade word (Good/Average/Fair/Poor) stands for diversification, the technical name effective number of bets, minimum torsion is absent until details-toggle is on, and diversificationLine gives that sentence for tensor mixes and a seeded sweep with no grade word (owner direction 2026-11-11)."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_47_diversification_word.py"
     setup: ""
     teardown: ""

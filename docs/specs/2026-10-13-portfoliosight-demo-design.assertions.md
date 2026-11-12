@@ -1267,15 +1267,17 @@ Phase 3 · ui + unit
   / Fair / Poor is shown for diversification; the technical name "effective number of bets,
   minimum torsion" is absent until `details-toggle` is on and then appears. Owner direction
   2026-11-11: the words and their cut points are retired.
-- **Setup.** As A-PS-41 for the UI legs; the word function no longer exists, so the unit leg
-  checks that `web/src/math/portfolio.ts` exports no `diversificationWord`.
+- **Setup.** As A-PS-41 for the UI legs; the unit leg calls `diversificationLine(enb, enbRef)`
+  from `web/src/copy.ts` for the frontier and most diversified mixes of three columns of the
+  fixture tensor and for a seeded sweep of 600 (ENB, highest) pairs.
 - **Observation.** UI: `div-word` text matches the template; N within half a unit of the last
   shown decimal of the mix's ENB computed from the tensor; M likewise of `enb_ref`; computed
   `font-size ≤ 14px`; computed `color` equals the computed `--muted` of the active theme; before
   details, no element's text matches `/effective number|ENB/`; after details, `details-enb`
   appears and the technical name is in the page text. The visible text holds none of `Average`,
-  `Fair`, `Poor` and `Good` only as the label of the range's top figure. Unit: no
-  `diversificationWord` export. **Must-not-contain:** a grade word for diversification; a font
+  `Fair`, `Poor` and `Good` only as the label of the range's top figure. Unit: each
+  result matches the template, N and M within half a shown unit of the ENB recomputed from the
+  tensor (or of the sweep's pair), with no grade word and no "Optimized". **Must-not-contain:** a grade word for diversification; a font
   size above 14 px. Fail = any.
 - **Kind.** property (three risk positions; four themes for the style legs).
 

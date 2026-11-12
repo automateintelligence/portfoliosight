@@ -5,14 +5,24 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseTensor } from "../src/api/client";
 import { diversificationLine } from "../src/copy";
-import * as portfolio from "../src/math/portfolio";
+import { portfolioMath } from "../src/math/portfolio";
 
 const tensor = parseTensor(JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "fixtures/guide2017_5y.json"), "utf-8")));
-const math = portfolio.portfolioMath(tensor);
+const math = portfolioMath(tensor);
+const GRADE = /\b(Good|Average|Fair|Poor)\b|optimi[sz]ed/i;
 
 describe("the diversification figure", () => {
-  it("has no word for the ratio of a mix's measure to the highest found", () => {
-    expect(Object.keys(portfolio)).not.toContain("diversificationWord");
+  it("grades no mix: the most diversified and the best-return mix of every column read only their figures", () => {
+    for (const [j, front] of tensor.frontier.w.entries()) {
+      for (const [kind, w] of [["frontier", front], ["most diversified", tensor.grid.w_div[j]]] as const) {
+        const enb = math.stats(w).enb;
+        const line = diversificationLine(enb, tensor.enb_ref);
+        expect(line, `${kind} mix of column ${j}`).toBe(
+          `This mix spreads risk over the equivalent of ${enb.toFixed(1)} independent bets; highest found on this portfolio: ${tensor.enb_ref.toFixed(1)}.`,
+        );
+        expect(line, `${kind} mix of column ${j}`).not.toMatch(GRADE);
+      }
+    }
   });
 
   it("reads each frontier mix's own measure beside the highest found, one decimal each", () => {

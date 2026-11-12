@@ -129,8 +129,9 @@ the docstring is authoritative for that test.
 - Front end: `web/src/math/amounts.ts` (`amountsToWeights`, `percentTotal`, `tradeDeltas`);
   `web/src/state/url.ts` (`encode`, `decode`, the `UrlState` shape); `web/src/state/store.ts`
   (`createStore`); `web/worker/share.ts` (`handleShare`, `shareLimit`); `ShareDialog` props
-  `{open, url, privatePreview, onClose}`; `diversificationWord` and `stressReturn` in
-  `web/src/math/portfolio.ts` (see A-PS-47 and A-PS-50). `web/package.json` scripts `build`,
+  `{open, url, privatePreview, onClose}`; `stressReturn` in `web/src/math/portfolio.ts`
+  (see A-PS-50); `diversificationLine` in `web/src/copy.ts` (see A-PS-47; until 2026-11-11 it was
+  `diversificationWord` in `web/src/math/portfolio.ts`). `web/package.json` scripts `build`,
   `lint`, `typecheck`, `test`. `web/e2e/smoke.spec.ts` declares `test("DoD-NN ...")` with static
   titles.
 - Configuration: `[tool.ruff] extend-exclude = ["assertions"]` and `[tool.pyright]
@@ -239,7 +240,8 @@ the docstring is authoritative for that test.
     `mix-card`'s `data-for` is `selected | current | cell`.
   - **Diversification line.** `div-word` (and `mix-card-word`) hold "This mix spreads risk over the
     equivalent of N independent bets; highest found on this portfolio: M." in place of Good /
-    Average / Fair / Poor; `diversificationWord` is removed from `web/src/math/portfolio.ts`.
+    Average / Fair / Poor; `diversificationWord` is removed from `web/src/math/portfolio.ts`; the line is
+    `diversificationLine(enb, enbRef)` in `web/src/copy.ts` (A-PS-47's unit leg).
     `details-enb` now holds only the technical name of the measure. The line from our tests on past
     data is `details-tested`, in the details. The colour map's legend is unchanged (its ends read
     "Less" and "More"). "bets" is allowed in default copy only inside "independent bets".
