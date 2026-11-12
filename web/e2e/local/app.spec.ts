@@ -306,6 +306,8 @@ test("at 1024 px the open sidebar leaves a first screen in which nothing overlap
   const chips = await Promise.all(["funds", "trades", "stress", "settings"].map((id) => box(`[data-testid="chip-${id}"]`)));
   const advice = await box(".advice");
   for (const chip of chips) expect(apart(chip, advice), "a chip and the advice line overlap").toBe(true);
+  // the chips keep the slack they had before the diversification line was a sentence: 753 of 768 px
+  for (const chip of chips) expect(chip.y + chip.height, "a chip ends at least 15 px above the bottom of the first screen").toBeLessThanOrEqual(753);
   const chart = await box('[data-testid="chart"]');
   const side = await box('[data-testid="section-funds"]');
   expect(chart.width).toBeGreaterThan(400);

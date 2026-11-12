@@ -391,8 +391,11 @@ button {
     padding: 0 6px;
   }
 
+  /* The narrow strip wraps the diversification line to two lines: the chart gives up that line's
+   * height, so the chips keep their place on a 768 px screen. */
   .app:has(.stage.side-open) {
     --div-col: 108px;
+    --chart-h: clamp(330px, calc(100vh - 403px), 700px);
   }
 
   .side-open .strip {
