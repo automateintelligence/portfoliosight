@@ -120,4 +120,15 @@ describe("the remembered choice", () => {
     ).not.toThrow();
     expect(() => writeSort("name", null)).not.toThrow();
   });
+
+  it("reads back a choice storage refused for the rest of the visit, until storage takes a later one", () => {
+    const refusing = { setItem: () => { throw new Error("blocked"); } };
+    writeSort("ticker", refusing);
+    expect(readSort(stored("amount"))).toBe("ticker");
+    writeSort("name", null);
+    expect(readSort(null)).toBe("name");
+    writeSort("amount", { setItem: () => undefined });
+    expect(readSort(stored("amount"))).toBe("amount");
+    expect(readSort(stored(null))).toBe("entered");
+  });
 });

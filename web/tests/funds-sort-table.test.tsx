@@ -9,6 +9,7 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTensor } from "../src/api/client";
 import { Funds } from "../src/sections/Funds";
+import { DEFAULT_SORT, writeSort } from "../src/sections/fundsSort";
 import type { Row, Unit } from "../src/state/store";
 
 const tensor = parseTensor(JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "fixtures/guide2017_5y.json"), "utf8")));
@@ -61,7 +62,11 @@ const amountField = (id: string, unit = "dollars") => screen.getByLabelText(`${i
 const selectedCell = (id: string) => screen.getByTestId(`mix-selected-${id}`).textContent;
 const enteredCell = (id: string) => screen.getByTestId(`mix-entered-${id}`).textContent;
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  // a choice that blocked storage refused in an earlier test is forgotten, as on a new visit
+  writeSort(DEFAULT_SORT);
+  localStorage.clear();
+});
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -310,5 +315,21 @@ describe("the remembered choice", () => {
     expect(() => choose("Amount")).not.toThrow();
     expect(select().selectedOptions[0].textContent).toBe("Amount");
     expect(order()).toEqual(["BND", "VNQ", "VTI", "AGG"]);
+  });
+
+  it("holds for the rest of the visit when storage throws, through closing and reopening the section", () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    shown();
+    choose("Ticker");
+    // the section closes (Funds unmounts) and opens again
+    cleanup();
+    shown();
+    expect(select().selectedOptions[0].textContent).toBe("Ticker");
+    expect(order()).toEqual(["AGG", "BND", "VNQ", "VTI"]);
   });
 });

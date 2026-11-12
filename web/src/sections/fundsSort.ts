@@ -67,8 +67,16 @@ const browserStorage = (): Storage | null => {
   }
 };
 
-/** The choice kept in this browser; As entered when none is kept, when it is not an option, or when storage cannot be read. */
+/**
+ * A choice storage would not take (blocked, full, or not there). It holds for the rest of the visit,
+ * through the Funds table closing and opening again, which unmounts it; the next visit starts on
+ * As entered. A later choice that storage does take replaces it.
+ */
+let unsaved: SortKey | null = null;
+
+/** The choice for this page: one storage refused on this visit, else the one kept in this browser; As entered when none is kept, when it is not an option, or when storage cannot be read. */
 export function readSort(storage: Pick<Storage, "getItem"> | null = browserStorage()): SortKey {
+  if (unsaved !== null) return unsaved;
   try {
     const stored = storage?.getItem(SORT_STORAGE_KEY);
     return isSortKey(stored) ? stored : DEFAULT_SORT;
@@ -77,11 +85,13 @@ export function readSort(storage: Pick<Storage, "getItem"> | null = browserStora
   }
 }
 
-/** Keeps the choice in this browser; where storage is blocked or full the page simply starts on As entered next time. */
+/** Keeps the choice in this browser; where storage is blocked or full it is kept in this page for the rest of the visit only. */
 export function writeSort(key: SortKey, storage: Pick<Storage, "setItem"> | null = browserStorage()): void {
   try {
-    storage?.setItem(SORT_STORAGE_KEY, key);
+    if (storage === null) throw new Error("no storage");
+    storage.setItem(SORT_STORAGE_KEY, key);
+    unsaved = null;
   } catch {
-    // storage unavailable: the choice holds for this visit only
+    unsaved = key;
   }
 }
