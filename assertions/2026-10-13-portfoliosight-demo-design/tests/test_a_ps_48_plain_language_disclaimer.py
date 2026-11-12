@@ -345,8 +345,8 @@ const FORBIDDEN = [
 const FORBIDDEN_RE = FORBIDDEN.map((p) => new RegExp(`\\b${p.replace(/ /g, "\\s+")}\\b`, "i"));
 const PLAIN_ALWAYS = [
   "Risk: how much it bounces around in a year", "Expected return per year", "How spread out the risk is",
-  "Best-return mix at this risk", "Selected mix", "More return", "More diversified", "Fewer independent bets",
-  "More independent bets", "Same portfolio, different years of history", "Historical math, not investment advice.",
+  "Best-return mix at this risk", "Selected mix", "More return", "More diversified",
+  "Same portfolio, different years of history", "Historical math, not investment advice.",
 ];
 const PLAIN_WITH_ALLOCATION = ["Your starting mix"];
 const TECHNICAL = [

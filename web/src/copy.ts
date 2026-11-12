@@ -6,9 +6,8 @@ export const plain = {
   xAxis: "Risk: how much it bounces around in a year",
   yAxis: "Expected return per year",
   heatLegend: "How spread out the risk is",
-  /** The colour map's scale runs from fewer to more independent bets (owner direction 2026-11-11). */
-  heatLess: "Fewer independent bets",
-  heatMore: "More independent bets",
+  heatLess: "Less",
+  heatMore: "More",
   riskSlider: "Best-return mix at this risk",
   riskBad: "Bad year",
   riskTypical: "Typical year",

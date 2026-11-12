@@ -111,9 +111,8 @@ describe("the chart", () => {
     expect(text).not.toMatch(OTHER_GRADE_WORDS);
     const legend = screen.getByTestId("chart-legend");
     expect(legend.textContent).toContain("How spread out the risk is");
-    expect(legend.textContent).toContain("Fewer independent bets");
-    expect(legend.textContent).toContain("More independent bets");
-    expect(legend.textContent).not.toMatch(/\bLess\b/);
+    expect(legend.textContent).toContain("Less");
+    expect(legend.textContent).toContain("More");
     expect(legend.querySelectorAll("li")).toHaveLength(3); // the frontier line, the selected mix and the starting mix: no key for a third marker
   });
 

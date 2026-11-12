@@ -1294,7 +1294,7 @@ Phase 3 · ui (desktop and phone; four themes; both presets of the mock)
 - **Observation.** `document.body.innerText` (details off) matches none of the forbidden
   patterns and contains: "Risk: how much it bounces around in a year", "Expected return per
   year", "How spread out the risk is", "Best-return mix at this risk", "Selected mix", "More
-  return", "More diversified", "Fewer independent bets", "More independent bets", "Same menu, different years of history", "The mix you
+  return", "More diversified", "Same menu, different years of history", "The mix you
   entered", "Historical math, not investment advice."; the `disclaimer` element's text equals
   the §3.7 paragraph verbatim and its rect is visible with no `aria-expanded="false"` ancestor;
   `footer-cta` contains anchors whose `href`s are exactly the three URLs. Details on:

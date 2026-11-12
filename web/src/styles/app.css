@@ -946,28 +946,16 @@ button {
   line-height: 1.3;
 }
 
-/* The bar on top, the two ends of its scale ("Fewer independent bets", "More independent bets") under it. */
 .ramp {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  align-items: start;
-  gap: 4px 8px;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
   font-size: 10.5px;
-  line-height: 1.25;
   color: var(--muted);
 }
 
-.ramp > span:not(.ramp-bar) {
-  grid-row: 2;
-}
-
-.ramp > span:last-child {
-  text-align: right;
-}
-
 .ramp-bar {
-  grid-column: 1 / -1;
-  grid-row: 1;
   height: 9px;
   border-radius: 999px;
   border: 1px solid var(--border);
@@ -2815,7 +2803,7 @@ button {
   }
 
   .legend {
-    width: 180px;
+    width: 150px;
     gap: 5px;
   }
 

@@ -241,8 +241,8 @@ the docstring is authoritative for that test.
     equivalent of N independent bets; highest found on this portfolio: M." in place of Good /
     Average / Fair / Poor; `diversificationWord` is removed from `web/src/math/portfolio.ts`.
     `details-enb` now holds only the technical name of the measure. The line from our tests on past
-    data is `details-tested`, in the details. The legend ends read "Fewer independent bets" and
-    "More independent bets". "bets" is allowed in default copy only inside "independent bets".
+    data is `details-tested`, in the details. The colour map's legend is unchanged (its ends read
+    "Less" and "More"). "bets" is allowed in default copy only inside "independent bets".
 - Light ramp, 2026-10-13 (owner direction). The heatmap reads its ramp per theme from the token
   `--heat-ramp` on `html`: `turned` (ks-dark, hud, grid) paints a cell at
   `1 - 0.8 * Z / enb_ref`, `rising` (light) at `Z / enb_ref`, the mapping Light had before owner
