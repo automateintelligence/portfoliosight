@@ -174,14 +174,18 @@ describe("store: transitions", () => {
     expect((await boot("?u=guide2017&r=30.5&d=0.25")).getState().t).toBe(0.25);
   });
 
-  it("the risk slider leaves the diversification position alone, and resetDiv returns it to the best-return mix", async () => {
+  it("the risk slider leaves the diversification position alone, and the slider itself returns it to 0", async () => {
     const store = await boot("?u=guide2017&r=20&d=0.4");
     store.dispatch({ type: "riskSlider", s: 25 });
     expect(store.getState().t).toBe(0.4);
     store.dispatch({ type: "divSlider", t: 0.7 });
     expect(store.getState().t).toBe(0.7);
-    store.dispatch({ type: "resetDiv" });
+    store.dispatch({ type: "divSlider", t: 0 });
     expect(store.getState().t).toBe(0);
+    // there is no separate "back to Optimized" action (owner direction 2026-11-11)
+    store.dispatch({ type: "divSlider", t: 0.5 });
+    store.dispatch({ type: "resetDiv" } as never);
+    expect(store.getState().t, "an unknown action changes nothing").toBe(0.5);
   });
 
   it("choosing another portfolio starts again on the best-return mix", async () => {

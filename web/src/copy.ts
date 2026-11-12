@@ -22,9 +22,8 @@ export const plain = {
   divMoreReturn: "More return",
   divMoreDiversified: "More diversified",
   divDisabled: "At this risk, the best-return mix is already the most diversified one found.",
-  /** The diversification slider's readout at position 0, and the way back to it (owner direction 2026-11-11). */
+  /** The diversification slider's readout at position 0 (owner direction 2026-11-11). */
   divBestReturn: "Best-return mix",
-  resetDiv: "Back to best-return mix",
   frontier: "Best return at each level of risk",
   ghosts: "Same portfolio, different years of history",
   noLimits: "No limits",

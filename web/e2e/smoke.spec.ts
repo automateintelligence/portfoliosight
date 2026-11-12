@@ -383,7 +383,7 @@ test("DoD-09 diversification slider: starts at the best-return mix, moves the po
   const api = watchApi(page);
   await openApp(page);
   const tensor = await shownTensor(api);
-  await expect(page.getByTestId("div-reset"), "no reset link at the best-return mix").toHaveCount(0);
+  await expect(page.getByTestId("div-reset"), "no button back to the best-return mix, here or after a move").toHaveCount(0);
   await expect.poll(() => param(page, "d")).toBe("0");
   await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-valuetext", "Best-return mix");
   await expect(page.getByTestId("point-div"), "the open circle and its name are gone").toHaveCount(0);
@@ -404,7 +404,7 @@ test("DoD-09 diversification slider: starts at the best-return mix, moves the po
   const enbTop = (await shownMeasure(page)).enb;
   expect(near(enbTop, mixStats(tensor, tensor.frontier.w[column]).enb), `the measure at the top end (${enbTop}) is the frontier mix's own`).toBe(true);
 
-  // Toward "More diversified": the point goes down, never right of the ceiling, and the reset link shows.
+  // Toward "More diversified": the point goes down, never right of the ceiling, and still no button back appears.
   let last = top.cy;
   const key = await towardDiversified(slider);
   for (let step = 0; step < 4; step++) {
@@ -415,7 +415,7 @@ test("DoD-09 diversification slider: starts at the best-return mix, moves the po
     last = now.cy;
   }
   expect(last, "the point moved down over the walk").toBeGreaterThan(top.cy + 3);
-  await expect(page.getByTestId("div-reset")).toBeVisible();
+  await expect(page.getByTestId("div-reset")).toHaveCount(0);
 
   // Bottom end: the most diversified mix of the column, at least as spread out as the top end.
   await pressDivEnd(slider, "diversified");
@@ -425,9 +425,9 @@ test("DoD-09 diversification slider: starts at the best-return mix, moves the po
   expect(near(enbBottom, mixStats(tensor, peak).enb), `the measure at the bottom end (${enbBottom}) is the most diversified mix's own`).toBe(true);
   expect(enbBottom, "ENB at the bottom end against the top end").toBeGreaterThanOrEqual(enbTop);
 
-  // Back to the best-return mix: the point returns to the frontier.
-  await page.getByTestId("div-reset").click();
-  await expect(page.getByTestId("div-reset")).toHaveCount(0);
+  // Back to the best-return mix by the slider itself: the point returns to the frontier.
+  await pressDivEnd(slider, "return");
+  await expect(slider).toHaveAttribute("aria-valuetext", "Best-return mix");
   await expect.poll(() => param(page, "d")).toBe("0");
   const home = await rectOf(point);
   expect(distanceToLine({ x: home.cx, y: home.cy }, curve), "at the best-return mix the point sits on the drawn frontier").toBeLessThanOrEqual(1);

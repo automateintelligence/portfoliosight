@@ -10,14 +10,13 @@ type Props = {
   horizontal: boolean;
   details: boolean;
   onChange: (t: number) => void;
-  onReset: () => void;
 };
 
 const STEP = 1 / 40;
 const PAD = 11; // half the thumb, so the thumb never leaves the track
 
 /** The second slider: moves the point along the column at the risk ceiling (spec 3.2). No numbers. */
-export function DivSlider({ t, moved, disabled, horizontal, details, onChange, onReset }: Props) {
+export function DivSlider({ t, moved, disabled, horizontal, details, onChange }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const clamp = (v: number) => Math.min(1, Math.max(0, v));
 
@@ -66,11 +65,6 @@ export function DivSlider({ t, moved, disabled, horizontal, details, onChange, o
     "aria-disabled": disabled || undefined,
   };
   const pos = (frac: number) => `calc(${PAD}px + (100% - ${2 * PAD}px) * ${frac})`;
-  const reset = moved && !disabled && (
-    <button type="button" className="btn-link" data-testid="div-reset" onClick={onReset}>
-      {plain.resetDiv}
-    </button>
-  );
   const note = disabled && <p className="divs-note">{plain.divDisabled}</p>;
   const tech = details && <p className="divs-note">{technical.divSlider}</p>;
 
@@ -79,7 +73,6 @@ export function DivSlider({ t, moved, disabled, horizontal, details, onChange, o
       <div className="divs divs-h" data-keeps-pin="">
         <div className="divs-row">
           <span className="divs-end">{plain.divMoreReturn}</span>
-          {reset}
           <span className="divs-end">{plain.divMoreDiversified}</span>
         </div>
         <div ref={ref} className="hslider" data-testid="div-slider" onKeyDown={onKeyDown} {...aria} {...slide}>
@@ -99,8 +92,7 @@ export function DivSlider({ t, moved, disabled, horizontal, details, onChange, o
         <span className="v-thumb" style={{ top: pos(t) }} />
       </div>
       <span className="divs-end">{plain.divMoreDiversified}</span>
-      <div className="divs-reset">
-        {reset}
+      <div className="divs-notes">
         {note}
         {tech}
       </div>

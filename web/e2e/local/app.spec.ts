@@ -46,7 +46,7 @@ test("the first screen needs nothing entered and shows no table", async ({ page 
   await expect(page.locator("table")).toHaveCount(0);
   await expect(page.getByTestId("fund-row-VTI")).toHaveCount(0);
   await expect(page.getByText("How spread out the risk is").first()).toBeVisible();
-  await expect(page.getByTestId("div-reset")).toBeHidden();
+  await expect(page.getByTestId("div-reset")).toHaveCount(0);
 });
 
 test("a window without enough shared history is disabled with its note and the view carries on", async ({ page, request }) => {
@@ -497,9 +497,9 @@ test("the details carry the past-data line once, name the measure, and explain n
 
 test("the page opens on the best-return mix, and nothing a visitor reads names Optimized or grades diversification", async ({ page }) => {
   await open(page);
-  // position 0 at the opening risk: the readout says so, the way back is hidden and the address says d=0
+  // position 0 at the opening risk: the readout says so, there is no button back to it and the address says d=0
   await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-valuetext", "Best-return mix");
-  await expect(page.getByTestId("div-reset")).toBeHidden();
+  await expect(page.getByTestId("div-reset")).toHaveCount(0);
   await expect.poll(() => new URL(page.url()).searchParams.get("d")).toBe("0");
   await page.getByTestId("details-toggle").click();
   for (const id of ["funds", "trades", "stress", "settings"]) await section(page, id);
@@ -515,20 +515,25 @@ test("the page opens on the best-return mix, and nothing a visitor reads names O
   await expect(page.getByTestId("div-word")).toHaveText(DIVERSIFICATION_LINE);
 });
 
-test("a link with no d, or with the old d=auto, opens on the best-return mix; an explicit d is kept", async ({ page }) => {
+test("a link with no d, or with the old d=auto, opens on the best-return mix; an explicit d is kept; the slider alone returns to 0", async ({ page }) => {
   for (const query of ["u=guide2017&lb=5y&r=20", "u=guide2017&lb=5y&r=20&d=auto"]) {
     await open(page, query);
     await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-valuetext", "Best-return mix");
-    await expect(page.getByTestId("div-reset")).toBeHidden();
+    await expect(page.getByTestId("div-reset")).toHaveCount(0);
     await expect.poll(() => new URL(page.url()).searchParams.get("d"), query).toBe("0");
   }
   await open(page, "u=guide2017&lb=5y&r=20&d=0.5");
-  await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-valuetext", "50 of 100 toward more diversified");
-  await expect(page.getByTestId("div-reset")).toBeVisible();
-  await expect(page.getByTestId("div-reset")).toHaveText("Back to best-return mix");
-  await page.getByTestId("div-reset").click();
-  await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-valuetext", "Best-return mix");
+  const slider = page.getByTestId("div-slider");
+  await expect(slider).toHaveAttribute("aria-valuetext", "50 of 100 toward more diversified");
+  // no button goes back (owner direction 2026-11-11): not by test id and not by name
+  await expect(page.getByTestId("div-reset")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /back to/i })).toHaveCount(0);
+  // the slider returns to 0 by the keyboard: End on the vertical one, Home on the horizontal one
+  await slider.focus();
+  await page.keyboard.press((await slider.getAttribute("aria-orientation")) === "horizontal" ? "Home" : "End");
+  await expect(slider).toHaveAttribute("aria-valuetext", "Best-return mix");
   await expect.poll(() => new URL(page.url()).searchParams.get("d")).toBe("0");
+  await expect(page.getByTestId("div-reset")).toHaveCount(0);
 });
 
 test("trades export a CSV file from the browser", async ({ page }) => {

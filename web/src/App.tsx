@@ -409,7 +409,6 @@ export default function App() {
               horizontal={false}
               details={state.details}
               onChange={setT}
-              onReset={() => dispatch({ type: "resetDiv" })}
             />
           )}
           {view && scales && (
@@ -436,7 +435,6 @@ export default function App() {
               horizontal
               details={state.details}
               onChange={setT}
-              onReset={() => dispatch({ type: "resetDiv" })}
             />
           )}
         </div>

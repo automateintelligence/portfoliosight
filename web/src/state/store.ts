@@ -94,7 +94,6 @@ export type Action =
   | { type: "start" }
   | { type: "riskSlider"; s: number }
   | { type: "divSlider"; t: number }
-  | { type: "resetDiv" }
   | { type: "setLookback"; lookback: LookbackId }
   | { type: "retryBuild" }
   | { type: "selectPreset"; id: string }
@@ -670,9 +669,6 @@ export function createStore(init: { search: string }): Store {
       case "divSlider":
         if (!Number.isFinite(action.t)) return;
         set({ t: Math.min(1, Math.max(0, action.t)) });
-        return;
-      case "resetDiv":
-        set({ t: 0 });
         return;
       case "setLookback": {
         if (!LOOKBACKS.includes(action.lookback) || state.unavailable[action.lookback]) return;

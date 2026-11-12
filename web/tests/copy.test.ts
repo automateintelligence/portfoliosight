@@ -83,7 +83,7 @@ describe("copy (spec 3.6, 3.7)", () => {
     expect(copy.plain.divMoreReturn).toBe("More return");
     expect(copy.plain.divMoreDiversified).toBe("More diversified");
     expect(copy.plain.divBestReturn).toBe("Best-return mix");
-    expect(copy.plain.resetDiv).toBe("Back to best-return mix");
+    expect(Object.keys(copy.plain), "no button back to a named mix").not.toContain("resetDiv");
     expect([copy.plain.heatLess, copy.plain.heatMore]).toEqual(["Fewer independent bets", "More independent bets"]);
     expect(copy.plain.noLimits).toBe("No limits");
     expect(copy.lookbackLine.nolimits).toBe("No allocation limits");

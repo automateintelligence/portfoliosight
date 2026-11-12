@@ -207,9 +207,10 @@ describe("the strip", () => {
 });
 
 describe("the diversification slider", () => {
-  const slider = (t: number, moved: boolean) => render(<DivSlider t={t} moved={moved} disabled={false} horizontal={false} details={false} onChange={vi.fn()} onReset={vi.fn()} />);
+  const slider = (t: number, moved: boolean, horizontal = false, onChange = vi.fn()) =>
+    render(<DivSlider t={t} moved={moved} disabled={false} horizontal={horizontal} details={false} onChange={onChange} />);
 
-  it("reads Best-return mix at position 0 and has no way back to a named mix", () => {
+  it("reads Best-return mix at position 0", () => {
     const { container } = slider(0, false);
     expect(screen.getByRole("slider").getAttribute("aria-valuetext")).toBe("Best-return mix");
     expect(screen.queryByTestId("div-reset")).toBeNull();
@@ -218,10 +219,26 @@ describe("the diversification slider", () => {
     expect(screen.getByText("More diversified")).toBeTruthy();
   });
 
-  it("once moved reads the distance and offers a way back to the best-return mix", () => {
-    const { container } = slider(0.4, true);
-    expect(screen.getByRole("slider").getAttribute("aria-valuetext")).toBe("40 of 100 toward more diversified");
-    expect(screen.getByTestId("div-reset").textContent).toBe("Back to best-return mix");
-    expect(visible(container)).not.toMatch(/optimi[sz]ed/i);
+  it("once moved reads the distance, and offers no button of any kind to go back (owner direction 2026-11-11)", () => {
+    for (const horizontal of [false, true]) {
+      const { container } = slider(0.4, true, horizontal);
+      expect(screen.getByRole("slider").getAttribute("aria-valuetext")).toBe("40 of 100 toward more diversified");
+      expect(screen.queryByTestId("div-reset")).toBeNull();
+      expect(container.querySelectorAll("button")).toHaveLength(0);
+      expect(visible(container)).not.toMatch(/optimi[sz]ed|back to/i);
+      cleanup();
+    }
+  });
+
+  it("is brought back to position 0 by the keyboard: End on the vertical slider, Home on the horizontal one", () => {
+    const vertical = vi.fn();
+    slider(0.4, true, false, vertical);
+    fireEvent.keyDown(screen.getByRole("slider"), { key: "End" });
+    expect(vertical).toHaveBeenLastCalledWith(0);
+    cleanup();
+    const horizontal = vi.fn();
+    slider(0.4, true, true, horizontal);
+    fireEvent.keyDown(screen.getByRole("slider"), { key: "Home" });
+    expect(horizontal).toHaveBeenLastCalledWith(0);
   });
 });
