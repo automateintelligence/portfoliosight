@@ -1,9 +1,11 @@
 # Fixed-risk experiment v3: simple and diversification-driven recipes (exploratory addendum 3)
 
 Date: 2026-11-11. Question approved by the owner on 2026-11-11 ("4 a"). Written and committed
-before any realized outcome of a new mix is computed. The decisions at the end are open; the run
-starts only after the owner answers them, and an answer that changes the design is recorded here
-as a dated correction before any realized outcome is read.
+before any realized outcome of a new mix is computed; revised the same day after review round 1
+(the review log at the end), still before any realized outcome of a new mix was computed. The
+decisions at the end are open; the run starts only after the owner answers them, and an answer
+that changes the design is recorded here as a dated correction before any realized outcome is
+read.
 
 ## Question
 
@@ -62,8 +64,14 @@ Vocabulary: the code calls the weight limits "caps" (`engine/caps.py`, `menus.FU
   max-`mu_s` greedy fill), as recorded in the anchors; the six settings `r = X(a)`,
   `a in {0.10, 0.25, 0.40, 0.55, 0.70, 0.85}`.
 - The **risk position** of a mix, `a(w) = (sigma(w) - sigma_min) / (sigma_top - sigma_min)`,
-  places it on the same axis as the six settings. Reported for every mix (mean, 5th and 95th
-  percentile over start months) with the nearest recorded setting.
+  places it on the same axis as the six settings. Reported for every mix (mean, median, 5th and
+  95th percentile over start months) with the nearest recorded setting; a start month with
+  `a(w) > 1` (the mix's risk is above the frontier's top) has no nearest setting and is reported
+  as "above the top", with the count of such months (the exclusion rule below).
+- **Model-side check already run.** Before this revision, a model-only script
+  (`geometry_check.py` in the session scratchpad; no realized outcome computed) read the snapshot
+  and the recorded columns for all 246 start months: `sigma(E)`, the limited and unlimited tops,
+  `a(E)`. Its counts are the expected counts pre-registered below.
 
 ## How each mix is built, per start month
 
@@ -77,9 +85,10 @@ frontier mix can be built at an arbitrary risk; nothing restricts it to the six 
 **Exact-line frontier mix with the limits, `F(s)`, at any risk `s`.** New code from those pieces:
 
 1. `s <= sigma_min + TOL` (`optimize.TOL = 1e-6`): `F(s)` is the minimum-variance mix.
-2. `s >= sigma_top - TOL`: `F(s)` is the max-`mu_s` greedy fill, and the cell is flagged "at or
-   above the frontier's top" (the frontier has no node above `sigma_top`; a mix there is dominated
-   by the greedy fill in model return at lower risk). Counted and reported.
+2. `s >= sigma_top - TOL`: the frontier has no node above `sigma_top` (the greedy fill's risk,
+   which is not the domain's maximum risk), so no frontier mix exists at that risk; a comparison
+   with the greedy fill would pair mixes of different risk. The cell is **excluded** from every
+   paired statistic and test, counted and reported (the exclusion rule below).
 3. Otherwise `programs.frontier_point(s)`, then `onto_risk` toward the greedy fill when the answer
    sits more than `TOL` inside the ceiling, so that `|sigma(F(s)) - s| <= TOL`. The **tolerance
    of the match is `1e-6` absolute** in annual volatility, far inside v3's narrow band
@@ -90,9 +99,14 @@ frontier mix can be built at an arbitrary risk; nothing restricts it to the six 
 
 Reconstruction check, before any realized outcome is read: at the six settings of every start
 month, `F(X(a))` must match the recorded `app_frontier` row (v3 §4.3 step 5, the exact-line
-reference) within L1 `1e-4`; the report gives the share of cells that match, and more than 1%
-mismatches stop the run. (`app_frontier` also applied `optimize.frontier`'s left-node correction,
-which can differ from step 3 only on a flat frontier; that is what the check measures.)
+reference) in model return and risk: `|mu_s'F - mu_s'w_app| <= 1e-6` and
+`|sigma(F) - sigma(w_app)| <= 1e-6`. More than 1% of cells outside that stop the run. The weight
+distance is reported, not gated: the count of cells with L1 `> 1e-4`. Why not the weights:
+`app_frontier` was built by `knee.side_frontier_node` (knee.py:67-76), which also applies
+`optimize.frontier`'s left-node correction; on a flat frontier two mixes with the same return and
+risk can differ in weights, and that is not an implementation error. Reproducing the correction
+would cost one 48-column frontier per start month (about 46 extra programs each) for a check of
+weights the test does not depend on.
 
 **Mix 1, F.** At the six settings: the recorded `app_frontier` row (exact line), with the recorded
 arm 1 row (narrow band, the v3 comparator) reported beside it; the v3 report shows the two agree
@@ -101,10 +115,14 @@ to 0.01 pp in realized return and fall. At any other risk: `F(s)` above.
 **Mix 2, U, the frontier with no weight limits.** Bounds `lo = 0`, `hi = 1` on all 19 holdings,
 `MenuPrograms(mu_s, Sigma, 0, 1)`; built by the same three steps at `s = r = X(a)` for the six
 settings of the limited geometry (the cell's recorded `r`), with the unlimited minimum-variance
-mix and the unlimited greedy fill (100% in the top-`mu_s` holding) as the two ends. Every `r` lies
-inside the unlimited span, because removing limits can only lower `sigma_min` and raise
-`sigma_top`. U is long-only. Comparator: mix 1 at the same cell. Both sit on the same line within
-`TOL`, so the match tolerance is `2e-6`.
+mix and the unlimited greedy fill (100% in the top-`mu_s` holding) as the two ends. The unlimited
+top can sit **below** the limited top: it is one holding, and when the top-`mu_s` holding has low
+volatility its risk is under that of the limited greedy fill, which spreads 40% slices over
+several holdings. The model-side check found this in 5 of 246 start months (2008-09, 2010-08,
+2010-10, 2012-09, 2014-01) and the unlimited top below `X(0.85)` in two (2008-09, 2010-08). A U
+cell with `r >= sigma_top_U - TOL` is excluded and counted (the exclusion rule below). U is
+long-only. Comparator: mix 1 at the same cell. Both sit on the same line within `TOL`, so the match
+tolerance is `2e-6`.
 
 **Mix 3, E, equal weight.** `w_i = 1/19` for every holding, every start month. It lies inside the
 limits (5.26% is under 10%), so it is a mix of the limited domain. Risk `sigma(E)`; comparator
@@ -118,13 +136,18 @@ the global one is new code, one convex program via the paper's synthetic-asset f
 in `y`), then `w = y / (1' y)`; Clarabel through `optimize.solve_with_retries`. Risk `sigma(D)`;
 comparator `F(sigma(D))`.
 
-Checks on D before any realized outcome is read: (a) on the paper's example 2 (three holdings of
-equal volatility, two correlated at 0.9 and a third at 0.1 with each) the program gives 25.7%,
-25.7%, 48.6% within 0.1 pp, and on example 1 (two holdings, volatilities 15% and 30%) 66.7% and
-33.3%; (b) at every start month, `DR(D)^2` is at least the largest `DR^2` recorded for any allowed
-main-pool mix of that month (`region3.distinct_mixes`, the `dr2` column v3 recorded for every
-evaluated mix) and at least `M_MDP` of all six recorded anchors, each minus `1e-6`. One start
-month failing (b) stops the run: the optimizer is wrong, not the pool.
+Checks on D before any realized outcome is read: (a) with `lo = 0`, `hi = 1` (the paper's
+long-only setting; example 2's 48.6% would break a 40% limit), on the paper's example 2 (three
+holdings of equal volatility, two correlated at 0.9 and a third at 0.1 with each) the program gives
+25.7%, 25.7%, 48.6% within 0.1 pp, and on example 1 (two holdings, volatilities 15% and 30%, any
+correlation below 1) 66.7% and 33.3%; (b) at every start month, `DR(D)^2` is at least the largest
+`DR^2` recorded for any allowed main-pool mix of that month (`region3.distinct_mixes`, the `dr2`
+column v3 recorded for every evaluated mix, objectives3.py:49) minus `1e-6`. One start month
+failing (b) stops the run: the optimizer is wrong, not the pool. The recorded anchors cannot
+serve here: the v3 harness solved only the frontier anchor `w_F` (search3.py, `COLUMN_SCHEMA` in
+driver3.py:72-99 holds no `w_MDP` or `M_MDP`). Re-solving `anchors.column_anchors` per month would
+add 18 SLSQP programs from eight starts each for a weaker check than the pool's millions of
+recorded mixes already give, so the anchor clause is dropped rather than recomputed.
 
 The weight limits in D: the paper limited each security to 10% and each asset's risk contribution
 to 4%. The main D uses the menu's limits, the same as every other mix, so that the comparison is
@@ -143,6 +166,35 @@ setting `a = 0.10` (a description of what the last step down the risk axis buys,
 yardstick's direction). No pass/fail test.
 
 Every mix is fixed by model quantities at the start month; no choice uses a realized outcome.
+
+**Cells at or above a frontier's top: excluded.** For E, D and D10, every cell with
+`sigma(M) >= sigma_top - TOL` (the limited top) is left out of the paired statistics and the
+tests; for U, every cell with `r >= sigma_top_U - TOL` (the unlimited top). Each mix's excluded
+cells are counted and listed. Expected counts, pre-registered from the model-side check:
+
+- E: 25 of 234 eligible start months (10.7%): 2008-11 to 2010-06, 2010-08 to 2010-10, 2020-03
+  and 2020-05. In 2008-11 to 2009-04 equal weight sits at 21.7% to 26.4% model risk while the
+  limited greedy fill sits at 7.3% to 8.4% (the top-`mu_s` holdings then were XOM and TLT), so
+  without this rule T4 to T6 would pair a 22%-risk mix with a 7%-risk one.
+- U: at least 2 of 1,404 cells (a = 0.85 in 2008-09 and 2010-08); the lower settings of those
+  months are checked by the run.
+- D and D10: 0 expected (low-risk mixes); reported.
+
+A mix whose excluded share exceeds **15%** of its cells has every one of its tests labelled
+inconclusive, whatever they show; the described figures are still reported on the remaining
+cells. The excluded months are also described on their own (the mix's outcome and risk), with no
+comparator.
+
+**Model-side gates, before any realized outcome is read.** They guard against a "no" that is
+really an identity:
+
+- at every U cell, `mu_s'U >= mu_s'F - 1e-6`, F the cell's `app_frontier` row: removing the
+  limits cannot lower the model return at the same risk. One failure stops the run.
+- reported: the share of U cells that break a limit (a fund above 40% or a stock above 10%) and
+  the share with L1(U, F) `> 1e-4`. If U equals F in most cells, decision rule 3 says nothing
+  about the limits, and the report says so.
+- for E, D and D10 at every kept cell, `mu_s'F(sigma(M)) >= mu_s'M - 1e-6`: the comparator is on
+  the frontier at that risk. One failure stops the run.
 
 ## Outcomes, per cell
 
@@ -163,9 +215,10 @@ start month for E, D, D10 and V. All outcomes use the monthly-rebalanced convent
 4. **Realized volatility** `vol_m`: the annualized standard deviation of the cohort's daily
    returns over the year. Described, not tested; it shows whether "the same model risk" held out
    of sample.
-5. **Turnover per rebalance**, the v3 definition: `realized.monthly_rebalanced`'s `turnover`,
-   the sum over the eleven in-year rebalances of the one-way trade `1/2 sum_i |w_i - w_i,drifted|`
-   back to target, divided by eleven. The **net return** `ret_net` charges 10 bp per unit of
+5. **Turnover per rebalance**, new in this check: v3 records only the summed in-year turnover
+   (`realized.monthly_rebalanced`'s `turnover`, realized.py:116-142, the sum over the eleven
+   in-year rebalances of the one-way trade `1/2 sum_i |w_i - w_i,drifted|` back to target); this
+   check divides that sum by eleven. The **net return** `ret_net` charges 10 bp per unit of
    one-way turnover at every rebalance and at funding (`realized.COST_BP`), as v3.
 6. **Break-even trading cost** against the comparator, in bp per unit of one-way turnover:
    `c* = theta_Ret / theta_T * 1e4`, with `theta_Ret` the mean paired one-year return difference
@@ -195,10 +248,12 @@ the start month's `Sigma`, the app's measure) and `DR^2` (`anchors.dr2`).
 Paired differences against the mix's comparator, averaged as the region and safety checks average
 them: for U, the six settings of a start month with equal weight, then the start months; for E, D,
 D10 and V, over start months directly. The same moving-block bootstrap over the job's whole
-schedule of 246 start months (`evidence.Bootstrap`, 2,000 resamples, seed 20261201): block 24
-for one-year outcomes and the worst-years tail, block 60 for the 5-year fall, each block length
-drawing its own resamples from the seed. The worst-years difference recomputes both mixes' tail
-means inside each resample.
+schedule of 246 start months (`evidence.Bootstrap`, seed 20261201): block 24 for one-year
+outcomes and the worst-years tail, block 60 for the 5-year fall, each block length drawing its
+own resamples from the seed. **10,000 resamples** throughout, not the 2,000 of the earlier checks:
+a 99.44% interval leaves 0.28% in each tail, about 5.6 of 2,000 resamples, too few to place its
+ends; 10,000 gives 28. The seed rule is unchanged (`Bootstrap(..., resamples=10_000)`). The
+worst-years difference recomputes both mixes' tail means inside each resample.
 
 Signs: a fall difference is comparator minus mix (positive: the mix fell less). A return,
 volatility or turnover difference is mix minus comparator. For every mix and outcome: the mean, the
@@ -229,7 +284,7 @@ one label:
 
 A 5-year test with fewer than 120 usable start months (start months with at least one cell where
 both mixes have the outcome) is inconclusive whatever it shows. A test without any paired cell is
-inconclusive. The lower bound of a return condition is the one-sided 95% bound, not the 99.44%
+inconclusive, and so is every test of a mix whose excluded cells exceed 15% (the exclusion rule). The lower bound of a return condition is the one-sided 95% bound, not the 99.44%
 interval.
 
 **The weight-limits reading (U against F), fixed now.** The same two-sided interval answers the
@@ -257,8 +312,11 @@ month-to-month turnover are description. Nothing in them changes the decision.
 ## Limits known in advance, and what a "no" would and would not rule out
 
 - **Where E, D and V sit.** The most-diversified and the lowest-volatility mixes are low-risk
-  mixes, and equal weight is wherever 19 equal slices land; the report says where (risk position).
-  Their comparator is the frontier with the limits *at that same risk*, which is exactly the
+  mixes. **Equal weight is not a low-risk mix on this portfolio**: 19 equal slices put 42% in
+  single stocks, and the model-side check puts its median risk position at 0.581 over the 234
+  eligible start months (0.575 over all 246), between the settings 0.55 and 0.70; its mean,
+  0.752, is pulled up by the 25 months above the frontier's top. The report gives both. Their
+  comparator is the frontier with the limits *at that same risk*, which is exactly the
   yardstick the v3 region and safety checks found to be the thing that reduces falls (the frontier
   at a lower risk setting). So any protection that comes from sitting at low risk is already in
   the comparator, and a "no" means the recipe did no better than the frontier mix at that risk,
@@ -298,12 +356,15 @@ No simulation bank, no search, no sizing run. Per scheduled start month (246):
 - E: no optimization; its comparator `F(sigma(E))`: 1 conic program.
 - D: 1 convex program; its comparator: 1 conic program. D10: the same again: 2.
 
-About 19 conic programs per start month, about 4,700 in all, each on 19 holdings and of the size
-of one app frontier node (the app solves 46 of them per frontier, `optimize.NX`), so roughly a
-hundred app frontiers' worth of solves. Check (b) on D reads the 246 pool files once, the same
-read as the region check (about 4.1 million main-pool rows). Realized outcomes: wealth paths for
-at most 15 mixes per eligible start month over one and five years. No runtime is estimated here;
-the run records its own CPU seconds as the other checks do.
+At most 19 conic programs per start month (an excluded cell solves no comparator), about 4,700
+in all, each on 19 holdings and of the size of one app frontier node (the app solves 46 of them
+per frontier, `optimize.NX`), so roughly a hundred app frontiers' worth of solves. No anchor is
+re-solved and no 48-column frontier is built (check (b) and the reconstruction check above).
+Check (b) on D reads the 246 pool files once, the same read as the region check (about 4.1
+million main-pool rows). Realized outcomes: wealth paths for at most 15 mixes per eligible start
+month over one and five years. The bootstrap draws 10,000 resamples per block length over a
+246-month index, five times the earlier checks' draw. No runtime is estimated here; the run
+records its own CPU seconds as the other checks do.
 
 ## Output and code
 
@@ -311,9 +372,11 @@ the run records its own CPU seconds as the other checks do.
   tests in `tests/research/fixedrisk/test_recipes3.py` written first: the two paper examples for
   D; the `F(s)` construction at the three branches (below `sigma_min`, inside, at `sigma_top`)
   against `optimize.frontier` on a small menu; the identity of V and the frontier's first node;
-  U feasible at every setting on a menu whose limited span is narrower than its unlimited span;
-  the break-even readings on the four sign cases; the paired and bootstrap code reused from
-  `safety3` unchanged.
+  U feasible or flagged: on a portfolio whose max-`mu_s` holding has low volatility, the settings
+  above the unlimited top are excluded and counted and the others solve on the line; the
+  exclusion rule and the 15% inconclusive label; the model-side gates (a U that keeps the limits
+  passes the return gate and is reported as equal to F); the break-even readings on the four sign
+  cases; the paired and bootstrap code reused from `safety3` unchanged with 10,000 resamples.
 - Result `fr-run-v3/analysis/recipes_check.json`, written with the safety check's no-replace
   convention (a later full run writes `recipes_check_2.json`; a run restricted to some start
   months is a smoke run that writes outside the run directory and is not recorded) and recorded
@@ -344,4 +407,22 @@ the run records its own CPU seconds as the other checks do.
    the v3 in-year turnover.
 5. **The optimizer check on D reads the whole pool.** y: check D against every recorded mix of the
    month (recommended: a free held-out check of a new optimizer; the cost is the region check's
-   pool read, done once). n: check against the six recorded anchors only (faster; a weaker check).
+   pool read, done once). n: the paper's two examples only (faster; the run's anchors cannot
+   serve, since v3 recorded no most-diversified anchor).
+6. **Exclusion share for an inconclusive label.** (a) 15% of a mix's cells (recommended: equal
+   weight's expected 10.7% stays testable, and a mix that loses more than a seventh of its months
+   to the rule is not being tested at matched risk). (b) 5%: stricter, which would label every
+   equal-weight test inconclusive before the run.
+
+## Review log
+
+Round 1, 2026-11-11, reviewed commit `94d09cb` against the code and a model-side geometry check
+(no realized outcome computed). Applied in this revision before any realized outcome of a new mix
+was read: P0-1 equal weight above the frontier's top in 25 start months (exclusion rule, expected
+counts, 15% label, median risk position, "not a low-risk mix"); P1-2 the unlimited top can sit
+below the limited top (claim deleted, U cells excluded by the same rule, unit test "feasible or
+flagged"); P1-3 no recorded most-diversified anchor (anchor clause of check (b) dropped, pool
+half kept); P1-4 model-side gates against a U that keeps the limits; P2-5 paper checks at
+`lo = 0`, `hi = 1`; P2-6 D10 in the exclusion rule and `a(w) > 1` reporting; P2-7 reconstruction
+check by return and risk, weight mismatches counted; P3-8 10,000 resamples; P3-9 turnover per
+rebalance named as new.
