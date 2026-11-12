@@ -3,7 +3,7 @@ import { plain, technical } from "../copy";
 import { useSlide } from "./useSlide";
 
 type Props = {
-  /** Position: 0 = the best-return mix, 1 = the most diversified mix at this risk. It starts at the Optimized mix (the open circle on the chart), so the slider carries no mark of its own. */
+  /** Position: 0 = the best-return mix, where the page opens, 1 = the most diversified mix at this risk. The slider carries no mark of its own. */
   t: number;
   moved: boolean;
   disabled: boolean;
@@ -53,7 +53,7 @@ export function DivSlider({ t, moved, disabled, horizontal, details, onChange, o
   // The ARIA value rises with the arrow keys that raise it: toward diversified when horizontal,
   // toward return when vertical (where the up arrow moves the thumb up).
   const value = horizontal ? t * 100 : (1 - t) * 100;
-  const text = moved ? `${Math.round(t * 100)} of 100 toward ${plain.divMoreDiversified.toLowerCase()}` : plain.optimized;
+  const text = moved ? `${Math.round(t * 100)} of 100 toward ${plain.divMoreDiversified.toLowerCase()}` : plain.divBestReturn;
   const aria = {
     role: "slider" as const,
     tabIndex: disabled ? -1 : 0,
@@ -68,7 +68,7 @@ export function DivSlider({ t, moved, disabled, horizontal, details, onChange, o
   const pos = (frac: number) => `calc(${PAD}px + (100% - ${2 * PAD}px) * ${frac})`;
   const reset = moved && !disabled && (
     <button type="button" className="btn-link" data-testid="div-reset" onClick={onReset}>
-      {plain.resetOptimized}
+      {plain.resetDiv}
     </button>
   );
   const note = disabled && <p className="divs-note">{plain.divDisabled}</p>;

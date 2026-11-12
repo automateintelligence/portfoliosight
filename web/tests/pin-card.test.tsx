@@ -138,7 +138,7 @@ describe("the pinned card", () => {
     expect(pinnedCard()).toBeNull();
   });
 
-  it("follows the sliders and the point: risk, return, range, word and holdings, and the details lines", () => {
+  it("follows the sliders and the point: risk, return, range, diversification figure and holdings, and the details lines", () => {
     const first = at(0.2, 0.1);
     const { update } = chart(first);
     click();
@@ -152,11 +152,11 @@ describe("the pinned card", () => {
       const now = text();
       expect(now).toContain(pct(v.selected.sigma));
       expect(now).toContain(pct(v.selected.mu));
-      expect(now).toContain(v.word);
+      expect(now).toContain(`${v.selected.enb.toFixed(1)} independent bets`);
       expect(pinnedCard()).not.toBeNull();
     }
     expect(text()).not.toBe(before);
     update(at(0.4, 0.5), true);
-    expect(text()).toContain("independent bets");
+    expect(text()).toContain("Textbook bell-curve figure");
   });
 });

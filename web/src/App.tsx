@@ -449,7 +449,6 @@ export default function App() {
             normal={view.normal}
             scale={stripBar}
             value={stripValue}
-            word={view.word}
             details={state.details}
             facts={{
               enb: view.selected.enb,
@@ -461,7 +460,6 @@ export default function App() {
               rows: tensor.lookback.rows,
               asof: tensor.asof,
               notes: tensor.notes ?? [],
-              defaultPoint: tensor.ladder.default_point,
             }}
             staleAsof={state.staleness?.asof ?? null}
             chartNotes={phone}

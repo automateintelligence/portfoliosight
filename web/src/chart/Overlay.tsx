@@ -7,7 +7,7 @@ import type { ChartScales } from "./scales";
 
 export type Mark = { sigma: number; mu: number };
 
-export type MarkId = "selected" | "div" | "current";
+export type MarkId = "selected" | "current";
 
 /** One frontier line to name at its right end: the primary line or a ghost. */
 export type LineEnd = { id: string; label: string; primary: boolean; sigma: number; mu: number };
@@ -18,14 +18,11 @@ type Props = {
   /** The selected risk ceiling X(s) and the frontier's return there (top of the dashed line). */
   ceiling: Mark;
   selected: Mark;
-  /** The Optimized mix (the open circle): where the diversification slider starts. */
-  optimized: Mark;
   current: Mark | null;
   /** Fund dots with ticker labels: details only. */
   funds: (Mark & { id: string })[] | null;
   selectedLabel: string;
-  /** What a screen reader hears on the other two markers. */
-  divLabel: string;
+  /** What a screen reader hears on the starting mix's marker. */
   currentLabel: string;
   /** The risk position and its domain, for the point's slider semantics. */
   position: { s: number; min: number; max: number };
@@ -132,15 +129,14 @@ export function placeLabels(lines: LineEnd[], scales: ChartScales, phone: boolea
  * frontier lines and the markers, each drawn at its mix's actual risk and return. Updates on
  * every slider tick.
  */
-export function Overlay({ scales, phone, ceiling, selected, optimized, current, funds, selectedLabel, divLabel, currentLabel, position, busy, cards, lines, hot, onRiskPixel, onDivDrag, onNudge, pinned, pinnedBox, pinnedId, onPin }: Props) {
+export function Overlay({ scales, phone, ceiling, selected, current, funds, selectedLabel, currentLabel, position, busy, cards, lines, hot, onRiskPixel, onDivDrag, onNudge, pinned, pinnedBox, pinnedId, onPin }: Props) {
   const xAxisRef = useRef<SVGGElement>(null);
   const yAxisRef = useRef<SVGGElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
-  // `fromMark`: the press began on the square or the open circle (phone), so it is a tap on that
-  // marker unless it moves far enough to be a drag of the selected point.
+  // `fromMark`: the press began on the square, so it is a tap on that marker unless it moves far
+  // enough to be a drag of the selected point.
   const drag = useRef<{ x0: number; y0: number; grabDx: number; axis: "x" | "y" | null; fromMark: boolean } | null>(null);
-  const fresh = useRef(false); // focus has just shown a card: the click that follows must not turn it over
   const tapped = useRef(0); // when a tap on the selected point last pinned or unpinned: the focus it brings opens no card
   const [dragging, setDragging] = useState(false);
   const [tip, setTip] = useState<MarkId | null>(null);
@@ -189,7 +185,6 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
   const cTop = Math.min(plot.bottom, y(ceiling.mu));
   const at: Record<MarkId, { px: number; py: number } | null> = {
     selected: { px: sx, py: sy },
-    div: { px: x(optimized.sigma), py: y(optimized.mu) },
     current: current ? { px: x(current.sigma), py: y(current.mu) } : null,
   };
 
@@ -274,16 +269,7 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
     onNudge(move[0], move[1]);
   };
 
-  // The square and the open circle can sit on top of each other; once the square's hit area (drawn
-  // above the circle) covers the circle's centre, a press there reaches the square only, so a
-  // second tap or click on it turns the card over to the marker underneath.
   const squareHit = phone ? HIT : 14;
-  const under = (id: MarkId): MarkId | null => {
-    const other = id === "current" ? "div" : id === "div" ? "current" : null;
-    const a = at[id];
-    const b = other ? at[other] : null;
-    return other && a && b && Math.hypot(a.px - b.px, a.py - b.py) < squareHit ? other : null;
-  };
   // Hover shows a marker's card with a mouse; a tap or keyboard focus shows it too.
   const show = (id: MarkId) => ({
     onPointerEnter: (e: ReactPointerEvent) => {
@@ -293,37 +279,28 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
       if (e.pointerType !== "touch" && !drag.current) setTip(null);
     },
     onFocus: (e: FocusEvent) => {
-      fresh.current = true;
       if (id === "selected" && e.timeStamp - tapped.current < 1000) return;
       setTip(id);
     },
     onBlur: () => setTip(null),
   });
-  // A tap focuses the marker first (which already shows the card), so the first tap only opens
-  // it; the next press anywhere else, or Escape, closes it.
+  // A tap on a marker opens its card; the next press anywhere else, or Escape, closes it.
   const tapToggle = (id: MarkId) => ({
-    onClick: () => {
-      const first = fresh.current;
-      fresh.current = false;
-      setTip((now) => (!first && now === id ? (under(id) ?? id) : id));
-    },
+    onClick: () => setTip(id),
     onKeyDown: (e: KeyboardEvent) => {
       if (e.key === "Escape") setTip(null);
     },
   });
 
-  // On a phone the selected point is a drag handle 44 px across and the open circle starts under
-  // it, with the square often close by. So there both markers are drawn above the handle: a tap
-  // on either opens its card, and a press on either that moves drags the selected point.
-  // The square is above the handle everywhere: with a mouse too it can sit right beside the
-  // selected point, and its card must open on hover.
+  // On a phone the selected point is a drag handle 44 px across, with the square often close by.
+  // The square is drawn above the handle: a tap on it opens its card, and a press on it that moves
+  // drags the selected point. With a mouse too it can sit right beside the selected point, and its
+  // card must open on hover.
   const fromMark = { onPointerDown: (e: ReactPointerEvent<SVGGElement>) => startDrag(e, true), onPointerMove, onPointerUp: endDrag, onPointerCancel: endDrag, onLostPointerCapture: endDrag };
-  const markDrag = phone ? fromMark : {};
-  const squareDrag = fromMark;
   // A click or tap on the selected point's centre always reaches the point (and pins its card);
-  // keyboard focus still reaches every marker. A marker drawn right on the point (as is
-  // the open circle while the slider rests on Optimized, where the two mixes are one) lets presses
-  // through; one close by draws its hit area short of the point's centre.
+  // keyboard focus still reaches every marker. A marker drawn right on the point (as is the
+  // square when the entered mix is the selected one) lets presses through; one close by draws its
+  // hit area short of the point's centre.
   const fromPoint = (id: MarkId) => {
     const p = at[id];
     return p ? Math.hypot(p.px - sx, p.py - sy) : Infinity;
@@ -432,13 +409,9 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
             </text>
           ))}
         {phone && selectedEl}
-        <g className={phone ? "mark drags" : "mark"} data-mark="div" tabIndex={0} role="img" aria-label={divLabel} aria-describedby={tip === "div" && placed ? CARD_ID : undefined} {...show("div")} {...tapToggle("div")} {...markDrag} {...through("div")}>
-          <circle className="hit" cx={at.div!.px} cy={at.div!.py} r={hitR("div", phone ? HIT : 13)} />
-          <circle className="pt-div" data-testid="point-div" cx={at.div!.px} cy={at.div!.py} r={4.5} />
-        </g>
         {!phone && selectedEl}
         {at.current && (
-          <g className="mark drags" data-mark="current" tabIndex={0} role="img" aria-label={currentLabel} aria-describedby={tip === "current" && placed ? CARD_ID : undefined} {...show("current")} {...tapToggle("current")} {...squareDrag} {...through("current")}>
+          <g className="mark drags" data-mark="current" tabIndex={0} role="img" aria-label={currentLabel} aria-describedby={tip === "current" && placed ? CARD_ID : undefined} {...show("current")} {...tapToggle("current")} {...fromMark} {...through("current")}>
             <circle className="hit" cx={at.current.px} cy={at.current.py} r={hitR("current", squareHit)} />
             <rect className="pt-current" data-testid="point-current" x={at.current.px - 6.5} y={at.current.py - 6.5} width={13} height={13} rx={2} />
           </g>
@@ -447,7 +420,6 @@ export function Overlay({ scales, phone, ceiling, selected, optimized, current, 
       {tip && placed && cards[tip] && (
         <div ref={cardRef} id={CARD_ID} className="tooltip" role="tooltip" style={{ left: placed.left, top: placed.top, width: cardW }}>
           {cards[tip]}
-          {tip !== "selected" && under(tip) && cards[under(tip)!] && <p className="tip-more">{phone ? "Tap" : "Click"} again for the marker underneath.</p>}
           {tip === "selected" && <p className="tip-more">{phone ? plain.pinHintPhone : plain.pinHint}</p>}
         </div>
       )}

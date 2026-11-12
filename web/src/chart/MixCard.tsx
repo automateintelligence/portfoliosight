@@ -1,15 +1,14 @@
 import type { ReactNode } from "react";
-import { enbLine, plain, technical } from "../copy";
+import { diversificationLine, plain, technical } from "../copy";
 import { pct, signedPct } from "../format";
 
 const BELL_Z = 1.96;
 
 export type CardMix = {
-  /** Yearly risk and expected return of the mix, and the measure behind the diversification word. */
+  /** Yearly risk and expected return of the mix, and the measure behind the diversification line. */
   sigma: number;
   mu: number;
   enb: number;
-  word: string;
   /** Largest holdings, biggest first. */
   holdings: { id: string; w: number }[];
   /** One-year range; left out of the smaller card that follows the pointer over the map, and while an entered mix's range is not known. */
@@ -26,11 +25,11 @@ export function topHoldings(funds: { id: string }[], weights: ArrayLike<number>,
 }
 
 type Props = {
-  kind: "selected" | "current" | "div" | "cell";
+  kind: "selected" | "current" | "cell";
   title: string;
   mix: CardMix;
   details: boolean;
-  /** Highest value of the measure found on this menu (details only). */
+  /** Highest value of the measure found on this portfolio. */
   enbRef: number;
   /** Extra technical lines (details only). */
   extra?: ReactNode;
@@ -70,14 +69,13 @@ export function MixCard({ kind, title, mix, details, enbRef, extra }: Props) {
         </div>
         <div>
           <dt>{plain.diversification}</dt>
-          <dd data-testid="mix-card-word">{mix.word}</dd>
+          <dd data-testid="mix-card-word">{diversificationLine(mix.enb, enbRef)}</dd>
         </div>
       </dl>
       <p className="tip-sub tip-sub-year">{plain.cardPerYear}</p>
       {details && (
         <p className="tip-tech">
-          {`This mix ${enbLine(mix.enb.toFixed(1), enbRef.toFixed(1))}.`}
-          {` ${technical.bellCurve(signedPct(mix.mu - BELL_Z * mix.sigma), signedPct(mix.mu), signedPct(mix.mu + BELL_Z * mix.sigma))}.`}
+          {`${technical.bellCurve(signedPct(mix.mu - BELL_Z * mix.sigma), signedPct(mix.mu), signedPct(mix.mu + BELL_Z * mix.sigma))}.`}
           {extra}
         </p>
       )}

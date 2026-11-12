@@ -1,5 +1,5 @@
 import { SlidersHorizontal } from "lucide-react";
-import { enbLine, plain, rangeBarLabel, staleLine, stripFigure, stripNoPrice, stripOnTotal, technical } from "../copy";
+import { diversificationLine, plain, rangeBarLabel, staleLine, stripFigure, stripNoPrice, stripOnTotal, technical } from "../copy";
 import { dollars, pct, signedDollars, signedPct } from "../format";
 import { stripPlace, type StripScale } from "../math/stripScale";
 import type { enteredValue } from "../state/store";
@@ -14,8 +14,6 @@ export type DetailFacts = {
   rows: number;
   asof: string;
   notes: string[];
-  /** Which mix the tensor calls Optimized (spec 4.8). */
-  defaultPoint: "balanced" | "peak";
 };
 
 type Props = {
@@ -28,7 +26,6 @@ type Props = {
   scale: StripScale;
   /** The value entered (state/store.ts `enteredValue`): dollars when it is known, else percent. */
   value: ReturnType<typeof enteredValue> | null;
-  word: string;
   details: boolean;
   facts: DetailFacts;
   staleAsof: string | null;
@@ -37,8 +34,8 @@ type Props = {
   onToggleDetails: () => void;
 };
 
-/** "Selected mix": the one-year range, the quiet diversification word, and the details toggle. */
-export function ResultStrip({ low, typical, high, normal, scale, value, word, details, facts, staleAsof, chartNotes = false, onToggleDetails }: Props) {
+/** "Selected mix": the one-year range, the quiet diversification line, and the details toggle. */
+export function ResultStrip({ low, typical, high, normal, scale, value, details, facts, staleAsof, chartNotes = false, onToggleDetails }: Props) {
   // A small picture of the range on one scale for the menu and window: the Bad-to-Good band with
   // its two ends marked, the typical year, and 0%. A figure past an end is drawn at that end with
   // an overflow mark. The bar is always in percent.
@@ -108,7 +105,7 @@ export function ResultStrip({ low, typical, high, normal, scale, value, word, de
       <div className="divword">
         <span className="divword-cap">{plain.diversification}</span>
         <span className="divword-val" data-testid="div-word">
-          {word}
+          {diversificationLine(facts.enb, facts.enbRef)}
         </span>
       </div>
       <button type="button" className="btn details-btn" data-testid="details-toggle" data-keeps-pin="" aria-pressed={details} onClick={onToggleDetails}>
@@ -123,7 +120,7 @@ export function ResultStrip({ low, typical, high, normal, scale, value, word, de
       {details && (
         <div className="details-panel">
           <p className="wide" data-testid="details-enb">
-            {`This mix ${enbLine(facts.enb.toFixed(1), facts.enbRef.toFixed(1))}.`} <span className="hint">({technical.enbName})</span>
+            Diversification is measured as the {technical.enbName}.
           </p>
           {facts.sigma < 0.01 && <p className="wide">{plain.lowRisk}</p>}
           {chartNotes && (
@@ -166,15 +163,11 @@ export function ResultStrip({ low, typical, high, normal, scale, value, word, de
             </dd>
           </dl>
           <dl className="wide">
-            <dt>What the diversification word means</dt>
-            <dd data-testid="details-words">{technical.cutPoints}</dd>
-          </dl>
-          <dl className="wide">
-            <dt>What “{plain.optimized}” means</dt>
-            <dd data-testid="details-suggested">{technical.optimized[facts.defaultPoint]}</dd>
+            <dt>{plain.heatLegend}</dt>
+            <dd data-testid="details-tested">{technical.testedOnPastData}</dd>
           </dl>
           <p className="wide hint" data-testid="details-method">
-            Method. Range: {technical.resultStrip}. The line on the chart: {technical.frontier}. {plain.optimized}: {technical.optimizedMethod[facts.defaultPoint]}.{" "}
+            Method. Range: {technical.resultStrip}. The line on the chart: {technical.frontier}.{" "}
             {facts.notes.filter((n) => !/^(the balanced point|one-year ranges)\b/i.test(n)).join(" ")}
           </p>
         </div>

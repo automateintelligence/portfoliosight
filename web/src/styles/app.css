@@ -439,6 +439,10 @@ button {
     display: none;
   }
 
+  .side-open .details-btn {
+    justify-self: end;
+  }
+
   .side-open .below {
     flex-wrap: wrap;
   }
@@ -736,9 +740,7 @@ button {
   fill: transparent;
 }
 
-.mark:hover .pt-div,
 .mark:hover .pt-current,
-.mark:focus-visible .pt-div,
 .mark:focus-visible .pt-current {
   stroke-width: 3.25;
 }
@@ -832,14 +834,6 @@ button {
 [data-theme="grid"] .pt-selected .dot {
   stroke-width: 2;
   filter: drop-shadow(0 0 6px rgba(255, 179, 71, 0.9));
-}
-
-.pt-div {
-  fill: none;
-  stroke: var(--mark-div);
-  stroke-width: 2.25;
-  pointer-events: none;
-  filter: drop-shadow(0 0 1.5px var(--chart-bg)) drop-shadow(0 0 1.5px var(--chart-bg));
 }
 
 .pt-current {
@@ -1168,7 +1162,7 @@ button {
 
 .mixcard .tip-facts {
   display: grid;
-  grid-template-columns: repeat(3, auto);
+  grid-template-columns: repeat(2, auto);
   justify-content: space-between;
   gap: 8px;
   margin: 8px 0 0;
@@ -1180,6 +1174,11 @@ button {
   margin-top: 0;
   padding-top: 0;
   border-top: 0;
+}
+
+/* The diversification row is a sentence, so it takes a row of its own under risk and return. */
+.mixcard .tip-facts > div:last-child {
+  grid-column: 1 / -1;
 }
 
 .mixcard dd {
@@ -1662,7 +1661,7 @@ button {
 .strip {
   margin-top: 12px;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   column-gap: 26px;
   row-gap: 8px;
@@ -1844,10 +1843,19 @@ button {
   border: 2px solid var(--surface);
 }
 
+/* The diversification line is a sentence: after the label, the range and the details button it
+ * takes a row of its own, ahead of the stale-prices notice and the details. */
 .divword {
   display: grid;
   gap: 0;
   justify-items: start;
+  order: 1;
+  grid-column: 1 / -1;
+}
+
+.stale,
+.details-panel {
+  order: 2;
 }
 
 .divword-cap {
@@ -2885,10 +2893,14 @@ button {
     font-size: 13.5px;
   }
 
+  /* The line shares a row with the details button, and wraps. */
   .divword {
     display: flex;
     align-items: baseline;
-    gap: 6px;
+    flex-wrap: wrap;
+    gap: 0 6px;
+    order: 0;
+    grid-column: auto;
   }
 
   .details-btn {
@@ -3334,14 +3346,9 @@ button {
   opacity: 0;
 }
 
-[data-theme="hud"] .pt-div,
 [data-theme="hud"] .pt-current {
   stroke-width: 1.75;
   filter: drop-shadow(0 0 4px currentColor) drop-shadow(0 0 1.5px var(--chart-bg));
-}
-
-[data-theme="hud"] .pt-div {
-  color: var(--mark-div);
 }
 
 [data-theme="hud"] .pt-current {

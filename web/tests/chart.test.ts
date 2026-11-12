@@ -168,21 +168,20 @@ describe("view derivation", () => {
     expect(frontierMuAt(TENSOR.frontier_curve, TENSOR.frontier_curve.sigma[8 * j])).toBeCloseTo(TENSOR.frontier_curve.mu[8 * j], 12);
   });
 
-  it("auto starts at the Optimized mix and the selected mix never passes the ceiling", () => {
+  it("position 0 is the best-return mix, and the selected mix never passes the ceiling at any position", () => {
     for (const s of [domain.s_safe, 12.5, 30, domain.s_max]) {
-      const auto = deriveView(TENSOR, math, s, "auto");
-      expect(auto.t).toBe(math.tAuto(s));
-      expect(auto.moved).toBe(false);
+      const start = deriveView(TENSOR, math, s, 0);
+      expect(start.t).toBe(0);
+      expect(start.moved).toBe(false);
+      expect(start.selected).toEqual(start.front);
+      expect(start.weights).toEqual(math.interpolate(s, 0));
       for (const t of [0, 0.5, 1]) {
         const v = deriveView(TENSOR, math, s, t);
         expect(v.selected.sigma).toBeLessThanOrEqual(v.ceiling + 1e-6);
-        expect(v.moved).toBe(true);
+        expect(v.moved).toBe(t > 0 && !v.disabled);
       }
-      expect(deriveView(TENSOR, math, s, 0).selected.mu).toBeCloseTo(auto.front.mu, 12);
-      expect(deriveView(TENSOR, math, s, 1).selected.enb).toBeCloseTo(auto.peak.enb, 12);
-      // the open circle is the Optimized mix, which is where the second slider starts
-      expect(auto.optWeights).toEqual(auto.weights);
-      expect(auto.optRange).toEqual(auto.range);
+      expect(deriveView(TENSOR, math, s, 0).selected.mu).toBeCloseTo(start.front.mu, 12);
+      expect(deriveView(TENSOR, math, s, 1).selected.enb).toBeCloseTo(start.peak.enb, 12);
     }
   });
 
@@ -205,7 +204,7 @@ describe("view derivation", () => {
   });
 
   it("a position outside the domain is clamped, and a collapsed column disables the second slider", () => {
-    expect(deriveView(TENSOR, math, -5, "auto").s).toBe(domain.s_safe);
+    expect(deriveView(TENSOR, math, -5, 0).s).toBe(domain.s_safe);
     expect(TENSOR.grid.k_div[0]).toBe(-1);
     expect(ladderCollapsedAt(TENSOR, 0)).toBe(true);
     expect(ladderCollapsedAt(TENSOR, 0.5)).toBe(TENSOR.grid.k_div[1] < 0);
