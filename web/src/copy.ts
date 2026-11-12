@@ -86,6 +86,12 @@ export const plain = {
   fundsClose: "Hide funds & amounts",
   colEntered: "Mix entered %",
   colSelected: "Selected mix %",
+  /** The "Sort by" choices of Funds & amounts (owner direction 2026-11-11); the two mix choices are named colEntered and colSelected. */
+  fundsSort: "Sort by",
+  sortEntered: "As entered",
+  sortTicker: "Ticker",
+  sortName: "Fund name",
+  sortAmount: "Amount",
   stressSentinel: "Not enough of this mix existed then to say.",
   notEnoughHistory: "not enough shared history",
   allSetAside: "Your starting mix uses only funds set aside in this view",
