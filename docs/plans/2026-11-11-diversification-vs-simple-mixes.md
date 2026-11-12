@@ -202,10 +202,15 @@ really an identity:
 
 - at every kept U cell, `mu_s'U >= mu_s'F - 1e-6`, F the cell's `app_frontier` row: removing
   the limits cannot lower the model return at the same risk. One failure stops the run.
-- at every kept U cell, a lower bound from the pool: every recorded main-pool row of the start
-  month (3-year lookback, any seed or penalty weight; model `mu` and `sigma` depend on the weights
-  and the month alone) with `sigma <= r + TOL` is a long-only mix at risk at most `r`, so
-  `mu_s'U >= max mu` over those rows, minus `1e-6`. This holds for the rows that break an upper
+- at every kept U cell, a lower bound from the pool: every main-pool row of the start month as
+  `region3.read_month_pool` reads them, unchanged (region3.py:137-148: 3-year lookback, the main
+  seed, no penalty weight or the main one; model `mu` and `sigma` depend on the weights and the
+  month alone) with `sigma <= r`, **no tolerance**, is a long-only mix at risk at most `r`, so
+  `mu_s'U >= max mu` over those rows, minus `1e-6`. No tolerance on the risk because a row on the
+  unlimited frontier just above `r` beats a correct U by about the frontier's slope times the
+  slack, and that slope near `sigma_min` can exceed 1, so a `TOL` slack could stop the run on a
+  correct U; the frontier rows within `TOL` of `r` are the limited frontier, which the
+  `app_frontier` gate above already covers. This holds for the rows that break an upper
   limit too: all 4,155,755 recorded rows are long-only (minimum recorded weight `-1.2e-9`, inside
   `FEASIBILITY_TOL`; checked on the run before this revision), because the harness clips
   iterates to the bounds before renormalizing (`Geometry.normalize`). Expected violations 0; one
@@ -471,3 +476,8 @@ in the implementation PR under `scripts/`, the list gate; P2-5 rule 3's limits c
 conditional on U breaking a limit in at least half of its kept cells; P3-6 U gates on kept cells;
 P3-7 resamples as a module constant; P3-8 the pool lower bound on `mu_s'U`, added after checking
 that every recorded row is long-only.
+
+Round 3, 2026-11-11, final, reviewed commit `48bee3c`: no P0 or P1. Applied without a further
+review, still before any realized outcome of a new mix was read: P2-1 the pool lower-bound gate
+compares rows with `sigma <= r` and no tolerance; P3-2 the gate reads the pool with
+`region3.read_month_pool` unchanged; P3-3 no change (13.4% and 232 confirmed).
