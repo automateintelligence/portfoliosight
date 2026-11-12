@@ -68,10 +68,13 @@ Vocabulary: the code calls the weight limits "caps" (`engine/caps.py`, `menus.FU
   95th percentile over start months) with the nearest recorded setting; a start month with
   `a(w) > 1` (the mix's risk is above the frontier's top) has no nearest setting and is reported
   as "above the top", with the count of such months (the exclusion rule below).
-- **Model-side check already run.** Before this revision, a model-only script
-  (`geometry_check.py` in the session scratchpad; no realized outcome computed) read the snapshot
-  and the recorded columns for all 246 start months: `sigma(E)`, the limited and unlimited tops,
-  `a(E)`. Its counts are the expected counts pre-registered below.
+- **Model-side check already run.** Before this revision, a model-only script (no realized
+  outcome computed) read the snapshot and the recorded columns for all 246 start months:
+  `sigma(E)`, the limited and unlimited tops, `a(E)`. Its results are written out in full below
+  (the excluded-month lists and counts), so this document does not depend on the script. The
+  script is not committed with this document (documentation only goes straight to main); the
+  implementation PR adds it as `scripts/fixedrisk_geometry_check.py` with tests, and the run
+  must reproduce its lists (the list gate below).
 
 ## How each mix is built, per start month
 
@@ -172,29 +175,50 @@ Every mix is fixed by model quantities at the start month; no choice uses a real
 tests; for U, every cell with `r >= sigma_top_U - TOL` (the unlimited top). Each mix's excluded
 cells are counted and listed. Expected counts, pre-registered from the model-side check:
 
-- E: 25 of 234 eligible start months (10.7%): 2008-11 to 2010-06, 2010-08 to 2010-10, 2020-03
-  and 2020-05. In 2008-11 to 2009-04 equal weight sits at 21.7% to 26.4% model risk while the
-  limited greedy fill sits at 7.3% to 8.4% (the top-`mu_s` holdings then were XOM and TLT), so
-  without this rule T4 to T6 would pair a 22%-risk mix with a 7%-risk one.
-- U: at least 2 of 1,404 cells (a = 0.85 in 2008-09 and 2010-08); the lower settings of those
-  months are checked by the run.
+- E: 25 of 234 eligible start months (10.7%), the full pre-registered list: 2008-11, 2008-12,
+  2009-01, 2009-02, 2009-03, 2009-04, 2009-05, 2009-06, 2009-07, 2009-08, 2009-09, 2009-10,
+  2009-11, 2009-12, 2010-01, 2010-02, 2010-03, 2010-04, 2010-05, 2010-06, 2010-08, 2010-09,
+  2010-10, 2020-03, 2020-05. In 2008-11 to 2009-04 equal weight sits at 21.7% to 26.4% model
+  risk while the limited greedy fill sits at 7.3% to 8.4% (the top-`mu_s` holdings then were XOM
+  and TLT), so without this rule T4 to T6 would pair a 22%-risk mix with a 7%-risk one. All 25
+  fall before 2021-09, so E keeps 161 of the 186 five-year start months (above the 120 floor).
+- U: at least 2 of 1,404 cells, the pre-registered cells (2008-09, a = 0.85) and
+  (2010-08, a = 0.85); the lower settings of those months are checked by the run.
 - D and D10: 0 expected (low-risk mixes); reported.
 
-A mix whose excluded share exceeds **15%** of its cells has every one of its tests labelled
-inconclusive, whatever they show; the described figures are still reported on the remaining
-cells. The excluded months are also described on their own (the mix's outcome and risk), with no
-comparator.
+**List gate.** The run's excluded months for E must equal the 25 listed, and its excluded U
+cells must include the two named; otherwise the run stops and reports, because the training side
+it rebuilt differs from the one this document was written against.
+
+**The 15% share.** A mix's excluded share is counted once, over its one-year cells: 234 for E, D
+and D10, 1,404 for U. A mix whose share exceeds **15%** has every one of its tests labelled
+inconclusive, whatever they show (E's expected share is 10.7%; over its five-year cells alone it
+would be 13.4%, which is why the base is fixed here); the described figures are still reported
+on the remaining cells. The excluded months are also described on their own (the mix's outcome
+and risk), with no comparator.
 
 **Model-side gates, before any realized outcome is read.** They guard against a "no" that is
 really an identity:
 
-- at every U cell, `mu_s'U >= mu_s'F - 1e-6`, F the cell's `app_frontier` row: removing the
-  limits cannot lower the model return at the same risk. One failure stops the run.
-- reported: the share of U cells that break a limit (a fund above 40% or a stock above 10%) and
-  the share with L1(U, F) `> 1e-4`. If U equals F in most cells, decision rule 3 says nothing
-  about the limits, and the report says so.
-- for E, D and D10 at every kept cell, `mu_s'F(sigma(M)) >= mu_s'M - 1e-6`: the comparator is on
-  the frontier at that risk. One failure stops the run.
+- at every kept U cell, `mu_s'U >= mu_s'F - 1e-6`, F the cell's `app_frontier` row: removing
+  the limits cannot lower the model return at the same risk. One failure stops the run.
+- at every kept U cell, a lower bound from the pool: every recorded main-pool row of the start
+  month (3-year lookback, any seed or penalty weight; model `mu` and `sigma` depend on the weights
+  and the month alone) with `sigma <= r + TOL` is a long-only mix at risk at most `r`, so
+  `mu_s'U >= max mu` over those rows, minus `1e-6`. This holds for the rows that break an upper
+  limit too: all 4,155,755 recorded rows are long-only (minimum recorded weight `-1.2e-9`, inside
+  `FEASIBILITY_TOL`; checked on the run before this revision), because the harness clips
+  iterates to the bounds before renormalizing (`Geometry.normalize`). Expected violations 0; one
+  stops the run.
+- reported: the share of kept U cells that break a limit (a fund above 40% or a stock above 10%)
+  and the share with L1(U, F) `> 1e-4`. Whether rule 3 may say anything about the limits depends
+  on the first share (the condition in rule 3).
+- for E, D and D10 at every kept cell, `mu_s'F(sigma(M)) - mu_s'M > 1e-6`, strictly: E and D are
+  interior mixes of the limited domain and the frontier at their risk earns strictly more. A
+  comparator that wrongly returned M itself would pass the risk match and a `>=` gate, make every
+  difference 0 and turn T4 to T9 into "no"; the strict gap closes that. Expected violations 0;
+  more than 1% of kept cells stop the run. Reported beside it: L1(F(sigma(M)), M) and the count
+  of cells below `1e-4`.
 
 ## Outcomes, per cell
 
@@ -211,7 +235,9 @@ start month for E, D, D10 and V. All outcomes use the monthly-rebalanced convent
 3. **Worst-years fall**: for one mix, the mean of the largest 10% (rounded up) of its one-year
    falls over the start months; for U and F per setting then averaged over the six settings
    (`safety3.tail_level_mean`); for E, D and V over their single cell per start month. Each mix is
-   ranked on its own outcomes.
+   ranked on its own outcomes. Tail sizes after the exclusions, rounded up: 24 for U per setting
+   (232 kept cells at a = 0.85, 234 elsewhere), 24 for D and D10 (234), 21 for E (209 kept start
+   months), 24 for V (234).
 4. **Realized volatility** `vol_m`: the annualized standard deviation of the cohort's daily
    returns over the year. Described, not tested; it shows whether "the same model risk" held out
    of sample.
@@ -303,8 +329,10 @@ of the sub-question; it does not enter the decision rules.
 2. No lead and at least one inconclusive: closed as not provable with this history. No further
    experiment on these start months.
 3. All nine "no": closed. At the same risk, neither the simple recipes nor the most-diversified
-   mix fell less than the frontier mix with the weight limits by the bar, and removing the limits
-   did not help either.
+   mix fell less than the frontier mix with the weight limits by the bar. The clause "and
+   removing the limits did not help either" is added only when U breaks a weight limit in at
+   least half of its kept cells; otherwise rule 3 reads "the limits rarely bound, so the U
+   comparison is uninformative". T1 to T3 still count toward rules 1 and 2 either way.
 
 V, D10, realized volatility, turnover, the break-even costs, the model figures and the
 month-to-month turnover are description. Nothing in them changes the decision.
@@ -333,11 +361,16 @@ month-to-month turnover are description. Nothing in them changes the decision.
 - **The paper's setting is not reproduced**: single stocks, 250-day covariance, a 4%
   risk-contribution limit, UCITS 5/40, a market-value benchmark. D here is the paper's program
   on 19 holdings with the menu's limits and the 3-year covariance.
+- **Equal weight's tests leave out the crisis.** E's kept set has no start month from 2008-11
+  to 2010-06 (and none of 2010-08 to 2010-10, 2020-03, 2020-05), so T4 to T6, one-year,
+  five-year and worst-years alike, say nothing about equal weight entered during the 2008-09
+  crisis or its first year of recovery. A "no" for E is a "no" on the other 209 start months.
+  The excluded months are described on their own, without a comparator.
 - **Fifth look at the same 234 start months, one portfolio, one lookback.** Neighbouring start
-  months share up to eleven of twelve realized months; the worst 10% is 24 start months per mix
-  and rests on few separate episodes; 186 overlapping five-year windows hold about three or four
-  independent periods. The intervals are nominal under the block bootstrap's stationarity
-  assumption.
+  months share up to eleven of twelve realized months; the worst 10% is 24 start months per
+  setting for U, 24 for D and 21 for E, and rests on few separate episodes; the five-year
+  windows (186, 161 for E) overlap and hold about three or four independent periods. The
+  intervals are nominal under the block bootstrap's stationarity assumption.
 - **A "no" would not rule out**: a benefit on the TSP portfolio or any other; a benefit with the
   app's 5-year lookback; a benefit to an investor who re-chooses monthly and pays trading costs
   (turnover is described, not tested); a benefit of the limits for estimation error on mixes other
@@ -376,7 +409,9 @@ records its own CPU seconds as the other checks do.
   above the unlimited top are excluded and counted and the others solve on the line; the
   exclusion rule and the 15% inconclusive label; the model-side gates (a U that keeps the limits
   passes the return gate and is reported as equal to F); the break-even readings on the four sign
-  cases; the paired and bootstrap code reused from `safety3` unchanged with 10,000 resamples.
+  cases; the paired and bootstrap code reused from `safety3` unchanged. The 10,000 resamples
+  are a module constant of `recipes3.py` passed to `safety3.assemble`, not a command-line flag,
+  so a smoke run cannot change them.
 - Result `fr-run-v3/analysis/recipes_check.json`, written with the safety check's no-replace
   convention (a later full run writes `recipes_check_2.json`; a run restricted to some start
   months is a smoke run that writes outside the run directory and is not recorded) and recorded
@@ -426,3 +461,13 @@ half kept); P1-4 model-side gates against a U that keeps the limits; P2-5 paper 
 `lo = 0`, `hi = 1`; P2-6 D10 in the exclusion rule and `a(w) > 1` reporting; P2-7 reconstruction
 check by return and risk, weight mismatches counted; P3-8 10,000 resamples; P3-9 turnover per
 rebalance named as new.
+
+Round 2, 2026-11-11, reviewed commit `3691aec`; the round-1 counts reproduced. Applied in this
+revision, still before any realized outcome of a new mix was read: P1-1 strict gap gate
+`mu_s'F(sigma(M)) - mu_s'M > 1e-6` against a comparator that returns M itself; P2-2 the 15% base
+fixed to one-year cells, E's five-year count 161 recorded; P2-3 tail sizes after exclusion (21
+for E) and the crisis-months limit; P2-4 the excluded lists written in full, the script to come
+in the implementation PR under `scripts/`, the list gate; P2-5 rule 3's limits clause made
+conditional on U breaking a limit in at least half of its kept cells; P3-6 U gates on kept cells;
+P3-7 resamples as a module constant; P3-8 the pool lower bound on `mu_s'U`, added after checking
+that every recorded row is long-only.
