@@ -1685,16 +1685,20 @@ Phase 3 · unit + ui (owner direction 2026-11-11, §3.3)
   the risk slider or the diversification slider is dragged, or the selected point or the starting-
   mix square on the chart, or a key is held on any of them, the row order does not change and the
   Selected mix % figures keep updating in place; the list re-sorts once on pointerup, pointercancel,
-  lost capture or key release (a single key press re-sorts on its release). While an amount field
-  has focus the order holds, and it re-sorts when focus leaves the amount fields. Adding or
+  lost capture or key release (a single key press re-sorts on its release). While focus is anywhere
+  inside the rows (an amount field or a Remove button) the order holds, Tab from an amount field to
+  its Remove button and on to the next amount field included, and it re-sorts when focus leaves the
+  rows or when the row holding focus leaves the list. Adding or
   removing a fund, and choosing another sort, put the list in sorted order at once. The choice is
   remembered in the browser, is "As entered" when storage throws or holds anything else, and is not
   in the share link.
 - **Setup.** Unit legs: the pure `sortFunds` over hand-made rows (every option, blanks, ties, the
   three units, two mixes that show as the same percent) and `readSort` / `writeSort` over a storage
   that throws; `Funds` in jsdom with a stateful list, `selected` replaced step by step, the
-  interaction flag raised and lowered, and an amount field focused and blurred; the sliders and the
-  chart's point in jsdom with the interaction signal. UI leg: as A-PS-41, Funds open (the sidebar
+  interaction flag raised and lowered, an amount field focused and blurred, focus moved field to
+  Remove button to field, and the row of the focused field removed from `rows`; the sliders and the
+  chart's point in jsdom with the interaction signal; the whole page in jsdom (a sized chart) with a
+  pointer drag of `risk-slider`, so the page's wiring of the signal to the table is covered. UI leg: as A-PS-41, Funds open (the sidebar
   on desktop, the section on the phone), sort on "Selected mix %"; a mouse drag of `risk-slider`
   in twelve steps and a held ArrowRight; the table's row ids and `mix-selected-*` texts read
   after every step.
@@ -1704,7 +1708,9 @@ Phase 3 · unit + ui (owner direction 2026-11-11, §3.3)
   differ from the start at some step; after pointerup the texts read largest first and the id list
   differs from the one before the drag. A held ArrowRight (forty key-downs) leaves the id list
   unchanged until its key-up, after which it is sorted. With an amount field focused and its value
-  raised above every other, the id list is unchanged until blur and then lists that fund first.
+  raised above every other, the id list is unchanged until focus leaves the rows (through that
+  row's Remove button and the next amount field) and then lists that fund first. With that row
+  removed while its field has focus, the next change of amounts re-sorts at once.
   Removing a fund while the flag is up gives the sorted order of the new figures; adding a fund
   while it is up lists the new fund in its sorted place. After choosing "Ticker", a reload shows
   "Ticker" selected and the rows A to Z, and the address has no sort parameter; with `getItem` and
