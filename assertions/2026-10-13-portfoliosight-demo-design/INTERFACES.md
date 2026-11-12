@@ -209,20 +209,39 @@ the docstring is authoritative for that test.
   - **Copy.** Stress card: "What this mix did: N% (Selected mix)". The diversification and
     "Suggested" explanations behind details were rewritten (spec 3.6). Engine 2: the open circle
     (`point-div`) is named "Optimized" (the tensor's `ladder.default_point`), the slider starts
-    there and has no separate Suggested tick; every range on the page is one year (Bad / Typical /
-    Good year), with the bell-curve figure only in details.
+    there and has no separate Suggested tick (retired 2026-11-11, see below); every range on the
+    page is one year (Bad / Typical / Good year), with the bell-curve figure only in details.
   - **New test ids** (asserted by `web/e2e/local/app.spec.ts` and `web/tests/`, free for later
     gate assertions): `funds-toggle` (opens and closes the sidebar; `aria-expanded`),
     `funds-hint`, `amount-head`, `mix-entered-{ID}`, `mix-selected-{ID}`,
     `frontier-label-{lookback id}` (a `<g>` in the overlay holding a `<text>` and, when the label
     was moved, a `path.leader`; `data-end-x` / `data-end-y` are the line end in chart pixels),
-    `ghost-tip`, `mix-card` (`data-for` = `selected | current | div | cell`), `mix-card-word`,
-    `trades-export`, `details-words`, `details-suggested` (what "Optimized" means),
-    `details-method`, `details-bell` (the one-year range two ways), `key-nolimits` (legend entry of
+    `ghost-tip`, `mix-card` (`data-for` = `selected | current | cell` since 2026-11-11),
+    `mix-card-word`, `trades-export`, `details-words`, `details-suggested` (what "Optimized"
+    means; both retired 2026-11-11, replaced by `details-tested`), `details-method`, `details-bell` (the one-year range two ways), `key-nolimits` (legend entry of
     the "No limits" curve, drawn when some limit binds), `caps-none` (sets every fund to no
     minimum and a 100% maximum and rebuilds; `caps-reset` reads "Reset limits"). The markers'
-    wrappers carry `data-mark` = `selected | div | current`; `point-*` ids are unchanged and no
+    wrappers carry `data-mark` = `selected | current` (`div` until 2026-11-11); `point-*` ids are unchanged and no
     new `point-` id exists.
+- Retire Optimized, 2026-11-11 (owner direction; the fourth sanctioned change of the frozen gate in
+  this run). Research found that at the same risk the more diversified "Optimized" point did not
+  lose less than the best-return mix on any measure tested, so the page implies no point is better
+  than the best-return mix. Every changed test asserts the new truth as strongly as before:
+  - **Position.** The page opens at diversification position 0, the best-return mix, at every risk
+    setting. An address with no `d`, and the old `d=auto`, decodes to `d = 0`; `encode` writes
+    `d=0`. `UrlState.d` is `number`. `portfolioMath(tensor).tAuto` stays in the module but the page
+    does not use it.
+  - **Removed.** The open circle (`point-div`, the `div` mix card and its key), the name
+    "Optimized", "Back to Optimized" (now "Back to best-return mix"), the `details-words` and
+    `details-suggested` entries and the Method sentence on the balanced point. The slider's readout
+    at 0 is "Best-return mix". The overlay's markers are `point-selected` and `point-current`;
+    `mix-card`'s `data-for` is `selected | current | cell`.
+  - **Diversification line.** `div-word` (and `mix-card-word`) hold "This mix spreads risk over the
+    equivalent of N independent bets; highest found on this portfolio: M." in place of Good /
+    Average / Fair / Poor; `diversificationWord` is removed from `web/src/math/portfolio.ts`.
+    `details-enb` now holds only the technical name of the measure. The line from our tests on past
+    data is `details-tested`, in the details. The legend ends read "Fewer independent bets" and
+    "More independent bets". "bets" is allowed in default copy only inside "independent bets".
 - Light ramp, 2026-10-13 (owner direction). The heatmap reads its ramp per theme from the token
   `--heat-ramp` on `html`: `turned` (ks-dark, hud, grid) paints a cell at
   `1 - 0.8 * Z / enb_ref`, `rising` (light) at `Z / enb_ref`, the mapping Light had before owner

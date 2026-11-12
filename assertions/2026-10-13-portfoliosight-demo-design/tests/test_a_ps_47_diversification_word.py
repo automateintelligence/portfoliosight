@@ -1,17 +1,20 @@
-"""A-PS-47 — the diversification word is quiet, one of four, with thresholds as specified.
+"""A-PS-47 — the diversification line is quiet and states the measure; no grade word stands for it.
+
+Owner direction 2026-11-11: the words Good / Average / Fair / Poor and their cut points are retired.
+The page states "This mix spreads risk over the equivalent of N independent bets; highest found on
+this portfolio: M." instead (`div-word` keeps its test id).
 
 Phase 3, ui + unit (Playwright against `vite preview` and a vitest leg, both run from pytest;
 standard library only).
 
-UI legs (desktop, three themes, three risk positions each): `div-word` is exactly one of
-Good/Average/Fair/Poor and is the word for q = ENB(frontier.w[r]) / enb_ref recomputed here from the
-tensor (spec 4.6); computed font-size <= 14 px; computed colour equals the computed `--muted`,
-which equals the spec 3.5 value; before details no visible text matches the ENB patterns, no
-neighbour of the word carries a digit and `details-enb` is hidden; after `details-toggle` the
-`details-enb` line matches "spreads risk over the equivalent of N independent bets; highest found on
-this portfolio: M" with N and M equal to the recomputed values at the shown precision, N/M inside the
-band of the shown word, and the technical name visible.
-Unit leg: the seven boundary values and a seeded sweep of 600 values.
+UI legs (desktop, four themes, three risk positions each): `div-word` is that sentence, with N and M
+equal to ENB(frontier.w[r]) and enb_ref recomputed here from the tensor (spec 4.6) at the shown
+precision; computed font-size <= 14 px; computed colour equals the computed `--muted`, which equals
+the spec 3.5 value; no neighbour of the line carries a digit; none of Average / Fair / Poor is in the
+page text; before details the technical name "effective number of bets, minimum torsion" and
+`details-enb` are absent; after `details-toggle` `details-enb` is visible and the technical name is on
+the page.
+Unit leg: the word function is gone from `web/src/math/portfolio.ts`.
 
 The Playwright spec mocks /api/* itself (page.route) from web/fixtures/guide2017_5y.json and
 data/holdings/holdings_guide2017_step2.csv: GET /api/presets (guide2017 with its "$" allocation and
@@ -23,10 +26,9 @@ an integer `r` inside the slider domain and `d=0` the selected mix is exactly `f
 as given (it may leave the URL untouched or rewrite the same values).
 
 Pinned interface (beyond the shared pins)
-- `diversificationWord(q: number): "Good" | "Average" | "Fair" | "Poor"` exported from
-  `web/src/math/portfolio.ts` (pure; importing the module needs no DOM).
-- `div-word` holds the bare word as its whole text; `details-enb` is absent or hidden until
-  `details-toggle` is clicked.
+- `div-word` holds the diversification line as its whole text (preceded by a caption sibling that
+  carries no digit); `details-enb` is absent or hidden until `details-toggle` is clicked.
+- `web/src/math/portfolio.ts` exports no `diversificationWord`.
 """
 
 # ruff: noqa: E501
@@ -333,18 +335,13 @@ async function advanceTheme(page: Page): Promise<string> {
 // ---------------------------------------------------------------------------------------------
 // A-PS-47, UI legs
 // ---------------------------------------------------------------------------------------------
-const WORDS = ["Good", "Average", "Fair", "Poor"];
-const CUTS = [0.3, 0.5, 0.75];
-const wordFor = (q: number) => (q >= 0.75 ? "Good" : q >= 0.5 ? "Average" : q >= 0.3 ? "Fair" : "Poor");
-const BAND: Record<string, [number, number]> = {
-  Good: [0.75, Infinity], Average: [0.5, 0.75], Fair: [0.3, 0.5], Poor: [-Infinity, 0.3],
-};
+const LINE = /^This mix spreads risk over the equivalent of (\d+(?:\.\d+)?) independent bets; highest found on this portfolio: (\d+(?:\.\d+)?)\.$/;
 // spec 3.5, row --muted
 const MUTED: Record<string, string> = { "ks-dark": "#8a8784", light: "#6b6b6b", hud: "#9a8572", grid: "#5c7e8c" };
 const halfUnit = (shown: string) => 0.5 * Math.pow(10, -((shown.split(".")[1] ?? "").length)) + 1e-9;
 
 for (const theme of THEMES) {
-  test(`div word ${theme}`, async ({ page }) => {
+  test(`div line ${theme}`, async ({ page }) => {
     const tensor = readFixtureTensor();
     await installMock(page, tensor);
     const positions = threeInts(tensor);
@@ -354,22 +351,23 @@ for (const theme of THEMES) {
       await expectPosition(page, r, 0);
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
       const enb = enbOf(tensor, tensor.frontier.w[r]);
-      const q = enb / tensor.enb_ref;
 
-      // default view: the word, quiet, and no number
-      const wordEl = page.getByTestId("div-word");
-      const word = norm((await wordEl.textContent()) ?? "");
-      expect(WORDS, `div-word text "${word}" at r=${r}`).toContain(word);
-      if (CUTS.every((cut) => Math.abs(q - cut) > 1e-6)) {
-        expect(word, `word for q=${q.toFixed(4)} at r=${r}`).toBe(wordFor(q));
-      }
-      const style = await wordEl.evaluate((el) => {
+      // default view: the line, quiet
+      const lineEl = page.getByTestId("div-word");
+      const text = norm((await lineEl.textContent()) ?? "");
+      const m = text.match(LINE);
+      expect(m, `div-word text "${text}" at r=${r}`).not.toBeNull();
+      const shownN = Number(m![1]);
+      const shownM = Number(m![2]);
+      expect(Math.abs(shownN - enb), `N=${m![1]} vs ENB ${enb} of frontier.w[${r}]`).toBeLessThanOrEqual(halfUnit(m![1]));
+      expect(Math.abs(shownM - tensor.enb_ref), `M=${m![2]} vs enb_ref ${tensor.enb_ref}`).toBeLessThanOrEqual(halfUnit(m![2]));
+      const style = await lineEl.evaluate((el) => {
         const cs = getComputedStyle(el);
         const near: string[] = [];
         for (const sib of [el.previousElementSibling, el.nextElementSibling]) {
           if (!sib) continue;
           const holdsRange = sib.matches('[data-testid^="range-"]') || sib.querySelector('[data-testid^="range-"]') !== null;
-          if (!holdsRange) near.push((sib as HTMLElement).innerText ?? "");
+          if (!holdsRange) near.push((sib as HTMLElement).innerText ?? (sib as HTMLElement).textContent ?? "");
         }
         return { fontSize: parseFloat(cs.fontSize), color: cs.color, near };
       });
@@ -378,30 +376,18 @@ for (const theme of THEMES) {
       const muted = await tokenHex(page, "--muted");
       expect(muted, `computed --muted in ${theme}`).toBe(MUTED[theme]);
       expect(await cssColorToHex(page, style.color), "div-word colour equals --muted").toBe(muted);
-      for (const text of style.near) expect(text, "no numeric score next to the word").not.toMatch(/\d/);
+      for (const near of style.near) expect(near, "no numeric score next to the line").not.toMatch(/\d/);
       await expect(page.getByTestId("details-enb")).toBeHidden();
       const plain = norm(await page.evaluate(() => document.body.innerText));
       expect(plain.length, "the page rendered text").toBeGreaterThan(100);
-      expect(plain, "no ENB number before details").not.toMatch(/\d\.\d+ (independent )?bets|ENB/);
-      expect(plain, "no ENB number before details").not.toMatch(/\d\.\d+ (independent )?bets/i);
+      expect(plain, "no technical name before details").not.toMatch(/ENB|effective number of bets/);
+      expect(plain, "no grade word for diversification").not.toMatch(/\b(Average|Fair|Poor)\b/);
+      expect(plain, "no Optimized mix").not.toMatch(/optimi[sz]ed/i);
 
-      // details on: the template, the two numbers and the ratio band
+      // details on: the technical name appears, the line is unchanged
       await page.getByTestId("details-toggle").click();
-      const detail = page.getByTestId("details-enb");
-      await expect(detail).toBeVisible();
-      const line = norm((await detail.textContent()) ?? "");
-      const m = line.match(/spreads risk over the equivalent of (\d+(?:\.\d+)?) independent bets; highest found on this portfolio: (\d+(?:\.\d+)?)/);
-      expect(m, `details-enb text "${line}"`).not.toBeNull();
-      const shownN = Number(m![1]);
-      const shownM = Number(m![2]);
-      expect(Math.abs(shownN - enb), `N=${m![1]} vs ENB ${enb} of frontier.w[${r}]`).toBeLessThanOrEqual(halfUnit(m![1]));
-      expect(Math.abs(shownM - tensor.enb_ref), `M=${m![2]} vs enb_ref ${tensor.enb_ref}`).toBeLessThanOrEqual(halfUnit(m![2]));
-      const wordNow = norm((await wordEl.textContent()) ?? "");
-      expect(WORDS).toContain(wordNow);
-      const lowRatio = (shownN - halfUnit(m![1])) / (shownM + halfUnit(m![2]));
-      const highRatio = (shownN + halfUnit(m![1])) / (shownM - halfUnit(m![2]));
-      const [bandLow, bandHigh] = BAND[wordNow];
-      expect(highRatio >= bandLow && lowRatio < bandHigh, `ratio ${shownN}/${shownM} outside the band of "${wordNow}"`).toBe(true);
+      await expect(page.getByTestId("details-enb")).toBeVisible();
+      expect(norm((await lineEl.textContent()) ?? ""), "the line does not change with details").toBe(text);
       const technical = norm(await page.evaluate(() => document.body.innerText)).toLowerCase();
       expect(technical).toContain("effective number of bets, minimum torsion");
       checked += 1;
@@ -411,58 +397,22 @@ for (const theme of THEMES) {
   });
 }
 """
-EXPECTED_TITLES = {"div word ks-dark", "div word light", "div word hud", "div word grid"}
+EXPECTED_TITLES = {"div line ks-dark", "div line light", "div line hud", "div line grid"}
 
 # The vitest leg (pure function, no browser). Written to web/tests/__gate__/ for the run.
 VITEST_TS = r"""
 import { describe, expect, it } from "vitest";
 
-const WORDS = ["Good", "Average", "Fair", "Poor"];
-const reference = (q: number) => (q >= 0.75 ? "Good" : q >= 0.5 ? "Average" : q >= 0.3 ? "Fair" : "Poor");
-
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 describe("A-PS-47", () => {
-  it("word thresholds at the seven boundary values", async () => {
+  it("the word function is gone from the math module", async () => {
     const mod: any = await import("../../src/math/portfolio");
-    expect(typeof mod.diversificationWord, "web/src/math/portfolio.ts must export diversificationWord(q)").toBe("function");
-    const cases: [number, string][] = [
-      [0.299, "Poor"], [0.3, "Fair"], [0.499, "Fair"], [0.5, "Average"], [0.749, "Average"], [0.75, "Good"], [1.0, "Good"],
-    ];
-    for (const [q, word] of cases) expect(mod.diversificationWord(q), `q=${q}`).toBe(word);
-    expect(mod.diversificationWord(0.299)).not.toBe("Fair");
-    expect(mod.diversificationWord(0.749)).not.toBe("Good");
-  });
-
-  it("word mapping over a seeded sweep stays inside the four words", async () => {
-    const mod: any = await import("../../src/math/portfolio");
-    expect(typeof mod.diversificationWord).toBe("function");
-    const random = mulberry32(47);
-    const seen: Record<string, number> = { Good: 0, Average: 0, Fair: 0, Poor: 0 };
-    for (let i = 0; i < 600; i++) {
-      const q = random() * 1.1;
-      const word = mod.diversificationWord(q);
-      expect(WORDS, `q=${q}`).toContain(word);
-      expect(word, `q=${q}`).toBe(reference(q));
-      seen[word] += 1;
-    }
-    for (const word of WORDS) expect(seen[word], `sweep reached ${word}`).toBeGreaterThanOrEqual(50);
-    expect(mod.diversificationWord(0)).toBe("Poor");
+    expect(typeof mod.portfolioMath, "web/src/math/portfolio.ts must still export portfolioMath").toBe("function");
+    expect(Object.keys(mod), "no function turns a ratio into Good / Average / Fair / Poor").not.toContain("diversificationWord");
   });
 });
 """
 VITEST_TITLES = {
-    "word thresholds at the seven boundary values",
-    "word mapping over a seeded sweep stays inside the four words",
+    "the word function is gone from the math module",
 }
 
 

@@ -1,5 +1,6 @@
-"""A-PS-46 - the diversification slider starts at the suggested spot, moves the point down and never
-right, and the point is drawn where its mix sits.
+"""A-PS-46 - the diversification slider starts at the best-return mix (position 0), moves the point
+down and never right, and the point is drawn where its mix sits. (Owner direction 2026-11-11: the
+page no longer opens at the tensor's suggested spot or marks it.)
 
 Playwright (desktop) run from pytest; stdlib only.
 
@@ -15,15 +16,16 @@ Pinned interface (beyond the shared pins of the gate contract):
 - web/ builds with `npm run build` and serves with `vite preview`; web/fixtures/guide2017_5y.json.
 - html[data-theme], URL keys u, lb, r, d, t, x (spec 8.1); r and d are written to the address
   (debounced) after every change, with at least six decimals.
-- web/src/math/portfolio.ts exports portfolioMath(tensor) with stats, interpolate, tAuto;
+- web/src/math/portfolio.ts exports portfolioMath(tensor) with stats, interpolate;
   web/src/api/client.ts exports parseTensor (both importable from a Playwright spec, no DOM).
-- test ids: div-slider, div-reset, details-enb, point-selected, ceiling-line, chart, chart-canvas.
+- test ids: div-slider, div-reset, div-word, point-selected, ceiling-line, chart, chart-canvas.
 - div-slider (or its inner [role=slider] / input[type=range]) is focusable, exposes
   aria-valuenow/min/max (or range value/min/max) proportional to t in either direction, and moves
   toward More diversified with one of the arrow keys; when disabled it carries disabled or
   aria-disabled="true".
 - d=0, d=0.5, d=1 and x=1 in the address are honoured on load.
-- details-enb's first number is the selected mix's ENB (one or more decimals).
+- div-word's first number is the selected mix's ENB (one or more decimals).
+- A link with no d, and the old d=auto, open at d=0.
 - the frontier is stroked on the canvas in --frontier.
 """
 
@@ -462,12 +464,13 @@ async function expectPointAt(page: Page, scales: { x: (v: number) => number; y: 
   return point;
 }
 
-test("default position is the suggested spot and the reset link appears only after a move", async ({ page }) => {
+test("default position is the best-return mix and the reset link appears only after a move", async ({ page }) => {
   const mock = buildMock(readFixture());
   const tensor = mock.tensor;
   const facts = tensorFacts(tensor);
   const math = await productMath(tensor);
-  // A half-integer position whose suggested t is as far inside (0, 1) as the fixture allows.
+  // A half-integer position where the tensor's own suggested t is as far inside (0, 1) as the
+  // fixture allows, so that opening there would be told apart from opening at 0.
   let s0 = facts.sSafe + (facts.sMax - facts.sSafe) / 2;
   let score = -1;
   for (let j = Math.ceil(facts.sSafe); j + 1 <= facts.sMax; j++) {
@@ -475,36 +478,36 @@ test("default position is the suggested spot and the reset link appears only aft
     const inside = Math.min(t, 1 - t);
     if (inside > score) { score = inside; s0 = j + 0.5; }
   }
-  const tAuto = facts.tAuto(s0);
-  expect(Math.abs(math.tAuto(s0) - tAuto), `portfolioMath.tAuto(${s0}) = ${math.tAuto(s0)} but spec 4.11 gives ${tAuto}`).toBeLessThanOrEqual(1e-9);
+  expect(score, "the fixture has a position where the suggested t differs from 0").toBeGreaterThan(0.05);
 
   await installMock(page, mock);
-  await openApp(page, mock, `u=guide2017&lb=5y&r=${s0}&d=auto`);
-  await expect(page.getByTestId("div-reset"), "div-reset must be absent or hidden before any move").toBeHidden();
-  const d0 = urlParam(page, "d");
-  expect(d0 === null || d0 === "auto" || Math.abs(Number(d0) - tAuto) <= 1e-6, `on load d must be auto or t_auto(${s0}) = ${tAuto}; it is ${d0}`).toBe(true);
+  // an address with no d, and the old d=auto, both open at 0 (owner direction 2026-11-11)
+  for (const query of [`u=guide2017&lb=5y&r=${s0}`, `u=guide2017&lb=5y&r=${s0}&d=auto`]) {
+    await openApp(page, mock, query);
+    await expect(page.getByTestId("div-reset"), "div-reset must be absent or hidden before any move").toBeHidden();
+    await waitParam(page, "d", (v) => v !== null && Number(v) === 0, `on load d must be 0 for ${query}`);
 
-  // The slider's own position (standard ARIA / range input), in either orientation.
-  const handle = await sliderHandle(page, "div-slider");
-  const aria = await handle.evaluate((el) => {
-    const input = el as HTMLInputElement;
-    const pick = (attr: string, prop: string) => (el.getAttribute(attr) !== null ? Number(el.getAttribute(attr)) : input.type === "range" ? Number((input as any)[prop]) : NaN);
-    return { now: pick("aria-valuenow", "value"), min: pick("aria-valuemin", "min"), max: pick("aria-valuemax", "max") };
-  });
-  const norm = (aria.now - aria.min) / (aria.max - aria.min);
-  expect(Number.isFinite(norm), `div-slider must expose its position (aria-valuenow/min/max or a range input); got ${JSON.stringify(aria)}`).toBe(true);
-  expect(Math.min(Math.abs(norm - tAuto), Math.abs(1 - norm - tAuto)), `div-slider position ${norm} is not t_auto(${s0}) = ${tAuto}`).toBeLessThanOrEqual(0.01);
+    // The slider's own position (standard ARIA / range input), in either orientation.
+    const handle = await sliderHandle(page, "div-slider");
+    const aria = await handle.evaluate((el) => {
+      const input = el as HTMLInputElement;
+      const pick = (attr: string, prop: string) => (el.getAttribute(attr) !== null ? Number(el.getAttribute(attr)) : input.type === "range" ? Number((input as any)[prop]) : NaN);
+      return { now: pick("aria-valuenow", "value"), min: pick("aria-valuemin", "min"), max: pick("aria-valuemax", "max") };
+    });
+    const norm = (aria.now - aria.min) / (aria.max - aria.min);
+    expect(Number.isFinite(norm), `div-slider must expose its position (aria-valuenow/min/max or a range input); got ${JSON.stringify(aria)}`).toBe(true);
+    expect(Math.min(norm, 1 - norm), `div-slider position ${norm} is at an end of the slider`).toBeLessThanOrEqual(0.01);
 
-  // The point is drawn where the suggested mix sits.
-  const scales = await chartScales(page);
-  const want = math.stats(math.interpolate(s0, tAuto));
-  await expectPointAt(page, scales, want, `default position s=${s0}, t_auto=${tAuto.toFixed(4)}`);
-  const top = math.stats(math.interpolate(s0, 0));
-  const bottom = math.stats(math.interpolate(s0, 1));
-  console.log(`A-PS-46 default leg: s=${s0}, t_auto=${tAuto}, pixel distance to t=0 ${Math.abs(scales.y(top.mu) - scales.y(want.mu)).toFixed(1)}, to t=1 ${Math.abs(scales.y(bottom.mu) - scales.y(want.mu)).toFixed(1)}`);
+    // The point is drawn where the best-return mix sits, not where the tensor suggests.
+    const scales = await chartScales(page);
+    const want = math.stats(math.interpolate(s0, 0));
+    await expectPointAt(page, scales, want, `default position s=${s0}, t=0`);
+    const suggested = math.stats(math.interpolate(s0, facts.tAuto(s0)));
+    expect(Math.abs(scales.y(want.mu) - scales.y(suggested.mu)), "the tensor's suggested mix is drawn somewhere else").toBeGreaterThan(2);
+  }
 
-  // One move: the reset link appears and d becomes a number.
-  await pressUntil(page, "div-slider", DOWN_KEYS, "d", (v) => v !== null && v !== "auto" && Number.isFinite(Number(v)) && Math.abs(Number(v) - tAuto) > 1e-9, "one keyboard move of div-slider must write a decimal d that differs from t_auto");
+  // One move: the reset link appears and d becomes a number above 0.
+  await pressUntil(page, "div-slider", DOWN_KEYS, "d", (v) => v !== null && Number.isFinite(Number(v)) && Number(v) > 1e-9, "one keyboard move of div-slider must write a decimal d above 0");
   await expect(page.getByTestId("div-reset"), "div-reset must appear once the slider has moved").toBeVisible();
 });
 
@@ -521,7 +524,7 @@ test("moving toward More diversified moves the point down and never right of the
   const start = await expectPointAt(page, scales, math.stats(math.interpolate(j, 0)), `s=${j}, t=0`);
   expect(start.cx, "point right of the ceiling at t=0").toBeLessThanOrEqual(lineX + 1);
 
-  const key = await pressUntil(page, "div-slider", DOWN_KEYS, "d", (v) => v !== null && v !== "auto" && Number(v) > 1e-9, "a key on div-slider must move it toward More diversified (d above 0)");
+  const key = await pressUntil(page, "div-slider", DOWN_KEYS, "d", (v) => v !== null && Number(v) > 1e-9, "a key on div-slider must move it toward More diversified (d above 0)");
   let prevD = 0;
   let prevY = start.cy;
   let steps = 0;
@@ -609,7 +612,7 @@ test("the point is drawn at its mix's actual risk and return (3 s x 3 t) and on 
   console.log(`A-PS-46 position leg: ${cases} positions checked, ${offCeiling} of them more than 2 px left of the ceiling`);
 });
 
-test("with details on, ENB at t=1 is at least ENB at t=0 on an integer column", async ({ page }) => {
+test("the ENB the page states at t=1 is at least the one at t=0 on an integer column", async ({ page }) => {
   const mock = buildMock(readFixture());
   const tensor = mock.tensor;
   const facts = tensorFacts(tensor);
@@ -625,17 +628,17 @@ test("with details on, ENB at t=1 is at least ENB at t=0 on an integer column", 
   await installMock(page, mock);
   const shown: Record<number, number> = {};
   for (const t of [0, 1]) {
-    await openApp(page, mock, `u=guide2017&lb=5y&r=${j}&d=${t}&x=1`);
-    const el = page.getByTestId("details-enb");
-    await expect(el, "details-enb must show when details are on (x=1)").toBeVisible();
+    await openApp(page, mock, `u=guide2017&lb=5y&r=${j}&d=${t}`);
+    const el = page.getByTestId("div-word");
+    await expect(el, "div-word must show the diversification line").toBeVisible();
     await expect(async () => {
       const m = ((await el.textContent()) || "").match(/\d+(\.\d+)?/);
-      expect(m, "details-enb must contain the ENB number").not.toBeNull();
+      expect(m, "div-word must contain the ENB number").not.toBeNull();
       shown[t] = Number(m![0]);
-      expect(Math.abs(shown[t] - truth[t as 0 | 1]), `details-enb at s=${j}, t=${t} shows ${shown[t]}; the tensor's mix has ENB ${truth[t as 0 | 1].toFixed(4)}`).toBeLessThanOrEqual(0.06);
+      expect(Math.abs(shown[t] - truth[t as 0 | 1]), `div-word at s=${j}, t=${t} shows ${shown[t]}; the tensor's mix has ENB ${truth[t as 0 | 1].toFixed(4)}`).toBeLessThanOrEqual(0.06);
     }).toPass({ timeout: 5000 });
   }
-  expect(shown[1], `details-enb(t=1) = ${shown[1]} is below details-enb(t=0) = ${shown[0]}`).toBeGreaterThanOrEqual(shown[0]);
+  expect(shown[1], `div-word(t=1) = ${shown[1]} is below div-word(t=0) = ${shown[0]}`).toBeGreaterThanOrEqual(shown[0]);
   expect(shown[1] < shown[0], "ENB dropped at the More diversified end").toBe(false);
 });
 
@@ -664,10 +667,10 @@ test("where both neighbouring ladders are collapsed the slider is disabled with 
 });
 """
 EXPECTED_TITLES = {
-    "default position is the suggested spot and the reset link appears only after a move",
+    "default position is the best-return mix and the reset link appears only after a move",
     "moving toward More diversified moves the point down and never right of the ceiling",
     "the point is drawn at its mix's actual risk and return (3 s x 3 t) and on the frontier at t=0",
-    "with details on, ENB at t=1 is at least ENB at t=0 on an integer column",
+    "the ENB the page states at t=1 is at least the one at t=0 on an integer column",
     "where both neighbouring ladders are collapsed the slider is disabled with the note",
 }
 

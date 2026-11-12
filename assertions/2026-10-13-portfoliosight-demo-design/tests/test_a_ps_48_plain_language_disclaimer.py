@@ -4,8 +4,9 @@ Phase 3, ui (Playwright against `vite preview`, run from pytest; desktop and pho
 both presets of the mock; standard library only).
 
 Per viewport, theme and preset: with details off and the sections expanded through their chips,
-`document.body.innerText` matches none of the fifteen forbidden patterns (word-bounded,
-case-insensitive) and contains every plain label of the assertion ("Your starting mix" only where
+`document.body.innerText` matches none of the forbidden patterns (word-bounded, case-insensitive;
+"bets" only counts outside "independent bets", and "Optimized", "Average", "Fair" and "Poor" are
+forbidden: owner direction 2026-11-11) and contains every plain label of the assertion ("Your starting mix" only where
 an allocation exists); the `disclaimer` element's text equals the spec 3.7 paragraph verbatim, is
 visible, and has neither an `aria-expanded="false"` ancestor nor a `section-*` ancestor (checked on
 load, expanded, and with details on); "Historical math, not investment advice." is the whole text of
@@ -336,15 +337,16 @@ async function advanceTheme(page: Page): Promise<string> {
 // ---------------------------------------------------------------------------------------------
 // A-PS-48
 // ---------------------------------------------------------------------------------------------
+// "bets" is allowed only inside "independent bets" (owner direction 2026-11-11), which is removed before the scan.
 const FORBIDDEN = [
-  "bets", "knee", "Sharpe", "tangency", "covariance", "sigma", "quantile", "significant", "you should",
+  "bets", "Optimized", "Average", "Fair", "Poor", "knee", "Sharpe", "tangency", "covariance", "sigma", "quantile", "significant", "you should",
   "we recommend", "Risk Number", "Risk Score", "login", "sign in", "password",
 ];
 const FORBIDDEN_RE = FORBIDDEN.map((p) => new RegExp(`\\b${p.replace(/ /g, "\\s+")}\\b`, "i"));
 const PLAIN_ALWAYS = [
   "Risk: how much it bounces around in a year", "Expected return per year", "How spread out the risk is",
-  "Best-return mix at this risk", "Selected mix", "More return", "More diversified", "Optimized",
-  "Same portfolio, different years of history", "Historical math, not investment advice.",
+  "Best-return mix at this risk", "Selected mix", "More return", "More diversified", "Fewer independent bets",
+  "More independent bets", "Same portfolio, different years of history", "Historical math, not investment advice.",
 ];
 const PLAIN_WITH_ALLOCATION = ["Your starting mix"];
 const TECHNICAL = [
@@ -405,9 +407,10 @@ for (const theme of THEMES) {
       const text = await visibleText(page);
       expect(text.length, "the scan read real page text").toBeGreaterThan(400);
       expect(text.toLowerCase(), "the scan read the product page").toContain("portfoliosight");
+      const scanned = text.replace(/independent bets/gi, "independent");
       for (const re of FORBIDDEN_RE) {
-        const hit = text.match(re);
-        const around = hit ? text.slice(Math.max(0, hit.index! - 40), hit.index! + 60) : "";
+        const hit = scanned.match(re);
+        const around = hit ? scanned.slice(Math.max(0, hit.index! - 40), hit.index! + 60) : "";
         expect(hit, `forbidden pattern ${re} in the default view: "...${around}..."`).toBeNull();
       }
       const lower = text.toLowerCase();
