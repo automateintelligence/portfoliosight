@@ -363,7 +363,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-46
-    claim: "On load, and for an address with no d or the old d=auto, d is 0, div-reset is hidden, the slider reads Best-return mix and point-selected lies on the drawn frontier (owner direction 2026-11-11); moving toward More diversified moves point-selected down and never right of ceiling-line; at t=0 the point lies on the drawn frontier; the ENB in div-word at t=1 is at least its value at t=0; at every tested (s, t) the point is drawn at the chart scales applied to stats(interpolate(s, t)) within 1 px; and where both neighbouring ladders are collapsed the slider is disabled with the note."
+    claim: "On load, and for an address with no d or the old d=auto, d is 0, no div-reset button exists then or after a move, the slider reads Best-return mix and point-selected lies on the drawn frontier (owner direction 2026-11-11); moving toward More diversified moves point-selected down and never right of ceiling-line; at t=0 the point lies on the drawn frontier; the ENB in div-word at t=1 is at least its value at t=0; at every tested (s, t) the point is drawn at the chart scales applied to stats(interpolate(s, t)) within 1 px; and where both neighbouring ladders are collapsed the slider is disabled with the note."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_46_div_slider_point.py"
     setup: ""
     teardown: ""

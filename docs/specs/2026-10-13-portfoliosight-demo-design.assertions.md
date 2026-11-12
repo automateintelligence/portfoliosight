@@ -1233,8 +1233,9 @@ Phase 3 · ui
 
 ### A-PS-46 — the diversification slider starts at the best-return mix, moves the point down and never right, and the point is drawn where its mix sits
 Phase 3 · ui
-- **Claim.** On load `d` is 0 (written `d=0`), `div-reset` is hidden, the slider's readout is
-  "Best-return mix" and `point-selected` lies on the drawn frontier within 1 px at every risk
+- **Claim.** On load `d` is 0 (written `d=0`), the slider's readout is "Best-return mix", no
+  `div-reset` button exists then or after a move (owner direction 2026-11-11: the slider alone
+  returns to 0, by Home or End, the arrow keys or a drag) and `point-selected` lies on the drawn frontier within 1 px at every risk
   setting; there is no `point-div`; moving toward "More diversified" moves `point-selected` down
   and never right of `ceiling-line`; with `r` an integer, the ENB in `div-word` at `t = 1` is ≥
   its value at `t = 0`; at every tested `(s, t)` the point's pixel position equals the chart
@@ -1244,7 +1245,8 @@ Phase 3 · ui
   2026-11-11).
 - **Setup.** As A-PS-41; the test reuses the TypeScript math (A-PS-34) to compute expected
   positions; `r` set to an integer column for the ENB leg.
-- **Observation.** `div-reset` absent/hidden on load and present after one move; initial `d`
+- **Observation.** `div-reset` absent on load, after one move and after Home or End returns `d`
+  to 0, and no button named "Back to …" exists; initial `d`
   is `0`, also for an address without `d`; the readout (`aria-valuetext`) is "Best-return mix";
   over five downward steps the point's y increases monotonically and x ≤ line x + 1 px; at the
   top the point's center is within 1 px of the canvas-drawn curve (sampled by locating the
@@ -1252,7 +1254,7 @@ Phase 3 · ui
   at `t = 1` is ≥ its value at `t = 0`; the drawn position matches the computed `(σ, μ)` through
   the axis scales within 1 px at `t ∈ {0, 0.5, 1}` and three `s` values; collapsed pair →
   `div-slider` has `disabled` and the note "At this risk, the best-return mix is already the
-  most diversified one found." **Must-not-contain:** a visible reset link before any move;
+  most diversified one found." **Must-not-contain:** a `div-reset` button or any "Back to …" button;
   `point-div`; a point drawn at the ceiling rather than at its actual σ when they differ by
   more than 1 px. Fail = any.
 - **Kind.** property (three `s` × three `t`; the collapsed case).

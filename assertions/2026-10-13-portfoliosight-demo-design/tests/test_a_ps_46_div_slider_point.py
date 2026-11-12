@@ -18,7 +18,9 @@ Pinned interface (beyond the shared pins of the gate contract):
   (debounced) after every change, with at least six decimals.
 - web/src/math/portfolio.ts exports portfolioMath(tensor) with stats, interpolate;
   web/src/api/client.ts exports parseTensor (both importable from a Playwright spec, no DOM).
-- test ids: div-slider, div-reset, div-word, point-selected, ceiling-line, chart, chart-canvas.
+- test ids: div-slider, div-word, point-selected, ceiling-line, chart, chart-canvas. There is no
+  `div-reset` and no button that goes back to a named mix (owner direction 2026-11-11); the slider
+  itself returns to 0 (Home or End, the arrow keys, a drag).
 - div-slider (or its inner [role=slider] / input[type=range]) is focusable, exposes
   aria-valuenow/min/max (or range value/min/max) proportional to t in either direction, and moves
   toward More diversified with one of the arrow keys; when disabled it carries disabled or
@@ -464,7 +466,7 @@ async function expectPointAt(page: Page, scales: { x: (v: number) => number; y: 
   return point;
 }
 
-test("default position is the best-return mix and the reset link appears only after a move", async ({ page }) => {
+test("default position is the best-return mix, and no button goes back to it after a move", async ({ page }) => {
   const mock = buildMock(readFixture());
   const tensor = mock.tensor;
   const facts = tensorFacts(tensor);
@@ -484,7 +486,7 @@ test("default position is the best-return mix and the reset link appears only af
   // an address with no d, and the old d=auto, both open at 0 (owner direction 2026-11-11)
   for (const query of [`u=guide2017&lb=5y&r=${s0}`, `u=guide2017&lb=5y&r=${s0}&d=auto`]) {
     await openApp(page, mock, query);
-    await expect(page.getByTestId("div-reset"), "div-reset must be absent or hidden before any move").toBeHidden();
+    await expect(page.getByTestId("div-reset"), "there is no div-reset button before any move").toHaveCount(0);
     await waitParam(page, "d", (v) => v !== null && Number(v) === 0, `on load d must be 0 for ${query}`);
 
     // The slider's own position (standard ARIA / range input), in either orientation.
@@ -506,9 +508,12 @@ test("default position is the best-return mix and the reset link appears only af
     expect(Math.abs(scales.y(want.mu) - scales.y(suggested.mu)), "the tensor's suggested mix is drawn somewhere else").toBeGreaterThan(2);
   }
 
-  // One move: the reset link appears and d becomes a number above 0.
+  // One move: d becomes a number above 0 and still no button goes back; the slider alone returns to 0.
   await pressUntil(page, "div-slider", DOWN_KEYS, "d", (v) => v !== null && Number.isFinite(Number(v)) && Number(v) > 1e-9, "one keyboard move of div-slider must write a decimal d above 0");
-  await expect(page.getByTestId("div-reset"), "div-reset must appear once the slider has moved").toBeVisible();
+  await expect(page.getByTestId("div-reset"), "there is no div-reset button once the slider has moved").toHaveCount(0);
+  await expect(page.getByRole("button", { name: /back to/i }), "no button goes back to a named mix").toHaveCount(0);
+  await pressUntil(page, "div-slider", ["Home", "End"], "d", (v) => v !== null && Number(v) === 0, "Home or End on div-slider must bring d back to 0");
+  await expect(page.getByTestId("div-reset"), "there is no div-reset button after returning to 0").toHaveCount(0);
 });
 
 test("moving toward More diversified moves the point down and never right of the ceiling", async ({ page }) => {
@@ -662,12 +667,12 @@ test("where both neighbouring ladders are collapsed the slider is disabled with 
   await openApp(page, mock, `u=guide2017&lb=5y&r=${pair + 0.5}&d=auto`);
   await expect.poll(() => divDisabled(page), { message: `div-slider must be disabled at s=${pair + 0.5} (columns ${pair} and ${pair + 1} are collapsed)` }).toBe(true);
   await expect(page.getByText(COLLAPSED_NOTE), "the collapsed-ladder note").toBeVisible();
-  await expect(page.getByTestId("div-reset"), "no reset link on a disabled slider before any move").toBeHidden();
+  await expect(page.getByTestId("div-reset"), "no reset button on a disabled slider").toHaveCount(0);
   console.log(`A-PS-46 collapsed-ladder leg exercised at s=${pair + 0.5}`);
 });
 """
 EXPECTED_TITLES = {
-    "default position is the best-return mix and the reset link appears only after a move",
+    "default position is the best-return mix, and no button goes back to it after a move",
     "moving toward More diversified moves the point down and never right of the ceiling",
     "the point is drawn at its mix's actual risk and return (3 s x 3 t) and on the frontier at t=0",
     "the ENB the page states at t=1 is at least the one at t=0 on an integer column",

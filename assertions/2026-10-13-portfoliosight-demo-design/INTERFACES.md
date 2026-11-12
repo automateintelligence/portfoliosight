@@ -232,7 +232,8 @@ the docstring is authoritative for that test.
     `d=0`. `UrlState.d` is `number`. `portfolioMath(tensor).tAuto` stays in the module but the page
     does not use it.
   - **Removed.** The open circle (`point-div`, the `div` mix card and its key), the name
-    "Optimized", "Back to Optimized" (now "Back to best-return mix"), the `details-words` and
+    "Optimized", "Back to Optimized" (the button is removed, not renamed: the slider returns to 0
+    by Home or End, the arrow keys and a drag; `div-reset` no longer exists), the `details-words` and
     `details-suggested` entries and the Method sentence on the balanced point. The slider's readout
     at 0 is "Best-return mix". The overlay's markers are `point-selected` and `point-current`;
     `mix-card`'s `data-for` is `selected | current | cell`.
