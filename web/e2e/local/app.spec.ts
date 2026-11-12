@@ -388,17 +388,16 @@ test("every frontier line is named at its right end and the names do not collide
   await expect(page.getByTestId("ghost-tip")).toHaveCount(0);
 });
 
-test("the square and the open circle show the same card as the selected mix", async ({ page }, testInfo) => {
+const DIVERSIFICATION_LINE = /^This mix spreads risk over the equivalent of \d+\.\d independent bets; highest found on this portfolio: \d+\.\d\.$/;
+
+test("the square shows the same card as the selected mix, and no third marker exists", async ({ page }, testInfo) => {
   await open(page);
   const card = page.getByTestId("mix-card");
-  const titles: Record<string, string> = { selected: "Selected mix", current: "Your starting mix", div: "Optimized" };
-  if (isPhone(testInfo.project.name)) {
-    // at rest on Optimized the selected point sits on the open circle, and a tap there reaches the
-    // point (it pins its card); move the point off the circle first
-    await page.getByTestId("div-slider").focus();
-    for (let i = 0; i < 12; i++) await page.keyboard.press("ArrowLeft");
-  }
-  for (const kind of ["current", "div", "selected"]) {
+  const titles: Record<string, string> = { selected: "Selected mix", current: "Your starting mix" };
+  // owner direction 2026-11-11: the open circle and its name are gone
+  await expect(page.getByTestId("point-div")).toHaveCount(0);
+  await expect(page.locator("[data-mark]")).toHaveCount(2);
+  for (const kind of ["current", "selected"]) {
     const mark = page.locator(`[data-mark="${kind}"]`);
     if (isPhone(testInfo.project.name)) {
       if (kind === "selected") continue; // on a phone the selected point is a drag handle
@@ -407,19 +406,16 @@ test("the square and the open circle show the same card as the selected mix", as
     } else {
       await page.mouse.move(5, 5);
       await expect(card).toHaveCount(0);
-      // the square and the circle can sit on top of each other: keyboard focus picks one exactly
+      // the square can sit on top of the selected point: keyboard focus picks one exactly (a focus
+      // within a second of the page's start is taken for the one a tap brings, so let that pass)
+      await page.waitForFunction(() => performance.now() > 1500);
       await mark.focus();
     }
     await expect(card).toHaveCount(1);
-    if (isPhone(testInfo.project.name) && kind === "div" && (await card.getAttribute("data-for")) === "current") {
-      // the square covers the circle in this view: a second tap turns the card over
-      await expect(page.getByText("Tap again for the marker underneath.")).toBeVisible();
-      await page.locator('[data-mark="current"] .hit').tap({ force: true });
-    }
     await expect(card).toHaveAttribute("data-for", kind);
     await expect(card.locator("h3")).toHaveText(titles[kind]);
     await expect(card.locator(".tip-range")).toHaveText(/Bad\s*[+−]?\d+\.\d%\s*Typical\s*[+−]?\d+\.\d%\s*Good\s*[+−]?\d+\.\d%/);
-    await expect(card.getByTestId("mix-card-word")).toHaveText(/^(Good|Average|Fair|Poor)$/);
+    await expect(card.getByTestId("mix-card-word")).toHaveText(DIVERSIFICATION_LINE);
     expect(await card.locator("li").count(), `${kind}: largest holdings`).toBeGreaterThanOrEqual(3);
     await expect(card).toContainText("Risk and expected return are per year.");
     expect(await mark.getAttribute("aria-describedby"), `${kind}: the open card describes its marker`).toBe(await card.locator("xpath=..").getAttribute("id"));
@@ -431,17 +427,15 @@ test("the square and the open circle show the same card as the selected mix", as
     if (!isPhone(testInfo.project.name)) await mark.blur();
   }
   if (isPhone(testInfo.project.name)) {
-    // a press on either marker that moves drags the selected point, so the page must not pan from it
-    for (const kind of ["current", "div"]) {
-      expect(await page.locator(`[data-mark="${kind}"]`).evaluate((el) => getComputedStyle(el).touchAction), `${kind}: no panning from the marker`).toBe("none");
-    }
+    // a press on the square that moves drags the selected point, so the page must not pan from it
+    expect(await page.locator('[data-mark="current"]').evaluate((el) => getComputedStyle(el).touchAction), "no panning from the marker").toBe("none");
     return;
   }
   // a mouse over the square shows its card as well
   const square = await boxOf(page, "point-current");
   await page.mouse.move(square.x + square.width / 2, square.y + square.height / 2);
   await expect(card).toHaveCount(1);
-  expect(["current", "div"]).toContain(await card.getAttribute("data-for"));
+  expect(["current", "selected"]).toContain(await card.getAttribute("data-for"));
 });
 
 test("hovering the colour map shows a plain card for the mix there", async ({ page }, testInfo) => {
@@ -462,36 +456,79 @@ test("hovering the colour map shows a plain card for the mix there", async ({ pa
   await expect(card.locator("h3")).toHaveText("The mix at this spot");
   await expect(card).toContainText(/Risk\s*\d+\.\d%/);
   await expect(card).toContainText(/Expected return\s*\d+\.\d%/);
-  await expect(card.getByTestId("mix-card-word")).toHaveText(/^(Good|Average|Fair|Poor)$/);
+  await expect(card.getByTestId("mix-card-word")).toHaveText(DIVERSIFICATION_LINE);
   expect(await card.locator("li").count()).toBeGreaterThanOrEqual(3);
   const plain = (await card.innerText()).toLowerCase();
-  for (const word of ["ceiling", "floor", "sits at", "bets", "computed for"]) expect(plain, `"${word}" in the default card`).not.toContain(word);
+  for (const word of ["ceiling", "floor", "sits at", "computed for"]) expect(plain, `"${word}" in the default card`).not.toContain(word);
+  // "bets" only as the figure that replaced the grade words
+  expect(plain.replace(/independent bets/g, ""), `"bets" in the default card`).not.toContain("bets");
   // over a marker the marker's own card wins
   await page.getByTestId("point-selected").hover({ force: true });
   await expect(card).toHaveCount(0);
-  // details add the measure and where the mix was computed
+  // details add the bell-curve figure and where the mix was computed
   await page.mouse.move(chart.x + 10, chart.y + 10);
   await page.getByTestId("details-toggle").click();
   await page.evaluate(() => window.scrollTo(0, 0));
   const after = await boxOf(page, "chart");
   await page.mouse.move(after.x + after.width * 0.3, after.y + after.height * 0.72);
-  await expect(card).toContainText("independent bets");
+  await expect(card).toContainText("Textbook bell-curve figure");
   await expect(card).toContainText(/At risk \d+\.\d%, earning at least \d+\.\d%/);
 });
 
-test("the details explain the diversification word and Optimized in plain words, each once", async ({ page }) => {
+const PAST_DATA_LINE = "In our tests on past data, mixes with risk spread more evenly did not lose less than the best-return mix at the same risk.";
+
+test("the details carry the past-data line once, name the measure, and explain no grade word and no Optimized mix", async ({ page }) => {
   await open(page);
+  expect((await page.locator("body").innerText()).split(PAST_DATA_LINE).length - 1, "not in the default view").toBe(0);
   await page.getByTestId("details-toggle").click();
-  await expect(page.getByTestId("details-words")).toContainText("the most spread-out mix these funds can make");
-  for (const word of ["Good:", "Average:", "Fair:", "Poor:"]) await expect(page.getByTestId("details-words")).toContainText(word);
-  await expect(page.getByTestId("details-suggested")).toContainText("Optimized is the balanced point");
+  await expect(page.getByTestId("details-tested")).toHaveText(PAST_DATA_LINE);
   const text = await page.locator("body").innerText();
+  expect(text.split(PAST_DATA_LINE).length - 1, "the line is stated once").toBe(1);
+  await expect(page.getByTestId("details-enb")).toContainText("effective number of bets, minimum torsion");
+  await expect(page.getByTestId("details-words")).toHaveCount(0);
+  await expect(page.getByTestId("details-suggested")).toHaveCount(0);
   expect(text).not.toContain("Words compare this mix");
   expect(text).not.toContain("standard error");
-  expect(text.split("the knee of diversification (ENB) gained against return given up").length - 1, "the method sentence is stated once").toBe(1);
-  await expect(page.getByTestId("details-method")).toContainText("Optimized: the knee of diversification");
+  expect(text).not.toContain("the knee of diversification");
+  await expect(page.getByTestId("details-method")).not.toContainText(/knee|balanced point/i);
   // the bell-curve figure appears in the details only, labelled as such
   await expect(page.getByTestId("details-bell")).toContainText("Textbook bell-curve figure");
+});
+
+test("the page opens on the best-return mix, and nothing a visitor reads names Optimized or grades diversification", async ({ page }) => {
+  await open(page);
+  // position 0 at the opening risk: the readout says so, the way back is hidden and the address says d=0
+  await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-valuetext", "Best-return mix");
+  await expect(page.getByTestId("div-reset")).toBeHidden();
+  await expect.poll(() => new URL(page.url()).searchParams.get("d")).toBe("0");
+  await page.getByTestId("details-toggle").click();
+  for (const id of ["funds", "trades", "stress", "settings"]) await section(page, id);
+  const everything = await page.evaluate(() => {
+    const names = [...document.querySelectorAll("[aria-label], [aria-valuetext], [title], [alt]")].flatMap((el) => ["aria-label", "aria-valuetext", "title", "alt"].map((a) => el.getAttribute(a) ?? ""));
+    return [document.body.innerText, ...names].join("\n");
+  });
+  expect(everything).not.toMatch(/optimi[sz]ed/i);
+  expect(everything).not.toMatch(/\b(Average|Fair|Poor)\b/);
+  // "Good" is left only as the label of the range's top figure
+  expect(everything.match(/\bGood\b/g)?.length ?? 0, "Good only as the range's label").toBeGreaterThan(0);
+  expect(everything).not.toMatch(/Diversification:?\s*Good/);
+  await expect(page.getByTestId("div-word")).toHaveText(DIVERSIFICATION_LINE);
+});
+
+test("a link with no d, or with the old d=auto, opens on the best-return mix; an explicit d is kept", async ({ page }) => {
+  for (const query of ["u=guide2017&lb=5y&r=20", "u=guide2017&lb=5y&r=20&d=auto"]) {
+    await open(page, query);
+    await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-valuetext", "Best-return mix");
+    await expect(page.getByTestId("div-reset")).toBeHidden();
+    await expect.poll(() => new URL(page.url()).searchParams.get("d"), query).toBe("0");
+  }
+  await open(page, "u=guide2017&lb=5y&r=20&d=0.5");
+  await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-valuetext", "50 of 100 toward more diversified");
+  await expect(page.getByTestId("div-reset")).toBeVisible();
+  await expect(page.getByTestId("div-reset")).toHaveText("Back to best-return mix");
+  await page.getByTestId("div-reset").click();
+  await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-valuetext", "Best-return mix");
+  await expect.poll(() => new URL(page.url()).searchParams.get("d")).toBe("0");
 });
 
 test("trades export a CSV file from the browser", async ({ page }) => {
@@ -566,7 +603,7 @@ test("four looks: the switcher reaches each, and a shared link opens the HUD or 
   expect(await look(), "Grid: the cyan look with its grid").toEqual({ accent: "#35c9e8", gap: "1", gridLines: true, ring: "reticle" });
 });
 
-test("the legend bar reads the way the map does: Light pale at Less, the other looks bright at Less", async ({ page }) => {
+test("the legend bar reads the way the map does: Light pale at Fewer, the other looks bright at Fewer", async ({ page }) => {
   for (const [theme, lessEnd, moreEnd] of [["ks-dark", "--heat-4", "--heat-1"], ["light", "--heat-1", "--heat-4"], ["hud", "--heat-4", "--heat-1"], ["grid", "--heat-4", "--heat-1"]]) {
     await open(page, `t=${theme}`);
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
@@ -583,8 +620,8 @@ test("the legend bar reads the way the map does: Light pale at Less, the other l
       const labels = [...document.querySelectorAll(".ramp > span:not(.ramp-bar)")].map((s) => s.textContent);
       return { want, first: stops[0], last: stops[stops.length - 1], labels };
     }, [lessEnd, moreEnd]);
-    expect(got.labels, `${theme}: Less on the left, More on the right`).toEqual(["Less", "More"]);
-    expect(got.first, `${theme}: the bar starts at ${lessEnd} under Less`).toBe(got.want.less);
+    expect(got.labels, `${theme}: fewer independent bets on the left, more on the right`).toEqual(["Fewer independent bets", "More independent bets"]);
+    expect(got.first, `${theme}: the bar starts at ${lessEnd} under Fewer`).toBe(got.want.less);
     expect(got.last, `${theme}: the bar ends at ${moreEnd} under More`).toBe(got.want.more);
     expect(got.want.ramp, `${theme}: the map reads its ramp the same way`).toBe(theme === "light" ? "rising" : "turned");
   }
@@ -1102,7 +1139,7 @@ test("a click or tap on the selected point pins its card; it follows both slider
   await expect(pinned).toBeVisible();
   await inPlace("after a drag");
   await expect(pinned).toContainText(/Bad\s*[+−]?\d+\.\d%/);
-  await expect(pinned.getByTestId("mix-card-word")).toHaveText(/^(Good|Average|Fair|Poor)$/);
+  await expect(pinned.getByTestId("mix-card-word")).toHaveText(DIVERSIFICATION_LINE);
 
   // a second click or tap on the point lets it go
   const p2 = await centre(page, "point-selected");

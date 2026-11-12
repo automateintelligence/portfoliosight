@@ -54,9 +54,9 @@ test("owner feedback 1 views", async ({ page, request }, testInfo) => {
     await ready(page, "t=ks-dark&g=1y,10y,ew");
     await expect(page.getByTestId("frontier-label-ew")).toBeVisible();
     await page.screenshot({ path: feedback("ghost-labels", "ks-dark", size) });
-    // the three marker cards
+    // the two marker cards
     await ready(page, "t=ks-dark");
-    for (const mark of ["selected", "current", "div"]) {
+    for (const mark of ["selected", "current"]) {
       await page.locator(`[data-mark="${mark}"]`).focus();
       await expect(page.getByTestId("mix-card")).toHaveAttribute("data-for", mark);
       await page.waitForTimeout(200);

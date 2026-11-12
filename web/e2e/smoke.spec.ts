@@ -12,7 +12,7 @@ import {
   decisionDates, env, expect, frontAt, fundRowIds, gateContext, generationDate, idleQueue, losAngelesHour, mixStats, nudge, openApp, openSection,
   levelRangePct, pageWords, param, parsePercent, pickCells, pressDivEnd, python, readmeProblems, rectOf, rgbBasis, riskPosition, ruleMaxPct, run,
   samePrint, secretValues, sessionWindow, setMenu, settledPrint, shownTensor, sliderDomain, stressOf, test, themeColors, towardDiversified, typeFund,
-  universeHash, walkableColumn, watchApi, wordFor, ROADMAP_ITEMS, type TensorLike,
+  universeHash, walkableColumn, watchApi, diversificationText, ROADMAP_ITEMS, type TensorLike,
 } from "./helpers";
 
 const GUIDE_NAME = "Example Portfolio";
@@ -53,9 +53,9 @@ async function shownPercent(page: import("@playwright/test").Page, testId: strin
   return parsePercent((await page.getByTestId(testId).innerText()).replace(/\s+/g, " "), testId);
 }
 
-/** The two figures of the details line: this mix's measure and the highest found on the menu. */
+/** The two figures of the diversification line: this mix's measure and the highest found on the portfolio. */
 async function shownMeasure(page: import("@playwright/test").Page): Promise<{ enb: number; best: number }> {
-  const line = await page.getByTestId("details-enb").innerText();
+  const line = await page.getByTestId("div-word").innerText();
   return { enb: Number(/equivalent of (\d+(?:\.\d+)?) independent/.exec(line)?.[1]), best: Number(/portfolio: (\d+(?:\.\d+)?)/.exec(line)?.[1]) };
 }
 /** Equal to one decimal, as a figure printed with one decimal can be. */
@@ -263,17 +263,18 @@ test("DoD-05 default view: the Example Portfolio with its allocation; TSP loads 
 test("DoD-06 no tangency point and no jargon in the default page", async ({ page }) => {
   await openApp(page);
   const banned = [/sharpe/i, /\bbets\b/i, /\bknee\b/i, /significant/i, /tangen/i];
-  const hits = (text: string) => banned.filter((pattern) => pattern.test(text)).map(String);
+  // "bets" is allowed only as "independent bets", the figure that replaced the grade words (owner direction 2026-11-11)
+  const hits = (text: string) => banned.filter((pattern) => pattern.test(text.replace(/independent bets/gi, ""))).map(String);
   expect(hits(await pageWords(page)), "jargon on the first screen").toEqual([]);
   for (const id of ["funds", "trades", "stress", "settings"] as const) await openSection(page, id);
   expect(hits(await pageWords(page)), "jargon with every section open").toEqual([]);
 
-  // The only marks on the chart: the selected point, the entered mix, the most diversified mix and the ceiling.
+  // The only marks on the chart: the selected point, the entered mix and the ceiling.
   const marks = await page.getByTestId("chart").evaluate((chart) => Array.from(chart.querySelectorAll("svg [data-testid]")).map((el) => el.getAttribute("data-testid")));
   // Beside them the overlay holds only the names of the frontier lines (text, one per line drawn).
   const names = marks.filter((id) => (id ?? "").startsWith("frontier-label-"));
   expect(names, "the primary frontier line is named").toEqual(["frontier-label-5y"]);
-  expect(marks.filter((id) => !names.includes(id)).sort()).toEqual(["ceiling-line", "point-current", "point-div", "point-selected"]);
+  expect(marks.filter((id) => !names.includes(id)).sort()).toEqual(["ceiling-line", "point-current", "point-selected"]);
   const ids = await page.evaluate(() => Array.from(document.querySelectorAll("[data-testid]")).map((el) => el.getAttribute("data-testid") ?? ""));
   expect(ids.filter((id) => /tangen|sharpe|cml|capital/i.test(id))).toEqual([]);
 
@@ -378,13 +379,14 @@ test("DoD-08 risk slider: the ceiling moves, both readouts follow the frontier, 
   expect({ low: await shownPercent(page, "risk-readout-bad"), typical: await shownPercent(page, "risk-readout-typical") }, "the readouts still describe the frontier mix").toEqual(readouts);
 });
 
-test("DoD-09 diversification slider: starts at Optimized, moves the point down, ends on the frontier", async ({ page }) => {
+test("DoD-09 diversification slider: starts at the best-return mix, moves the point down, ends on the frontier", async ({ page }) => {
   const api = watchApi(page);
   await openApp(page);
   const tensor = await shownTensor(api);
-  await expect(page.getByTestId("div-reset"), "no reset link at the Optimized position").toHaveCount(0);
-  await expect.poll(() => param(page, "d")).toBe("auto");
-  await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-valuetext", "Optimized");
+  await expect(page.getByTestId("div-reset"), "no reset link at the best-return mix").toHaveCount(0);
+  await expect.poll(() => param(page, "d")).toBe("0");
+  await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-valuetext", "Best-return mix");
+  await expect(page.getByTestId("point-div"), "the open circle and its name are gone").toHaveCount(0);
 
   const column = walkableColumn(tensor);
   await openApp(page, `u=guide2017&lb=5y&r=${column}&d=0&x=1`);
@@ -392,11 +394,11 @@ test("DoD-09 diversification slider: starts at Optimized, moves the point down, 
   const point = page.getByTestId("point-selected");
   const line = async () => (await rectOf(page.getByTestId("ceiling-line"))).cx;
   const scales = await chartScales(page);
+  const curve = tensor.frontier_curve.sigma.map((sigma, i) => ({ x: scales.x(sigma), y: scales.y(tensor.frontier_curve.mu[i]) }));
 
   // Top end: the point sits on the drawn frontier.
   await pressDivEnd(slider, "return");
-  await expect(slider).toHaveAttribute("aria-valuetext", /^0 of 100/);
-  const curve = tensor.frontier_curve.sigma.map((sigma, i) => ({ x: scales.x(sigma), y: scales.y(tensor.frontier_curve.mu[i]) }));
+  await expect(slider).toHaveAttribute("aria-valuetext", "Best-return mix");
   const top = await rectOf(point);
   expect(distanceToLine({ x: top.cx, y: top.cy }, curve), "distance from the point to the drawn frontier at the top end").toBeLessThanOrEqual(1);
   const enbTop = (await shownMeasure(page)).enb;
@@ -423,13 +425,12 @@ test("DoD-09 diversification slider: starts at Optimized, moves the point down, 
   expect(near(enbBottom, mixStats(tensor, peak).enb), `the measure at the bottom end (${enbBottom}) is the most diversified mix's own`).toBe(true);
   expect(enbBottom, "ENB at the bottom end against the top end").toBeGreaterThanOrEqual(enbTop);
 
-  // Back to Optimized: the point returns to the open circle.
+  // Back to the best-return mix: the point returns to the frontier.
   await page.getByTestId("div-reset").click();
   await expect(page.getByTestId("div-reset")).toHaveCount(0);
-  await expect.poll(() => param(page, "d")).toBe("auto");
+  await expect.poll(() => param(page, "d")).toBe("0");
   const home = await rectOf(point);
-  const circle = await rectOf(page.getByTestId("point-div"));
-  expect(Math.hypot(home.cx - circle.cx, home.cy - circle.cy), "at Optimized the point sits on the open circle").toBeLessThanOrEqual(1);
+  expect(distanceToLine({ x: home.cx, y: home.cy }, curve), "at the best-return mix the point sits on the drawn frontier").toBeLessThanOrEqual(1);
 
   await test.step("a position with collapsed ladders disables the slider", async (step) => {
     const collapsed = collapsedPosition(tensor);
@@ -441,38 +442,37 @@ test("DoD-09 diversification slider: starts at Optimized, moves the point down, 
     await pressDivEnd(page.getByTestId("div-slider"), "diversified", { force: true });
     await page.waitForTimeout(300);
     expect((await rectOf(page.getByTestId("point-selected"))).cy, "a press on the disabled slider moves nothing").toBe(before.cy);
-    await expect.poll(() => param(page, "d")).toBe("auto");
+    await expect.poll(() => param(page, "d")).toBe("0");
   });
 });
 
-test("DoD-10 the diversification word is quiet and the measure shows only with details", async ({ page }) => {
+test("DoD-10 the diversification line is quiet, states the measure, and names the technical measure only with details", async ({ page }) => {
   const api = watchApi(page);
   await openApp(page);
   const tensor = await shownTensor(api);
   const column = walkableColumn(tensor);
   const muted = (await themeColors(page, ["--muted"]))["--muted"];
-  const seen = new Set<string>();
   for (const [d, weights] of [["0", tensor.frontier.w[column]], ["1", tensor.grid.w_div[column]]] as const) {
     await openApp(page, `u=guide2017&lb=5y&r=${column}&d=${d}`);
     const own = mixStats(tensor, weights);
-    const word = page.getByTestId("div-word");
-    await expect(word, `the word for the mix at column ${column}, d=${d}`).toHaveText(wordFor(own.enb / tensor.enb_ref));
-    seen.add(await word.innerText());
-    const style = await word.evaluate((el) => ({ size: parseFloat(getComputedStyle(el).fontSize), color: getComputedStyle(el).color }));
-    expect(style.size, "font size of the word").toBeLessThanOrEqual(14);
-    expect((style.color.match(/\d+(\.\d+)?/g) ?? []).slice(0, 3).map(Number), "the word is in the muted colour").toEqual(muted);
-    // Nothing bigger than the range figures: the word is not a headline.
+    const line = page.getByTestId("div-word");
+    await expect(line, `the line for the mix at column ${column}, d=${d}`).toHaveText(diversificationText(own.enb, tensor.enb_ref));
+    const style = await line.evaluate((el) => ({ size: parseFloat(getComputedStyle(el).fontSize), color: getComputedStyle(el).color }));
+    expect(style.size, "font size of the line").toBeLessThanOrEqual(14);
+    expect((style.color.match(/\d+(\.\d+)?/g) ?? []).slice(0, 3).map(Number), "the line is in the muted colour").toEqual(muted);
+    // Nothing bigger than the range figures: the line is not a headline.
     const figure = await page.getByTestId("range-typical").evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
     expect(style.size).toBeLessThan(figure);
 
     await expect(page.getByTestId("details-enb")).toHaveCount(0);
-    expect(await pageWords(page), "no measure without details").not.toMatch(/independent bets|effective number/i);
+    expect(await pageWords(page), "no technical name without details").not.toMatch(/effective number/i);
+    expect(await pageWords(page), "no grade word").not.toMatch(/\b(Average|Fair|Poor)\b/);
     await page.getByTestId("details-toggle").click();
+    await expect(page.getByTestId("details-enb")).toContainText("effective number of bets, minimum torsion");
     const measure = await shownMeasure(page);
-    expect(near(measure.enb, own.enb), `the measure shown with details (${measure.enb}) is this mix's own (${own.enb.toFixed(3)})`).toBe(true);
-    expect(near(measure.best, tensor.enb_ref), "the highest value found on the menu").toBe(true);
+    expect(near(measure.enb, own.enb), `the measure shown (${measure.enb}) is this mix's own (${own.enb.toFixed(3)})`).toBe(true);
+    expect(near(measure.best, tensor.enb_ref), "the highest value found on the portfolio").toBe(true);
   }
-  for (const word of seen) expect(["Good", "Average", "Fair", "Poor"]).toContain(word);
 });
 
 test("DoD-11 TSP preset: five funds, 60% ceiling, no entered mix, L 2050 offered as a custom fund", async ({ page }) => {
