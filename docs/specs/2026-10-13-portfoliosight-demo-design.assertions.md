@@ -1690,8 +1690,9 @@ Phase 3 · unit + ui (owner direction 2026-11-11, §3.3)
   its Remove button and on to the next amount field included, and it re-sorts when focus leaves the
   rows or when the row holding focus leaves the list. Adding or
   removing a fund, and choosing another sort, put the list in sorted order at once. The choice is
-  remembered in the browser, is "As entered" when storage throws or holds anything else, and is not
-  in the share link.
+  remembered in the browser, is "As entered" when storage throws or holds anything else, holds for
+  the rest of the visit through closing and reopening the section when storage refuses it, and is
+  not in the share link.
 - **Setup.** Unit legs: the pure `sortFunds` over hand-made rows (every option, blanks, ties, the
   three units, two mixes that show as the same percent) and `readSort` / `writeSort` over a storage
   that throws; `Funds` in jsdom with a stateful list, `selected` replaced step by step, the
@@ -1714,7 +1715,8 @@ Phase 3 · unit + ui (owner direction 2026-11-11, §3.3)
   Removing a fund while the flag is up gives the sorted order of the new figures; adding a fund
   while it is up lists the new fund in its sorted place. After choosing "Ticker", a reload shows
   "Ticker" selected and the rows A to Z, and the address has no sort parameter; with `getItem` and
-  `setItem` both throwing the page opens on "As entered" and still sorts. **Must-not-contain:** a
+  `setItem` both throwing the page opens on "As entered" and still sorts, and "Ticker" chosen then
+  is still selected after the table unmounts and mounts again. **Must-not-contain:** a
   row that changes place between a press and its release; a re-sort on every key repeat; a sort
   choice in the address; an uncaught error from storage. Fail = any.
 - **Kind.** property (six options × the three units; drag, held key, field focus, add, remove, two
