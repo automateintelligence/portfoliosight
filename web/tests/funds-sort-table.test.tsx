@@ -230,6 +230,58 @@ describe("while an amount field has focus", () => {
   });
 });
 
+describe("while focus is inside the rows", () => {
+  it("keeps holding as Tab goes from an amount field to the row's Remove button and on to the next amount field, and re-sorts when focus leaves the rows", () => {
+    shown();
+    choose("Amount");
+    expect(order()).toEqual(["BND", "VNQ", "VTI", "AGG"]);
+    const field = amountField("VTI");
+    act(() => field.focus());
+    fireEvent.change(field, { target: { value: "900" } });
+    // the browser's Tab order: the field, its row's Remove button, the next row's field
+    act(() => screen.getByLabelText("Remove VTI").focus());
+    expect(order(), "on the Remove button").toEqual(["BND", "VNQ", "VTI", "AGG"]);
+    act(() => amountField("AGG").focus());
+    expect(order(), "on the next amount field").toEqual(["BND", "VNQ", "VTI", "AGG"]);
+    act(() => select().focus());
+    expect(order()).toEqual(["VTI", "BND", "VNQ", "AGG"]);
+  });
+
+  it("stops holding when the row with the focused field leaves the list", () => {
+    const table = (rows: Row[]) => (
+      <Funds
+        rows={rows}
+        unit="usd"
+        tensor={tensor}
+        symbols={symbols as never}
+        mixStatus="ok"
+        setAside={0}
+        menuError={null}
+        busy={false}
+        menuMax={30}
+        selected={null}
+        upload={null}
+        onUnit={noop}
+        onAmount={noop}
+        onUseMenu={noop}
+        onNeedSymbols={noop}
+        onUpload={noop}
+        onDismissUpload={noop}
+        onRequestTickers={noop}
+      />
+    );
+    const { rerender } = render(table(entered()));
+    choose("Amount");
+    act(() => amountField("VTI").focus());
+    // VTI leaves the list (another tab's change, a preset): its field goes with it and focus with the field
+    rerender(table([make("BND", 300), make("AGG", null), make("VNQ", 200)]));
+    expect(document.activeElement).toBe(document.body);
+    expect(order()).toEqual(["BND", "VNQ", "AGG"]);
+    rerender(table([make("BND", 300), make("AGG", 5000), make("VNQ", 200)]));
+    expect(order()).toEqual(["AGG", "BND", "VNQ"]);
+  });
+});
+
 describe("the remembered choice", () => {
   it("comes back on the next visit", () => {
     shown();

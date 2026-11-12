@@ -1,5 +1,5 @@
 import { Download, Eraser, Percent, Plus, Upload, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { SymbolEntry } from "../api/http";
 import type { Tensor } from "../api/tensor";
 import { TICKER_SHAPE, type TickerSource } from "../api/tickerShape";
@@ -65,7 +65,6 @@ function AmountInput({ id, value, unit, onCommit }: { id: string; value: number 
   return (
     <input
       className="field num amt"
-      data-amount-field=""
       inputMode="decimal"
       aria-label={`${id} amount in ${unit === "usd" ? "dollars" : unit === "pct" ? "percent" : "shares"}`}
       placeholder="—"
@@ -140,16 +139,22 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
 
   // "Sort by" (owner direction 2026-11-11). The order on screen is the last one committed. It is
   // recomputed whenever nothing is in use, and held while a slider, the chart's point or a key on
-  // one is in use (`interacting`) or an amount field has focus, so a row never moves under the
-  // visitor's hand; the numbers in the rows keep updating in place. Changing the sort, adding or
-  // removing a fund put the list in order at once.
+  // one is in use (`interacting`) or focus is inside the rows (an amount field, a Remove button, and
+  // the Tab between them), so a row never moves under the visitor's hand; the numbers in the rows
+  // keep updating in place. Changing the sort, adding or removing a fund put the list in order at once.
   const [sortKey, setSortKey] = useState<SortKey>(readSort);
-  const [amountFocused, setAmountFocused] = useState(false);
+  const [focusInRows, setFocusInRows] = useState(false);
+  const rowsRef = useRef<HTMLDivElement>(null);
+  // A focused element that leaves the page (its row removed) sends no blur: the flag is only as good
+  // as where focus actually is after each render.
+  useLayoutEffect(() => {
+    if (focusInRows && !rowsRef.current?.contains(document.activeElement)) setFocusInRows(false);
+  });
   const [committed, setCommitted] = useState<{ key: SortKey; ids: string[] }>({ key: sortKey, ids: [] });
   const wanted = (): string[] => sortFunds(list, sortKey, { entered, selected: selectedById }).map((r) => r.id);
   const committedIds = new Set(committed.ids);
   const sameFunds = committedIds.size === list.length && list.every((r) => committedIds.has(r.id));
-  const holding = sortKey !== "entered" && (interacting || amountFocused) && committed.key === sortKey && sameFunds;
+  const holding = sortKey !== "entered" && (interacting || focusInRows) && committed.key === sortKey && sameFunds;
   const orderedIds = holding ? committed.ids : wanted();
   if (!holding && (committed.key !== sortKey || orderedIds.join(",") !== committed.ids.join(","))) setCommitted({ key: sortKey, ids: orderedIds });
   const byId = new Map(list.map((r) => [r.id, r]));
@@ -158,8 +163,6 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
     setSortKey(next);
     writeSort(next);
   };
-  // Focus moving from one amount field to another is still "in a field": the row stays put for the Tab.
-  const isAmountField = (target: EventTarget | null) => target instanceof Element && target.closest("[data-amount-field]") !== null;
 
   const setAmount = (id: string, amount: number | null) => {
     if (draft) setDraft(draft.map((r) => (r.id === id ? { ...r, amount } : r)));
@@ -250,7 +253,6 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
   // Each button goes away (Scale) or turns off (Clear all) once used, so keyboard focus moves on to
   // a control that stays: Clear all after scaling, the first amount after clearing.
   const clearRef = useRef<HTMLButtonElement>(null);
-  const rowsRef = useRef<HTMLDivElement>(null);
   const clearAll = () => {
     setAll(list.map(() => null));
     // after the emptied fields have rendered: a focused field keeps the text it had
@@ -335,8 +337,9 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
         className="rows"
         role="list"
         ref={rowsRef}
-        onFocus={(e) => isAmountField(e.target) && setAmountFocused(true)}
-        onBlur={(e) => isAmountField(e.target) && !isAmountField(e.relatedTarget) && setAmountFocused(false)}
+        onFocus={() => setFocusInRows(true)}
+        // focus moving within the rows (field to Remove button to the next field) is still inside them
+        onBlur={(e) => !(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) && setFocusInRows(false)}
       >
         <div className="row row-head" aria-hidden="true">
           <span className="tk">Ticker</span>
