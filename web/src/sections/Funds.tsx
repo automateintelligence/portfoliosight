@@ -145,11 +145,11 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
   const [sortKey, setSortKey] = useState<SortKey>(readSort);
   const [focusInRows, setFocusInRows] = useState(false);
   const rowsRef = useRef<HTMLDivElement>(null);
-  // A focused element that leaves the page (its row removed) sends no blur: the flag is only as good
-  // as where focus actually is after each render.
+  // A focused element that leaves the page (its row removed) sends no blur: whenever the list
+  // changes, the flag is checked against where focus actually is.
   useLayoutEffect(() => {
     if (focusInRows && !rowsRef.current?.contains(document.activeElement)) setFocusInRows(false);
-  });
+  }, [focusInRows, list]);
   const [committed, setCommitted] = useState<{ key: SortKey; ids: string[] }>({ key: sortKey, ids: [] });
   const wanted = (): string[] => sortFunds(list, sortKey, { entered, selected: selectedById }).map((r) => r.id);
   const committedIds = new Set(committed.ids);
