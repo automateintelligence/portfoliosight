@@ -2243,6 +2243,22 @@ button {
   flex: 1 1 180px;
 }
 
+/* Funds: the "Sort by" drop-down, small and quiet beside the other toolbar controls. */
+.funds-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.funds-sort .field {
+  min-height: 32px;
+  padding: 0 6px;
+  color: var(--text);
+  font-size: 12px;
+}
+
 /* Funds: the template and upload buttons sit under the unit toolbar, quietly. */
 .file-tools {
   margin-bottom: 4px;

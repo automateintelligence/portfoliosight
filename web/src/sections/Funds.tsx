@@ -8,6 +8,7 @@ import { amountText, money, parseAmount, pct } from "../format";
 import { amountsToWeights, fundsWithPrices, percentShown, percentTotal, scaleTo100 } from "../math/amounts";
 import { MIN_FUNDS, type Row, type Unit, type UploadReport } from "../state/store";
 import { MAX_FILE_BYTES, parseFundsCsv, resolveUpload, TEMPLATE_CSV, TEMPLATE_FILENAME } from "./fundsCsv";
+import { readSort, SORT_KEYS, sortFunds, writeSort, type SortKey } from "./fundsSort";
 import { matchGroup, rankSymbols } from "./symbolSearch";
 import { downloadCsv } from "./tradesCsv";
 
@@ -26,6 +27,8 @@ type Props = {
   selected: number[] | null;
   /** What the last CSV upload has to say (refusal, tickers left out, notes), until dismissed. */
   upload: UploadReport | null;
+  /** A slider or the chart's point is being dragged, or a key is held on one: the order of the rows holds still. */
+  interacting?: boolean;
   onUnit: (unit: Unit) => void;
   onAmount: (id: string, amount: number | null) => void;
   /** A fund list to use, with the unit its amounts are in when that is not the page's own. */
@@ -35,6 +38,16 @@ type Props = {
   onDismissUpload: () => void;
   /** Tickers the site does not serve that someone asked for (a CSV file, or typed into the picker). */
   onRequestTickers: (tickers: string[], source: TickerSource) => void;
+};
+
+/** The "Sort by" choices in the order they are offered. */
+const SORT_LABEL: Record<SortKey, string> = {
+  entered: plain.sortEntered,
+  ticker: plain.sortTicker,
+  name: plain.sortName,
+  amount: plain.sortAmount,
+  mixEntered: plain.colEntered,
+  mixSelected: plain.colSelected,
 };
 
 const UNITS: { id: Unit; label: string; hint: string }[] = [
@@ -52,6 +65,7 @@ function AmountInput({ id, value, unit, onCommit }: { id: string; value: number 
   return (
     <input
       className="field num amt"
+      data-amount-field=""
       inputMode="decimal"
       aria-label={`${id} amount in ${unit === "usd" ? "dollars" : unit === "pct" ? "percent" : "shares"}`}
       placeholder="—"
@@ -70,7 +84,7 @@ function AmountInput({ id, value, unit, onCommit }: { id: string; value: number 
 const sameIds = (a: Row[], b: Row[]) => a.length === b.length && [...a.map((r) => r.id)].sort().join(",") === [...b.map((r) => r.id)].sort().join(",");
 
 /** Funds & amounts: the menu, the ways to enter it, and the two mixes side by side (spec 3.3). */
-export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAside, menuError, busy, menuMax, selected, upload, onUnit, onAmount, onUseMenu, onNeedSymbols, onUpload, onDismissUpload, onRequestTickers }: Props) {
+export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAside, menuError, busy, menuMax, selected, upload, interacting = false, onUnit, onAmount, onUseMenu, onNeedSymbols, onUpload, onDismissUpload, onRequestTickers }: Props) {
   // Adding or removing funds edits a draft; amounts of the menu in use apply as they are typed.
   const [draft, setDraft] = useState<Row[] | null>(null);
   // A file's list comes with the unit of its amounts. The page's menu keeps its own unit until the
@@ -123,6 +137,29 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
     return new Map(res.weights ? counted.map((r, i) => [r.id, res.weights[i]]) : []);
   }, [list, changed, tensor, excluded, included, unit, lastClose]);
   const selectedById = useMemo(() => new Map((tensor && selected ? tensor.universe.funds : []).map((f, i) => [f.id, selected?.[i] ?? 0])), [tensor, selected]);
+
+  // "Sort by" (owner direction 2026-11-11). The order on screen is the last one committed. It is
+  // recomputed whenever nothing is in use, and held while a slider, the chart's point or a key on
+  // one is in use (`interacting`) or an amount field has focus, so a row never moves under the
+  // visitor's hand; the numbers in the rows keep updating in place. Changing the sort, adding or
+  // removing a fund put the list in order at once.
+  const [sortKey, setSortKey] = useState<SortKey>(readSort);
+  const [amountFocused, setAmountFocused] = useState(false);
+  const [committed, setCommitted] = useState<{ key: SortKey; ids: string[] }>({ key: sortKey, ids: [] });
+  const wanted = (): string[] => sortFunds(list, sortKey, { entered, selected: selectedById }).map((r) => r.id);
+  const committedIds = new Set(committed.ids);
+  const sameFunds = committedIds.size === list.length && list.every((r) => committedIds.has(r.id));
+  const holding = sortKey !== "entered" && (interacting || amountFocused) && committed.key === sortKey && sameFunds;
+  const orderedIds = holding ? committed.ids : wanted();
+  if (!holding && (committed.key !== sortKey || orderedIds.join(",") !== committed.ids.join(","))) setCommitted({ key: sortKey, ids: orderedIds });
+  const byId = new Map(list.map((r) => [r.id, r]));
+  const ordered = orderedIds.map((id) => byId.get(id)!);
+  const chooseSort = (next: SortKey) => {
+    setSortKey(next);
+    writeSort(next);
+  };
+  // Focus moving from one amount field to another is still "in a field": the row stays put for the Tab.
+  const isAmountField = (target: EventTarget | null) => target instanceof Element && target.closest("[data-amount-field]") !== null;
 
   const setAmount = (id: string, amount: number | null) => {
     if (draft) setDraft(draft.map((r) => (r.id === id ? { ...r, amount } : r)));
@@ -254,6 +291,16 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
           </button>
         )}
         <span className="spacer" />
+        <label className="funds-sort">
+          <span>{plain.fundsSort}</span>
+          <select className="field" data-testid="funds-sort" value={sortKey} onChange={(e) => chooseSort(e.target.value as SortKey)}>
+            {SORT_KEYS.map((k) => (
+              <option key={k} value={k}>
+                {SORT_LABEL[k]}
+              </option>
+            ))}
+          </select>
+        </label>
         <button ref={clearRef} type="button" className="btn btn-quiet" data-testid="funds-clear" title={plain.fundsClearHint} aria-label={`${plain.fundsClear}: ${plain.fundsClearHint.toLowerCase()}`} disabled={!anyAmount} onClick={clearAll}>
           <Eraser size={14} aria-hidden="true" />
           <span>{plain.fundsClear}</span>
@@ -284,7 +331,13 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
       {mixStatus === "ok" && setAside !== null && setAside > 0.0005 && (
         <p className="hint">{`${pct(setAside)} of your starting mix is in funds set aside in this view; the rest is scaled up to 100%.`}</p>
       )}
-      <div className="rows" role="list" ref={rowsRef}>
+      <div
+        className="rows"
+        role="list"
+        ref={rowsRef}
+        onFocus={(e) => isAmountField(e.target) && setAmountFocused(true)}
+        onBlur={(e) => isAmountField(e.target) && !isAmountField(e.relatedTarget) && setAmountFocused(false)}
+      >
         <div className="row row-head" aria-hidden="true">
           <span className="tk">Ticker</span>
           <span className="nm">Fund</span>
@@ -295,7 +348,7 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
           <span className="pc pc-sel">{plain.colSelected}</span>
           <span className="rm" />
         </div>
-        {list.map((r) => {
+        {ordered.map((r) => {
           const reason = excluded.get(r.id) ?? (tensor && !draft && !included.has(r.id) ? "no verified current data" : servedIds && !servedIds.has(r.id) && !included.has(r.id) ? "no verified current data" : null);
           return (
             <div key={r.id} className={reason ? "row is-out" : "row"} role="listitem" data-testid={`fund-row-${r.id}`}>
