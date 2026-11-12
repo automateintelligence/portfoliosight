@@ -1,5 +1,6 @@
 import { useCallback, useRef, type KeyboardEvent } from "react";
 import { plain, technical } from "../copy";
+import { useHold } from "../state/interaction";
 import { useSlide } from "./useSlide";
 
 type Props = {
@@ -32,6 +33,7 @@ export function DivSlider({ t, moved, disabled, horizontal, details, onChange, o
     [horizontal, onChange],
   );
   const slide = useSlide(onPoint, disabled);
+  const hold = useHold();
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (disabled) return;
@@ -47,6 +49,7 @@ export function DivSlider({ t, moved, disabled, horizontal, details, onChange, o
     else if (e.key === "End") next = horizontal ? 1 : 0;
     if (next === null) return;
     e.preventDefault();
+    hold.key(); // a held key is one interaction, ended by its release
     onChange(clamp(next));
   };
 

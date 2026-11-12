@@ -1,6 +1,7 @@
 import { useCallback, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { plain, technical } from "../copy";
 import { signedPct } from "../format";
+import { useHold } from "../state/interaction";
 import { useSlide } from "./useSlide";
 
 type Props = {
@@ -42,6 +43,7 @@ export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, 
     [clamp, onChange, sOf],
   );
   const slide = useSlide(onPoint, disabled);
+  const hold = useHold();
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (disabled) return;
@@ -51,6 +53,7 @@ export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, 
     };
     if (!(e.key in moves)) return;
     e.preventDefault();
+    hold.key(); // a held key is one interaction, ended by its release
     onChange(clamp(moves[e.key]));
   };
 

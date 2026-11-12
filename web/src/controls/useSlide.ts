@@ -1,12 +1,19 @@
 import { useCallback, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { useHold } from "../state/interaction";
 
-/** Pointer drag on a slider track: calls `onPoint(clientX, clientY)` on press and on every move. */
+/**
+ * Pointer drag on a slider track: calls `onPoint(clientX, clientY)` on press and on every move.
+ * The drag is an interaction in progress for the whole app from the press until it is released,
+ * cancelled or loses capture (so the Funds table holds its order meanwhile).
+ */
 export function useSlide(onPoint: (clientX: number, clientY: number) => void, disabled: boolean) {
   const active = useRef(false);
+  const hold = useHold();
   const onPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLElement>) => {
       if (disabled || (e.pointerType === "mouse" && e.button !== 0)) return;
       active.current = true;
+      hold.pointer(e.pointerId);
       try {
         e.currentTarget.setPointerCapture(e.pointerId);
       } catch {
@@ -15,7 +22,7 @@ export function useSlide(onPoint: (clientX: number, clientY: number) => void, di
       e.currentTarget.focus({ preventScroll: true });
       onPoint(e.clientX, e.clientY);
     },
-    [disabled, onPoint],
+    [disabled, onPoint, hold],
   );
   const onPointerMove = useCallback(
     (e: ReactPointerEvent<HTMLElement>) => {
@@ -25,6 +32,7 @@ export function useSlide(onPoint: (clientX: number, clientY: number) => void, di
   );
   const end = useCallback(() => {
     active.current = false;
-  }, []);
+    hold.endPointer();
+  }, [hold]);
   return { onPointerDown, onPointerMove, onPointerUp: end, onPointerCancel: end, onLostPointerCapture: end };
 }
