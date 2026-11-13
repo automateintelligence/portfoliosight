@@ -232,6 +232,36 @@ it("counts the funds of an uploaded file, not the plotted ones, and not the tick
   expect(screen.getByTestId("funds-count").textContent).toBe("4 funds");
 });
 
+it("counts the funds the plotted results used when the list has funds set aside", () => {
+  const out = { id: "ZZOUT" };
+  const partial = parseTensor({ ...raw, universe: { ...raw.universe, excluded: [{ id: out.id, reason: "no data since 2024-10-30", last_close: null }] } });
+  const rows: Row[] = [funds[0], funds[1], out].map((f) => ({ id: f.id, name: f.id, amount: null }));
+  const props = { unit: "usd" as const, symbols: null, mixStatus: "ok" as const, setAside: 0, menuError: null, busy: false, menuMax: 30, selected: null, onUnit: noop, onAmount: noop, onUseMenu: noop, onNeedSymbols: noop, ...noUpload };
+  render(<Funds rows={rows} tensor={partial} {...props} />);
+  // the used count is the plotted results' own funds: both rows marked "not used" agree with it
+  expect(screen.getByTestId("funds-count").textContent).toBe("2 of 3 funds used");
+  expect(screen.getAllByTestId("excluded-note")).toHaveLength(1);
+  cleanup();
+  // a fund the results left out without a reason is not counted as used either
+  render(<Funds rows={rows} tensor={tensor} {...props} />);
+  expect(screen.getByTestId("funds-count").textContent).toBe("2 of 3 funds used");
+  cleanup();
+  // nothing plotted yet: no used count to give
+  render(<Funds rows={rows} tensor={null} {...props} />);
+  expect(screen.getByTestId("funds-count").textContent).toBe("3 funds");
+});
+
+it("drops the used count while the list on screen is a draft not yet plotted", () => {
+  const rows: Row[] = [funds[0], funds[1], { id: "ZZOUT" }].map((f) => ({ id: f.id, name: f.id, amount: null }));
+  const symbols = [...funds.map((f) => ({ id: f.id, name: f.name ?? f.id })), { id: "ZZOUT", name: "Out" }];
+  render(<Funds rows={rows} unit="usd" tensor={tensor} symbols={symbols as never} mixStatus="ok" setAside={0} menuError={null} busy={false} menuMax={30} selected={null} onUnit={noop} onAmount={noop} onUseMenu={noop} onNeedSymbols={noop} {...noUpload} />);
+  expect(screen.getByTestId("funds-count").textContent).toBe("2 of 3 funds used");
+  fireEvent.change(screen.getByTestId("fund-add"), { target: { value: funds[2].id } });
+  fireEvent.keyDown(screen.getByTestId("fund-add"), { key: "Enter" });
+  expect(screen.getByTestId("use-menu")).toBeTruthy();
+  expect(screen.getByTestId("funds-count").textContent).toBe("4 funds");
+});
+
 it("Clear all empties every amount and keeps the fund list", () => {
   const onAmount = vi.fn();
   const onUseMenu = vi.fn();

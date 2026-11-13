@@ -100,6 +100,8 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
   const pctBlocked = unit === "pct" && anyAmount && !total.ok;
   const countBlocked = list.length < MIN_FUNDS || list.length > menuMax;
   const sum = list.reduce((acc, r) => acc + (r.amount ?? 0), 0);
+  // Funds the plotted results used: only the list they were computed for has such a count.
+  const used = tensor && draft === null ? list.filter((r) => included.has(r.id)).length : null;
 
   // The fund list on screen differs from the one plotted: only then is there anything to recalculate.
   const changed = draft !== null;
@@ -229,7 +231,7 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
   return (
     <div>
       <p className="hint funds-count" data-testid="funds-count">
-        {fundsCount(list.length)}
+        {fundsCount(list.length, used)}
       </p>
       <div className="toolbar">
         <div className="seg" data-testid="unit-toggle" role="radiogroup" aria-label="Amounts are in">

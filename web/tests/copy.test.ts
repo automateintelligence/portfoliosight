@@ -29,6 +29,7 @@ describe("copy (spec 3.6, 3.7)", () => {
     copy.uploadSkipped(["XYZ"]),
     copy.fundsCount(23),
     copy.fundsCount(1),
+    copy.fundsCount(5, 3),
     copy.uploadMismatch.percentDollars(2),
     copy.uploadMismatch.dollarsShares(1),
     copy.uploadMismatch.percentShares(3),
