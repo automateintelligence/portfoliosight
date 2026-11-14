@@ -1009,6 +1009,30 @@ test("a shared link over the public limit is refused with a message and the defa
   await expect.poll(() => page.url()).not.toContain("MOCKF");
 });
 
+test("the risk slider says why it stops at its left end, clear of its readouts, and the note is described to a screen reader", async ({ page }) => {
+  const wording = "Less risk here would mean a lower return and a worse bad year";
+  for (const query of ["", "x=1"]) {
+    await open(page, query);
+    const note = page.getByTestId("risk-limit");
+    await expect(note).toHaveText(wording);
+    const slider = page.getByTestId("risk-slider");
+    const noteId = await slider.getAttribute("aria-describedby");
+    expect(noteId, "the slider points at the note").toBe(await note.getAttribute("id"));
+    // thumb at the left limit, where the readouts are nearest the note, then at the right end
+    for (const key of ["Home", "End"]) {
+      await slider.focus();
+      await page.keyboard.press(key);
+      await expect(slider).toHaveAttribute("aria-valuenow", await slider.getAttribute(key === "Home" ? "aria-valuemin" : "aria-valuemax") ?? "");
+      const [n, readout, rail] = [await boxOf(page, "risk-limit"), (await page.locator(".risk .readout").boundingBox())!, await boxOf(page, "risk-slider")];
+      expect(overlap(n, readout), `${query || "default"} ${key}: the note and the readouts`).toBe(false);
+      expect(overlap(n, rail), `${query || "default"} ${key}: the note and the slider`).toBe(false);
+      expect(n.x, "the note starts on the page").toBeGreaterThanOrEqual(0);
+      expect(n.x + n.width, "the note ends on the page").toBeLessThanOrEqual(page.viewportSize()!.width);
+      expect(n.y, "the note is under the slider").toBeGreaterThan(rail.y + rail.height - 1);
+    }
+  }
+});
+
 // ── The pinned card (owner direction 2026-10-16) ─────────────────────────────────────────────
 type Box = { x: number; y: number; width: number; height: number };
 const overlap = (a: Box, b: Box) => a.x < b.x + b.width - 0.5 && b.x < a.x + a.width - 0.5 && a.y < b.y + b.height - 0.5 && b.y < a.y + a.height - 0.5;
@@ -1234,9 +1258,12 @@ test("uploading a CSV replaces the fund list, lists what it could not add, and R
   const before = (await posts(page)).length;
   // the template, as the upload button's own file picker takes it back: VXUS is not served by the mock
   const [chooser] = await Promise.all([page.waitForEvent("filechooser"), page.getByTestId("funds-upload").click()]);
+  await expect(page.getByTestId("funds-count")).toHaveText("2 funds");
   await chooser.setFiles(csvFile(template, "portfoliosight-template.csv"));
-  await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): VXUS.");
+  await expect(page.getByTestId("upload-skipped")).toHaveText("1 ticker not added (no data for it yet): VXUS.");
   await expect(page.getByTestId("upload-skipped")).toBeVisible();
+  // the count is of the list on screen, the file's three served funds, not of the menu in use
+  await expect(page.getByTestId("funds-count")).toHaveText("3 funds");
   // the fund list on screen is the file's, in dollars; the menu in use has not changed yet
   for (const id of ["VTI", "BND", "VNQ"]) await expect(page.getByTestId(`fund-row-${id}`)).toBeVisible();
   await expect(page.getByTestId("fund-row-SGOV")).toHaveCount(0);
@@ -1254,12 +1281,13 @@ test("uploading a CSV replaces the fund list, lists what it could not add, and R
   await expect.poll(() => new URL(page.url()).searchParams.get("unit")).toBe("usd");
   await expect.poll(() => new URL(page.url()).searchParams.get("f")).toBe("VTI:10000,BND:7500,VNQ:2500");
   await expect(page.getByTestId("mix-entered-VTI")).toHaveText("50.0%");
+  await expect(page.getByTestId("funds-count")).toHaveText("3 funds");
   // what could not be added is still said, and was reported to us without any amounts
-  await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): VXUS.");
+  await expect(page.getByTestId("upload-skipped")).toHaveText("1 ticker not added (no data for it yet): VXUS.");
   expect(await tickerRequests(page)).toEqual([{ tickers: ["VXUS"], source: "csv" }]);
   // neither the file's contents nor the report reach the address
   const address = decodeURIComponent(page.url());
-  for (const text of ["VXUS", "Not added", "upload", "10000,40"]) expect(address).not.toContain(text);
+  for (const text of ["VXUS", "not added", "upload", "10000,40"]) expect(address).not.toContain(text);
   // dismissed
   await page.getByTestId("upload-dismiss").click();
   await expect(page.getByTestId("upload-skipped")).toHaveCount(0);
@@ -1334,10 +1362,19 @@ test("tickers left out of a file are listed even when the file is refused for ha
   await section(page, "funds");
   await page.getByTestId("funds-file").setInputFiles(csvFile("ticker\nVTI\nXYZ\nABC\n"));
   await expect(page.getByTestId("upload-error")).toHaveText("A portfolio needs at least 2 funds.");
-  await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): XYZ, ABC.");
+  await expect(page.getByTestId("upload-skipped")).toHaveText("2 tickers not added (no data for these yet): XYZ, ABC.");
   await expect(page.getByTestId("fund-row-SGOV")).toBeVisible();
   await expect.poll(async () => (await tickerRequests(page)).length).toBe(1);
   expect(await tickerRequests(page)).toEqual([{ tickers: ["XYZ", "ABC"], source: "csv" }]);
+});
+
+test("a class share a file writes with a slash is reported, when the site has none, with a hyphen; one with a dot as written", async ({ page }) => {
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await section(page, "funds");
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker\nVTI\nBND\nXYZ/B\nabc.d\n"));
+  await expect(page.getByTestId("upload-skipped")).toHaveText("2 tickers not added (no data for these yet): XYZ-B, ABC.D.");
+  await expect.poll(async () => (await tickerRequests(page)).length).toBe(1);
+  expect(await tickerRequests(page)).toEqual([{ tickers: ["XYZ-B", "ABC.D"], source: "csv" }]);
 });
 
 test("the list of skipped tickers stays when the funds panel is closed and opened again @desktop-only", async ({ page }) => {
@@ -1348,7 +1385,7 @@ test("the list of skipped tickers stays when the funds panel is closed and opene
   await page.getByTestId("funds-toggle").click();
   await expect(page.getByTestId("upload-skipped")).toHaveCount(0);
   await page.getByTestId("funds-toggle").click();
-  await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): XYZ.");
+  await expect(page.getByTestId("upload-skipped")).toHaveText("1 ticker not added (no data for it yet): XYZ.");
 });
 
 test("a ticker typed into the picker that the site does not have is reported once Enter is pressed, once per visit", async ({ page }) => {
@@ -1370,6 +1407,17 @@ test("a ticker typed into the picker that the site does not have is reported onc
   await expect(page.getByTestId("fund-row-VTI")).toBeVisible();
   await page.waitForTimeout(300);
   expect(await tickerRequests(page)).toEqual([{ tickers: ["ZZQJ"], source: "picker" }]);
+});
+
+test("a class share typed into the picker with a slash is reported with a hyphen", async ({ page }) => {
+  await open(page);
+  await section(page, "funds");
+  const field = page.getByTestId("fund-add");
+  await field.fill("zzqj/b");
+  await field.press("Enter");
+  await expect(page.getByText("ZZQJ/B isn't offered")).toBeVisible();
+  await expect.poll(async () => (await tickerRequests(page)).length).toBe(1);
+  expect(await tickerRequests(page)).toEqual([{ tickers: ["ZZQJ-B"], source: "picker" }]);
 });
 
 // ── Example Portfolio 2: a preset that declares its own limits ───────────────────────────────
