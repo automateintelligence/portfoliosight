@@ -108,6 +108,7 @@ def test_tensor_is_pinned_to_the_generation_and_reads_only_what_it_needs(
     vti = store_mod.get_record(store, "VTI")
     fund = tensor["universe"]["funds"][0]
     assert fund["last_close"] == pytest.approx(float(vti["close"].iloc[-1]), rel=1e-12)
+    assert fund["last_close_date"] == d_g.isoformat()  # a close on D_G is dated D_G
     assert fund["adjusted_through"] == d_g.isoformat() and fund["source"] == "seed+tiingo"
     assert tensor["built_at"].endswith("Z")
     # Only served funds are read, plus the served G Fund for the risk-free rate.
@@ -211,12 +212,71 @@ def test_a_file_cached_under_an_old_version_never_serves_a_newer_catalog(
     assert again["universe"]["funds"][0]["last_close"] == 1234.5
 
 
-def test_a_fund_without_a_price_on_d_g_has_no_last_close(store, generation, tmp_path):
+def _funds_by_id(tensor: dict) -> dict[str, dict]:
+    return {fund["id"]: fund for fund in tensor["universe"]["funds"]}
+
+
+def _day(value) -> str:
+    return pd.Timestamp(value).date().isoformat()
+
+
+@pytest.mark.parametrize("sessions_behind", [1, 3])
+def test_a_fund_behind_d_g_has_its_latest_close_and_the_day_of_it(
+    store, generation, d_g, tmp_path, sessions_behind
+):
+    """A served fund may lag D_G by up to three sessions (spec 5.2); its last row prices it."""
     record = store_mod.get_record(store, "BND")
-    store_mod.put_record(store, "BND", record.iloc[:-1])
+    kept = record.iloc[:-sessions_behind]
+    assert _day(kept["date"].iloc[-1]) < d_g.isoformat()
+    store_mod.put_record(store, "BND", kept)
+    funds = _funds_by_id(_build(store, generation, tmp_path, ids=MENU[:3]))
+    assert funds["BND"]["last_close"] == pytest.approx(float(kept["close"].iloc[-1]), rel=1e-12)
+    assert funds["BND"]["last_close_date"] == _day(kept["date"].iloc[-1])
+    # a fund with a close on D_G is as it was: that close, dated D_G
+    vti = store_mod.get_record(store, "VTI")
+    assert funds["VTI"]["last_close"] == pytest.approx(float(vti["close"].iloc[-1]), rel=1e-12)
+    assert funds["VTI"]["last_close_date"] == d_g.isoformat()
+
+
+def test_a_close_after_d_g_is_never_the_last_close(store, generation, d_g, tmp_path):
+    record = store_mod.get_record(store, "BND")
+    on_d_g = float(record["close"].iloc[-1])
+    later = record.iloc[[-1]].assign(
+        date=pd.Timestamp(d_g) + pd.Timedelta(days=1), close=on_d_g * 3.0
+    )
+    store_mod.put_record(store, "BND", pd.concat([record, later], ignore_index=True))
+    bnd = _funds_by_id(_build(store, generation, tmp_path, ids=MENU[:3]))["BND"]
+    assert bnd["last_close"] == pytest.approx(on_d_g, rel=1e-12)
+    assert bnd["last_close_date"] == d_g.isoformat()
+
+
+def test_a_missing_close_on_the_last_row_falls_back_to_the_one_before(
+    store, generation, d_g, tmp_path
+):
+    record = store_mod.get_record(store, "BND")
+    record.loc[record.index[-1], "close"] = float("nan")
+    store_mod.put_record(store, "BND", record)
+    bnd = _funds_by_id(_build(store, generation, tmp_path, ids=MENU[:3]))["BND"]
+    assert bnd["last_close"] == pytest.approx(float(record["close"].iloc[-2]), rel=1e-12)
+    assert bnd["last_close_date"] == _day(record["date"].iloc[-2])
+
+
+def test_a_fund_with_no_close_in_its_rows_has_no_last_close_and_no_date(
+    store, generation, tmp_path
+):
+    record = store_mod.get_record(store, "BND")
+    store_mod.put_record(store, "BND", record.assign(close=float("nan")))
+    funds = _funds_by_id(_build(store, generation, tmp_path, ids=MENU[:3]))
+    assert funds["BND"]["last_close"] is None and funds["BND"]["last_close_date"] is None
+    assert funds["VTI"]["last_close"] is not None
+
+
+def test_a_fund_with_no_rows_is_set_aside_with_no_last_close(store, generation, tmp_path):
+    record = store_mod.get_record(store, "BND")
+    store_mod.put_record(store, "BND", record.iloc[:0])
     tensor = _build(store, generation, tmp_path, ids=MENU[:3])
-    closes = {fund["id"]: fund["last_close"] for fund in tensor["universe"]["funds"]}
-    assert closes["BND"] is None and closes["VTI"] is not None
+    assert "BND" not in _funds_by_id(tensor)
+    assert [(e["id"], e["last_close"]) for e in tensor["universe"]["excluded"]] == [("BND", None)]
 
 
 def test_requested_caps_and_preset_names_reach_the_tensor(store, generation, tmp_path):

@@ -177,7 +177,7 @@ function twoFundTensor(lookback) {
   // Schema 3: History replay's own figures (the same numbers) under `ranges`; a custom menu
   // carries no other engine.
   const figures = ({ bad, typical, good }) => ({ bad, typical, good });
-  const fund = (id, name, lastClose) => ({ id, name, kind: "etf", source: "tiingo", adjusted_through: fixture.asof, fetched_at: fixture.built_at, last_close: lastClose });
+  const fund = (id, name, lastClose) => ({ id, name, kind: "etf", source: "tiingo", adjusted_through: fixture.asof, fetched_at: fixture.built_at, last_close: lastClose, last_close_date: fixture.asof });
   const win = (id, r) => ({ label: fixture.stress[id].label, start: fixture.stress[id].start, end: fixture.stress[id].end, r });
   return {
     schema: fixture.schema,

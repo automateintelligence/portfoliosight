@@ -9,7 +9,8 @@ simple returns, NaN where the fund has no return. Its schema metadata may carry,
 `portfoliosight`, the universe name, the entered mix (`universe.allocation`, amounts by fund id)
 and per-fund catalog facts (as `scripts/make_fixtures.py` writes them). The metadata's
 `last_close` is the close on the file's last day, so it is used
-only when `--asof` is that day; for any other day the close is not known. A file without that
+only when `--asof` is that day (and then dated that day); for any other day the close is not
+known. A file without that
 metadata still builds: every fund is taken as served and described as an ETF from the seed,
 verified through its own last return, with no last close. Whether a fund is served is the
 catalog's to say (spec 5.2); without one, a fund whose returns have stopped stays in the menu
@@ -93,6 +94,7 @@ def read_inputs(
         verified = asof if last is None else last.date().isoformat()
         entry = catalog.get(fund, {})
         adjusted_through = entry.get("adjusted_through", verified)
+        last_close = entry.get("last_close") if close_is_known else None
         funds.append(
             FundInput(
                 id=fund,
@@ -101,7 +103,8 @@ def read_inputs(
                 source=entry.get("source", "seed"),
                 adjusted_through=adjusted_through,
                 fetched_at=entry.get("fetched_at", f"{adjusted_through}T00:00:00Z"),
-                last_close=entry.get("last_close") if close_is_known else None,
+                last_close=last_close,
+                last_close_date=None if last_close is None else asof,
                 served=entry.get("served", True),
                 catalog_reason=entry.get("catalog_reason"),
             )

@@ -177,6 +177,20 @@ describe("parseTensor", () => {
     expect(tensor.universe.excluded).toEqual([]);
   });
 
+  it("keeps the day of each fund's last close, and reads a tensor stored before the field existed", () => {
+    expect(parseTensor(clone()).universe.funds.map((f) => f.last_close_date)).toEqual(Array(N).fill(RAW.asof));
+    const lagging = clone();
+    lagging.universe.funds[0].last_close_date = "2026-10-09";
+    lagging.universe.funds[1].last_close = null;
+    lagging.universe.funds[1].last_close_date = null;
+    expect(parseTensor(lagging).universe.funds.slice(0, 2).map((f) => f.last_close_date)).toEqual(["2026-10-09", null]);
+    const stored = clone();
+    for (const fund of stored.universe.funds) delete fund.last_close_date;
+    const old = parseTensor(stored);
+    expect(old.universe.funds[0].last_close).toBe(RAW.universe.funds[0].last_close);
+    expect(old.universe.funds[0].last_close_date).toBeUndefined();
+  });
+
   it("keeps a fund the service set aside, with its reason", () => {
     const tensor = parseTensor(withAside());
     expect(tensor.universe.excluded).toEqual([ASIDE]);
@@ -215,6 +229,8 @@ describe("parseTensor", () => {
       [["universe", "funds", 0, "kind"], "bond"],
       [["universe", "funds", 0, "source"], "yahoo"],
       [["universe", "funds", 0, "last_close"], "162.07"],
+      [["universe", "funds", 0, "last_close_date"], "yesterday"],
+      [["universe", "funds", 0, "last_close_date"], 20261012],
       [["universe", "funds", 0, "adjusted_through"], "yesterday"],
       [["universe", "excluded", 0, "reason"], ""],
       [["lookback", "id"], "7y"],
