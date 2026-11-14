@@ -6,7 +6,7 @@ import type { TickerSource } from "../api/tickerShape";
 import { fundsCount, fundsTotal, fundsUpTo, menuFull, menuNeedsMore, plain, uploadCatalogLoading, uploadSkipped, uploadTooBig, uploadUnreadable } from "../copy";
 import { amountText, money, parseAmount, pct } from "../format";
 import { amountsToWeights, fundsWithPrices, percentShown, percentTotal, scaleTo100 } from "../math/amounts";
-import { MIN_FUNDS, type Row, type Unit, type UploadReport } from "../state/store";
+import { MIN_FUNDS, withoutPrices, type Row, type Unit, type UploadReport } from "../state/store";
 import { MAX_FILE_BYTES, parseFundsCsv, requestedTicker, resolveUpload, servedTicker, TEMPLATE_CSV, TEMPLATE_FILENAME } from "./fundsCsv";
 import { matchGroup, rankSymbols } from "./symbolSearch";
 import { downloadCsv } from "./tradesCsv";
@@ -85,7 +85,12 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
   }, [rows.map((r) => r.id).join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => onNeedSymbols(), [onNeedSymbols]);
   const unit = draft !== null && draftUnit !== null ? draftUnit : pageUnit;
-  const changeUnit = (next: Unit) => (draft !== null && draftUnit !== null ? setDraftUnit(next) : onUnit(next));
+  const changeUnit = (next: Unit) => {
+    // a file's prices are for its share counts: the list being edited forgets them as the page's rows do
+    if (draft !== null && next !== "shares") setDraft(withoutPrices(draft));
+    if (draft !== null && draftUnit !== null) setDraftUnit(next);
+    else onUnit(next);
+  };
   // Amounts of funds already plotted normally apply to the page as they are typed; while the draft's
   // unit is not the page's they stay in the draft, or the plotted menu would read them in the wrong unit.
   const unitPending = unit !== pageUnit;

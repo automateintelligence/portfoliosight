@@ -782,3 +782,41 @@ it("fills the column for a plotted fund the service has no close for, from the p
   expect(cell("entered", A)).toBe(pct(1000 / 1500));
   expect(cell("entered", B)).toBe(pct(500 / 1500));
 });
+
+// ── the file's prices belong to share counts: leaving the Shares unit forgets them ──
+const unitButton = (name: string) => within(screen.getByTestId("unit-toggle")).getByRole("radio", { name });
+
+it("keeps a pending upload's prices through Use portfolio in shares, and forgets them once its unit has left shares", async () => {
+  const calls = openUpload({ plotted: [A, B], unit: "usd" });
+  chooseFile(`ticker,shares,dollars\n${C},10,1000\n${D},5,500\n`);
+  await screen.findByTestId("use-menu");
+  fireEvent.click(screen.getByTestId("use-menu"));
+  expect((calls.onUseMenu.mock.calls[0] as [Row[]])[0].map((r) => r.price)).toEqual([100, 100]);
+
+  cleanup();
+  const other = openUpload({ plotted: [A, B], unit: "usd" });
+  chooseFile(`ticker,shares,dollars\n${C},10,1000\n${D},5,500\n`);
+  await screen.findByTestId("use-menu");
+  // % and back to shares: the amounts are the same numbers, but a file's prices are for its share counts only
+  fireEvent.click(unitButton("%"));
+  fireEvent.click(unitButton("Shares"));
+  fireEvent.click(screen.getByTestId("use-menu"));
+  const [rows, unit] = other.onUseMenu.mock.calls[0] as [Row[], Unit];
+  expect(unit).toBe("shares");
+  expect(rows.map((r) => [r.id, r.amount, r.price])).toEqual([[C, 10, undefined], [D, 5, undefined]]);
+});
+
+it("forgets the prices of a list being edited when the page's unit leaves shares", () => {
+  const onUnit = vi.fn();
+  const onUseMenu = vi.fn();
+  const rows: Row[] = [{ id: A, name: A, amount: 10, price: 100 }, { id: B, name: B, amount: 5, price: 50 }, { id: C, name: C, amount: 3, price: 20 }];
+  const calls = { onUnit, onAmount: vi.fn(), onUseMenu, onRequestTickers: vi.fn() };
+  render(<Harness rows={rows} unit="shares" symbols={catalog} calls={calls} />);
+  fireEvent.click(screen.getByLabelText(`Remove ${C}`));
+  fireEvent.click(unitButton("$"));
+  expect(onUnit).toHaveBeenCalledWith("usd");
+  fireEvent.click(unitButton("Shares"));
+  fireEvent.click(screen.getByTestId("use-menu"));
+  const [used] = onUseMenu.mock.calls[0] as [Row[]];
+  expect(used.map((r) => [r.id, r.amount, r.price])).toEqual([[A, 10, undefined], [B, 5, undefined]]);
+});
