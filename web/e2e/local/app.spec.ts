@@ -1625,3 +1625,89 @@ test("an edited limit on Example Portfolio 2 is sent with the others, goes in th
   await expect(page.getByTestId(`cap-max-${own.last}`)).toHaveValue(own.percent(own.last));
   await expect(page.getByTestId("preset-menu")).toHaveAccessibleName(/Example Portfolio 2/);
 });
+
+// ── Funds & amounts: Sort by (owner direction 2026-11-11) ────────────────────────────────────
+const fundOrder = (page: Page) => page.locator('[data-testid^="fund-row-"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")!.replace("fund-row-", "")));
+const selectedMix = (page: Page) => page.locator('[data-testid^="mix-selected-"]').allTextContents();
+/** The selected mix figures in the order the rows are in, largest first, a blank last. */
+const figuresInOrder = async (page: Page) => (await selectedMix(page)).map((t) => (Number.isNaN(Number.parseFloat(t.replace("−", "-"))) ? -1 : Number.parseFloat(t.replace("−", "-"))));
+const sortedBySelected = async (page: Page) => {
+  const figures = await figuresInOrder(page);
+  return figures.every((f, i) => i === 0 || figures[i - 1] >= f);
+};
+const sortByLabel = async (page: Page, label: string) => {
+  await page.getByLabel("Sort by").selectOption({ label });
+  await expect(page.getByLabel("Sort by").locator("option:checked")).toHaveText(label);
+};
+
+test("Sort by: the rows hold their order while the risk slider is dragged and sort once when it is released", async ({ page }) => {
+  await open(page);
+  await section(page, "funds");
+  await sortByLabel(page, "Selected mix %");
+  expect(await sortedBySelected(page), "sorted on the selected mix as it opens").toBe(true);
+  const before = await fundOrder(page);
+  const figuresBefore = (await selectedMix(page)).join("|");
+  await page.getByTestId("risk-slider").scrollIntoViewIfNeeded();
+  const risk = (await page.getByTestId("risk-slider").boundingBox())!;
+  const y = risk.y + risk.height / 2;
+  const x0 = risk.x + risk.width * 0.5;
+  const x1 = risk.x + risk.width * 0.97;
+  await page.mouse.move(x0, y);
+  await page.mouse.down();
+  let moved = false;
+  for (let k = 1; k <= 12; k++) {
+    await page.mouse.move(x0 + ((x1 - x0) * k) / 12, y);
+    expect(await fundOrder(page), `the order at step ${k} of the drag`).toEqual(before);
+    if ((await selectedMix(page)).join("|") !== figuresBefore) moved = true;
+  }
+  expect(moved, "the Selected mix % figures kept updating during the drag").toBe(true);
+  expect(await sortedBySelected(page), "still the order from before the drag").toBe(false);
+  await page.mouse.up();
+  await expect.poll(() => sortedBySelected(page)).toBe(true);
+  expect(await fundOrder(page), "the list re-sorted once the drag was released").not.toEqual(before);
+});
+
+test("Sort by: a held arrow key on the slider is one interaction, sorted when the key is released", async ({ page }) => {
+  await open(page);
+  await section(page, "funds");
+  await sortByLabel(page, "Selected mix %");
+  const before = await fundOrder(page);
+  const figuresBefore = (await selectedMix(page)).join("|");
+  await page.getByTestId("risk-slider").focus();
+  // a held key: the first key down, then its repeats (Playwright marks a key that is already down as a repeat)
+  for (let i = 0; i < 40; i++) await page.keyboard.down("ArrowRight");
+  await expect.poll(async () => (await selectedMix(page)).join("|")).not.toBe(figuresBefore);
+  expect(await fundOrder(page), "the order while the key is down").toEqual(before);
+  await page.keyboard.up("ArrowRight");
+  await expect.poll(() => sortedBySelected(page)).toBe(true);
+  expect(await fundOrder(page), "sorted once the key was released").not.toEqual(before);
+});
+
+test("Sort by: the order holds while an amount field has focus and sorts when it loses focus", async ({ page }) => {
+  await open(page);
+  await section(page, "funds");
+  await sortByLabel(page, "Amount");
+  const before = await fundOrder(page);
+  const last = before[before.length - 1];
+  const field = page.getByLabel(`${last} amount in dollars`);
+  await field.focus();
+  await field.fill("99999999");
+  expect(await fundOrder(page), "the row stays under the cursor").toEqual(before);
+  await page.getByTestId("funds-hint").click();
+  await expect.poll(async () => (await fundOrder(page))[0]).toBe(last);
+});
+
+test("Sort by: the choice is remembered in this browser and is not in the link", async ({ page }) => {
+  await open(page);
+  await section(page, "funds");
+  await expect(page.getByLabel("Sort by").locator("option:checked")).toHaveText("As entered");
+  await sortByLabel(page, "Ticker");
+  const tickers = await fundOrder(page);
+  expect(tickers).toEqual([...tickers].sort((a, b) => a.localeCompare(b)));
+  expect(new URL(page.url()).search.toLowerCase()).not.toContain("sort");
+  await page.reload();
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  await section(page, "funds");
+  await expect(page.getByLabel("Sort by").locator("option:checked")).toHaveText("Ticker");
+  expect(await fundOrder(page)).toEqual(tickers);
+});
