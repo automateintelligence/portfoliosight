@@ -33,7 +33,7 @@ not regress.
 | Phase 0 (data) | A-PS-02 … A-PS-14 |
 | Phase 1 (engine) | A-PS-15 … A-PS-25 |
 | Phase 2 (API, nightly, container) | A-PS-26 … A-PS-33 |
-| Phase 3 (front end) | A-PS-34 … A-PS-53, A-PS-69 |
+| Phase 3 (front end) | A-PS-34 … A-PS-53, A-PS-70 |
 | Phase 4 (production deployment) | A-PS-54 … A-PS-60, A-PS-66, A-PS-67, A-PS-68 |
 | Phase 5 (smoke tests and docs) | A-PS-61 … A-PS-65 |
 
@@ -190,7 +190,7 @@ why it is load-bearing.
 - **A-PS-51 — the address reproduces the view in a fresh context.** (S17, S22, DoD 19)
 - **A-PS-52 — the bundle carries no secret, no gate header and no origin host.** (M2, §9.4)
 - **A-PS-53 — cap edits are validated inline and sent only when valid.** (S12, DoD 14 local part)
-- **A-PS-69 — Funds & amounts "Sort by" orders the table as chosen, holds still while the selected
+- **A-PS-70 — Funds & amounts "Sort by" orders the table as chosen, holds still while the selected
   mix is being moved or an amount field is in use, and sorts once on release.** (owner direction
   2026-11-11, §3.3) Without it a row would jump out from under a finger or a cursor.
 
@@ -1689,7 +1689,7 @@ Phase 5 · static + unit
   missing or duplicated `DoD-NN`; a coverage row under the thresholds. Fail = any.
 - **Kind.** contract (gates) with property legs (every test file; all 31 names).
 
-### A-PS-69 — Funds & amounts "Sort by" orders the table as chosen, holds still while the selected mix is being moved or an amount field is in use, and sorts once on release
+### A-PS-70 — Funds & amounts "Sort by" orders the table as chosen, holds still while the selected mix is being moved or an amount field is in use, and sorts once on release
 Phase 3 · unit + ui (owner direction 2026-11-11, §3.3)
 - **Claim.** A native drop-down with the accessible name "Sort by" sits in the Funds toolbar at both
   viewports, offers "As entered", "Ticker", "Fund name", "Amount", "Mix entered %" and "Selected
@@ -1739,7 +1739,7 @@ Phase 3 · unit + ui (owner direction 2026-11-11, §3.3)
 
 ---
 
-End of machine assertions. 69 specs: A-PS-01 … A-PS-69. Owner-gated group: none (see §0).
+End of machine assertions. 69 specs: A-PS-01 … A-PS-68 and A-PS-70 (A-PS-69 is the human item H-PS-01, below). Owner-gated group: none (see §0).
 
 ## 4. Human verification (not in the gate)
 
