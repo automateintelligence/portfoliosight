@@ -2710,6 +2710,14 @@ button {
     --chart-h: min(calc(100vw - 32px), 60vh, max(240px, calc(120vh - 470px)));
   }
 
+  /* The small viewport height (browser toolbars shown) where supported, so a phone browser's collapsing
+     toolbar cannot lift the bound above the visible screen. */
+  @supports (height: 1svh) {
+    .app {
+      --chart-h: min(calc(100vw - 32px), 60vh, max(240px, calc(120svh - 470px)));
+    }
+  }
+
   .hdr {
     height: 48px;
   }
