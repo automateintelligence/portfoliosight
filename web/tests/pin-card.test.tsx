@@ -138,7 +138,7 @@ describe("the pinned card", () => {
     expect(pinnedCard()).toBeNull();
   });
 
-  it("follows the sliders and the point: risk, return, range, word and holdings, and the details lines", () => {
+  it("follows the sliders and the point: risk, return, range, diversification figure and holdings, and the details lines", () => {
     const first = at(0.2, 0.1);
     const { update } = chart(first);
     click();
@@ -152,11 +152,42 @@ describe("the pinned card", () => {
       const now = text();
       expect(now).toContain(pct(v.selected.sigma));
       expect(now).toContain(pct(v.selected.mu));
-      expect(now).toContain(v.word);
+      expect(now).toContain(`${v.selected.enb.toFixed(1)} independent bets`);
       expect(pinnedCard()).not.toBeNull();
     }
     expect(text()).not.toBe(before);
     update(at(0.4, 0.5), true);
-    expect(text()).toContain("independent bets");
+    expect(text()).toContain("Textbook bell-curve figure");
+  });
+});
+
+// An event's timeStamp counts from the page's start, so these set it, as a browser would.
+const at_ = <E extends Event>(event: E, timeStamp: number): E => {
+  Object.defineProperty(event, "timeStamp", { value: timeStamp });
+  return event;
+};
+const focusAt = (el: Element, timeStamp: number) => fireEvent(el, at_(new FocusEvent("focusin", { bubbles: true }), timeStamp));
+const hoverCard = () => screen.queryByTestId("mix-card");
+
+describe("the selected point's card on keyboard focus", () => {
+  it("opens on a focus in the page's first second when the point was never tapped", () => {
+    chart(at(0.5, 0.3));
+    focusAt(point(), 400);
+    expect(hoverCard()).not.toBeNull();
+    expect(hoverCard()!.getAttribute("data-for")).toBe("selected");
+  });
+
+  it("does not open on the focus a touch tap brings within a second", () => {
+    chart(at(0.5, 0.3));
+    const tap = (t: number) => {
+      fireEvent(point(), at_(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch", pointerId: 3, clientX: 200, clientY: 200 }), t));
+      fireEvent(point(), at_(new PointerEvent("pointerup", { bubbles: true, pointerType: "touch", pointerId: 3, clientX: 200, clientY: 200 }), t + 80));
+    };
+    tap(5000);
+    expect(pinnedCard(), "the first tap pins the card").not.toBeNull();
+    tap(5400);
+    expect(pinnedCard(), "the second tap lets it go").toBeNull();
+    focusAt(point(), 5600);
+    expect(hoverCard(), "the focus the tap brought opens no card").toBeNull();
   });
 });

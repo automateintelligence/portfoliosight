@@ -1,8 +1,7 @@
 import { forwardRef, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import type { Tensor } from "../api/tensor";
-import { lookbackLine, plain, technical } from "../copy";
+import { diversificationLine, lookbackLine, plain, technical } from "../copy";
 import { pct, signedPct } from "../format";
-import { diversificationWord } from "../math/portfolio";
 import type { Range, Stats, View } from "../math/view";
 import { Heatmap, NO_LIMITS, type Ghost } from "./Heatmap";
 import { MixCard, topHoldings, type CardMix } from "./MixCard";
@@ -69,12 +68,6 @@ export function MarkKeys({ hasCurrent, hasGhosts, hasNoLimits, compact = false }
             <span>{plain.currentMix}</span>
           </li>
         )}
-        <li>
-          <svg viewBox="0 0 18 12" aria-hidden="true">
-            <circle cx="9" cy="6" r="4" fill="none" stroke="var(--mark-div)" strokeWidth="1.8" />
-          </svg>
-          <span>{plain.optimized}</span>
-        </li>
         {hasGhosts && (
           <li>
             <svg viewBox="0 0 18 12" aria-hidden="true">
@@ -181,11 +174,11 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
   }, [ghostAt, ghostPixels]);
 
   const cardOf = (stats: Stats, weights: ArrayLike<number>, range?: Range): CardMix | null =>
-    tensor ? { ...stats, word: diversificationWord(stats.enb / tensor.enb_ref), holdings: topHoldings(tensor.universe.funds, weights), range } : null;
-  const spoken = (title: string, range: Range | null, word: string) =>
+    tensor ? { ...stats, holdings: topHoldings(tensor.universe.funds, weights), range } : null;
+  const spoken = (title: string, range: Range | null, stats: Stats) =>
     range
-      ? `${title}: ${plain.rangeLow} ${signedPct(range.low)}, ${plain.rangeTypical} ${signedPct(range.typical)}, ${plain.rangeHigh} ${signedPct(range.high)} ${plain.resultStripSuffix}. ${plain.diversification}: ${word}.`
-      : `${title}. ${plain.diversification}: ${word}.`;
+      ? `${title}: ${plain.rangeLow} ${signedPct(range.low)}, ${plain.rangeTypical} ${signedPct(range.typical)}, ${plain.rangeHigh} ${signedPct(range.high)} ${plain.resultStripSuffix}. ${plain.diversification}: ${diversificationLine(stats.enb, tensor!.enb_ref)}`
+      : `${title}. ${plain.diversification}: ${diversificationLine(stats.enb, tensor!.enb_ref)}`;
 
   // The selected mix's card, pinned open by a click or tap on the point (pin.ts).
   const [pin, onPin] = useReducer(pinStep, PIN_START);
@@ -237,7 +230,6 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
   let pinnedCard: ReactNode = null;
   if (ready) {
     const selMix = cardOf(view.selected, view.weights, view.range)!;
-    const divMix = cardOf(view.optimized, view.optWeights, view.optRange)!;
     const curMix = current ? cardOf(current.stats, current.weights, current.range ?? undefined) : null;
     const card = (kind: MarkId, title: string, mix: CardMix, extra?: ReactNode) => <MixCard kind={kind} title={title} mix={mix} details={details} enbRef={tensor.enb_ref} extra={extra} />;
     if (pinBox) {
@@ -264,15 +256,12 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
         phone={phone}
         ceiling={{ sigma: view.ceiling, mu: view.ceilingMu }}
         selected={view.selected}
-        optimized={view.optimized}
         current={current?.stats ?? null}
         funds={funds}
         selectedLabel={`${plain.selectedMix}: ${plain.rangeLow} ${signedPct(view.range.low)}, ${plain.rangeTypical} ${signedPct(view.range.typical)}, ${plain.rangeHigh} ${signedPct(view.range.high)} ${plain.resultStripSuffix}. Left and right arrows change risk; up and down arrows move between more return and more diversified.`}
-        divLabel={spoken(plain.optimized, view.optRange, divMix.word)}
-        currentLabel={current && curMix ? spoken(plain.currentMix, current.range, curMix.word) : ""}
+        currentLabel={current && curMix ? spoken(plain.currentMix, current.range, current.stats) : ""}
         cards={{
           selected: card("selected", plain.selectedMix, selMix),
-          div: card("div", plain.optimized, divMix),
           current: curMix ? card("current", plain.currentMix, curMix, current?.range ? undefined : ` ${technical.rangePending}`) : null,
         }}
         lines={lines}

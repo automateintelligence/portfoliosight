@@ -1,7 +1,7 @@
 // What the first screen shows for one slider position, derived from the tensor with the
 // browser math of spec 4.9 and 4.11. Pure; statistics are recomputed, never interpolated.
 import type { Tensor } from "../api/tensor";
-import { diversificationWord, portfolioMath, type NormalRange, type YearRange } from "./portfolio";
+import { portfolioMath, type NormalRange, type YearRange } from "./portfolio";
 
 export type PMath = ReturnType<typeof portfolioMath>;
 export type Stats = { mu: number; sigma: number; enb: number };
@@ -65,7 +65,7 @@ export function limitsBind(tensor: Tensor): boolean {
 export type View = {
   s: number;
   t: number;
-  tAuto: number;
+  /** True once the diversification slider has left position 0, the best-return mix. */
   moved: boolean;
   disabled: boolean;
   domain: { s_safe: number; s_max: number };
@@ -79,33 +79,24 @@ export type View = {
   normal: NormalRange;
   front: Stats;
   frontRange: Range;
-  /** The Optimized mix at this risk (the open circle, where the second slider starts): ladder position t_auto(s). */
-  optimized: Stats;
-  optWeights: number[];
-  optRange: Range;
   /** The most diversified mix found at this risk (t = 1): the far end of the second slider. */
   peak: Stats;
-  word: ReturnType<typeof diversificationWord>;
 };
 
-/** Everything the first screen needs at slider position (s, t | "auto"). About a millisecond. */
-export function deriveView(tensor: Tensor, math: PMath, sIn: number, tSetting: number | "auto"): View {
+/** Everything the first screen needs at slider position (s, t). About a millisecond. */
+export function deriveView(tensor: Tensor, math: PMath, sIn: number, tSetting: number): View {
   const domain = math.riskSliderDomain();
   const s = Math.min(domain.s_max, Math.max(domain.s_safe, sIn));
   const disabled = ladderCollapsedAt(tensor, s);
-  const tAuto = disabled ? 0 : math.tAuto(s);
-  const t = disabled ? 0 : tSetting === "auto" ? tAuto : Math.min(1, Math.max(0, tSetting));
+  const t = disabled ? 0 : Math.min(1, Math.max(0, tSetting));
   const weights = math.interpolate(s, t);
   const selected = math.stats(weights);
   const front = math.stats(math.interpolate(s, 0));
-  const optWeights = math.interpolate(s, tAuto);
-  const optimized = math.stats(optWeights);
   const ceiling = ceilingAt(tensor, s);
   return {
     s,
     t,
-    tAuto,
-    moved: tSetting !== "auto",
+    moved: t > 0,
     disabled,
     domain,
     ceiling,
@@ -116,11 +107,7 @@ export function deriveView(tensor: Tensor, math: PMath, sIn: number, tSetting: n
     normal: math.normalRange(selected.mu, selected.sigma),
     front,
     frontRange: math.yearRange(s, 0),
-    optimized,
-    optWeights,
-    optRange: math.yearRange(s, tAuto),
     peak: math.stats(math.interpolate(s, 1)),
-    word: diversificationWord(selected.enb / tensor.enb_ref),
   };
 }
 

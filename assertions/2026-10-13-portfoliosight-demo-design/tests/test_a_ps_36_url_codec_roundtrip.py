@@ -16,9 +16,10 @@ Pinned interface (`web/src/state/url.ts`)
   `caps: {id: string, min: number | null, max: number | null}[]` (`c`, `ID:min:max`, percent integers, blank = `null`),
   `lookback: "1y" | "2y" | "3y" | "5y" | "10y" | "ew"` (`lb`; default `5y`),
   `ghosts: string[]` (`g`; lookback ids), `r: number | null` (`null` = not in the URL),
-  `d: "auto" | number` (default `auto`), `theme: "ks-dark" | "light" | "hud" | null` (`t`; `null` =
+  `d: number` in `[0, 1]` (default `0`, the best-return mix; a query with no `d`, and the old `d=auto`,
+  decode to `0`; owner direction 2026-11-11), `theme: "ks-dark" | "light" | "hud" | null` (`t`; `null` =
   not in the URL, so stored preference applies), `details: boolean` (`x=1`).
-- The spec example `?u=guide2017&lb=5y&r=19.25&d=auto&t=hud` must re-encode to itself, which fixes
+- The spec example `?u=guide2017&lb=5y&r=19.25&d=0&t=hud` must re-encode to itself, which fixes
   the key order `u, f, unit, c, lb, g, r, d, t, x`, that `lb` and `d` are written even at their
   defaults, and that `unit=pct`, an empty `f`/`c`/`g` and `x` off are omitted.
 - `r` and `d` survive a round trip to within 1e-9 (values carry up to six decimals); every other
@@ -103,7 +104,7 @@ function generate(rnd: () => number) {
   else if (kind < 0.7) state.r = round(DOMAIN.s_safe + (Math.floor(rnd() * 201) * span) / 200, 6);
   else state.r = Math.min(DOMAIN.s_max, Math.max(DOMAIN.s_safe, round(DOMAIN.s_safe + rnd() * span, 4)));
   const dk = rnd();
-  state.d = dk < 0.4 ? "auto" : dk < 0.5 ? 0 : dk < 0.6 ? 1 : round(rnd(), 6);
+  state.d = dk < 0.5 ? 0 : dk < 0.6 ? 1 : round(rnd(), 6);
   state.theme = pick(THEMES);
   state.details = rnd() < 0.5;
   return state;
@@ -118,7 +119,7 @@ function sameState(got: any, want: any): string | null {
     return String(err.message).slice(0, 600);
   }
   if (want.r === null ? got.r !== null : !(typeof got.r === "number" && Math.abs(got.r - want.r) <= 1e-9)) return `r: got ${got.r}, want ${want.r}`;
-  if (want.d === "auto" ? got.d !== "auto" : !(typeof got.d === "number" && Math.abs(got.d - want.d) <= 1e-9)) return `d: got ${got.d}, want ${want.d}`;
+  if (!(typeof got.d === "number" && Math.abs(got.d - want.d) <= 1e-9)) return `d: got ${got.d}, want ${want.d}`;
   return null;
 }
 
@@ -163,7 +164,7 @@ describe("A-PS-36", () => {
       if (state.unit === "shares") seen.shares += 1;
       if (state.caps.length) seen.caps += 1;
       if (state.ghosts.length) seen.ghosts += 1;
-      if (state.d !== "auto") seen.dNumber += 1;
+      if (state.d > 0) seen.dNumber += 1;
       cases += 1;
     }
     expect(bad.slice(0, 6).join("\n")).toBe("");
@@ -175,7 +176,7 @@ describe("A-PS-36", () => {
   });
 
   it("the spec example decodes to the obvious state and re-encodes to itself", () => {
-    const example = "?u=guide2017&lb=5y&r=19.25&d=auto&t=hud";
+    const example = "?u=guide2017&lb=5y&r=19.25&d=0&t=hud";
     const state = U.decode(example);
     expect(state).toEqual({
       preset: "guide2017",
@@ -185,7 +186,7 @@ describe("A-PS-36", () => {
       lookback: "5y",
       ghosts: [],
       r: 19.25,
-      d: "auto",
+      d: 0,
       theme: "hud",
       details: false,
     });
@@ -202,6 +203,20 @@ describe("A-PS-36", () => {
     expect(custom.d).toBe(0.5);
     expect(custom.theme).toBeNull();
     expect(custom.details).toBe(true);
+  });
+
+  it("a query with no d, and the old d=auto, open at position 0 and are written back as d=0", () => {
+    for (const search of ["?u=guide2017&lb=5y&r=19.25&t=hud", "?u=guide2017&lb=5y&r=19.25&d=auto&t=hud", "", "?lb=3y"]) {
+      const state = U.decode(search);
+      expect(state.d, search).toBe(0);
+      expect(U.encode(state), search).toContain("d=0");
+      expect(U.encode(state), search).not.toContain("auto");
+    }
+    expect(U.encode(U.decode("?u=guide2017&lb=5y&r=19.25&d=auto&t=hud"))).toBe("?u=guide2017&lb=5y&r=19.25&d=0&t=hud");
+    // an explicit d is kept, clamped into [0, 1]
+    expect(U.decode("?d=0.25").d).toBe(0.25);
+    expect(U.decode("?d=1").d).toBe(1);
+    expect(U.decode("?d=9").d).toBe(1);
   });
 
   it("unknown keys zz and k are ignored and never re-encoded", () => {
@@ -256,6 +271,7 @@ describe("A-PS-36", () => {
 EXPECTED_TITLES = {
     "600 generated states round-trip and encode emits only the 8.1 keys",
     "the spec example decodes to the obvious state and re-encodes to itself",
+    "a query with no d, and the old d=auto, open at position 0 and are written back as d=0",
     "unknown keys zz and k are ignored and never re-encoded",
     "r is clamped into the domain on load",
 }

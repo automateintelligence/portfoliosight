@@ -33,6 +33,7 @@ describe("copy (spec 3.6, 3.7)", () => {
     copy.uploadMismatch.percentDollars(2),
     copy.uploadMismatch.dollarsShares(1),
     copy.uploadMismatch.percentShares(3),
+    copy.diversificationLine(3.84, 5.1),
   ];
 
   it("default copy holds none of the forbidden words", () => {
@@ -51,8 +52,30 @@ describe("copy (spec 3.6, 3.7)", () => {
   });
 
   it("the forbidden-word check is live", () => {
-    const re = new RegExp(`\\b${copy.forbiddenDefault[0]}\\b`, "i");
-    expect(re.test(copy.enbLine("3.8", "5.1"))).toBe(true);
+    expect(copy.forbiddenDefault.length).toBeGreaterThan(5);
+    for (const word of copy.forbiddenDefault) {
+      const re = new RegExp(`\\b${word.replace(/ /g, "\\s+")}\\b`, "i");
+      expect(re.test(`a line with ${word.toUpperCase()} in it`), word).toBe(true);
+    }
+  });
+
+  it("'bets' is in default copy only as 'independent bets', the figure that replaced the grade words (owner direction 2026-11-11)", () => {
+    expect(defaults.filter((text) => /\bbets\b/i.test(text)).length).toBeGreaterThan(0);
+    for (const text of defaults) expect(/\bbets\b/i.test(text.replace(/independent bets/gi, "")), `"bets" in "${text}"`).toBe(false);
+  });
+
+  it("holds no grade word for diversification and never names an Optimized mix", () => {
+    const everything = [...defaults, ...flatten(copy.technical)];
+    for (const text of everything) {
+      expect(text, text).not.toMatch(/optimi[sz]ed/i);
+      expect(text, text).not.toMatch(/\b(Average|Fair|Poor)\b/);
+      expect(text, text).not.toMatch(/diversification word/i);
+    }
+    // "Good" is left only as the label of the one-year range's top figure
+    expect(everything.filter((text) => /\bGood\b/.test(text))).toEqual(["Good"]);
+    expect(copy.plain.rangeHigh).toBe("Good");
+    expect(Object.keys(copy.plain)).not.toContain("words");
+    expect(Object.keys(copy.plain)).not.toContain("optimized");
   });
 
   it("carries the plain strings of the table verbatim", () => {
@@ -61,10 +84,11 @@ describe("copy (spec 3.6, 3.7)", () => {
     expect(copy.plain.heatLegend).toBe("How spread out the risk is");
     expect(copy.plain.riskSlider).toBe("Best-return mix at this risk");
     expect(copy.plain.resultStrip).toBe("Selected mix");
-    expect(copy.plain.words).toEqual(["Good", "Average", "Fair", "Poor"]);
     expect(copy.plain.divMoreReturn).toBe("More return");
     expect(copy.plain.divMoreDiversified).toBe("More diversified");
-    expect(copy.plain.optimized).toBe("Optimized");
+    expect(copy.plain.divBestReturn).toBe("Best-return mix");
+    expect(Object.keys(copy.plain), "no button back to a named mix").not.toContain("resetDiv");
+    expect([copy.plain.heatLess, copy.plain.heatMore]).toEqual(["Less", "More"]);
     expect(copy.plain.noLimits).toBe("No limits");
     expect(copy.lookbackLine.nolimits).toBe("No allocation limits");
     expect(copy.plain.noAllocationLimits).toBe("No allocation limits");
@@ -86,11 +110,12 @@ describe("copy (spec 3.6, 3.7)", () => {
     // A-PS-48 requires this technical name behind details
     expect(copy.technical.resultStrip).toMatch(/^Estimated central 95% range of the one-year return: .* over 2,000 one-year paths/);
     expect(copy.technical.bellCurve("−9.0%", "+6.0%", "+21.0%")).toBe("Textbook bell-curve figure (normal, μ ± 1.96σ): −9.0% to +21.0% around +6.0%");
-    expect(copy.technical.optimized.balanced).toContain("balanced point");
+    expect(copy.plain.testedOnPastData).toBe("In our tests on past data, more diversification did not lose less than the best return (frontier line) at the same risk.");
     // nothing on the page speaks of six months any more
     const all = JSON.stringify({ plain: copy.plain, technical: { ...copy.technical, bellCurve: "", cellPlace: "" } });
     expect(all).not.toMatch(/six|6 months|six-month/i);
     expect(copy.enbLine("3.8", "5.1")).toBe("spreads risk over the equivalent of 3.8 independent bets; highest found on this portfolio: 5.1");
+    expect(copy.diversificationLine(3.84, 5.1)).toBe("This mix spreads risk over the equivalent of 3.8 independent bets; highest found on this portfolio: 5.1.");
   });
 
   it("carries the compliance copy verbatim", () => {

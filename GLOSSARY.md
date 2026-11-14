@@ -64,5 +64,7 @@ _Avoid_: MDR, diversification (unqualified)
 
 **Optimized point**:
 The mix at a fixed risk where each further step toward more diversification starts buying less
-diversification than the return it gives up.
-_Avoid_: best mix, balanced mix
+diversification than the return it gives up. A research term only: retired on 2026-11-11 from
+everything a visitor reads, because at the same risk it did not lose less than the best-return mix
+on any measure tested.
+_Avoid_: best mix, balanced mix, "Optimized" (in anything a visitor reads)

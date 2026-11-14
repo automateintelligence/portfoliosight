@@ -283,7 +283,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-36
-    claim: "decode(encode(state)) equals state for every reachable state of web/src/state/url.ts, unknown keys are ignored, r is clamped into the domain on load, and encode emits only the spec 8.1 keys."
+    claim: "decode(encode(state)) equals state for every reachable state of web/src/state/url.ts, an address with no d or the old d=auto decodes to d=0, unknown keys are ignored, r is clamped into the domain on load, and encode emits only the spec 8.1 keys."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_36_url_codec_roundtrip.py"
     setup: ""
     teardown: ""
@@ -323,7 +323,7 @@ assertions:
     level: spec
     kind: contract
   - id: A-PS-41
-    claim: "On load with the fixture preset, in all four themes, the first viewport holds chart-canvas, both sliders, the result strip and the four chips, no table, fund row or stress card is visible, all four sections are collapsed, each chip expands its section, and the overlay markers are exactly point-selected, point-div and point-current."
+    claim: "On load with the fixture preset, in all four themes, the first viewport holds chart-canvas, both sliders, the result strip and the four chips, no table, fund row or stress card is visible, all four sections are collapsed, each chip expands its section, and the overlay markers are exactly point-selected and point-current (point-div, the open circle, retired by owner direction 2026-11-11)."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_41_first_screen.py"
     setup: ""
     teardown: ""
@@ -363,7 +363,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-46
-    claim: "On load div-reset is hidden and the diversification slider sits at t_auto(s); moving toward More diversified moves point-selected down and never right of ceiling-line; at t=0 the point lies on the drawn frontier; details-enb at t=1 is at least its value at t=0; at every tested (s, t) the point is drawn at the chart scales applied to stats(interpolate(s, t)) within 1 px; and where both neighbouring ladders are collapsed the slider is disabled with the note."
+    claim: "On load, and for an address with no d or the old d=auto, d is 0, no div-reset button exists then or after a move, the slider reads Best-return mix and point-selected lies on the drawn frontier (owner direction 2026-11-11); moving toward More diversified moves point-selected down and never right of ceiling-line; at t=0 the point lies on the drawn frontier; the ENB in div-word at t=1 is at least its value at t=0; at every tested (s, t) the point is drawn at the chart scales applied to stats(interpolate(s, t)) within 1 px; and where both neighbouring ladders are collapsed the slider is disabled with the note."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_46_div_slider_point.py"
     setup: ""
     teardown: ""
@@ -371,7 +371,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-47
-    claim: "div-word is one of Good/Average/Fair/Poor at 14 px or less in the theme's --muted colour, the ENB number is absent until details-toggle is on and then reads as the spec template with a ratio matching the word, and the pure mapping uses the cut points 0.75, 0.50 and 0.30."
+    claim: "div-word reads This mix spreads risk over the equivalent of N independent bets; highest found on this portfolio: M. with the mix's own ENB and enb_ref, at 14 px or less in the theme's --muted colour, no grade word (Good/Average/Fair/Poor) stands for diversification, the technical name effective number of bets, minimum torsion is absent until details-toggle is on, and diversificationLine gives that sentence for tensor mixes and a seeded sweep with no grade word (owner direction 2026-11-11)."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_47_diversification_word.py"
     setup: ""
     teardown: ""
@@ -379,7 +379,7 @@ assertions:
     level: spec
     kind: property
   - id: A-PS-48
-    claim: "With details off and every section expanded the visible text holds none of the forbidden jargon, advice or login words and every applicable plain label, with details on it holds the technical names, the footer disclaimer is verbatim and visible outside any collapsed section, the advice line sits under the result strip, and footer-cta links to the three family URLs with the same text for every preset and slider position."
+    claim: "With details off and every section expanded the visible text holds none of the forbidden jargon (bets only inside independent bets), Optimized, grade words, advice or login words and every applicable plain label, with details on it holds the technical names, the footer disclaimer is verbatim and visible outside any collapsed section, the advice line sits under the result strip, and footer-cta links to the three family URLs with the same text for every preset and slider position."
     command: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q --noconftest -p no:cacheprovider assertions/2026-10-13-portfoliosight-demo-design/tests/test_a_ps_48_plain_language_disclaimer.py"
     setup: ""
     teardown: ""

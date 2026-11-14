@@ -11,7 +11,6 @@ export type YearRange = { low: number; typical: number; high: number };
 export type NormalRange = { low: number; mid: number; high: number };
 export type Curve = { sigma: number[]; mu: number[] };
 export type Domain = { s_safe: number; s_max: number };
-export type DiversificationWord = "Good" | "Average" | "Fair" | "Poor";
 
 export interface PortfolioMath {
   /** Yearly expected return, yearly standard deviation and ENB of weights `w` (`enb` is NaN for a mix without variance). */
@@ -26,7 +25,7 @@ export interface PortfolioMath {
   frontierCurve(): Curve;
   /** The risk slider's domain: `s_safe` is the tensor's `frontier.s_safe` (the engine reads it off the one-year range, which needs the return history), `s_max = nx - 1`. The same object on every call. */
   riskSliderDomain(): Domain;
-  /** The diversification slider's default at `s`: `tSug` interpolated between the two neighbouring columns. */
+  /** The tensor's suggested diversification position at `s`: `tSug` interpolated between the two neighbouring columns. The page does not use it: it opens at 0, the best-return mix (owner direction 2026-11-11). */
   tAuto(s: number): number;
   /** The risk ceiling `X(s)`, interpolated between the two neighbouring columns. */
   ceiling(s: number): number;
@@ -50,14 +49,6 @@ const lerp = (a: Mix, b: Mix, f: number): number[] => Array.from(a, (v, i) => (1
 function normalRange(mu: number, sigma: number): NormalRange {
   const spread = RANGE_Z * sigma;
   return { low: mu - spread, mid: mu, high: mu + spread };
-}
-
-/** The word for `q = ENB(w) / enb_ref` (spec 4.6). */
-export function diversificationWord(q: number): DiversificationWord {
-  if (q >= 0.75) return "Good";
-  if (q >= 0.5) return "Average";
-  if (q >= 0.3) return "Fair";
-  return "Poor";
 }
 
 /**

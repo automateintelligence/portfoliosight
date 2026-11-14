@@ -16,7 +16,7 @@ Pinned interface (beyond the shared pins of the gate contract):
   (debounced) after every change, with at least six decimals.
 - test ids: chart, chart-canvas, risk-slider, div-slider, range-low, range-typical, range-high,
   div-word, chip-{funds,trades,stress,settings}, section-{funds,trades,stress,settings} (each
-  carries aria-expanded), point-selected, point-div, point-current, ceiling-line, fund-row-{ID},
+  carries aria-expanded), point-selected, point-current, ceiling-line, fund-row-{ID},
   stress-{id}.
 - point-* and ceiling-line live in one <svg> overlay inside the chart element; its axes are
   d3-axis groups (g.tick with a line). Any other line/polyline, or a straight path, in that svg
@@ -498,9 +498,10 @@ for (const theme of THEMES) {
       };
     });
     expect(overlay, "point-selected must live in an <svg> overlay inside the chart element").not.toBeNull();
-    const want = ["point-current", "point-div", "point-selected"];
-    expect(overlay!.inSvg, "the overlay's markers must be exactly point-selected, point-div and point-current").toEqual(want);
-    expect(overlay!.inDocument, "no fourth point-* marker anywhere in the page").toEqual(want);
+    // owner direction 2026-11-11: the open circle (point-div) that marked "Optimized" is retired
+    const want = ["point-current", "point-selected"];
+    expect(overlay!.inSvg, "the overlay's markers must be exactly point-selected and point-current").toEqual(want);
+    expect(overlay!.inDocument, "no third point-* marker anywhere in the page").toEqual(want);
     expect(overlay!.textHits, "no Sharpe / tangency / capital market text or aria-label in the chart").toEqual([]);
     expect(overlay!.ticks, "the overlay must carry the axes (g.tick lines), so the stray-line scan looked at real content").toBeGreaterThanOrEqual(4);
     expect(overlay!.ceilingInSvg, "ceiling-line must be in the overlay").toBe(true);

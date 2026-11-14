@@ -77,7 +77,7 @@ describe("the value entered", () => {
   });
 });
 
-const facts: DetailFacts = { enb: 3, enbRef: 5, mu: 0.06, sigma: 0.1, lookbackStart: "2020-10-01", lookbackEnd: "2025-10-01", rows: 1250, asof: "2026-10-12", notes: [], defaultPoint: "balanced" };
+const facts: DetailFacts = { enb: 3, enbRef: 5, mu: 0.06, sigma: 0.1, lookbackStart: "2020-10-01", lookbackEnd: "2025-10-01", rows: 1250, asof: "2026-10-12", notes: [] };
 const strip = (value: Parameters<typeof ResultStrip>[0]["value"], details = false) =>
   render(
     <ResultStrip
@@ -87,7 +87,6 @@ const strip = (value: Parameters<typeof ResultStrip>[0]["value"], details = fals
       normal={{ low: -0.1, mid: 0.06, high: 0.22 }}
       scale={stripScale({ min: -0.2, max: 0.35 })}
       value={value}
-      word="Good"
       details={details}
       facts={facts}
       staleAsof={null}
