@@ -1033,6 +1033,21 @@ test("the risk slider says why it stops at its left end, clear of its readouts, 
   }
 });
 
+// Gate A-PS-42, leg 2, on its device (iPhone 13: 390 x 664), with the risk slider's note showing. The size is set here, so this runs the same in both projects.
+test("on a phone the chart, the sliders, the strip and the chip row end within 1.2 screen heights, with the risk note showing, in every look", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 664 });
+  const ids = ["chart", "chart-canvas", "risk-slider", "div-slider", "range-low", "range-typical", "range-high", "div-word", "chip-funds", "chip-trades", "chip-stress", "chip-settings"];
+  for (const theme of ["ks-dark", "light", "hud", "grid"]) {
+    await open(page, `t=${theme}`);
+    await expect(page.getByTestId("risk-limit"), `${theme}: the note is part of this first screen`).toBeVisible();
+    const limit = 1.2 * (await page.evaluate(() => window.innerHeight));
+    for (const id of ids) {
+      const bottom = await page.getByTestId(id).evaluate((el) => el.getBoundingClientRect().bottom + window.scrollY);
+      expect(bottom, `${theme}: ${id} must end within ${limit.toFixed(1)} px`).toBeLessThanOrEqual(limit);
+    }
+  }
+});
+
 // ── The pinned card (owner direction 2026-10-16) ─────────────────────────────────────────────
 type Box = { x: number; y: number; width: number; height: number };
 const overlap = (a: Box, b: Box) => a.x < b.x + b.width - 0.5 && b.x < a.x + a.width - 0.5 && a.y < b.y + b.height - 0.5 && b.y < a.y + a.height - 0.5;
