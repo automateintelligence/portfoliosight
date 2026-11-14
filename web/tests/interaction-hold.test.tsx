@@ -103,7 +103,7 @@ describe("diversification slider", () => {
     describe(horizontal ? "horizontal (phone)" : "vertical", () => {
       const slider = (signal: Interaction) => {
         const onChange = vi.fn();
-        render(provided(signal, <DivSlider t={0.5} moved={false} disabled={false} horizontal={horizontal} details={false} onChange={onChange} onReset={vi.fn()} />));
+        render(provided(signal, <DivSlider t={0.5} moved={false} disabled={false} horizontal={horizontal} details={false} onChange={onChange} />));
         return { el: screen.getByTestId("div-slider"), onChange };
       };
 
