@@ -1,4 +1,4 @@
-import { useCallback, useRef, type KeyboardEvent } from "react";
+import { useCallback, useId, useRef, type KeyboardEvent } from "react";
 import { plain, technical } from "../copy";
 import { useSlide } from "./useSlide";
 
@@ -53,6 +53,7 @@ export function DivSlider({ t, moved, disabled, horizontal, details, onChange }:
   // toward return when vertical (where the up arrow moves the thumb up).
   const value = horizontal ? t * 100 : (1 - t) * 100;
   const text = moved ? `${Math.round(t * 100)} of 100 toward ${plain.divMoreDiversified.toLowerCase()}` : plain.divBestReturn;
+  const testedId = useId();
   const aria = {
     role: "slider" as const,
     tabIndex: disabled ? -1 : 0,
@@ -63,13 +64,14 @@ export function DivSlider({ t, moved, disabled, horizontal, details, onChange }:
     "aria-valuenow": Number(value.toFixed(3)),
     "aria-valuetext": text,
     "aria-disabled": disabled || undefined,
+    "aria-describedby": testedId,
   };
   const pos = (frac: number) => `calc(${PAD}px + (100% - ${2 * PAD}px) * ${frac})`;
   const note = disabled && <p className="divs-note">{plain.divDisabled}</p>;
   const tech = details && <p className="divs-note">{technical.divSlider}</p>;
   // Always shown, with Details on or off: the one line from our tests on past data (owner direction 2026-11-14).
   const tested = (
-    <p className="divs-tested" data-testid="past-data-line">
+    <p id={testedId} className="divs-tested" data-testid="past-data-line">
       {plain.testedOnPastData}
     </p>
   );

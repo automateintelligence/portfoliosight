@@ -84,4 +84,13 @@ describe.each([
     expect(count(container.textContent ?? ""), "shown once on the page").toBe(1);
     expect(screen.getByTestId("past-data-line").textContent).toBe(LINE);
   });
+
+  it("is read with the slider: the slider's description names the line", async () => {
+    page(phone);
+    await waitFor(() => expect(screen.getByTestId("div-slider")).toBeTruthy(), { timeout: 5000 });
+    const el = screen.getByTestId("past-data-line");
+    const ids = (screen.getByTestId("div-slider").getAttribute("aria-describedby") ?? "").split(/\s+/);
+    expect(el.id, "the line has an id").not.toBe("");
+    expect(ids, "the slider is described by the line").toContain(el.id);
+  });
 });
