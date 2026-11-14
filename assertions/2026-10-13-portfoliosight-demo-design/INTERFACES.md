@@ -244,7 +244,8 @@ the docstring is authoritative for that test.
     `diversificationLine(enb, enbRef)` in `web/src/copy.ts` (A-PS-47's unit leg).
     `details-enb` now holds only the technical name of the measure. The line from our tests on past
     data is `past-data-line` (`details-tested`, in the details, until 2026-11-14; owner direction
-    2026-11-14): under the diversification slider at all times, once, never in the details. The colour
+    2026-11-14): under the diversification slider, when Details is on and only then, once, not inside
+    the details panel (with Details off it is not on the page and the slider has no `aria-describedby`). The colour
     map's legend is unchanged (its ends read "Less" and "More"). "bets" is allowed in default copy only
     inside "independent bets".
 - Light ramp, 2026-10-13 (owner direction). The heatmap reads its ramp per theme from the token
