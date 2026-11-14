@@ -110,7 +110,7 @@ describe("copy (spec 3.6, 3.7)", () => {
     // A-PS-48 requires this technical name behind details
     expect(copy.technical.resultStrip).toMatch(/^Estimated central 95% range of the one-year return: .* over 2,000 one-year paths/);
     expect(copy.technical.bellCurve("−9.0%", "+6.0%", "+21.0%")).toBe("Textbook bell-curve figure (normal, μ ± 1.96σ): −9.0% to +21.0% around +6.0%");
-    expect(copy.technical.testedOnPastData).toBe("In our tests on past data, mixes with risk spread more evenly did not lose less than the best-return mix at the same risk.");
+    expect(copy.plain.testedOnPastData).toBe("In our tests on past data, mixes with risk spread more evenly did not lose less than the best-return mix at the same risk.");
     // nothing on the page speaks of six months any more
     const all = JSON.stringify({ plain: copy.plain, technical: { ...copy.technical, bellCurve: "", cellPlace: "" } });
     expect(all).not.toMatch(/six|6 months|six-month/i);

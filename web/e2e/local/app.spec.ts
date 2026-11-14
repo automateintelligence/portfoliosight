@@ -477,11 +477,17 @@ test("hovering the colour map shows a plain card for the mix there", async ({ pa
 
 const PAST_DATA_LINE = "In our tests on past data, mixes with risk spread more evenly did not lose less than the best-return mix at the same risk.";
 
-test("the details carry the past-data line once, name the measure, and explain no grade word and no Optimized mix", async ({ page }) => {
+test("the past-data line shows once under the diversification slider, in the details never, and the details name the measure and explain no grade word and no Optimized mix", async ({ page }) => {
   await open(page);
-  expect((await page.locator("body").innerText()).split(PAST_DATA_LINE).length - 1, "not in the default view").toBe(0);
+  // owner direction 2026-11-14: under the slider at all times, not behind Details
+  await expect(page.getByTestId("details-toggle")).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByTestId("past-data-line")).toHaveText(PAST_DATA_LINE);
+  await expect(page.getByTestId("past-data-line")).toBeVisible();
+  expect((await page.locator("body").innerText()).split(PAST_DATA_LINE).length - 1, "stated once in the default view").toBe(1);
   await page.getByTestId("details-toggle").click();
-  await expect(page.getByTestId("details-tested")).toHaveText(PAST_DATA_LINE);
+  await expect(page.getByTestId("details-tested")).toHaveCount(0);
+  await expect(page.locator(".details-panel")).not.toContainText(PAST_DATA_LINE);
+  await expect(page.getByTestId("past-data-line")).toHaveText(PAST_DATA_LINE);
   const text = await page.locator("body").innerText();
   expect(text.split(PAST_DATA_LINE).length - 1, "the line is stated once").toBe(1);
   await expect(page.getByTestId("details-enb")).toContainText("effective number of bets, minimum torsion");
@@ -493,6 +499,48 @@ test("the details carry the past-data line once, name the measure, and explain n
   await expect(page.getByTestId("details-method")).not.toContainText(/knee|balanced point/i);
   // the bell-curve figure appears in the details only, labelled as such
   await expect(page.getByTestId("details-bell")).toContainText("Textbook bell-curve figure");
+});
+
+// The line is long, so beside the chart it takes the cell under the slider's column rather than a place
+// inside the column: the column keeps the chart's height (a taller one would push the risk slider, the
+// strip, the chips and the sidebar down). On a phone it follows the horizontal slider.
+test("the past-data line sits under the slider, inside its width, and leaves the chart's height and the first screen alone", async ({ page }, testInfo) => {
+  const phone = isPhone(testInfo.project.name);
+  const views = phone
+    ? [{ width: 390, height: 844, side: false }]
+    : [
+        { width: 1366, height: 768, side: false },
+        { width: 1366, height: 900, side: false },
+        { width: 1024, height: 768, side: true },
+      ];
+  for (const view of views) {
+    if (!phone) await page.setViewportSize({ width: view.width, height: view.height });
+    for (const details of [false, true]) {
+      const tag = `${view.width}x${view.height}${view.side ? " sidebar open" : ""}${details ? " details on" : ""}`;
+      await open(page, details ? "x=1" : "");
+      if (view.side && (await page.getByTestId("funds-toggle").getAttribute("aria-expanded")) !== "true") await page.getByTestId("funds-toggle").click();
+      const line = (await page.getByTestId("past-data-line").boundingBox())!;
+      const slider = (await page.getByTestId("div-slider").boundingBox())!;
+      const column = (await page.locator(".divs").boundingBox())!;
+      const chart = (await page.getByTestId("chart").boundingBox())!;
+      expect(line.y, `${tag}: under the slider`).toBeGreaterThanOrEqual(slider.y + slider.height - 0.5);
+      expect(line.x, `${tag}: not wider than the slider's column, on the left`).toBeGreaterThanOrEqual(column.x - 0.5);
+      expect(line.x + line.width, `${tag}: not wider than the slider's column, on the right`).toBeLessThanOrEqual(column.x + column.width + 0.5);
+      if (phone) expect(line.y + line.height, `${tag}: at the foot of the slider's block`).toBeLessThanOrEqual(column.y + column.height + 0.5);
+      else {
+        expect(line.y, `${tag}: directly under the column`).toBeGreaterThanOrEqual(column.y + column.height - 0.5);
+        expect(column.height, `${tag}: the column is as tall as the chart, no taller`).toBeLessThanOrEqual(chart.height + 1);
+        expect(slider.height, `${tag}: the slider keeps room to drag`).toBeGreaterThanOrEqual(120);
+        // the chips keep the first screen they had
+        if (!details) {
+          expect(line.y + line.height, `${tag}: the line is on the first screen`).toBeLessThanOrEqual(view.height);
+          const chips = await Promise.all(["funds", "trades", "stress", "settings"].map((id) => boxOf(page, `chip-${id}`)));
+          for (const chip of chips) expect(chip.y + chip.height, `${tag}: a chip ends at least 15 px above the bottom of the first screen`).toBeLessThanOrEqual(view.height - 15);
+        }
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth), `${tag}: nothing scrolls sideways`).toBeLessThanOrEqual(view.width);
+    }
+  }
 });
 
 test("the page opens on the best-return mix, and nothing a visitor reads names Optimized or grades diversification", async ({ page }) => {

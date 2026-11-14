@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Owner direction 2026-11-11: the page never names an "Optimized" mix and never grades diversification
 // with a word. Each mix states the neutral figure instead, and the one line from our tests on past data
-// appears once, in the details.
+// appears once, under the diversification slider (owner direction 2026-11-14; it was in the details).
 import fs from "node:fs";
 import path from "node:path";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -181,14 +181,13 @@ describe("the strip", () => {
     expect(screen.getByRole("region", { name: "Selected mix" }).textContent).not.toMatch(OTHER_GRADE_WORDS);
   });
 
-  it("keeps the past-data line out of the default view and shows it once behind details", () => {
-    const off = strip(false);
-    expect(visible(off.container)).not.toContain(PAST_DATA_LINE);
-    cleanup();
-    const on = strip(true);
-    const text = visible(on.container);
-    expect(text.split(PAST_DATA_LINE)).toHaveLength(2);
-    expect(on.container.textContent!.split(PAST_DATA_LINE)).toHaveLength(2);
+  it("carries the past-data line neither in the default view nor in the details (it is under the diversification slider)", () => {
+    for (const details of [false, true]) {
+      const { container } = strip(details);
+      expect(visible(container), `details ${details}`).not.toContain(PAST_DATA_LINE);
+      expect(screen.queryByTestId("details-tested")).toBeNull();
+      cleanup();
+    }
   });
 
   it("explains neither a grade word nor Optimized in the details, and the method line does not mention it", () => {
@@ -216,6 +215,19 @@ describe("the diversification slider", () => {
     expect(visible(container)).not.toMatch(/optimi[sz]ed/i);
     expect(screen.getByText("More return")).toBeTruthy();
     expect(screen.getByText("More diversified")).toBeTruthy();
+  });
+
+  it("shows the past-data line once under the slider, with details on or off, vertical or horizontal (owner direction 2026-11-14)", () => {
+    for (const horizontal of [false, true]) {
+      for (const details of [false, true]) {
+        const { container } = render(<DivSlider t={0} moved={false} disabled={false} horizontal={horizontal} details={details} onChange={vi.fn()} />);
+        const el = screen.getByTestId("past-data-line");
+        expect(el.textContent).toBe(PAST_DATA_LINE);
+        expect(container.textContent!.split(PAST_DATA_LINE), `horizontal ${horizontal}, details ${details}`).toHaveLength(2);
+        expect(screen.getByRole("slider").compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING, "after the slider").toBeTruthy();
+        cleanup();
+      }
+    }
   });
 
   it("once moved reads the distance, and offers no button of any kind to go back (owner direction 2026-11-11)", () => {

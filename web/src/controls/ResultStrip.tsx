@@ -162,10 +162,6 @@ export function ResultStrip({ low, typical, high, normal, scale, value, details,
               {facts.lookbackStart} to {facts.lookbackEnd} ({facts.rows} trading days) · prices through {facts.asof}
             </dd>
           </dl>
-          <dl className="wide">
-            <dt>{plain.heatLegend}</dt>
-            <dd data-testid="details-tested">{technical.testedOnPastData}</dd>
-          </dl>
           <p className="wide hint" data-testid="details-method">
             Method. Range: {technical.resultStrip}. The line on the chart: {technical.frontier}.{" "}
             {facts.notes.filter((n) => !/^(the balanced point|one-year ranges)\b/i.test(n)).join(" ")}

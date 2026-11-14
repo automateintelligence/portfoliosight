@@ -67,6 +67,12 @@ export function DivSlider({ t, moved, disabled, horizontal, details, onChange }:
   const pos = (frac: number) => `calc(${PAD}px + (100% - ${2 * PAD}px) * ${frac})`;
   const note = disabled && <p className="divs-note">{plain.divDisabled}</p>;
   const tech = details && <p className="divs-note">{technical.divSlider}</p>;
+  // Always shown, with Details on or off: the one line from our tests on past data (owner direction 2026-11-14).
+  const tested = (
+    <p className="divs-tested" data-testid="past-data-line">
+      {plain.testedOnPastData}
+    </p>
+  );
 
   if (horizontal) {
     return (
@@ -81,21 +87,27 @@ export function DivSlider({ t, moved, disabled, horizontal, details, onChange }:
         </div>
         {note}
         {tech}
+        {tested}
       </div>
     );
   }
+  // Beside the chart the line takes the cell under the slider's column (app.css: `.divs-tested` in
+  // the page's second row), so the column keeps the chart's height, with Details on or off.
   return (
-    <div className="divs" data-keeps-pin="">
-      <span className="divs-end">{plain.divMoreReturn}</span>
-      <div ref={ref} className="vslider" data-testid="div-slider" onKeyDown={onKeyDown} {...aria} {...slide}>
-        <span className="v-track" />
-        <span className="v-thumb" style={{ top: pos(t) }} />
+    <>
+      <div className="divs" data-keeps-pin="">
+        <span className="divs-end">{plain.divMoreReturn}</span>
+        <div ref={ref} className="vslider" data-testid="div-slider" onKeyDown={onKeyDown} {...aria} {...slide}>
+          <span className="v-track" />
+          <span className="v-thumb" style={{ top: pos(t) }} />
+        </div>
+        <span className="divs-end">{plain.divMoreDiversified}</span>
+        <div className="divs-notes">
+          {note}
+          {tech}
+        </div>
       </div>
-      <span className="divs-end">{plain.divMoreDiversified}</span>
-      <div className="divs-notes">
-        {note}
-        {tech}
-      </div>
-    </div>
+      {tested}
+    </>
   );
 }

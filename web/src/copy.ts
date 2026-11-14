@@ -25,6 +25,12 @@ export const plain = {
   divDisabled: "At this risk, the best-return mix is already the most diversified one found.",
   /** The diversification slider's readout at position 0 (owner direction 2026-11-11). */
   divBestReturn: "Best-return mix",
+  /**
+   * The one line from our research on how spread-out risk did against the best-return mix (owner
+   * direction 2026-11-11). Under the diversification slider at all times (owner direction 2026-11-14);
+   * the only copy of this text.
+   */
+  testedOnPastData: "In our tests on past data, mixes with risk spread more evenly did not lose less than the best-return mix at the same risk.",
   frontier: "Best return at each level of risk",
   ghosts: "Same portfolio, different years of history",
   noLimits: "No limits",
@@ -107,8 +113,6 @@ export const technical = {
   enbName: "effective number of bets, minimum torsion",
   divSlider:
     "Walks the mixes that keep the risk at X: every step down gives up return for diversification; the bottom end is the most diversified mix found at that risk",
-  /** The one line from our research on how spread-out risk did against the best-return mix (owner direction 2026-11-11). */
-  testedOnPastData: "In our tests on past data, mixes with risk spread more evenly did not lose less than the best-return mix at the same risk.",
   noLimits: "The same frontier with every fund allowed from 0% to 100%",
   rangePending: "The one-year range of this mix comes from the service and is not available right now.",
   frontier:
