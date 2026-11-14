@@ -12,6 +12,7 @@ import { Chart } from "../src/chart/Chart";
 import { makeScales, paddedExtent } from "../src/chart/scales";
 import { DivSlider } from "../src/controls/DivSlider";
 import { ResultStrip, type DetailFacts } from "../src/controls/ResultStrip";
+import { plain } from "../src/copy";
 import { portfolioMath } from "../src/math/portfolio";
 import { stripScale } from "../src/math/stripScale";
 import { deriveView, type View } from "../src/math/view";
@@ -23,7 +24,8 @@ const pts = TENSOR.frontier_curve.sigma.map((sigma, i) => ({ sigma, mu: TENSOR.f
 const scales = makeScales(1040, 560, paddedExtent(pts, { dx: 0.002, dy: 0.002 }), false);
 const at = (fs: number, t: number): View => deriveView(TENSOR, math, domain.s_safe + fs * (domain.s_max - domain.s_safe), t);
 
-const PAST_DATA_LINE = "In our tests on past data, mixes with risk spread more evenly did not lose less than the best-return mix at the same risk.";
+/** The wording lives in one copy constant (copy.test.ts pins its text); the test reads it from there. */
+const PAST_DATA_LINE = plain.testedOnPastData;
 const line = (enb: number, ref = TENSOR.enb_ref) => `This mix spreads risk over the equivalent of ${enb.toFixed(1)} independent bets; highest found on this portfolio: ${ref.toFixed(1)}.`;
 /** The four grade words that used to stand for the diversification measure. */
 const GRADE_WORDS = /\b(Good|Average|Fair|Poor)\b/;

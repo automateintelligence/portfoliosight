@@ -475,7 +475,7 @@ test("hovering the colour map shows a plain card for the mix there", async ({ pa
   await expect(card).toContainText(/At risk \d+\.\d%, earning at least \d+\.\d%/);
 });
 
-const PAST_DATA_LINE = "In our tests on past data, mixes with risk spread more evenly did not lose less than the best-return mix at the same risk.";
+const PAST_DATA_LINE = "In our tests on past data, more diversification did not lose less than the best return (frontier line) at the same risk.";
 
 test("the past-data line shows once under the diversification slider with Details on, not in the details panel, and is not on the page with Details off, and the details name the measure and explain no grade word and no Optimized mix", async ({ page }) => {
   await open(page);
