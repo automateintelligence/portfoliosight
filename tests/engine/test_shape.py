@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import pickle
 
 import numpy as np
 import pandas as pd
 import pytest
+from threadpoolctl import threadpool_limits
 
 from portfoliosight.engine import shape
 from portfoliosight.engine.ranges import HORIZON_DAYS, PATHS, SEED, sample_digest
@@ -235,8 +237,9 @@ def test_fit_names_every_fund_s_status_and_keeps_the_fallbacks_constant(mixed, a
 
 def test_the_fit_is_qse_s_on_the_panel_s_log_returns(mixed, artifact):
     """QSE fits `log1p` of the panel (a missing return stays missing); the panel itself, and so
-    its digest, stays the simple daily returns."""
-    fit = fit_garch_t_panel(np.log1p(mixed.frame))
+    its digest, stays the simple daily returns. The fit runs with BLAS on one thread."""
+    with threadpool_limits(limits=1, user_api="blas"):
+        fit = fit_garch_t_panel(np.log1p(mixed.frame))
     for field in ("mu", "omega", "alpha", "beta", "nu"):
         assert getattr(artifact, field).tobytes() == np.asarray(getattr(fit, field)).tobytes()
     assert artifact.status == tuple(fit.status) and artifact.n_obs == tuple(fit.n_obs)
@@ -479,3 +482,14 @@ def test_method_block_names_the_pinned_code(artifact):
         "qse": lock["commit"],
         "arch": "8.0.0",
     }
+
+
+def test_the_fit_does_not_depend_on_the_callers_blas_threads(fixture_frame):
+    """A fit made outside a build (a test, a script) is the build's fit: on a multi-core machine a
+    multi-threaded BLAS sums in another order, and the optimizer then stops at another optimum."""
+    panel = shape_panel(fixture_frame, ["VTI", "BND", "VNQ"], FIXTURE_ASOF)
+    with threadpool_limits(limits=1, user_api="blas"):
+        single = artifact_to_json(fit_shape(panel))
+    with threadpool_limits(limits=max(os.cpu_count() or 1, 2), user_api="blas"):
+        many = artifact_to_json(fit_shape(panel))
+    assert many == single
