@@ -409,7 +409,11 @@ Names as built (run rule 11: where the task text below differs, these are the na
   1. Spec: §3.3 Funds & amounts, the "Sort by" paragraph; §3.6 copy row "Funds table".
   2. Assertion: A-PS-70 in the assertions file (the PR first numbered it A-PS-69, which this plan already retired as H-PS-01, task 7.3; renumbered when the PR is brought up to date). Not in `manifest.yaml`.
   3. Done when: the same checks as 8.1 pass on the PR head brought up to date with `main` after 8.1 merges, including `web/e2e/local/app.spec.ts` in full.
-- [ ] 8.3 Deploy: `make deploy`, then `make smoke`, from `main` after 8.1 and 8.2 merge, on the owner's word about what ships (all of `main`, which includes engine 0.3.0, or the page only).
+- [ ] 8.4 Phone first screen back within A-PS-42: own small PR off `main`, branch `fix/phone-first-screen`, merged before 8.3
+  1. Spec: §3.4 phone layout; the frozen check A-PS-42 (on a phone the funds chip ends within 1.2 screen heights) stays as written (owner decision 2026-11-14, "15 a").
+  2. Cause: the risk-limit note from PR #196 pushed the chips about 24 px past the limit (820.5 px against 796.8 px on the iPhone 13 project). Fix: the phone chart gives up the height needed, with no assertion loosened.
+  3. Done when: A-PS-42 passes on all four themes, A-PS-41 and the local e2e suite pass, and lint, typecheck and vitest are clean.
+- [ ] 8.3 Deploy: `make deploy`, then `make smoke`, from `main` after 8.1, 8.2 and 8.4 merge, on the owner's word about what ships (all of `main`, which includes engine 0.3.0, or the page only).
 
 ---
 
