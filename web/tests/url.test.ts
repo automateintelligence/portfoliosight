@@ -209,6 +209,106 @@ describe("encode and decode", () => {
   });
 });
 
+describe("file prices (p)", () => {
+  // the price per share an uploaded file gave: `p=ID:price`, only in the shares unit
+  const shares = (funds: UrlState["funds"], patch: Partial<UrlState> = {}): UrlState => ({ ...EMPTY, unit: "shares", funds, ...patch });
+
+  it("writes the prices after f, only for rows that have one, and reads them back", () => {
+    const state = shares([{ id: "VTI", amount: 10, price: 200.5 }, { id: "BND", amount: 100 }, { id: "VNQ", amount: 7, price: 80 }]);
+    const search = encode(state);
+    expect(search).toBe("?f=VTI:10,BND:100,VNQ:7&p=VTI:200.5,VNQ:80&unit=shares&lb=5y&d=auto");
+    expect(decode(search)).toEqual(state);
+    expect(encode(decode(search))).toBe(search);
+    expect(keysOf(search)).toEqual(["f", "p", "unit", "lb", "d"]);
+  });
+
+  it("keeps a price on a row whose amount is blank, and a row without a price has no price at all", () => {
+    const state = shares([{ id: "VTI", amount: null, price: 200 }, { id: "BND", amount: 5 }]);
+    expect(encode(state)).toBe("?f=VTI,BND:5&p=VTI:200&unit=shares&lb=5y&d=auto");
+    const back = decode(encode(state));
+    expect(back).toEqual(state);
+    expect(Object.keys(back.funds[1])).toEqual(["id", "amount"]);
+  });
+
+  it("leaves addresses without prices exactly as they were, written and read", () => {
+    expect(encode(shares([{ id: "VTI", amount: 10 }, { id: "BND", amount: 100 }]))).toBe("?f=VTI:10,BND:100&unit=shares&lb=5y&d=auto");
+    const old = decode("?f=VTI:10,BND:100&unit=shares&lb=5y&d=auto");
+    expect(old.funds).toStrictEqual([{ id: "VTI", amount: 10 }, { id: "BND", amount: 100 }]);
+    // a page that never meets a price writes the same address it always did
+    expect(encode({ ...EMPTY, funds: [{ id: "VTI", amount: 60 }, { id: "BND", amount: 40 }] })).toBe("?f=VTI:60,BND:40&lb=5y&d=auto");
+  });
+
+  it("writes no prices outside the shares unit, and none with a preset", () => {
+    const funds = [{ id: "VTI", amount: 10, price: 200 }, { id: "BND", amount: 5, price: 10 }];
+    expect(encode({ ...EMPTY, unit: "pct", funds })).toBe("?f=VTI:10,BND:5&lb=5y&d=auto");
+    expect(encode({ ...EMPTY, unit: "usd", funds })).toBe("?f=VTI:10,BND:5&unit=usd&lb=5y&d=auto");
+    expect(encode({ ...EMPTY, unit: "shares", preset: "tsp", funds })).toBe("?u=tsp&unit=shares&lb=5y&d=auto");
+  });
+
+  it("writes prices at six decimals like every other number, and leaves out one that would be written as zero", () => {
+    const search = encode(shares([{ id: "VTI", amount: 3, price: 1000 / 3 }, { id: "BND", amount: 1, price: 0.0000004 }, { id: "VNQ", amount: 1, price: 0.000001 }]));
+    expect(search).toBe("?f=VTI:3,BND:1,VNQ:1&p=VTI:333.333333,VNQ:0.000001&unit=shares&lb=5y&d=auto");
+    expect(encode(decode(search))).toBe(search);
+    // not a number a price can be: nothing is written for them
+    for (const price of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(encode(shares([{ id: "VTI", amount: 1, price }])), String(price)).toBe("?f=VTI:1&unit=shares&lb=5y&d=auto");
+    }
+  });
+
+  it("reads a price only when it is a positive number, and ignores anything else without touching the funds", () => {
+    const read = (p: string) => decode(`?f=VTI:10,BND:5&unit=shares&p=${p}`).funds;
+    expect(read("VTI:200,BND:0.5")).toEqual([{ id: "VTI", amount: 10, price: 200 }, { id: "BND", amount: 5, price: 0.5 }]);
+    expect(read("vti:200.50")).toEqual([{ id: "VTI", amount: 10, price: 200.5 }, { id: "BND", amount: 5 }]);
+    const plain = [{ id: "VTI", amount: 10 }, { id: "BND", amount: 5 }];
+    for (const bad of ["VTI:0", "VTI:-3", "VTI:abc", "VTI:1e3", "VTI:Infinity", "VTI:NaN", "VTI:", "VTI", "VTI:0x10", ":200", "", ",,", "VTI:" + "9".repeat(400)]) {
+      expect(read(bad), bad).toStrictEqual(plain);
+    }
+    // a good entry survives the bad one beside it; extra fields are not part of the price
+    expect(read("VTI:abc,BND:10:99")).toEqual([{ id: "VTI", amount: 10 }, { id: "BND", amount: 5, price: 10 }]);
+  });
+
+  it("ignores prices unless the unit is shares", () => {
+    for (const unit of ["", "&unit=pct", "&unit=usd", "&unit=bogus"]) {
+      expect(decode(`?f=VTI:10,BND:5&p=VTI:200,BND:10${unit}`).funds, unit).toStrictEqual([{ id: "VTI", amount: 10 }, { id: "BND", amount: 5 }]);
+    }
+  });
+
+  it("ignores a price for a fund the address does not list, and with a preset; the first price of a fund counts", () => {
+    expect(decode("?f=VTI:10&unit=shares&p=ZZZ:5,VTI:200,VTI:300").funds).toEqual([{ id: "VTI", amount: 10, price: 200 }]);
+    expect(decode("?u=tsp&unit=shares&p=VTI:200")).toEqual({ ...EMPTY, preset: "tsp", unit: "shares" });
+    expect(decode("?unit=shares&p=VTI:200").funds).toEqual([]);
+  });
+
+  it("reads percent-encoded separators, and never writes the key back when nothing is left", () => {
+    const state = decode("?f=VTI%3A10%2CBND%3A5&unit=shares&p=VTI%3A200%2CBND%3A10");
+    expect(state.funds).toEqual([{ id: "VTI", amount: 10, price: 200 }, { id: "BND", amount: 5, price: 10 }]);
+    expect(encode(decode("?f=VTI:10&unit=shares&p=VTI:0")).includes("p=")).toBe(false);
+  });
+
+  it("round-trips 300 generated states with prices exactly", () => {
+    let seed = 7;
+    const rnd = () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    const ids = ["VTI", "BND", "VNQ", "AGG", "TSP-G", "BRK.B", "VBIAX", "GLD", "TIP", "SGOV"];
+    let withPrices = 0;
+    for (let i = 0; i < 300; i++) {
+      const unit = (["pct", "usd", "shares", "shares"] as const)[Math.floor(rnd() * 4)];
+      const funds = ids.filter(() => rnd() < 0.5).concat("QQQ").map((id) => {
+        const amount = rnd() < 0.2 ? null : Math.round(rnd() * 5e6) / 100;
+        return rnd() < 0.6 && unit === "shares" ? { id, amount, price: Math.max(1, Math.round(rnd() * 5e8)) / 1e6 } : { id, amount };
+      });
+      const state: UrlState = { ...EMPTY, unit, funds };
+      const search = encode(state);
+      expect(decode(search), search).toEqual(state);
+      expect(encode(decode(search))).toBe(search);
+      if (search.includes("&p=")) withPrices += 1;
+    }
+    expect(withPrices).toBeGreaterThan(50);
+  });
+});
+
 describe("clampR", () => {
   const wide = { s_safe: 0.625, s_max: 47 };
   const tight = { s_safe: 7.375, s_max: 31 };

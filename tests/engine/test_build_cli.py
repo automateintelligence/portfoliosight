@@ -113,6 +113,7 @@ def test_ui_fixture_has_what_the_page_tests_need(ui):
     assert ui["bounds"]["max"] == [0.25] * 23 and ui["bounds"]["min"] == [0.0] * 23
     closes = [fund["last_close"] for fund in ui["universe"]["funds"]]
     assert all(isinstance(c, float) and c > 0 for c in closes) and closes[0] != closes[1]
+    assert {fund["last_close_date"] for fund in ui["universe"]["funds"]} == {ui["asof"]}
 
     # stress: the 2008 card has both gaps and numbers, and the guide mix is mostly covered
     held = sum(amounts[i] for i in ids)
@@ -310,7 +311,7 @@ def test_parquet_without_metadata_gets_plain_catalog_facts(cli, tmp_path):
     last_bbb = frame["BBB"].last_valid_index().date().isoformat()
     for fund in universe["funds"]:
         assert fund["name"] == fund["id"] and fund["kind"] == "etf" and fund["source"] == "seed"
-        assert fund["last_close"] is None
+        assert fund["last_close"] is None and fund["last_close_date"] is None
         expected = last_bbb if fund["id"] == "BBB" else "2026-06-30"
         assert fund["adjusted_through"] == expected
         assert fund["fetched_at"] == f"{expected}T00:00:00Z"
@@ -332,8 +333,11 @@ def test_last_close_is_only_known_for_the_files_last_day(cli, tmp_path):
     earlier = json.loads(out.read_text())
     assert code == 0 and earlier["asof"] == "2026-10-09"
     assert [fund["last_close"] for fund in earlier["universe"]["funds"]] == [None] * 23
+    assert [fund["last_close_date"] for fund in earlier["universe"]["funds"]] == [None] * 23
     code, out = _run(cli, tmp_path, *SMALL, lookback="1y", name="last.json")
-    assert all(fund["last_close"] > 0 for fund in json.loads(out.read_text())["universe"]["funds"])
+    funds = json.loads(out.read_text())["universe"]["funds"]
+    assert all(fund["last_close"] > 0 for fund in funds)
+    assert {fund["last_close_date"] for fund in funds} == {"2026-10-12"}
 
 
 def test_engines_option_chooses_what_is_computed(cli, tmp_path, capsys):

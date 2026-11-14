@@ -1682,6 +1682,18 @@ button {
   color: var(--muted);
 }
 
+/* Risk slider: the note at the left limit of the domain. Beside the chart it is placed under the readouts
+   (RiskSlider.tsx gives its top and the room under it); on a phone it follows the slider in the flow. */
+.risk-limit {
+  position: absolute;
+  left: 0;
+  margin: 0;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 /* ── Result strip ──────────────────────────────────────────────────────────── */
 .strip {
   margin-top: 12px;
@@ -2133,6 +2145,11 @@ button {
 
 .toolbar .spacer {
   flex: 1 1 auto;
+}
+
+/* Funds: the number of funds in the list on screen, above the toolbar that holds the running total. */
+.funds-count {
+  margin-bottom: 6px;
 }
 
 /* Funds: the live region of the total line takes no room while it is empty (it stays mounted). */
@@ -2848,6 +2865,12 @@ button {
   .risk.has-tech {
     padding-bottom: 0;
     display: grid;
+  }
+
+  .risk-limit {
+    position: static;
+    white-space: normal;
+    margin-top: 2px;
   }
 
   .readout {

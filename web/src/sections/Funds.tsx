@@ -2,12 +2,12 @@ import { Download, Eraser, Percent, Plus, Upload, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SymbolEntry } from "../api/http";
 import type { Tensor } from "../api/tensor";
-import { TICKER_SHAPE, type TickerSource } from "../api/tickerShape";
-import { fundsTotal, fundsUpTo, menuFull, menuNeedsMore, plain, uploadCatalogLoading, uploadSkipped, uploadTooBig, uploadUnreadable } from "../copy";
+import type { TickerSource } from "../api/tickerShape";
+import { fundsCount, fundsTotal, fundsUpTo, menuFull, menuNeedsMore, plain, uploadCatalogLoading, uploadSkipped, uploadTooBig, uploadUnreadable } from "../copy";
 import { amountText, money, parseAmount, pct } from "../format";
 import { amountsToWeights, fundsWithPrices, percentShown, percentTotal, scaleTo100 } from "../math/amounts";
-import { MIN_FUNDS, type Row, type Unit, type UploadReport } from "../state/store";
-import { MAX_FILE_BYTES, parseFundsCsv, resolveUpload, TEMPLATE_CSV, TEMPLATE_FILENAME } from "./fundsCsv";
+import { MIN_FUNDS, withoutPrices, type Row, type Unit, type UploadReport } from "../state/store";
+import { MAX_FILE_BYTES, parseFundsCsv, requestedTicker, resolveUpload, servedTicker, TEMPLATE_CSV, TEMPLATE_FILENAME } from "./fundsCsv";
 import { matchGroup, rankSymbols } from "./symbolSearch";
 import { downloadCsv } from "./tradesCsv";
 
@@ -85,7 +85,12 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
   }, [rows.map((r) => r.id).join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => onNeedSymbols(), [onNeedSymbols]);
   const unit = draft !== null && draftUnit !== null ? draftUnit : pageUnit;
-  const changeUnit = (next: Unit) => (draft !== null && draftUnit !== null ? setDraftUnit(next) : onUnit(next));
+  const changeUnit = (next: Unit) => {
+    // a file's prices are for its share counts: the list being edited forgets them as the page's rows do
+    if (draft !== null && next !== "shares") setDraft(withoutPrices(draft));
+    if (draft !== null && draftUnit !== null) setDraftUnit(next);
+    else onUnit(next);
+  };
   // Amounts of funds already plotted normally apply to the page as they are typed; while the draft's
   // unit is not the page's they stay in the draft, or the plotted menu would read them in the wrong unit.
   const unitPending = unit !== pageUnit;
@@ -100,6 +105,8 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
   const pctBlocked = unit === "pct" && anyAmount && !total.ok;
   const countBlocked = list.length < MIN_FUNDS || list.length > menuMax;
   const sum = list.reduce((acc, r) => acc + (r.amount ?? 0), 0);
+  // Funds the plotted results used: only the list they were computed for has such a count.
+  const used = tensor && draft === null ? list.filter((r) => included.has(r.id)).length : null;
 
   // The fund list on screen differs from the one plotted: only then is there anything to recalculate.
   const changed = draft !== null;
@@ -148,12 +155,14 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
   }, [listOpen, matches.length]);
   const tryAddTyped = () => {
     if (!q) return;
-    const exact = (matches[0] && matchGroup(matches[0], q) === 1 ? matches[0] : undefined) ?? (matches.length === 1 ? matches[0] : undefined);
+    // The ticker as typed when it is served, else a class share typed as BRK/B or BRK.B is the served BRK-B.
+    const id = servedIds ? servedTicker(query, (t) => servedIds.has(t)) : null;
+    const exact = symbols?.find((s) => s.id === id) ?? (matches[0] && matchGroup(matches[0], q) === 1 ? matches[0] : undefined) ?? (matches.length === 1 ? matches[0] : undefined);
     if (exact) return add(exact);
-    const typed = query.trim().toUpperCase();
-    setAddError(`${typed} isn't offered: no verified current data for it.`);
+    setAddError(`${query.trim().toUpperCase()} isn't offered: no verified current data for it.`);
     // Committed (not merely typed), shaped like a ticker and matching nothing served: someone wants a ticker we do not have.
-    if (symbols !== null && matches.length === 0 && TICKER_SHAPE.test(typed)) onRequestTickers([typed], "picker");
+    const asked = requestedTicker(query);
+    if (symbols !== null && matches.length === 0 && asked !== null) onRequestTickers([asked], "picker");
   };
 
   /** A CSV file replaces the fund list: the draft, as adding funds makes it, with the file's amounts and unit. */
@@ -226,6 +235,9 @@ export function Funds({ rows, unit: pageUnit, tensor, symbols, mixStatus, setAsi
 
   return (
     <div>
+      <p className="hint funds-count" data-testid="funds-count">
+        {fundsCount(list.length, used)}
+      </p>
       <div className="toolbar">
         <div className="seg" data-testid="unit-toggle" role="radiogroup" aria-label="Amounts are in">
           {UNITS.map((u) => (

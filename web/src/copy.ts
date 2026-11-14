@@ -12,6 +12,8 @@ export const plain = {
   riskBad: "Bad year",
   riskTypical: "Typical year",
   riskDisabled: "this portfolio has only one sensible risk level",
+  /** At the slider's left end when the curve runs on to the left of it (the tensor's frontier.s_safe is above 0). */
+  riskLimit: "Less risk here would mean a lower return and a worse bad year",
   resultStrip: "Selected mix",
   resultStripSuffix: "over one year",
   rangeLow: "Bad",
@@ -219,8 +221,12 @@ export const uploadTooManyValues = (row: number) =>
 /** The funds with amounts share no column: `who` is the sentence naming which fund has which columns. */
 export const uploadNoCommonColumn = (who: string) => `Every fund with an amount needs the same column filled in (shares, dollars or percent). ${who}`;
 /** After an upload: every ticker that was left out, so no one assumes it made it in. */
-export const uploadSkipped = (tickers: string[]) => `Not added (no data for these yet): ${tickers.join(", ")}.`;
+export const uploadSkipped = (tickers: string[]) =>
+  `${tickers.length} ${tickers.length === 1 ? "ticker not added (no data for it yet)" : "tickers not added (no data for these yet)"}: ${tickers.join(", ")}.`;
 const fundsOf = (n: number) => `${n} ${n === 1 ? "fund" : "funds"}`;
+/** The top of Funds & amounts: how many funds are in the list on screen, "23 funds", and when the
+ * plotted results used fewer of them, how many they used, "3 of 5 funds used". */
+export const fundsCount = (n: number, used: number | null = null) => (used === null || used === n ? fundsOf(n) : `${used} of ${fundsOf(n)} used`);
 /** A column that was not used because it does not agree with the one that was. */
 export const uploadMismatch = {
   percentDollars: (n: number) => `Percent didn't match dollars for ${fundsOf(n)} and was ignored.`,

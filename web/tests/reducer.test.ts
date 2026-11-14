@@ -757,3 +757,73 @@ describe("store: a fund list from a CSV file", () => {
     });
   });
 });
+
+describe("store: the file's prices in the address", () => {
+  const [A, B, C] = IDS;
+  // 10 shares of A at $200 and 10 shares of B at $50 are $2,000 and $500, whatever the service's closes are
+  const LINK = `f=${A}:10,${B}:10&p=${A}:200,${B}:50&unit=shares`;
+  const lastUrl = async (store: Store) => {
+    store.dispatch({ type: "flushUrl" });
+    await advance(500);
+    return replaced[replaced.length - 1];
+  };
+  const priceOf = (store: Store) => store.getState().rows.map((r) => [r.id, r.price]);
+
+  it("opens a link with prices on the same starting mix as the dollars they stand for", async () => {
+    const withPrices = await boot(LINK);
+    expect(priceOf(withPrices)).toEqual([[A, 200], [B, 50]]);
+    const mix = currentMix(withPrices.getState(), withPrices.getState().tensor as NonNullable<ReturnType<Store["getState"]>["tensor"]>);
+    expect(mix.status).toBe("ok");
+    expect(mix.weights?.[IDS.indexOf(A)]).toBeCloseTo(0.8, 12);
+    expect(mix.weights?.[IDS.indexOf(B)]).toBeCloseTo(0.2, 12);
+    // the slider starts where the entered mix says, as it does for the same mix entered in dollars
+    const inDollars = await boot(`f=${A}:2000,${B}:500&unit=usd`);
+    expect(withPrices.getState().s).toBeCloseTo(inDollars.getState().s, 9);
+  });
+
+  it("writes the prices back, and a reload of that address gives the same rows", async () => {
+    const store = await boot(LINK);
+    const address = await lastUrl(store);
+    expect(address).toContain(`f=${A}:10,${B}:10&p=${A}:200,${B}:50&unit=shares`);
+    const again = await boot(address.slice(address.indexOf("?")));
+    expect(again.getState().rows).toEqual(store.getState().rows);
+  });
+
+  it("keeps a price while its share count is edited, and in the address", async () => {
+    const store = await boot(LINK);
+    store.dispatch({ type: "setAmount", id: A, amount: 30 });
+    store.dispatch({ type: "setAmount", id: B, amount: null });
+    expect(priceOf(store)).toEqual([[A, 200], [B, 50]]);
+    expect(await lastUrl(store)).toContain(`f=${A}:30,${B}&p=${A}:200,${B}:50&unit=shares`);
+  });
+
+  it("forgets the prices when the unit leaves shares, and shares are valued at the service's closes again", async () => {
+    const store = await boot(LINK);
+    store.dispatch({ type: "setUnit", unit: "usd" });
+    expect(priceOf(store)).toEqual([[A, undefined], [B, undefined]]);
+    expect(await lastUrl(store)).not.toContain("p=");
+    store.dispatch({ type: "setUnit", unit: "shares" });
+    expect(priceOf(store)).toEqual([[A, undefined], [B, undefined]]);
+    expect(await lastUrl(store)).not.toContain("p=");
+  });
+
+  it("takes a file's prices with its list only in shares", async () => {
+    const row = (id: string, amount: number | null, price?: number) => ({ id, name: id, amount, ...(price === undefined ? {} : { price }) });
+    const store = await boot("");
+    store.dispatch({ type: "useMenu", rows: [row(A, 10, 200), row(B, 5, 50), row(C, null)], unit: "shares" });
+    expect(priceOf(store)).toEqual([[A, 200], [B, 50], [C, undefined]]);
+    expect(await lastUrl(store)).toContain(`f=${A}:10,${B}:5,${C}&p=${A}:200,${B}:50&unit=shares`);
+    // the same funds again in another unit, and the page's own unit when the list brings none
+    store.dispatch({ type: "useMenu", rows: [row(A, 10, 200), row(B, 5, 50), row(C, null)], unit: "usd" });
+    expect(priceOf(store)).toEqual([[A, undefined], [B, undefined], [C, undefined]]);
+    store.dispatch({ type: "useMenu", rows: [row(A, 10, 200), row(B, 5, 50)] });
+    expect(store.getState().unit).toBe("usd");
+    expect(priceOf(store)).toEqual([[A, undefined], [B, undefined]]);
+  });
+
+  it("opens a link with prices but no shares unit as the link would have been without them", async () => {
+    const store = await boot(`f=${A}:60,${B}:40&p=${A}:200,${B}:50`);
+    expect(priceOf(store)).toEqual([[A, undefined], [B, undefined]]);
+    expect(await lastUrl(store)).not.toContain("p=");
+  });
+});

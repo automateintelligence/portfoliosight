@@ -190,6 +190,78 @@ it("hides the running total and Scale to 100% at exactly 100%, with nothing ente
   expect(screen.getByTestId("funds-entered").textContent).toBe("$4,000 entered");
 });
 
+it("counts the funds in the portfolio at the top, above the running total line", () => {
+  show({ unit: "usd", amounts: [3000, 1000] });
+  const count = screen.getByTestId("funds-count");
+  expect(count.textContent).toBe(`${funds.length} funds`);
+  const entered = screen.getByTestId("funds-entered");
+  expect(count.compareDocumentPosition(entered) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(count.compareDocumentPosition(screen.getByTestId("unit-toggle")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+it("says '1 fund' for one fund", () => {
+  render(<Funds rows={[{ id: funds[0].id, name: funds[0].id, amount: null }]} unit="usd" tensor={tensor} symbols={null} mixStatus="ok" setAside={0} menuError={null} busy={false} menuMax={30} selected={null} onUnit={noop} onAmount={noop} onUseMenu={noop} onNeedSymbols={noop} {...noUpload} />);
+  expect(screen.getByTestId("funds-count").textContent).toBe("1 fund");
+});
+
+it("counts the list on screen while it is a draft that differs from the plotted one", () => {
+  show({ unit: "usd", amounts: [] });
+  expect(screen.getByTestId("funds-count").textContent).toBe(`${funds.length} funds`);
+  fireEvent.change(screen.getByTestId("fund-add"), { target: { value: "zznew" } });
+  fireEvent.keyDown(screen.getByTestId("fund-add"), { key: "Enter" });
+  expect(screen.getByTestId("fund-row-ZZNEW")).toBeTruthy();
+  expect(screen.getByTestId("funds-count").textContent).toBe(`${funds.length + 1} funds`);
+  fireEvent.click(screen.getByLabelText(`Remove ${funds[0].id}`));
+  fireEvent.click(screen.getByLabelText(`Remove ${funds[1].id}`));
+  expect(screen.getByTestId("funds-count").textContent).toBe(`${funds.length - 1} funds`);
+  // back to the plotted funds: the draft is gone and so is its count
+  fireEvent.click(screen.getByLabelText("Remove ZZNEW"));
+  fireEvent.change(screen.getByTestId("fund-add"), { target: { value: funds[0].id } });
+  fireEvent.keyDown(screen.getByTestId("fund-add"), { key: "Enter" });
+  fireEvent.change(screen.getByTestId("fund-add"), { target: { value: funds[1].id } });
+  fireEvent.keyDown(screen.getByTestId("fund-add"), { key: "Enter" });
+  expect(screen.queryByTestId("use-menu")).toBeNull();
+  expect(screen.getByTestId("funds-count").textContent).toBe(`${funds.length} funds`);
+});
+
+it("counts the funds of an uploaded file, not the plotted ones, and not the tickers it could not add", async () => {
+  openUpload({ plotted: [A, B] });
+  expect(screen.getByTestId("funds-count").textContent).toBe("2 funds");
+  chooseFile(`ticker\n${A}\n${B}\n${C}\n${D}\nXYZ\n`);
+  await screen.findByTestId("use-menu");
+  expect(screen.getByTestId("funds-count").textContent).toBe("4 funds");
+});
+
+it("counts the funds the plotted results used when the list has funds set aside", () => {
+  const out = { id: "ZZOUT" };
+  const partial = parseTensor({ ...raw, universe: { ...raw.universe, excluded: [{ id: out.id, reason: "no data since 2024-10-30", last_close: null }] } });
+  const rows: Row[] = [funds[0], funds[1], out].map((f) => ({ id: f.id, name: f.id, amount: null }));
+  const props = { unit: "usd" as const, symbols: null, mixStatus: "ok" as const, setAside: 0, menuError: null, busy: false, menuMax: 30, selected: null, onUnit: noop, onAmount: noop, onUseMenu: noop, onNeedSymbols: noop, ...noUpload };
+  render(<Funds rows={rows} tensor={partial} {...props} />);
+  // the used count is the plotted results' own funds: both rows marked "not used" agree with it
+  expect(screen.getByTestId("funds-count").textContent).toBe("2 of 3 funds used");
+  expect(screen.getAllByTestId("excluded-note")).toHaveLength(1);
+  cleanup();
+  // a fund the results left out without a reason is not counted as used either
+  render(<Funds rows={rows} tensor={tensor} {...props} />);
+  expect(screen.getByTestId("funds-count").textContent).toBe("2 of 3 funds used");
+  cleanup();
+  // nothing plotted yet: no used count to give
+  render(<Funds rows={rows} tensor={null} {...props} />);
+  expect(screen.getByTestId("funds-count").textContent).toBe("3 funds");
+});
+
+it("drops the used count while the list on screen is a draft not yet plotted", () => {
+  const rows: Row[] = [funds[0], funds[1], { id: "ZZOUT" }].map((f) => ({ id: f.id, name: f.id, amount: null }));
+  const symbols = [...funds.map((f) => ({ id: f.id, name: f.name ?? f.id })), { id: "ZZOUT", name: "Out" }];
+  render(<Funds rows={rows} unit="usd" tensor={tensor} symbols={symbols as never} mixStatus="ok" setAside={0} menuError={null} busy={false} menuMax={30} selected={null} onUnit={noop} onAmount={noop} onUseMenu={noop} onNeedSymbols={noop} {...noUpload} />);
+  expect(screen.getByTestId("funds-count").textContent).toBe("2 of 3 funds used");
+  fireEvent.change(screen.getByTestId("fund-add"), { target: { value: funds[2].id } });
+  fireEvent.keyDown(screen.getByTestId("fund-add"), { key: "Enter" });
+  expect(screen.getByTestId("use-menu")).toBeTruthy();
+  expect(screen.getByTestId("funds-count").textContent).toBe("4 funds");
+});
+
 it("Clear all empties every amount and keeps the fund list", () => {
   const onAmount = vi.fn();
   const onUseMenu = vi.fn();
@@ -427,7 +499,7 @@ it("lists every ticker it did not add, tells the page about them, and keeps the 
   const calls = openUpload({ plotted: [A, B] });
   chooseFile(`ticker,dollars\n${C},1000\nxyz,500\n${D},2000\nABC,1\n`);
   const skipped = await screen.findByTestId("upload-skipped");
-  expect(skipped.textContent).toBe("Not added (no data for these yet): XYZ, ABC.");
+  expect(skipped.textContent).toBe("2 tickers not added (no data for these yet): XYZ, ABC.");
   expect(calls.onRequestTickers).toHaveBeenCalledTimes(1);
   expect(calls.onRequestTickers).toHaveBeenCalledWith(["XYZ", "ABC"], "csv");
   expect(amounts()).toEqual([null, null, "1000", "2000"]);
@@ -440,9 +512,40 @@ it("lists every ticker it did not add, tells the page about them, and keeps the 
   expect(screen.queryByTestId("upload-report")).toBeNull();
   // replaced by the next upload's own
   chooseFile(`ticker\n${A}\n${B}\nQQQQ\n`);
-  expect((await screen.findByTestId("upload-skipped")).textContent).toBe("Not added (no data for these yet): QQQQ.");
+  expect((await screen.findByTestId("upload-skipped")).textContent).toBe("1 ticker not added (no data for it yet): QQQQ.");
   chooseFile(`ticker\n${A}\n${B}\n`);
   await waitFor(() => expect(screen.queryByTestId("upload-skipped")).toBeNull());
+});
+
+it("serves class shares a file writes with a slash or a dot, and tells the page an unserved one under its hyphen form", async () => {
+  const calls = openUpload({ plotted: [A, B], symbols: [...catalog, { id: "BRK-B", name: "Berkshire Hathaway Inc" }, { id: "BF-B", name: "Brown-Forman Corp" }] });
+  chooseFile(`ticker,dollars\nBRK/B,3000\nbf.b,2000\n${C},1000\nXYZ/B,500\nABC.D,500\n`);
+  await screen.findByTestId("use-menu");
+  expect(screen.getByTestId("fund-row-BRK-B")).toBeTruthy();
+  expect(screen.getByTestId("fund-row-BF-B")).toBeTruthy();
+  // ABC.D is a valid ticker as written; only the slash of XYZ/B is not
+  expect(screen.getByTestId("upload-skipped").textContent).toBe("2 tickers not added (no data for these yet): XYZ-B, ABC.D.");
+  expect(calls.onRequestTickers).toHaveBeenCalledTimes(1);
+  expect(calls.onRequestTickers).toHaveBeenCalledWith(["XYZ-B", "ABC.D"], "csv");
+});
+
+it("tells the page an exchange suffix or a ticker of several parts as the file writes it", async () => {
+  const calls = openUpload({ plotted: [A, B], symbols: [...catalog, { id: "RY-TO", name: "Not Royal Bank" }] });
+  chooseFile(`ticker\n${C}\n${D}\nry.to\nBMW.DE\na.b.c\n`);
+  await screen.findByTestId("use-menu");
+  expect(screen.queryByTestId("fund-row-RY-TO")).toBeNull();
+  expect(screen.getByTestId("upload-skipped").textContent).toBe("3 tickers not added (no data for these yet): RY.TO, BMW.DE, A.B.C.");
+  expect(calls.onRequestTickers).toHaveBeenCalledWith(["RY.TO", "BMW.DE", "A.B.C"], "csv");
+});
+
+it("adds a fund the site serves under a dotted id when the file writes that id", async () => {
+  const calls = openUpload({ plotted: [A, B], symbols: [...catalog, { id: "RY.TO", name: "Royal Bank of Canada" }, { id: "BRK.B", name: "Berkshire Hathaway Inc" }] });
+  chooseFile(`ticker,dollars\n${C},1000\nry.to,2000\nBRK.B,500\n`);
+  await screen.findByTestId("use-menu");
+  expect(screen.getByTestId("fund-row-RY.TO")).toBeTruthy();
+  expect(screen.getByTestId("fund-row-BRK.B")).toBeTruthy();
+  expect(screen.queryByTestId("upload-skipped")).toBeNull();
+  expect(calls.onRequestTickers).not.toHaveBeenCalled();
 });
 
 it("sends nothing about the tickers when every one of them is served", async () => {
@@ -484,7 +587,7 @@ it("refuses a file with fewer than two served funds, with the usual sentence, an
   const calls = openUpload();
   chooseFile(`ticker\n${C}\nXYZ\n`);
   expect((await screen.findByTestId("upload-error")).textContent).toBe("A portfolio needs at least 2 funds.");
-  expect(screen.getByTestId("upload-skipped").textContent).toBe("Not added (no data for these yet): XYZ.");
+  expect(screen.getByTestId("upload-skipped").textContent).toBe("1 ticker not added (no data for it yet): XYZ.");
   expect(calls.onRequestTickers).toHaveBeenCalledWith(["XYZ"], "csv");
   expect(screen.queryByTestId("use-menu")).toBeNull();
 });
@@ -585,6 +688,35 @@ describe("a ticker typed into the picker that nothing matches", () => {
     typeAndEnter(A.slice(0, 1));
     expect(calls.onRequestTickers).not.toHaveBeenCalled();
   });
+  it("is reported under its hyphen form when it is a class share written with a slash, and the message shows what was typed", () => {
+    const calls = openUpload();
+    typeAndEnter("zzqj/b");
+    expect(screen.getByRole("alert").textContent).toBe("ZZQJ/B isn't offered: no verified current data for it.");
+    expect(calls.onRequestTickers.mock.calls).toEqual([[["ZZQJ-B"], "picker"]]);
+  });
+  it("is reported as typed when it is a valid ticker with a dot: a class share, an exchange suffix or several parts", () => {
+    const calls = openUpload();
+    for (const text of ["zzqk.b", "ry.to", "BMW.DE", "a.b.c"]) typeAndEnter(text);
+    expect(calls.onRequestTickers.mock.calls).toEqual([[["ZZQK.B"], "picker"], [["RY.TO"], "picker"], [["BMW.DE"], "picker"], [["A.B.C"], "picker"]]);
+  });
+  it("adds a fund served under a dotted id as typed, before its class-share form", () => {
+    const calls = openUpload({ symbols: [...catalog, { id: "BRK.B", name: "Berkshire dotted" }, { id: "BRK-B", name: "Berkshire Hathaway Inc" }] });
+    typeAndEnter("brk.b");
+    expect(screen.getByTestId("fund-row-BRK.B")).toBeTruthy();
+    expect(screen.queryByTestId("fund-row-BRK-B")).toBeNull();
+    typeAndEnter("BRK/B");
+    expect(screen.getByTestId("fund-row-BRK-B")).toBeTruthy();
+    expect(calls.onRequestTickers).not.toHaveBeenCalled();
+  });
+  it("adds a served class share typed with a slash or a dot, and reports nothing", () => {
+    const calls = openUpload({ symbols: [...catalog, { id: "BRK-B", name: "Berkshire Hathaway Inc" }, { id: "BRKB", name: "Another Fund" }] });
+    typeAndEnter("brk/b");
+    expect(screen.getByTestId("fund-row-BRK-B")).toBeTruthy();
+    expect(screen.queryByTestId("fund-row-BRKB")).toBeNull();
+    typeAndEnter("BRK.B");
+    expect(screen.getByRole("alert").textContent).toBe("BRK-B is already in the portfolio.");
+    expect(calls.onRequestTickers).not.toHaveBeenCalled();
+  });
   it("is not reported while the list of served funds has not arrived", () => {
     const calls = openUpload({ symbols: null });
     typeAndEnter("zzqj");
@@ -649,4 +781,42 @@ it("fills the column for a plotted fund the service has no close for, from the p
   render(<Funds rows={rows} unit="shares" tensor={lagging} symbols={null} mixStatus="ok" setAside={0} menuError={null} busy={false} menuMax={30} selected={null} onUnit={noop} onAmount={noop} onUseMenu={noop} onNeedSymbols={noop} {...noUpload} />);
   expect(cell("entered", A)).toBe(pct(1000 / 1500));
   expect(cell("entered", B)).toBe(pct(500 / 1500));
+});
+
+// ── the file's prices belong to share counts: leaving the Shares unit forgets them ──
+const unitButton = (name: string) => within(screen.getByTestId("unit-toggle")).getByRole("radio", { name });
+
+it("keeps a pending upload's prices through Use portfolio in shares, and forgets them once its unit has left shares", async () => {
+  const calls = openUpload({ plotted: [A, B], unit: "usd" });
+  chooseFile(`ticker,shares,dollars\n${C},10,1000\n${D},5,500\n`);
+  await screen.findByTestId("use-menu");
+  fireEvent.click(screen.getByTestId("use-menu"));
+  expect((calls.onUseMenu.mock.calls[0] as [Row[]])[0].map((r) => r.price)).toEqual([100, 100]);
+
+  cleanup();
+  const other = openUpload({ plotted: [A, B], unit: "usd" });
+  chooseFile(`ticker,shares,dollars\n${C},10,1000\n${D},5,500\n`);
+  await screen.findByTestId("use-menu");
+  // % and back to shares: the amounts are the same numbers, but a file's prices are for its share counts only
+  fireEvent.click(unitButton("%"));
+  fireEvent.click(unitButton("Shares"));
+  fireEvent.click(screen.getByTestId("use-menu"));
+  const [rows, unit] = other.onUseMenu.mock.calls[0] as [Row[], Unit];
+  expect(unit).toBe("shares");
+  expect(rows.map((r) => [r.id, r.amount, r.price])).toEqual([[C, 10, undefined], [D, 5, undefined]]);
+});
+
+it("forgets the prices of a list being edited when the page's unit leaves shares", () => {
+  const onUnit = vi.fn();
+  const onUseMenu = vi.fn();
+  const rows: Row[] = [{ id: A, name: A, amount: 10, price: 100 }, { id: B, name: B, amount: 5, price: 50 }, { id: C, name: C, amount: 3, price: 20 }];
+  const calls = { onUnit, onAmount: vi.fn(), onUseMenu, onRequestTickers: vi.fn() };
+  render(<Harness rows={rows} unit="shares" symbols={catalog} calls={calls} />);
+  fireEvent.click(screen.getByLabelText(`Remove ${C}`));
+  fireEvent.click(unitButton("$"));
+  expect(onUnit).toHaveBeenCalledWith("usd");
+  fireEvent.click(unitButton("Shares"));
+  fireEvent.click(screen.getByTestId("use-menu"));
+  const [used] = onUseMenu.mock.calls[0] as [Row[]];
+  expect(used.map((r) => [r.id, r.amount, r.price])).toEqual([[A, 10, undefined], [B, 5, undefined]]);
 });

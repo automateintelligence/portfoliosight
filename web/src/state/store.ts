@@ -35,9 +35,14 @@ export type Cap = UrlState["caps"][number];
 /**
  * A fund of the menu and its amount. `price` is the price per share of an uploaded file that gave
  * shares and dollars (its dollars over its shares); while it is set, the fund's shares are valued
- * at it in place of the service's latest close. Page state only: it is not part of the address.
+ * at it in place of the service's latest close. It goes in the address as `p`, and only while the
+ * unit is shares: it belongs to a file's share counts, so a row loses it when the unit leaves
+ * shares (`withoutPrices`) and keeps it when only the share count is edited.
  */
 export type Row = { id: string; name: string; amount: number | null; price?: number };
+/** `rows` with no file prices; the same array when none has one. */
+export const withoutPrices = (rows: Row[]): Row[] =>
+  rows.some((r) => r.price !== undefined) ? rows.map((r) => ({ id: r.id, name: r.name, amount: r.amount })) : rows;
 /**
  * What the last CSV upload has to tell: why it was refused, the tickers it left out, notes on
  * columns that were not used, and the checks still waiting for the new menu's prices (`menu` is
@@ -159,7 +164,7 @@ export function toUrlState(state: State, haveR: boolean): UrlState {
   const own = state.preset ? state.presets?.presets.find((p) => p.id === state.preset) : undefined;
   return {
     preset: state.preset as UrlState["preset"],
-    funds: state.preset ? [] : state.rows.map((r) => ({ id: r.id, amount: r.amount })),
+    funds: state.preset ? [] : state.rows.map((r) => ({ id: r.id, amount: r.amount, ...(r.price === undefined ? {} : { price: r.price }) })),
     unit: state.unit,
     caps: own && sameCaps(state.caps, capsOfPreset(own)) ? [] : state.caps,
     lookback: state.lookback,
@@ -230,7 +235,7 @@ export function createStore(init: { search: string }): Store {
 
   let state: State = {
     preset: url.preset,
-    rows: url.funds.map((f) => ({ id: f.id, name: f.id, amount: f.amount })),
+    rows: url.funds.map((f) => ({ id: f.id, name: f.id, amount: f.amount, ...(f.price === undefined ? {} : { price: f.price }) })),
     unit: url.unit,
     caps: url.caps,
     lookback: url.lookback,
@@ -723,7 +728,9 @@ export function createStore(init: { search: string }): Store {
         // not reopen in percent: in that one case the menu is written out as a custom one.
         const own = activePreset();
         const lost = own !== null && action.unit === "pct" && (unitOfPreset(own) ?? "pct") !== "pct";
-        set(lost ? { unit: action.unit, preset: null } : { unit: action.unit });
+        // A file's prices are for its share counts, so they go when the unit leaves shares.
+        const rows = action.unit === "shares" ? state.rows : withoutPrices(state.rows);
+        set(lost ? { unit: action.unit, rows, preset: null } : { unit: action.unit, rows });
         return;
       }
       case "setAmount": {
@@ -735,11 +742,12 @@ export function createStore(init: { search: string }): Store {
       }
       case "useMenu": {
         // The funds table never offers more than the tier allows; a longer list is refused, not cut.
-        const rows = action.rows;
-        if (rows.length < MIN_FUNDS || rows.length > state.tier.menuMax) return;
+        if (action.rows.length < MIN_FUNDS || action.rows.length > state.tier.menuMax) return;
         // A unit that comes with the list (a CSV upload) is taken in the same step as its amounts,
         // so the plotted menu never reads amounts in another unit.
         const unit = action.unit ?? state.unit;
+        // A file's prices are for its share counts: they are kept only when the amounts are shares.
+        const rows = unit === "shares" ? action.rows : withoutPrices(action.rows);
         const sameFunds = menuKey(rows, []) === menuKey(state.rows, []);
         if (sameFunds) {
           set({ rows, unit, preset: null });
