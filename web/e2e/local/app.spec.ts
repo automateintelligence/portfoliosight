@@ -1042,6 +1042,9 @@ test("on a phone the chart, the sliders, the strip and the chip row end within 1
     await expect(page.getByTestId("risk-limit"), `${theme}: the note is part of this first screen`).toBeVisible();
     const limit = 1.2 * (await page.evaluate(() => window.innerHeight));
     for (const id of ids) {
+      await expect(page.getByTestId(id), `${theme}: ${id} is shown`).toBeVisible();
+      const box = await page.getByTestId(id).evaluate((el) => { const r = el.getBoundingClientRect(); return { w: r.width, h: r.height }; });
+      expect(box.w > 0 && box.h > 0, `${theme}: ${id} has a size`).toBe(true);
       const bottom = await page.getByTestId(id).evaluate((el) => el.getBoundingClientRect().bottom + window.scrollY);
       expect(bottom, `${theme}: ${id} must end within ${limit.toFixed(1)} px`).toBeLessThanOrEqual(limit);
     }
