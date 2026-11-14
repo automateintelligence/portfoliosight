@@ -48,6 +48,7 @@ from importlib import resources
 
 import numpy as np
 import pandas as pd
+from threadpoolctl import threadpool_limits
 
 from qse.distributions.garch_recursion import garch11_long_run_variance, simulate_garch11
 from qse.distributions.joint import draw_row_indices, fit_garch_t_panel, residual_pool
@@ -166,11 +167,13 @@ def fit_shape(panel: ShapePanel, splice_dates: Mapping[str, str] | None = None) 
     everything (it has no log return), when the splice guard trips, or when the shared rows hold
     no information about a fund that does vary (QSE's pool refuses it); a pool shorter than
     `MIN_POOL_ROWS` is not an error but an artifact without a pool, whose `unavailable_reason`
-    the tensor shows.
+    the tensor shows. BLAS runs on one thread during the fit, whoever calls it: a multi-threaded
+    BLAS sums in another order and the optimizer can stop at another optimum.
     """
     guarded = guarded_splice_dates([str(fund) for fund in panel.frame.columns], splice_dates)
     _refuse_total_losses(panel)
-    fit = fit_garch_t_panel(np.log1p(panel.frame))
+    with threadpool_limits(limits=1, user_api="blas"):
+        fit = fit_garch_t_panel(np.log1p(panel.frame))
     outliers = _guard(panel, fit.std_residuals, guarded)
     pool: np.ndarray | None
     reason = None
