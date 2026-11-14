@@ -2704,7 +2704,18 @@ button {
 
   .app {
     --gutter: 16px;
-    --chart-h: min(calc(100vw - 32px), 60vh);
+    /* As high as it is wide and at most 60 vh, and no higher than leaves the chip row within the first 1.2 screen heights
+       (A-PS-42): 470 px is what stands above and below the chart (header, strip, sliders, risk note, chips) and a margin;
+       the bound itself never takes the chart below 240 px. */
+    --chart-h: min(calc(100vw - 32px), 60vh, max(240px, calc(120vh - 470px)));
+  }
+
+  /* The small viewport height (browser toolbars shown) where supported, so a phone browser's collapsing
+     toolbar cannot lift the bound above the visible screen. */
+  @supports (height: 1svh) {
+    .app {
+      --chart-h: min(calc(100vw - 32px), 60vh, max(240px, calc(120svh - 470px)));
+    }
   }
 
   .hdr {
