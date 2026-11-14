@@ -64,13 +64,14 @@ export function DivSlider({ t, moved, disabled, horizontal, details, onChange }:
     "aria-valuenow": Number(value.toFixed(3)),
     "aria-valuetext": text,
     "aria-disabled": disabled || undefined,
-    "aria-describedby": testedId,
+    // Names the past-data line only while that line is on the page (Details on), never an absent element.
+    "aria-describedby": details ? testedId : undefined,
   };
   const pos = (frac: number) => `calc(${PAD}px + (100% - ${2 * PAD}px) * ${frac})`;
   const note = disabled && <p className="divs-note">{plain.divDisabled}</p>;
   const tech = details && <p className="divs-note">{technical.divSlider}</p>;
-  // Always shown, with Details on or off: the one line from our tests on past data (owner direction 2026-11-14).
-  const tested = (
+  // The one line from our tests on past data: under the slider with Details on, and only then (owner direction 2026-11-14).
+  const tested = details && (
     <p id={testedId} className="divs-tested" data-testid="past-data-line">
       {plain.testedOnPastData}
     </p>
@@ -94,7 +95,7 @@ export function DivSlider({ t, moved, disabled, horizontal, details, onChange }:
     );
   }
   // Beside the chart the line takes the cell under the slider's column (app.css: `.divs-tested` in
-  // the page's second row), so the column keeps the chart's height, with Details on or off.
+  // the page's second row), so the column keeps the chart's height.
   return (
     <>
       <div className="divs" data-keeps-pin="">

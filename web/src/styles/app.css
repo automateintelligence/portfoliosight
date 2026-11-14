@@ -1478,7 +1478,7 @@ button {
   line-height: 1.3;
 }
 
-/* The line from our tests on past data, under the slider at all times (owner direction 2026-11-14).
+/* The line from our tests on past data, under the slider with Details on and only then (owner direction 2026-11-14).
  * Beside the chart it sits in the page's second row, under the slider's column, so the column keeps
  * the chart's height; on a phone it follows the horizontal slider inside `.divs-h`. */
 .divs-tested {

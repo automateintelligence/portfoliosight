@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // Owner direction 2026-11-11: the page never names an "Optimized" mix and never grades diversification
 // with a word. Each mix states the neutral figure instead, and the one line from our tests on past data
-// appears once, under the diversification slider (owner direction 2026-11-14; it was in the details).
+// appears once, under the diversification slider when Details is on and only then (owner direction
+// 2026-11-14; it was in the details).
 import fs from "node:fs";
 import path from "node:path";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -181,7 +182,7 @@ describe("the strip", () => {
     expect(screen.getByRole("region", { name: "Selected mix" }).textContent).not.toMatch(OTHER_GRADE_WORDS);
   });
 
-  it("carries the past-data line neither in the default view nor in the details (it is under the diversification slider)", () => {
+  it("carries the past-data line neither in the default view nor in the details (it is under the diversification slider, with Details on)", () => {
     for (const details of [false, true]) {
       const { container } = strip(details);
       expect(visible(container), `details ${details}`).not.toContain(PAST_DATA_LINE);
@@ -217,16 +218,20 @@ describe("the diversification slider", () => {
     expect(screen.getByText("More diversified")).toBeTruthy();
   });
 
-  it("shows the past-data line once under the slider, with details on or off, vertical or horizontal (owner direction 2026-11-14)", () => {
+  it("shows the past-data line once under the slider with Details on, and not at all with Details off, vertical or horizontal (owner direction 2026-11-14)", () => {
     for (const horizontal of [false, true]) {
-      for (const details of [false, true]) {
-        const { container } = render(<DivSlider t={0} moved={false} disabled={false} horizontal={horizontal} details={details} onChange={vi.fn()} />);
-        const el = screen.getByTestId("past-data-line");
-        expect(el.textContent).toBe(PAST_DATA_LINE);
-        expect(container.textContent!.split(PAST_DATA_LINE), `horizontal ${horizontal}, details ${details}`).toHaveLength(2);
-        expect(screen.getByRole("slider").compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING, "after the slider").toBeTruthy();
-        cleanup();
-      }
+      const off = render(<DivSlider t={0} moved={false} disabled={false} horizontal={horizontal} details={false} onChange={vi.fn()} />);
+      expect(screen.queryByTestId("past-data-line"), `horizontal ${horizontal}, details off`).toBeNull();
+      expect(off.container.textContent!.includes(PAST_DATA_LINE), `horizontal ${horizontal}, details off`).toBe(false);
+      expect(screen.getByRole("slider").hasAttribute("aria-describedby"), `horizontal ${horizontal}, details off: no description`).toBe(false);
+      cleanup();
+      const { container } = render(<DivSlider t={0} moved={false} disabled={false} horizontal={horizontal} details={true} onChange={vi.fn()} />);
+      const el = screen.getByTestId("past-data-line");
+      expect(el.textContent).toBe(PAST_DATA_LINE);
+      expect(container.textContent!.split(PAST_DATA_LINE), `horizontal ${horizontal}, details on`).toHaveLength(2);
+      expect(screen.getByRole("slider").compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING, "after the slider").toBeTruthy();
+      expect((screen.getByRole("slider").getAttribute("aria-describedby") ?? "").split(/\s+/), "named by the slider").toContain(el.id);
+      cleanup();
     }
   });
 

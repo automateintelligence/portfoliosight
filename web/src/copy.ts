@@ -27,8 +27,8 @@ export const plain = {
   divBestReturn: "Best-return mix",
   /**
    * The one line from our research on how spread-out risk did against the best-return mix (owner
-   * direction 2026-11-11). Under the diversification slider at all times (owner direction 2026-11-14);
-   * the only copy of this text.
+   * direction 2026-11-11). Under the diversification slider, with Details on and only then (owner
+   * direction 2026-11-14); the only copy of this text.
    */
   testedOnPastData: "In our tests on past data, mixes with risk spread more evenly did not lose less than the best-return mix at the same risk.",
   frontier: "Best return at each level of risk",
