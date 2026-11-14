@@ -219,7 +219,7 @@ the docstring is authoritative for that test.
     was moved, a `path.leader`; `data-end-x` / `data-end-y` are the line end in chart pixels),
     `ghost-tip`, `mix-card` (`data-for` = `selected | current | cell` since 2026-11-11),
     `mix-card-word`, `trades-export`, `details-words`, `details-suggested` (what "Optimized"
-    means; both retired 2026-11-11, replaced by `details-tested`), `details-method`, `details-bell` (the one-year range two ways), `key-nolimits` (legend entry of
+    means; both retired 2026-11-11, replaced by `details-tested`, which became `past-data-line` on 2026-11-14), `details-method`, `details-bell` (the one-year range two ways), `key-nolimits` (legend entry of
     the "No limits" curve, drawn when some limit binds), `caps-none` (sets every fund to no
     minimum and a 100% maximum and rebuilds; `caps-reset` reads "Reset limits"). The markers'
     wrappers carry `data-mark` = `selected | current` (`div` until 2026-11-11); `point-*` ids are unchanged and no
@@ -243,8 +243,10 @@ the docstring is authoritative for that test.
     Average / Fair / Poor; `diversificationWord` is removed from `web/src/math/portfolio.ts`; the line is
     `diversificationLine(enb, enbRef)` in `web/src/copy.ts` (A-PS-47's unit leg).
     `details-enb` now holds only the technical name of the measure. The line from our tests on past
-    data is `details-tested`, in the details. The colour map's legend is unchanged (its ends read
-    "Less" and "More"). "bets" is allowed in default copy only inside "independent bets".
+    data is `past-data-line` (`details-tested`, in the details, until 2026-11-14; owner direction
+    2026-11-14): under the diversification slider at all times, once, never in the details. The colour
+    map's legend is unchanged (its ends read "Less" and "More"). "bets" is allowed in default copy only
+    inside "independent bets".
 - Light ramp, 2026-10-13 (owner direction). The heatmap reads its ramp per theme from the token
   `--heat-ramp` on `html`: `turned` (ks-dark, hud, grid) paints a cell at
   `1 - 0.8 * Z / enb_ref`, `rising` (light) at `Z / enb_ref`, the mapping Light had before owner
