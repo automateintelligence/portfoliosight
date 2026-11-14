@@ -216,7 +216,7 @@ describe("file prices (p)", () => {
   it("writes the prices after f, only for rows that have one, and reads them back", () => {
     const state = shares([{ id: "VTI", amount: 10, price: 200.5 }, { id: "BND", amount: 100 }, { id: "VNQ", amount: 7, price: 80 }]);
     const search = encode(state);
-    expect(search).toBe("?f=VTI:10,BND:100,VNQ:7&p=VTI:200.5,VNQ:80&unit=shares&lb=5y&d=auto");
+    expect(search).toBe("?f=VTI:10,BND:100,VNQ:7&p=VTI:200.5,VNQ:80&unit=shares&lb=5y&d=0");
     expect(decode(search)).toEqual(state);
     expect(encode(decode(search))).toBe(search);
     expect(keysOf(search)).toEqual(["f", "p", "unit", "lb", "d"]);
@@ -224,34 +224,34 @@ describe("file prices (p)", () => {
 
   it("keeps a price on a row whose amount is blank, and a row without a price has no price at all", () => {
     const state = shares([{ id: "VTI", amount: null, price: 200 }, { id: "BND", amount: 5 }]);
-    expect(encode(state)).toBe("?f=VTI,BND:5&p=VTI:200&unit=shares&lb=5y&d=auto");
+    expect(encode(state)).toBe("?f=VTI,BND:5&p=VTI:200&unit=shares&lb=5y&d=0");
     const back = decode(encode(state));
     expect(back).toEqual(state);
     expect(Object.keys(back.funds[1])).toEqual(["id", "amount"]);
   });
 
   it("leaves addresses without prices exactly as they were, written and read", () => {
-    expect(encode(shares([{ id: "VTI", amount: 10 }, { id: "BND", amount: 100 }]))).toBe("?f=VTI:10,BND:100&unit=shares&lb=5y&d=auto");
+    expect(encode(shares([{ id: "VTI", amount: 10 }, { id: "BND", amount: 100 }]))).toBe("?f=VTI:10,BND:100&unit=shares&lb=5y&d=0");
     const old = decode("?f=VTI:10,BND:100&unit=shares&lb=5y&d=auto");
     expect(old.funds).toStrictEqual([{ id: "VTI", amount: 10 }, { id: "BND", amount: 100 }]);
     // a page that never meets a price writes the same address it always did
-    expect(encode({ ...EMPTY, funds: [{ id: "VTI", amount: 60 }, { id: "BND", amount: 40 }] })).toBe("?f=VTI:60,BND:40&lb=5y&d=auto");
+    expect(encode({ ...EMPTY, funds: [{ id: "VTI", amount: 60 }, { id: "BND", amount: 40 }] })).toBe("?f=VTI:60,BND:40&lb=5y&d=0");
   });
 
   it("writes no prices outside the shares unit, and none with a preset", () => {
     const funds = [{ id: "VTI", amount: 10, price: 200 }, { id: "BND", amount: 5, price: 10 }];
-    expect(encode({ ...EMPTY, unit: "pct", funds })).toBe("?f=VTI:10,BND:5&lb=5y&d=auto");
-    expect(encode({ ...EMPTY, unit: "usd", funds })).toBe("?f=VTI:10,BND:5&unit=usd&lb=5y&d=auto");
-    expect(encode({ ...EMPTY, unit: "shares", preset: "tsp", funds })).toBe("?u=tsp&unit=shares&lb=5y&d=auto");
+    expect(encode({ ...EMPTY, unit: "pct", funds })).toBe("?f=VTI:10,BND:5&lb=5y&d=0");
+    expect(encode({ ...EMPTY, unit: "usd", funds })).toBe("?f=VTI:10,BND:5&unit=usd&lb=5y&d=0");
+    expect(encode({ ...EMPTY, unit: "shares", preset: "tsp", funds })).toBe("?u=tsp&unit=shares&lb=5y&d=0");
   });
 
   it("writes prices at six decimals like every other number, and leaves out one that would be written as zero", () => {
     const search = encode(shares([{ id: "VTI", amount: 3, price: 1000 / 3 }, { id: "BND", amount: 1, price: 0.0000004 }, { id: "VNQ", amount: 1, price: 0.000001 }]));
-    expect(search).toBe("?f=VTI:3,BND:1,VNQ:1&p=VTI:333.333333,VNQ:0.000001&unit=shares&lb=5y&d=auto");
+    expect(search).toBe("?f=VTI:3,BND:1,VNQ:1&p=VTI:333.333333,VNQ:0.000001&unit=shares&lb=5y&d=0");
     expect(encode(decode(search))).toBe(search);
     // not a number a price can be: nothing is written for them
     for (const price of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(encode(shares([{ id: "VTI", amount: 1, price }])), String(price)).toBe("?f=VTI:1&unit=shares&lb=5y&d=auto");
+      expect(encode(shares([{ id: "VTI", amount: 1, price }])), String(price)).toBe("?f=VTI:1&unit=shares&lb=5y&d=0");
     }
   });
 
