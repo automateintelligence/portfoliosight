@@ -46,7 +46,7 @@ test("the first screen needs nothing entered and shows no table", async ({ page 
   await expect(page.locator("table")).toHaveCount(0);
   await expect(page.getByTestId("fund-row-VTI")).toHaveCount(0);
   await expect(page.getByText("How spread out the risk is").first()).toBeVisible();
-  await expect(page.getByTestId("div-reset")).toBeHidden();
+  await expect(page.getByTestId("div-reset")).toHaveCount(0);
 });
 
 test("a window without enough shared history is disabled with its note and the view carries on", async ({ page, request }) => {
@@ -306,6 +306,8 @@ test("at 1024 px the open sidebar leaves a first screen in which nothing overlap
   const chips = await Promise.all(["funds", "trades", "stress", "settings"].map((id) => box(`[data-testid="chip-${id}"]`)));
   const advice = await box(".advice");
   for (const chip of chips) expect(apart(chip, advice), "a chip and the advice line overlap").toBe(true);
+  // the chips keep the slack they had before the diversification line was a sentence: 753 of 768 px
+  for (const chip of chips) expect(chip.y + chip.height, "a chip ends at least 15 px above the bottom of the first screen").toBeLessThanOrEqual(753);
   const chart = await box('[data-testid="chart"]');
   const side = await box('[data-testid="section-funds"]');
   expect(chart.width).toBeGreaterThan(400);
@@ -388,17 +390,16 @@ test("every frontier line is named at its right end and the names do not collide
   await expect(page.getByTestId("ghost-tip")).toHaveCount(0);
 });
 
-test("the square and the open circle show the same card as the selected mix", async ({ page }, testInfo) => {
+const DIVERSIFICATION_LINE = /^This mix spreads risk over the equivalent of \d+\.\d independent bets; highest found on this portfolio: \d+\.\d\.$/;
+
+test("the square shows the same card as the selected mix, and no third marker exists", async ({ page }, testInfo) => {
   await open(page);
   const card = page.getByTestId("mix-card");
-  const titles: Record<string, string> = { selected: "Selected mix", current: "Your starting mix", div: "Optimized" };
-  if (isPhone(testInfo.project.name)) {
-    // at rest on Optimized the selected point sits on the open circle, and a tap there reaches the
-    // point (it pins its card); move the point off the circle first
-    await page.getByTestId("div-slider").focus();
-    for (let i = 0; i < 12; i++) await page.keyboard.press("ArrowLeft");
-  }
-  for (const kind of ["current", "div", "selected"]) {
+  const titles: Record<string, string> = { selected: "Selected mix", current: "Your starting mix" };
+  // owner direction 2026-11-11: the open circle and its name are gone
+  await expect(page.getByTestId("point-div")).toHaveCount(0);
+  await expect(page.locator("[data-mark]")).toHaveCount(2);
+  for (const kind of ["current", "selected"]) {
     const mark = page.locator(`[data-mark="${kind}"]`);
     if (isPhone(testInfo.project.name)) {
       if (kind === "selected") continue; // on a phone the selected point is a drag handle
@@ -407,19 +408,14 @@ test("the square and the open circle show the same card as the selected mix", as
     } else {
       await page.mouse.move(5, 5);
       await expect(card).toHaveCount(0);
-      // the square and the circle can sit on top of each other: keyboard focus picks one exactly
+      // the square can sit on top of the selected point: keyboard focus picks one exactly
       await mark.focus();
     }
     await expect(card).toHaveCount(1);
-    if (isPhone(testInfo.project.name) && kind === "div" && (await card.getAttribute("data-for")) === "current") {
-      // the square covers the circle in this view: a second tap turns the card over
-      await expect(page.getByText("Tap again for the marker underneath.")).toBeVisible();
-      await page.locator('[data-mark="current"] .hit').tap({ force: true });
-    }
     await expect(card).toHaveAttribute("data-for", kind);
     await expect(card.locator("h3")).toHaveText(titles[kind]);
     await expect(card.locator(".tip-range")).toHaveText(/Bad\s*[+−]?\d+\.\d%\s*Typical\s*[+−]?\d+\.\d%\s*Good\s*[+−]?\d+\.\d%/);
-    await expect(card.getByTestId("mix-card-word")).toHaveText(/^(Good|Average|Fair|Poor)$/);
+    await expect(card.getByTestId("mix-card-word")).toHaveText(DIVERSIFICATION_LINE);
     expect(await card.locator("li").count(), `${kind}: largest holdings`).toBeGreaterThanOrEqual(3);
     await expect(card).toContainText("Risk and expected return are per year.");
     expect(await mark.getAttribute("aria-describedby"), `${kind}: the open card describes its marker`).toBe(await card.locator("xpath=..").getAttribute("id"));
@@ -431,17 +427,15 @@ test("the square and the open circle show the same card as the selected mix", as
     if (!isPhone(testInfo.project.name)) await mark.blur();
   }
   if (isPhone(testInfo.project.name)) {
-    // a press on either marker that moves drags the selected point, so the page must not pan from it
-    for (const kind of ["current", "div"]) {
-      expect(await page.locator(`[data-mark="${kind}"]`).evaluate((el) => getComputedStyle(el).touchAction), `${kind}: no panning from the marker`).toBe("none");
-    }
+    // a press on the square that moves drags the selected point, so the page must not pan from it
+    expect(await page.locator('[data-mark="current"]').evaluate((el) => getComputedStyle(el).touchAction), "no panning from the marker").toBe("none");
     return;
   }
   // a mouse over the square shows its card as well
   const square = await boxOf(page, "point-current");
   await page.mouse.move(square.x + square.width / 2, square.y + square.height / 2);
   await expect(card).toHaveCount(1);
-  expect(["current", "div"]).toContain(await card.getAttribute("data-for"));
+  expect(["current", "selected"]).toContain(await card.getAttribute("data-for"));
 });
 
 test("hovering the colour map shows a plain card for the mix there", async ({ page }, testInfo) => {
@@ -462,36 +456,150 @@ test("hovering the colour map shows a plain card for the mix there", async ({ pa
   await expect(card.locator("h3")).toHaveText("The mix at this spot");
   await expect(card).toContainText(/Risk\s*\d+\.\d%/);
   await expect(card).toContainText(/Expected return\s*\d+\.\d%/);
-  await expect(card.getByTestId("mix-card-word")).toHaveText(/^(Good|Average|Fair|Poor)$/);
+  await expect(card.getByTestId("mix-card-word")).toHaveText(DIVERSIFICATION_LINE);
   expect(await card.locator("li").count()).toBeGreaterThanOrEqual(3);
   const plain = (await card.innerText()).toLowerCase();
-  for (const word of ["ceiling", "floor", "sits at", "bets", "computed for"]) expect(plain, `"${word}" in the default card`).not.toContain(word);
+  for (const word of ["ceiling", "floor", "sits at", "computed for"]) expect(plain, `"${word}" in the default card`).not.toContain(word);
+  // "bets" only as the figure that replaced the grade words
+  expect(plain.replace(/independent bets/g, ""), `"bets" in the default card`).not.toContain("bets");
   // over a marker the marker's own card wins
   await page.getByTestId("point-selected").hover({ force: true });
   await expect(card).toHaveCount(0);
-  // details add the measure and where the mix was computed
+  // details add the bell-curve figure and where the mix was computed
   await page.mouse.move(chart.x + 10, chart.y + 10);
   await page.getByTestId("details-toggle").click();
   await page.evaluate(() => window.scrollTo(0, 0));
   const after = await boxOf(page, "chart");
   await page.mouse.move(after.x + after.width * 0.3, after.y + after.height * 0.72);
-  await expect(card).toContainText("independent bets");
+  await expect(card).toContainText("Textbook bell-curve figure");
   await expect(card).toContainText(/At risk \d+\.\d%, earning at least \d+\.\d%/);
 });
 
-test("the details explain the diversification word and Optimized in plain words, each once", async ({ page }) => {
+const PAST_DATA_LINE = "In our tests on past data, more diversification did not lose less than the best return (frontier line) at the same risk.";
+
+test("the past-data line shows once under the diversification slider with Details on, not in the details panel, and is not on the page with Details off, and the details name the measure and explain no grade word and no Optimized mix", async ({ page }) => {
   await open(page);
+  // owner direction 2026-11-14: with Details off the line is not on the page and the slider has no description
+  await expect(page.getByTestId("details-toggle")).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByTestId("past-data-line")).toHaveCount(0);
+  await expect(page.getByTestId("div-slider")).not.toHaveAttribute("aria-describedby", /.*/);
+  expect((await page.locator("body").innerText()).split(PAST_DATA_LINE).length - 1, "not stated with Details off").toBe(0);
   await page.getByTestId("details-toggle").click();
-  await expect(page.getByTestId("details-words")).toContainText("the most spread-out mix these funds can make");
-  for (const word of ["Good:", "Average:", "Fair:", "Poor:"]) await expect(page.getByTestId("details-words")).toContainText(word);
-  await expect(page.getByTestId("details-suggested")).toContainText("Optimized is the balanced point");
+  await expect(page.getByTestId("details-tested")).toHaveCount(0);
+  await expect(page.getByTestId("past-data-line")).toHaveText(PAST_DATA_LINE);
+  await expect(page.getByTestId("past-data-line")).toBeVisible();
+  const lineId = await page.getByTestId("past-data-line").getAttribute("id");
+  expect(lineId, "the line has an id").toBeTruthy();
+  await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-describedby", lineId!);
+  await expect(page.locator(".details-panel")).not.toContainText(PAST_DATA_LINE);
   const text = await page.locator("body").innerText();
+  expect(text.split(PAST_DATA_LINE).length - 1, "the line is stated once with Details on").toBe(1);
+  await expect(page.getByTestId("details-enb")).toContainText("effective number of bets, minimum torsion");
+  await expect(page.getByTestId("details-words")).toHaveCount(0);
+  await expect(page.getByTestId("details-suggested")).toHaveCount(0);
   expect(text).not.toContain("Words compare this mix");
   expect(text).not.toContain("standard error");
-  expect(text.split("the knee of diversification (ENB) gained against return given up").length - 1, "the method sentence is stated once").toBe(1);
-  await expect(page.getByTestId("details-method")).toContainText("Optimized: the knee of diversification");
+  expect(text).not.toContain("the knee of diversification");
+  await expect(page.getByTestId("details-method")).not.toContainText(/knee|balanced point/i);
   // the bell-curve figure appears in the details only, labelled as such
   await expect(page.getByTestId("details-bell")).toContainText("Textbook bell-curve figure");
+  // turning Details off again takes the line away
+  await page.getByTestId("details-toggle").click();
+  await expect(page.getByTestId("past-data-line")).toHaveCount(0);
+  await expect(page.getByTestId("div-slider")).not.toHaveAttribute("aria-describedby", /.*/);
+});
+
+// With Details on the line is long, so beside the chart it takes the cell under the slider's column
+// rather than a place inside the column: the column keeps the chart's height (a taller one would push
+// the risk slider, the strip, the chips and the sidebar down). On a phone it follows the horizontal
+// slider. With Details off there is no line, and the chips keep the first screen they had.
+test("with Details on the past-data line sits under the slider, inside its width, and leaves the chart's height alone; with Details off it is absent and the first screen is as it was", async ({ page }, testInfo) => {
+  const phone = isPhone(testInfo.project.name);
+  const views = phone
+    ? [{ width: 390, height: 844, side: false }]
+    : [
+        { width: 1366, height: 768, side: false },
+        { width: 1366, height: 900, side: false },
+        { width: 1024, height: 768, side: true },
+      ];
+  for (const view of views) {
+    if (!phone) await page.setViewportSize({ width: view.width, height: view.height });
+    for (const details of [false, true]) {
+      const tag = `${view.width}x${view.height}${view.side ? " sidebar open" : ""}${details ? " details on" : " details off"}`;
+      await open(page, details ? "x=1" : "");
+      if (view.side && (await page.getByTestId("funds-toggle").getAttribute("aria-expanded")) !== "true") await page.getByTestId("funds-toggle").click();
+      await expect(page.getByTestId("details-toggle"), `${tag}: the Details state`).toHaveAttribute("aria-pressed", details ? "true" : "false");
+      const slider = (await page.getByTestId("div-slider").boundingBox())!;
+      const column = (await page.locator(".divs").boundingBox())!;
+      const chart = (await page.getByTestId("chart").boundingBox())!;
+      if (!details) {
+        await expect(page.getByTestId("past-data-line"), `${tag}: no line`).toHaveCount(0);
+        await expect(page.getByTestId("div-slider"), `${tag}: the slider has no description`).not.toHaveAttribute("aria-describedby", /.*/);
+        expect((await page.locator("body").innerText()).split(PAST_DATA_LINE).length - 1, `${tag}: the wording is not on the page`).toBe(0);
+      } else {
+        const line = (await page.getByTestId("past-data-line").boundingBox())!;
+        expect(line.y, `${tag}: under the slider`).toBeGreaterThanOrEqual(slider.y + slider.height - 0.5);
+        expect(line.x, `${tag}: not wider than the slider's column, on the left`).toBeGreaterThanOrEqual(column.x - 0.5);
+        expect(line.x + line.width, `${tag}: not wider than the slider's column, on the right`).toBeLessThanOrEqual(column.x + column.width + 0.5);
+        if (phone) expect(line.y + line.height, `${tag}: at the foot of the slider's block`).toBeLessThanOrEqual(column.y + column.height + 0.5);
+        else expect(line.y, `${tag}: directly under the column`).toBeGreaterThanOrEqual(column.y + column.height - 0.5);
+        const id = await page.getByTestId("past-data-line").getAttribute("id");
+        await expect(page.getByTestId("div-slider"), `${tag}: the slider names the line`).toHaveAttribute("aria-describedby", id!);
+        await expect(page.locator(".details-panel"), `${tag}: not inside the details panel`).not.toContainText(PAST_DATA_LINE);
+      }
+      if (!phone) {
+        expect(column.height, `${tag}: the column is as tall as the chart, no taller`).toBeLessThanOrEqual(chart.height + 1);
+        expect(slider.height, `${tag}: the slider keeps room to drag`).toBeGreaterThanOrEqual(120);
+        // with Details off the chips keep the first screen they had
+        if (!details) {
+          const chips = await Promise.all(["funds", "trades", "stress", "settings"].map((id) => boxOf(page, `chip-${id}`)));
+          for (const chip of chips) expect(chip.y + chip.height, `${tag}: a chip ends at least 15 px above the bottom of the first screen`).toBeLessThanOrEqual(view.height - 15);
+        }
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth), `${tag}: nothing scrolls sideways`).toBeLessThanOrEqual(view.width);
+    }
+  }
+});
+
+test("the page opens on the best-return mix, and nothing a visitor reads names Optimized or grades diversification", async ({ page }) => {
+  await open(page);
+  // position 0 at the opening risk: the readout says so, there is no button back to it and the address says d=0
+  await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-valuetext", "Best-return mix");
+  await expect(page.getByTestId("div-reset")).toHaveCount(0);
+  await expect.poll(() => new URL(page.url()).searchParams.get("d")).toBe("0");
+  await page.getByTestId("details-toggle").click();
+  for (const id of ["funds", "trades", "stress", "settings"]) await section(page, id);
+  const everything = await page.evaluate(() => {
+    const names = [...document.querySelectorAll("[aria-label], [aria-valuetext], [title], [alt]")].flatMap((el) => ["aria-label", "aria-valuetext", "title", "alt"].map((a) => el.getAttribute(a) ?? ""));
+    return [document.body.innerText, ...names].join("\n");
+  });
+  expect(everything).not.toMatch(/optimi[sz]ed/i);
+  expect(everything).not.toMatch(/\b(Average|Fair|Poor)\b/);
+  // "Good" is left only as the label of the range's top figure
+  expect(everything.match(/\bGood\b/g)?.length ?? 0, "Good only as the range's label").toBeGreaterThan(0);
+  expect(everything).not.toMatch(/Diversification:?\s*Good/);
+  await expect(page.getByTestId("div-word")).toHaveText(DIVERSIFICATION_LINE);
+});
+
+test("a link with no d, or with the old d=auto, opens on the best-return mix; an explicit d is kept; the slider alone returns to 0", async ({ page }) => {
+  for (const query of ["u=guide2017&lb=5y&r=20", "u=guide2017&lb=5y&r=20&d=auto"]) {
+    await open(page, query);
+    await expect(page.getByTestId("div-slider")).toHaveAttribute("aria-valuetext", "Best-return mix");
+    await expect(page.getByTestId("div-reset")).toHaveCount(0);
+    await expect.poll(() => new URL(page.url()).searchParams.get("d"), query).toBe("0");
+  }
+  await open(page, "u=guide2017&lb=5y&r=20&d=0.5");
+  const slider = page.getByTestId("div-slider");
+  await expect(slider).toHaveAttribute("aria-valuetext", "50 of 100 toward more diversified");
+  // no button goes back (owner direction 2026-11-11): not by test id and not by name
+  await expect(page.getByTestId("div-reset")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /back to/i })).toHaveCount(0);
+  // the slider returns to 0 by the keyboard: End on the vertical one, Home on the horizontal one
+  await slider.focus();
+  await page.keyboard.press((await slider.getAttribute("aria-orientation")) === "horizontal" ? "Home" : "End");
+  await expect(slider).toHaveAttribute("aria-valuetext", "Best-return mix");
+  await expect.poll(() => new URL(page.url()).searchParams.get("d")).toBe("0");
+  await expect(page.getByTestId("div-reset")).toHaveCount(0);
 });
 
 test("trades export a CSV file from the browser", async ({ page }) => {
@@ -1009,6 +1117,30 @@ test("a shared link over the public limit is refused with a message and the defa
   await expect.poll(() => page.url()).not.toContain("MOCKF");
 });
 
+test("the risk slider says why it stops at its left end, clear of its readouts, and the note is described to a screen reader", async ({ page }) => {
+  const wording = "Less risk here would mean a lower return and a worse bad year";
+  for (const query of ["", "x=1"]) {
+    await open(page, query);
+    const note = page.getByTestId("risk-limit");
+    await expect(note).toHaveText(wording);
+    const slider = page.getByTestId("risk-slider");
+    const noteId = await slider.getAttribute("aria-describedby");
+    expect(noteId, "the slider points at the note").toBe(await note.getAttribute("id"));
+    // thumb at the left limit, where the readouts are nearest the note, then at the right end
+    for (const key of ["Home", "End"]) {
+      await slider.focus();
+      await page.keyboard.press(key);
+      await expect(slider).toHaveAttribute("aria-valuenow", await slider.getAttribute(key === "Home" ? "aria-valuemin" : "aria-valuemax") ?? "");
+      const [n, readout, rail] = [await boxOf(page, "risk-limit"), (await page.locator(".risk .readout").boundingBox())!, await boxOf(page, "risk-slider")];
+      expect(overlap(n, readout), `${query || "default"} ${key}: the note and the readouts`).toBe(false);
+      expect(overlap(n, rail), `${query || "default"} ${key}: the note and the slider`).toBe(false);
+      expect(n.x, "the note starts on the page").toBeGreaterThanOrEqual(0);
+      expect(n.x + n.width, "the note ends on the page").toBeLessThanOrEqual(page.viewportSize()!.width);
+      expect(n.y, "the note is under the slider").toBeGreaterThan(rail.y + rail.height - 1);
+    }
+  }
+});
+
 // ── The pinned card (owner direction 2026-10-16) ─────────────────────────────────────────────
 type Box = { x: number; y: number; width: number; height: number };
 const overlap = (a: Box, b: Box) => a.x < b.x + b.width - 0.5 && b.x < a.x + a.width - 0.5 && a.y < b.y + b.height - 0.5 && b.y < a.y + a.height - 0.5;
@@ -1102,7 +1234,7 @@ test("a click or tap on the selected point pins its card; it follows both slider
   await expect(pinned).toBeVisible();
   await inPlace("after a drag");
   await expect(pinned).toContainText(/Bad\s*[+−]?\d+\.\d%/);
-  await expect(pinned.getByTestId("mix-card-word")).toHaveText(/^(Good|Average|Fair|Poor)$/);
+  await expect(pinned.getByTestId("mix-card-word")).toHaveText(DIVERSIFICATION_LINE);
 
   // a second click or tap on the point lets it go
   const p2 = await centre(page, "point-selected");
@@ -1234,9 +1366,12 @@ test("uploading a CSV replaces the fund list, lists what it could not add, and R
   const before = (await posts(page)).length;
   // the template, as the upload button's own file picker takes it back: VXUS is not served by the mock
   const [chooser] = await Promise.all([page.waitForEvent("filechooser"), page.getByTestId("funds-upload").click()]);
+  await expect(page.getByTestId("funds-count")).toHaveText("2 funds");
   await chooser.setFiles(csvFile(template, "portfoliosight-template.csv"));
-  await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): VXUS.");
+  await expect(page.getByTestId("upload-skipped")).toHaveText("1 ticker not added (no data for it yet): VXUS.");
   await expect(page.getByTestId("upload-skipped")).toBeVisible();
+  // the count is of the list on screen, the file's three served funds, not of the menu in use
+  await expect(page.getByTestId("funds-count")).toHaveText("3 funds");
   // the fund list on screen is the file's, in dollars; the menu in use has not changed yet
   for (const id of ["VTI", "BND", "VNQ"]) await expect(page.getByTestId(`fund-row-${id}`)).toBeVisible();
   await expect(page.getByTestId("fund-row-SGOV")).toHaveCount(0);
@@ -1254,12 +1389,13 @@ test("uploading a CSV replaces the fund list, lists what it could not add, and R
   await expect.poll(() => new URL(page.url()).searchParams.get("unit")).toBe("usd");
   await expect.poll(() => new URL(page.url()).searchParams.get("f")).toBe("VTI:10000,BND:7500,VNQ:2500");
   await expect(page.getByTestId("mix-entered-VTI")).toHaveText("50.0%");
+  await expect(page.getByTestId("funds-count")).toHaveText("3 funds");
   // what could not be added is still said, and was reported to us without any amounts
-  await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): VXUS.");
+  await expect(page.getByTestId("upload-skipped")).toHaveText("1 ticker not added (no data for it yet): VXUS.");
   expect(await tickerRequests(page)).toEqual([{ tickers: ["VXUS"], source: "csv" }]);
   // neither the file's contents nor the report reach the address
   const address = decodeURIComponent(page.url());
-  for (const text of ["VXUS", "Not added", "upload", "10000,40"]) expect(address).not.toContain(text);
+  for (const text of ["VXUS", "not added", "upload", "10000,40"]) expect(address).not.toContain(text);
   // dismissed
   await page.getByTestId("upload-dismiss").click();
   await expect(page.getByTestId("upload-skipped")).toHaveCount(0);
@@ -1312,6 +1448,43 @@ test("a file with shares and dollars fills Your starting mix from its dollars at
   for (const r of held) expect(Math.abs(Number(r[5]) - Number(r[4]) / price[r[0]]), r[0]).toBeLessThanOrEqual(0.51);
 });
 
+test("a file's prices stay in the address: a reload and the same link in a new page show the same starting mix", async ({ page }) => {
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await section(page, "funds");
+  // the mock's latest closes are 162.07 (VTI) and 33.99 (BND); the file's dollars give $200 and $10 a share
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker,shares,dollars\nVTI,10,2000\nBND,100,1000\n"));
+  await page.getByTestId("use-menu").click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("p")).toBe("VTI:200,BND:10");
+  await expect(page.getByTestId("mix-entered-VTI")).toHaveText("66.7%");
+  await expect(page.getByTestId("mix-entered-BND")).toHaveText("33.3%");
+  const link = page.url();
+  expect(new URL(link).searchParams.get("f")).toBe("VTI:10,BND:100");
+  // reload: the same starting mix, not the one the service's closes would give
+  await page.reload();
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  await section(page, "funds");
+  await expect(page.getByTestId("mix-entered-VTI")).toHaveText("66.7%");
+  await expect(page.getByTestId("mix-entered-BND")).toHaveText("33.3%");
+  expect(new URL(page.url()).searchParams.get("p")).toBe("VTI:200,BND:10");
+  // the link opened by someone else
+  const other = await page.context().newPage();
+  await other.goto(link);
+  await expect(other.getByTestId("point-selected")).toBeVisible();
+  await section(other, "funds");
+  await expect(other.getByTestId("mix-entered-VTI")).toHaveText("66.7%");
+  await expect(other.getByTestId("mix-entered-BND")).toHaveText("33.3%");
+  await other.close();
+  // leaving the Shares unit drops the prices from the address
+  await page.getByTestId("unit-toggle").getByRole("radio", { name: "$" }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("unit")).toBe("usd");
+  expect(new URL(page.url()).searchParams.has("p")).toBe(false);
+  // the same shares with no prices in the link are valued at the closes (10 x 162.07 against 100 x 33.99)
+  await page.goto("/?f=VTI:10,BND:100&unit=shares");
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  await section(page, "funds");
+  await expect(page.getByTestId("mix-entered-VTI")).toHaveText("32.3%");
+});
+
 test("a file whose amounts do not share a column is refused whole, with who has what", async ({ page }) => {
   await open(page, "f=SGOV:50,VTIP:50&unit=pct");
   await section(page, "funds");
@@ -1334,10 +1507,19 @@ test("tickers left out of a file are listed even when the file is refused for ha
   await section(page, "funds");
   await page.getByTestId("funds-file").setInputFiles(csvFile("ticker\nVTI\nXYZ\nABC\n"));
   await expect(page.getByTestId("upload-error")).toHaveText("A portfolio needs at least 2 funds.");
-  await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): XYZ, ABC.");
+  await expect(page.getByTestId("upload-skipped")).toHaveText("2 tickers not added (no data for these yet): XYZ, ABC.");
   await expect(page.getByTestId("fund-row-SGOV")).toBeVisible();
   await expect.poll(async () => (await tickerRequests(page)).length).toBe(1);
   expect(await tickerRequests(page)).toEqual([{ tickers: ["XYZ", "ABC"], source: "csv" }]);
+});
+
+test("a class share a file writes with a slash is reported, when the site has none, with a hyphen; one with a dot as written", async ({ page }) => {
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await section(page, "funds");
+  await page.getByTestId("funds-file").setInputFiles(csvFile("ticker\nVTI\nBND\nXYZ/B\nabc.d\n"));
+  await expect(page.getByTestId("upload-skipped")).toHaveText("2 tickers not added (no data for these yet): XYZ-B, ABC.D.");
+  await expect.poll(async () => (await tickerRequests(page)).length).toBe(1);
+  expect(await tickerRequests(page)).toEqual([{ tickers: ["XYZ-B", "ABC.D"], source: "csv" }]);
 });
 
 test("the list of skipped tickers stays when the funds panel is closed and opened again @desktop-only", async ({ page }) => {
@@ -1348,7 +1530,7 @@ test("the list of skipped tickers stays when the funds panel is closed and opene
   await page.getByTestId("funds-toggle").click();
   await expect(page.getByTestId("upload-skipped")).toHaveCount(0);
   await page.getByTestId("funds-toggle").click();
-  await expect(page.getByTestId("upload-skipped")).toHaveText("Not added (no data for these yet): XYZ.");
+  await expect(page.getByTestId("upload-skipped")).toHaveText("1 ticker not added (no data for it yet): XYZ.");
 });
 
 test("a ticker typed into the picker that the site does not have is reported once Enter is pressed, once per visit", async ({ page }) => {
@@ -1370,6 +1552,17 @@ test("a ticker typed into the picker that the site does not have is reported onc
   await expect(page.getByTestId("fund-row-VTI")).toBeVisible();
   await page.waitForTimeout(300);
   expect(await tickerRequests(page)).toEqual([{ tickers: ["ZZQJ"], source: "picker" }]);
+});
+
+test("a class share typed into the picker with a slash is reported with a hyphen", async ({ page }) => {
+  await open(page);
+  await section(page, "funds");
+  const field = page.getByTestId("fund-add");
+  await field.fill("zzqj/b");
+  await field.press("Enter");
+  await expect(page.getByText("ZZQJ/B isn't offered")).toBeVisible();
+  await expect.poll(async () => (await tickerRequests(page)).length).toBe(1);
+  expect(await tickerRequests(page)).toEqual([{ tickers: ["ZZQJ-B"], source: "picker" }]);
 });
 
 // ── Example Portfolio 2: a preset that declares its own limits ───────────────────────────────

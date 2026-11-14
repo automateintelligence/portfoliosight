@@ -128,12 +128,9 @@ export function mixStats(tensor: TensorLike, w: number[]): { mu: number; sigma: 
   return { mu, sigma: Math.sqrt(variance), enb: Math.exp(entropy) };
 }
 
-/** Good / Average / Fair / Poor for `q = ENB / enb_ref` (spec 4.6). */
-export function wordFor(q: number): "Good" | "Average" | "Fair" | "Poor" {
-  if (q >= 0.75) return "Good";
-  if (q >= 0.5) return "Average";
-  if (q >= 0.3) return "Fair";
-  return "Poor";
+/** The diversification line a mix shows in place of a grade word (spec 3.6, owner direction 2026-11-11). */
+export function diversificationText(enb: number, enbRef: number): string {
+  return `This mix spreads risk over the equivalent of ${enb.toFixed(1)} independent bets; highest found on this portfolio: ${enbRef.toFixed(1)}.`;
 }
 
 /** A mix's return over one stress window (spec 4.10); `value` is null below half coverage. */

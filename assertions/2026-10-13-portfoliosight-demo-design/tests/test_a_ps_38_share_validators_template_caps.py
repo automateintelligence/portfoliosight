@@ -64,7 +64,7 @@ const MAIL_URL = "https://api.mailchannels.net/tx/v1/send";
 const SUBJECT = "Someone shared a PortfolioSight view with you";
 const LINE_1 = "Someone shared a PortfolioSight view with you:";
 const LINE_3 = "PortfolioSight is an educational tool. Historical math, not investment advice.";
-const CANONICAL = "?u=guide2017&lb=5y&r=19.25&d=auto&t=hud";
+const CANONICAL = "?u=guide2017&lb=5y&r=19.25&d=0&t=hud";
 const SHUFFLED = `${SITE}/?t=hud&d=auto&r=19.25&lb=5y&u=guide2017`;
 const CAPS = { ipMinute: 1, ipDay: 3, globalDay: 50 };
 const T0 = Date.parse("2026-10-13T12:00:01Z");

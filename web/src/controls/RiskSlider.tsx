@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { plain, technical } from "../copy";
 import { signedPct } from "../format";
 import { useHold } from "../state/interaction";
@@ -24,11 +24,17 @@ type Props = {
   onChange: (s: number) => void;
 };
 
+/** The slider's height in px (the readouts start under it), the gap between the readouts and the note, and the note's line (app.css). */
+const SLIDER_HEIGHT = 44;
+const LIMIT_GAP = 2;
+const LIMIT_LINE = 14;
+
 /** One thumb on the chart's risk axis; its two readouts always move together (spec 3.2). */
 export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, phone, stem, busy = false, onChange }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const readoutRef = useRef<HTMLDivElement>(null);
   const [readoutW, setReadoutW] = useState(0);
+  const [readoutH, setReadoutH] = useState(0);
   const single = !(domain.s_max > domain.s_safe);
   const disabled = single || busy;
   const step = (domain.s_max - domain.s_safe) / 200;
@@ -60,7 +66,9 @@ export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, 
   const bad = signedPct(low);
   const typ = signedPct(typical);
   useLayoutEffect(() => {
-    if (readoutRef.current) setReadoutW(readoutRef.current.offsetWidth);
+    if (!readoutRef.current) return;
+    setReadoutW(readoutRef.current.offsetWidth);
+    setReadoutH(readoutRef.current.offsetHeight);
   }, [bad, typ, details, phone]);
 
   const thumbX = xOf(s);
@@ -68,10 +76,16 @@ export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, 
   const domainLeft = xOf(domain.s_safe);
   const domainRight = xOf(domain.s_max);
   const half = readoutW / 2;
+  // The curve runs on to the left of the first selectable position: say why the slider stops there.
+  // Beside the chart the readouts hang under the thumb (anywhere along the slider), so the note goes
+  // under them, on the line the slider makes room for; on a phone the readouts are above it.
+  const limited = domain.s_safe > 0;
+  const limitId = useId();
+  const underReadouts = readoutH + LIMIT_GAP;
   const readoutX = Math.min(Math.max(thumbX, half), Math.max(half, width - half));
 
   return (
-    <div className={details ? "risk has-tech" : "risk"} data-keeps-pin="">
+    <div className={details ? "risk has-tech" : "risk"} style={limited && !phone ? { paddingBottom: underReadouts + LIMIT_LINE } : undefined} data-keeps-pin="">
       <div
         ref={ref}
         className="rslider"
@@ -84,6 +98,7 @@ export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, 
         aria-valuemax={Number(domain.s_max.toFixed(4))}
         aria-valuenow={Number(s.toFixed(4))}
         aria-valuetext={`${plain.riskBad} ${bad}, ${plain.riskTypical} ${typ}`}
+        aria-describedby={limited ? limitId : undefined}
         aria-disabled={disabled || undefined}
         onKeyDown={onKeyDown}
         {...slide}
@@ -117,6 +132,11 @@ export function RiskSlider({ s, domain, xOf, sOf, width, low, typical, details, 
           </details>
         )}
       </div>
+      {limited && (
+        <p id={limitId} className="risk-limit" data-testid="risk-limit" style={phone ? { marginLeft: railLeft } : { marginLeft: railLeft, top: SLIDER_HEIGHT + underReadouts }}>
+          {plain.riskLimit}
+        </p>
+      )}
       {single && <p className="risk-note">{plain.riskDisabled}</p>}
     </div>
   );

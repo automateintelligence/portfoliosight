@@ -16,6 +16,7 @@ import {
   uploadTwoColumns,
   uploadUnreadable,
 } from "../copy";
+import { TICKER_SHAPE } from "../api/tickerShape";
 import type { Row, Unit } from "../state/store";
 
 export const TEMPLATE_FILENAME = "portfoliosight-template.csv";
@@ -59,6 +60,38 @@ export function parseNumber(text: string): Cell {
   const value = Number(body.replace(/,/g, ""));
   if (!Number.isFinite(value)) return { ok: false, reason: "number" };
   return negative && value > 0 ? { ok: false, reason: "negative" } : { ok: true, value };
+}
+
+// letters, one slash or dot, one letter: a share class as a brokerage writes it ("BRK/B", "BF.B")
+const CLASS_SHARE = /^([A-Z]+)[./]([A-Z])$/;
+
+/** The served list's form of a class share ("BRK-B" for "BRK/B" or "BRK.B"), or null when the ticker is not one. */
+function classShareForm(ticker: string): string | null {
+  const m = CLASS_SHARE.exec(ticker);
+  return m ? `${m[1]}-${m[2]}` : null;
+}
+
+/**
+ * The served id a typed ticker names: the ticker as typed (trimmed, upper case) when it is served,
+ * else its class-share form when that is served, else null.
+ */
+export function servedTicker(text: string, isServed: (id: string) => boolean): string | null {
+  const typed = text.trim().toUpperCase();
+  if (isServed(typed)) return typed;
+  const form = classShareForm(typed);
+  return form !== null && isServed(form) ? form : null;
+}
+
+/**
+ * The ticker an unserved one is asked for under: as typed (trimmed, upper case) when it has the
+ * shape of a ticker; its class-share form when only the slash of a class share keeps it from that
+ * shape ("XYZ/B" is asked for as "XYZ-B"); otherwise null, and it is not asked for.
+ */
+export function requestedTicker(text: string): string | null {
+  const typed = text.trim().toUpperCase();
+  if (TICKER_SHAPE.test(typed)) return typed;
+  const form = classShareForm(typed);
+  return form !== null && TICKER_SHAPE.test(form) ? form : null;
 }
 
 /** The delimiter of the header line: comma, tab or semicolon, whichever it holds most of (comma when none). */
@@ -181,7 +214,10 @@ export type UploadPlan = {
   rows: Row[];
   /** The unit of the amounts, or null when no fund has one (the table's unit stays). */
   unit: Unit | null;
-  /** Tickers of the file the catalog does not serve, once each, in file order. */
+  /**
+   * Tickers of the file the catalog does not serve, once each, in file order: each as it is asked
+   * for (`requestedTicker`), or as the file writes it when it is not asked for.
+   */
   skipped: string[];
   /** Notes about columns that were not used because they disagree with the one that was. */
   notes: string[];
@@ -213,7 +249,9 @@ function whoHasWhat(withAmount: FundLine[]): string {
 }
 
 /**
- * The table a file makes. Tickers the catalog does not serve are skipped (and listed). Of the
+ * The table a file makes. Each ticker is matched to the catalog as `servedTicker` matches it, and
+ * the lines that name one served fund are added column by column into one, under the spelling the
+ * file wrote first. Tickers the catalog does not serve are skipped (and listed). Of the
  * served funds that have any amount, the best column filled for all of them is used (shares, then
  * dollars, then percent); funds with only a ticker load without an amount. When shares are used and
  * every fund with shares also has dollars, the dollars give each fund's price (`prices`). A file with fewer than
@@ -222,8 +260,20 @@ function whoHasWhat(withAmount: FundLine[]): string {
  */
 export function resolveUpload(lines: FundLine[], catalog: ReadonlyArray<{ id: string; name?: string | null }>, limits: { min: number; max: number }): Resolution {
   const names = new Map(catalog.map((s) => [s.id, s.name ?? s.id]));
-  const served = lines.filter((l) => names.has(l.ticker));
-  const skipped = lines.filter((l) => !names.has(l.ticker)).map((l) => l.ticker);
+  // a line per served fund, keyed by its served id; `ticker` stays as the file wrote it, for the messages
+  const byId = new Map<string, FundLine & { id: string }>();
+  const skipped: string[] = [];
+  for (const l of lines) {
+    const id = servedTicker(l.ticker, (t) => names.has(t));
+    if (id === null) {
+      const asked = requestedTicker(l.ticker) ?? l.ticker;
+      if (!skipped.includes(asked)) skipped.push(asked);
+      continue;
+    }
+    const seen = byId.get(id);
+    byId.set(id, seen ? { ...seen, shares: add(seen.shares, l.shares), dollars: add(seen.dollars, l.dollars), percent: add(seen.percent, l.percent) } : { ...l, id });
+  }
+  const served = [...byId.values()];
   const refuse = (error: string): Resolution => ({ ok: false, error, skipped });
   if (served.length < limits.min) return refuse(menuNeedsMore(limits.min));
   if (served.length > limits.max) return refuse(menuFull(limits.max));
@@ -232,19 +282,19 @@ export function resolveUpload(lines: FundLine[], catalog: ReadonlyArray<{ id: st
   const chosen = withAmount.length === 0 ? null : (COLUMNS.find((column) => withAmount.every((l) => filled(l, column))) ?? null);
   if (withAmount.length > 0 && chosen === null) return refuse(uploadNoCommonColumn(whoHasWhat(withAmount)));
 
-  const rows = served.map((l): Row => ({ id: l.ticker, name: names.get(l.ticker) ?? l.ticker, amount: chosen === null ? null : l[chosen] }));
+  const rows = served.map((l): Row => ({ id: l.id, name: names.get(l.id) ?? l.id, amount: chosen === null ? null : l[chosen] }));
   const notes: string[] = [];
   const pending: PendingCheck[] = [];
   const held = chosen === "shares" ? withAmount.filter((l) => (l.shares ?? 0) > 0) : [];
   const dollarsPrice = held.length > 0 && held.every((l) => (l.dollars ?? 0) > 0);
-  const prices: Record<string, number> = dollarsPrice ? Object.fromEntries(held.map((l) => [l.ticker, (l.dollars as number) / (l.shares as number)])) : {};
+  const prices: Record<string, number> = dollarsPrice ? Object.fromEntries(held.map((l) => [l.id, (l.dollars as number) / (l.shares as number)])) : {};
   if (chosen === "dollars" || dollarsPrice) {
     const both = withAmount.flatMap((l) => (l.dollars !== null && l.percent !== null ? [{ dollars: l.dollars, percent: l.percent }] : []));
     const n = percentVsDollars(both);
     if (n > 0) notes.push(uploadMismatch.percentDollars(n));
   } else if (chosen === "shares") {
     for (const against of ["dollars", "percent"] as const) {
-      const entries = withAmount.flatMap((l) => (l.shares !== null && l[against] !== null ? [{ id: l.ticker, shares: l.shares, value: l[against] as number }] : []));
+      const entries = withAmount.flatMap((l) => (l.shares !== null && l[against] !== null ? [{ id: l.id, shares: l.shares, value: l[against] as number }] : []));
       if (entries.length > 0) pending.push({ against, entries });
     }
   }

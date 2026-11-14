@@ -204,6 +204,12 @@ def test_schema_accepts_the_build_and_is_not_permissive(fixture_tensor):
         "set-aside share above 1": lambda d: d["entered"].update(set_aside=1.5),
         "missing stress window": lambda d: d["stress"].pop("covid2020"),
         "fund without last_close": lambda d: d["universe"]["funds"][0].pop("last_close"),
+        "last_close_date that is not a date": lambda d: d["universe"]["funds"][0].update(
+            last_close_date="yesterday"
+        ),
+        "last_close_date as a number": lambda d: d["universe"]["funds"][0].update(
+            last_close_date=20261012
+        ),
         "unknown kind": lambda d: d["universe"]["funds"][0].update(kind="crypto"),
         "schema 1": lambda d: d.update(schema=1),
         "schema 2": lambda d: d.update(schema=2),
@@ -255,7 +261,10 @@ def test_schema_accepts_the_build_and_is_not_permissive(fixture_tensor):
         assert label
     # null is allowed exactly where spec 7 says
     for change in (
-        lambda d: d["universe"]["funds"][0].update(last_close=None),
+        lambda d: d["universe"]["funds"][0].update(last_close=None, last_close_date=None),
+        # tensors stored before the field existed have no last_close_date and stay valid
+        lambda d: d["universe"]["funds"][0].pop("last_close_date"),
+        lambda d: d["universe"]["funds"][0].update(last_close_date="2026-10-09"),
         lambda d: d["universe"].update(preset_id=None),
         lambda d: d["stress"]["rates2022"]["r"].__setitem__(0, None),
         lambda d: d.update(entered=None),
@@ -323,8 +332,10 @@ def test_identity_block(fixture_tensor, fixture_frame):
             "adjusted_through",
             "fetched_at",
             "last_close",
+            "last_close_date",
         }
         assert fund["adjusted_through"] == "2026-10-12" and fund["last_close"] > 0
+        assert fund["last_close_date"] == "2026-10-12"  # the close is the one on asof
     # the hash covers the requested policy of the whole menu, excluded funds included; it keeps
     # its own schema number, so a menu's key did not move with the tensor's schema 3
     rows = sorted(({"id": c, "min": None, "max": None} for c in fixture_frame.columns), key=str)

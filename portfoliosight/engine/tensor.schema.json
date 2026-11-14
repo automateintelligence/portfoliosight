@@ -55,7 +55,8 @@
               "source": {"enum": ["seed", "tiingo", "tsp", "seed+tiingo", "lake"]},
               "adjusted_through": {"$ref": "#/$defs/date"},
               "fetched_at": {"type": "string", "minLength": 1},
-              "last_close": {"type": ["number", "null"]}
+              "last_close": {"type": ["number", "null"]},
+              "last_close_date": {"oneOf": [{"$ref": "#/$defs/date"}, {"type": "null"}]}
             }
           }
         },

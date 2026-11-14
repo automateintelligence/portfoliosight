@@ -1,4 +1,4 @@
-// The single store (spec 8): menu, allocation, lookback, ghosts, s, t | "auto", theme, caps and
+// The single store (spec 8): menu, allocation, lookback, ghosts, s, t, theme, caps and
 // build status, plus the effects that load tensors. Slider actions never touch the network.
 // Runs in plain node: `fetch`, `history`, `location` and `localStorage` are read only inside
 // functions, never at import time.
@@ -35,9 +35,14 @@ export type Cap = UrlState["caps"][number];
 /**
  * A fund of the menu and its amount. `price` is the price per share of an uploaded file that gave
  * shares and dollars (its dollars over its shares); while it is set, the fund's shares are valued
- * at it in place of the service's latest close. Page state only: it is not part of the address.
+ * at it in place of the service's latest close. It goes in the address as `p`, and only while the
+ * unit is shares: it belongs to a file's share counts, so a row loses it when the unit leaves
+ * shares (`withoutPrices`) and keeps it when only the share count is edited.
  */
 export type Row = { id: string; name: string; amount: number | null; price?: number };
+/** `rows` with no file prices; the same array when none has one. */
+export const withoutPrices = (rows: Row[]): Row[] =>
+  rows.some((r) => r.price !== undefined) ? rows.map((r) => ({ id: r.id, name: r.name, amount: r.amount })) : rows;
 /**
  * What the last CSV upload has to tell: why it was refused, the tickers it left out, notes on
  * columns that were not used, and the checks still waiting for the new menu's prices (`menu` is
@@ -63,7 +68,8 @@ export type State = {
   lookback: LookbackId;
   ghosts: LookbackId[];
   s: number;
-  t: number | "auto";
+  /** The diversification position: 0 is the best-return mix, where the page opens. */
+  t: number;
   theme: ThemeId;
   details: boolean;
   presets: PresetsBody | null;
@@ -93,7 +99,6 @@ export type Action =
   | { type: "start" }
   | { type: "riskSlider"; s: number }
   | { type: "divSlider"; t: number }
-  | { type: "resetDiv" }
   | { type: "setLookback"; lookback: LookbackId }
   | { type: "retryBuild" }
   | { type: "selectPreset"; id: string }
@@ -159,7 +164,7 @@ export function toUrlState(state: State, haveR: boolean): UrlState {
   const own = state.preset ? state.presets?.presets.find((p) => p.id === state.preset) : undefined;
   return {
     preset: state.preset as UrlState["preset"],
-    funds: state.preset ? [] : state.rows.map((r) => ({ id: r.id, amount: r.amount })),
+    funds: state.preset ? [] : state.rows.map((r) => ({ id: r.id, amount: r.amount, ...(r.price === undefined ? {} : { price: r.price }) })),
     unit: state.unit,
     caps: own && sameCaps(state.caps, capsOfPreset(own)) ? [] : state.caps,
     lookback: state.lookback,
@@ -230,7 +235,7 @@ export function createStore(init: { search: string }): Store {
 
   let state: State = {
     preset: url.preset,
-    rows: url.funds.map((f) => ({ id: f.id, name: f.id, amount: f.amount })),
+    rows: url.funds.map((f) => ({ id: f.id, name: f.id, amount: f.amount, ...(f.price === undefined ? {} : { price: f.price }) })),
     unit: url.unit,
     caps: url.caps,
     lookback: url.lookback,
@@ -345,9 +350,9 @@ export function createStore(init: { search: string }): Store {
     let t = state.t;
     if (pendingUrlR || state.tensor !== null) {
       // A position exists already (from the URL or the previous tensor): keep it, clamped into the
-      // new domain; a clamp moves the point, so the diversification position returns to suggested.
+      // new domain; a clamp moves the point, so the diversification position returns to the best-return mix.
       s = clamp(state.s);
-      if (Math.abs(s - state.s) > 1e-12) t = "auto";
+      if (Math.abs(s - state.s) > 1e-12) t = 0;
     } else {
       const mix = currentMix(state, tensor);
       s = mix.weights ? positionOfCeiling(tensor, math.stats(mix.weights).sigma) : (domain.s_safe + domain.s_max) / 2;
@@ -590,7 +595,7 @@ export function createStore(init: { search: string }): Store {
     pendingUrlR = false;
     haveR = false;
     unitInUrl = false;
-    state = { ...state, preset: null, rows: [], caps: [], s: 0, t: "auto", linkError: linkTooManyFunds(state.tier.menuMax) };
+    state = { ...state, preset: null, rows: [], caps: [], s: 0, t: 0, linkError: linkTooManyFunds(state.tier.menuMax) };
     emit();
   }
 
@@ -662,17 +667,13 @@ export function createStore(init: { search: string }): Store {
       case "riskSlider": {
         if (!Number.isFinite(action.s)) return;
         haveR = true;
-        // Review focus 4: when the position leaves an "auto" neighbourhood nothing else changes;
-        // the diversification default follows s by itself because t stays "auto".
+        // The diversification position is its own setting: moving the risk leaves it where it is.
         set({ s: action.s });
         return;
       }
       case "divSlider":
         if (!Number.isFinite(action.t)) return;
         set({ t: Math.min(1, Math.max(0, action.t)) });
-        return;
-      case "resetDiv":
-        set({ t: "auto" });
         return;
       case "setLookback": {
         if (!LOOKBACKS.includes(action.lookback) || state.unavailable[action.lookback]) return;
@@ -692,8 +693,8 @@ export function createStore(init: { search: string }): Store {
         if (!preset) return;
         failures = 0;
         adoptPreset(preset, false);
-        // A new menu starts at its own default position (spec 4.9), with the suggested point.
-        state = { ...state, tensor: null, tensorLookback: null, t: "auto" };
+        // A new menu starts at its own default position (spec 4.9), on the best-return mix.
+        state = { ...state, tensor: null, tensorLookback: null, t: 0 };
         menuChanged({});
         return;
       }
@@ -727,7 +728,9 @@ export function createStore(init: { search: string }): Store {
         // not reopen in percent: in that one case the menu is written out as a custom one.
         const own = activePreset();
         const lost = own !== null && action.unit === "pct" && (unitOfPreset(own) ?? "pct") !== "pct";
-        set(lost ? { unit: action.unit, preset: null } : { unit: action.unit });
+        // A file's prices are for its share counts, so they go when the unit leaves shares.
+        const rows = action.unit === "shares" ? state.rows : withoutPrices(state.rows);
+        set(lost ? { unit: action.unit, rows, preset: null } : { unit: action.unit, rows });
         return;
       }
       case "setAmount": {
@@ -739,11 +742,12 @@ export function createStore(init: { search: string }): Store {
       }
       case "useMenu": {
         // The funds table never offers more than the tier allows; a longer list is refused, not cut.
-        const rows = action.rows;
-        if (rows.length < MIN_FUNDS || rows.length > state.tier.menuMax) return;
+        if (action.rows.length < MIN_FUNDS || action.rows.length > state.tier.menuMax) return;
         // A unit that comes with the list (a CSV upload) is taken in the same step as its amounts,
         // so the plotted menu never reads amounts in another unit.
         const unit = action.unit ?? state.unit;
+        // A file's prices are for its share counts: they are kept only when the amounts are shares.
+        const rows = unit === "shares" ? action.rows : withoutPrices(action.rows);
         const sameFunds = menuKey(rows, []) === menuKey(state.rows, []);
         if (sameFunds) {
           set({ rows, unit, preset: null });
@@ -752,7 +756,7 @@ export function createStore(init: { search: string }): Store {
         }
         failures = 0;
         const ids = new Set(rows.map((r) => r.id));
-        state = { ...state, tensor: null, tensorLookback: null, t: "auto" };
+        state = { ...state, tensor: null, tensorLookback: null, t: 0 };
         menuChanged({ rows, unit, preset: null, caps: state.caps.filter((c) => ids.has(c.id)) });
         return;
       }

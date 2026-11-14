@@ -125,7 +125,8 @@ class FundInput:
     source: str  # seed | tiingo | tsp | seed+tiingo | lake
     adjusted_through: str  # ISO date the corporate actions are verified through
     fetched_at: str  # ISO timestamp of the last provider fetch
-    last_close: float | None = None  # raw close on asof, None when unknown
+    last_close: float | None = None  # latest raw close on or before asof, None when unknown
+    last_close_date: str | None = None  # ISO date of that close, None when last_close is
     served: bool = True
     catalog_reason: str | None = None  # the catalog's own reason when not served
 
@@ -392,6 +393,7 @@ def _build(inputs: TensorInputs, workers: int) -> BuildResult:
                     "adjusted_through": by_id[fund].adjusted_through,
                     "fetched_at": by_id[fund].fetched_at,
                     "last_close": _number_or_none(by_id[fund].last_close),
+                    "last_close_date": by_id[fund].last_close_date,
                 }
                 for fund in included
             ],

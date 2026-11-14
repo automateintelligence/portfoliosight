@@ -119,6 +119,9 @@ const schema = z.strictObject({
           adjusted_through: date,
           fetched_at: text,
           last_close: optional,
+          // The day of last_close: a served fund may lag the tensor's asof by up to three sessions
+          // (spec 5.2). Tensors stored before the field existed lack it; their closes are on asof.
+          last_close_date: date.nullable().optional(),
         }),
       )
       .min(2),

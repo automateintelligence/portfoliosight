@@ -422,7 +422,6 @@ function Page({ interaction }: { interaction: Interaction }) {
               horizontal={false}
               details={state.details}
               onChange={setT}
-              onReset={() => dispatch({ type: "resetDiv" })}
             />
           )}
           {view && scales && (
@@ -449,7 +448,6 @@ function Page({ interaction }: { interaction: Interaction }) {
               horizontal
               details={state.details}
               onChange={setT}
-              onReset={() => dispatch({ type: "resetDiv" })}
             />
           )}
         </div>
@@ -462,7 +460,6 @@ function Page({ interaction }: { interaction: Interaction }) {
             normal={view.normal}
             scale={stripBar}
             value={stripValue}
-            word={view.word}
             details={state.details}
             facts={{
               enb: view.selected.enb,
@@ -474,7 +471,6 @@ function Page({ interaction }: { interaction: Interaction }) {
               rows: tensor.lookback.rows,
               asof: tensor.asof,
               notes: tensor.notes ?? [],
-              defaultPoint: tensor.ladder.default_point,
             }}
             staleAsof={state.staleness?.asof ?? null}
             chartNotes={phone}

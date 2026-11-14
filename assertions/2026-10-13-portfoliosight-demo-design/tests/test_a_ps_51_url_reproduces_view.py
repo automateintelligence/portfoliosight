@@ -23,7 +23,8 @@ as given (it may leave the URL untouched or rewrite the same values).
 
 Pinned interface (beyond the shared pins)
 - `risk-slider` and `div-slider` (or their inner `[role=slider]` / `input[type=range]`) are
-  focusable and move with the arrow keys; moving `div-slider` turns `d` from `auto` into a decimal.
+  focusable and move with the arrow keys; moving `div-slider` turns `d` from 0 (the position a new address opens at, owner
+  direction 2026-11-11) into a decimal above 0.
 - `unit-toggle` holds an option with the text "Shares"; the selected option is marked with
   `aria-pressed`, `aria-checked`, `aria-selected` = "true" or is a checked input.
 - `share-open` is visible in the header, or becomes reachable after `chip-settings`; `share-link` is
@@ -386,7 +387,7 @@ test("url reproduces the view in a fresh context", async ({ page, browser, baseU
     for (let i = 0; i < 10; i++) await page.keyboard.press(there);
     for (let i = 0; i < 3; i++) await page.keyboard.press(back);
     try {
-      await expect.poll(() => urlParam(page, "d") ?? "", { timeout: 2500 }).toMatch(DECIMAL);
+      await expect.poll(() => Number(urlParam(page, "d") ?? "0"), { timeout: 2500 }).toBeGreaterThan(0);
       moved = true;
       break;
     } catch {
@@ -423,12 +424,13 @@ test("url reproduces the view in a fresh context", async ({ page, browser, baseU
   expect(Number(params.get("d"))).toBeGreaterThanOrEqual(0);
   expect(Number(params.get("d"))).toBeLessThanOrEqual(1);
   expect(params.get("d"), "d is a position, no longer auto").not.toBe("auto");
+  expect(Number(params.get("d")), "the diversification slider moved d off 0").toBeGreaterThan(0);
   if (params.get("lb") !== null) expect(params.get("lb")).toBe("5y");
 
   const first = await readouts(page);
   expect(first.theme).toBe("hud");
   expect(first.unit).toMatch(/shares/i);
-  expect(["Good", "Average", "Fair", "Poor"]).toContain(first.word);
+  expect(first.word).toMatch(/^This mix spreads risk over the equivalent of \d+(\.\d+)? independent bets; highest found on this portfolio: \d+(\.\d+)?\.$/);
   expect(first.bad).toMatch(/\d/);
   expect(first.low).toMatch(/\d/);
 

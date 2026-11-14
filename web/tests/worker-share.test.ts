@@ -154,7 +154,7 @@ describe("share by email", () => {
     expect(mail.json.reply_to).toEqual({ email: "replies@example.org" });
     expect(mail.json.subject).toBe(SUBJECT);
     expect(mail.json.content.map((c) => c.type)).toEqual(["text/plain", "text/html"]);
-    const link = `${SITE}/?u=guide2017&lb=5y&r=19.25&d=auto&t=hud`;
+    const link = `${SITE}/?u=guide2017&lb=5y&r=19.25&d=0&t=hud`;
     expect(part(mail.json, "text/plain").split("\n").filter((l) => l !== "")).toEqual([LINE_1, link, LINE_3]);
     const html = part(mail.json, "text/html");
     const escaped = link.replaceAll("&", "&amp;");
@@ -169,13 +169,14 @@ describe("share by email", () => {
 
   it("re-encodes a valid URL in the contract's key order with the defaults written", () => {
     const cases: Array<[string, string]> = [
-      ["?u=guide2017&lb=5y&r=19.25&d=auto&t=hud", "?u=guide2017&lb=5y&r=19.25&d=auto&t=hud"],
+      ["?u=guide2017&lb=5y&r=19.25&d=auto&t=hud", "?u=guide2017&lb=5y&r=19.25&d=0&t=hud"],
+      ["?u=guide2017&lb=5y&r=19.25&t=hud", "?u=guide2017&lb=5y&r=19.25&d=0&t=hud"],
       ["?x=1&t=light&d=0.25&r=12.5&lb=3y&u=tsp", "?u=tsp&lb=3y&r=12.5&d=0.25&t=light&x=1"],
-      ["", "?lb=5y&d=auto"],
-      ["?u=tsp", "?u=tsp&lb=5y&d=auto"],
-      ["?unit=pct&u=tsp", "?u=tsp&lb=5y&d=auto"],
+      ["", "?lb=5y&d=0"],
+      ["?u=tsp", "?u=tsp&lb=5y&d=0"],
+      ["?unit=pct&u=tsp", "?u=tsp&lb=5y&d=0"],
       ["?g=1y,10y&x=1&d=0.5&lb=ew&c=VTI::10,BND:5:&unit=shares&f=VTI:60,BND:40,VNQ", "?f=VTI:60,BND:40,VNQ&unit=shares&c=VTI::10,BND:5:&lb=ew&g=1y,10y&d=0.5&x=1"],
-      ["?f=VTI%3A60%2CBND%3A40.5&unit=usd", "?f=VTI:60,BND:40.5&unit=usd&lb=5y&d=auto"],
+      ["?f=VTI%3A60%2CBND%3A40.5&unit=usd", "?f=VTI:60,BND:40.5&unit=usd&lb=5y&d=0"],
       ["?f=BRK.B:10,BF-B&t=ks-dark&d=1", "?f=BRK.B:10,BF-B&lb=5y&d=1&t=ks-dark"],
     ];
     for (const [submitted, canonical] of cases) {
@@ -183,14 +184,96 @@ describe("share by email", () => {
       // re-encoding its own output changes nothing
       expect(S.reencodeShareUrl(`${SITE}/${canonical}`), canonical).toBe(`${SITE}/${canonical}`);
     }
-    expect(S.reencodeShareUrl("https://portfoliosight.ai")).toBe(`${SITE}/?lb=5y&d=auto`);
+    expect(S.reencodeShareUrl("https://portfoliosight.ai")).toBe(`${SITE}/?lb=5y&d=0`);
+  });
+
+  it("mails the file prices of a shares view, re-encoded in the page's own form", async () => {
+    const cases: Array<[string, string]> = [
+      ["?unit=shares&p=VTI:200,BND:10&f=VTI:10,BND:100", "?f=VTI:10,BND:100&p=VTI:200,BND:10&unit=shares&lb=5y&d=0"],
+      ["?f=VTI%3A10%2CBND%3A100&p=VTI%3A200.50%2CBND%3A10&unit=shares", "?f=VTI:10,BND:100&p=VTI:200.5,BND:10&unit=shares&lb=5y&d=0"],
+      ["?f=VTI:10,BND:100&unit=shares&p=BND:333.333333", "?f=VTI:10,BND:100&p=BND:333.333333&unit=shares&lb=5y&d=0"],
+      ["?f=VTI,BND:5&p=VTI:200&unit=shares", "?f=VTI,BND:5&p=VTI:200&unit=shares&lb=5y&d=0"],
+      // a view without prices is mailed exactly as before
+      ["?f=VTI:10,BND:100&unit=shares", "?f=VTI:10,BND:100&unit=shares&lb=5y&d=0"],
+    ];
+    for (const [submitted, canonical] of cases) {
+      expect(S.reencodeShareUrl(`${SITE}/${submitted}`), submitted).toBe(`${SITE}/${canonical}`);
+      expect(S.reencodeShareUrl(`${SITE}/${canonical}`), canonical).toBe(`${SITE}/${canonical}`);
+      // the page's address for the same view is the mailed link
+      expect(`${SITE}/${encode(decode(new URL(`${SITE}/${submitted}`).search))}`, submitted).toBe(`${SITE}/${canonical}`);
+    }
+    // end to end: the mail carries the prices
+    sent = [];
+    const res = await S.handleShare(post({ ...good, url: `${SITE}/?f=VTI:10,BND:100&p=VTI:200,BND:10&unit=shares` }), baseEnv(), allow);
+    expect(res.status).toBe(202);
+    expect(part(sent[0].json, "text/plain")).toContain(`${SITE}/?f=VTI:10,BND:100&p=VTI:200,BND:10&unit=shares&lb=5y&d=0`);
+  });
+
+  it("leaves a price out of the mailed link where the page would ignore it: another unit, a preset, a fund not listed", () => {
+    expect(S.reencodeShareUrl(`${SITE}/?f=VTI:10,BND:100&p=VTI:200`)).toBe(`${SITE}/?f=VTI:10,BND:100&lb=5y&d=0`);
+    expect(S.reencodeShareUrl(`${SITE}/?f=VTI:10,BND:100&p=VTI:200&unit=usd`)).toBe(`${SITE}/?f=VTI:10,BND:100&unit=usd&lb=5y&d=0`);
+    expect(S.reencodeShareUrl(`${SITE}/?u=tsp&unit=shares&p=VTI:200`)).toBe(`${SITE}/?u=tsp&unit=shares&lb=5y&d=0`);
+    expect(S.reencodeShareUrl(`${SITE}/?f=VTI:10&unit=shares&p=ZZZ:5,VTI:200`)).toBe(`${SITE}/?f=VTI:10&p=VTI:200&unit=shares&lb=5y&d=0`);
+  });
+
+  it("refuses a price list that is not ID:price pairs of positive numbers (12 digits, 6 decimals), repeated, or longer than 30", () => {
+    const f = "f=VTI:10,BND:5&unit=shares";
+    const bad = [
+      "p=",
+      "p=VTI",
+      "p=VTI:",
+      "p=vti:200",
+      "p=VTI:0",
+      "p=VTI:0.000000",
+      "p=VTI:00",
+      "p=VTI:-5",
+      "p=VTI:abc",
+      "p=VTI:1e3",
+      "p=VTI:.5",
+      "p=VTI:5.",
+      "p=VTI:200:1",
+      "p=VTI:200,",
+      "p=VTI:200,,BND:5",
+      "p=VTI:1234567890123",
+      "p=VTI:1.1234567",
+      "p=VTI:200&p=BND:5",
+      "p=VISIT+EXAMPLE+DOT+COM",
+      `p=${Array.from({ length: 31 }, (_, i) => `F${i}:1`).join(",")}`,
+    ];
+    for (const p of bad) expect(S.reencodeShareUrl(`${SITE}/?${f}&${p}`), p).toBeNull();
+    // the same shapes at their limits are accepted, in the page's own form
+    const limits = `${SITE}/?${f}&p=VTI:123456789012.123456,BND:0.000001`;
+    expect(S.reencodeShareUrl(limits)).toBe(`${SITE}/${encode(decode(new URL(limits).search))}`);
+    expect(S.reencodeShareUrl(limits)).toContain("&p=VTI:123456789012.123");
+    expect(S.reencodeShareUrl(limits)).toContain(",BND:0.000001&unit=shares&");
+    const thirty = Array.from({ length: 30 }, (_, i) => `F${i}`);
+    expect(S.reencodeShareUrl(`${SITE}/?f=${thirty.join(",")}&unit=shares&p=${thirty.map((id) => `${id}:1`).join(",")}`)).toBe(
+      `${SITE}/?f=${thirty.join(",")}&p=${thirty.map((id) => `${id}:1`).join(",")}&unit=shares&lb=5y&d=0`,
+    );
+  });
+
+  it("refuses a link whose re-encoded form is over 2,048 characters because of its prices, rather than cutting it", () => {
+    const ids = Array.from({ length: 30 }, (_, i) => `ABCDEFGHIJ${String(i).padStart(2, "0")}`);
+    // numbers a double holds exactly, so the page's canonical form is as long as what is submitted
+    const number = "123456789.123456";
+    const base = `${SITE}/?f=${ids.map((x) => `${x}:${number}`).join(",")}&unit=shares&c=${ids.map((x) => `${x}:100:100`).join(",")}&lb=10y&d=0.5`;
+    const prices = (list: string[]) => `&p=${list.map((x) => `${x}:${number}`).join(",")}`;
+    expect(S.reencodeShareUrl(base)).toBe(base);
+    // a few prices still fit, and the link that comes back is within the limit
+    const few = S.reencodeShareUrl(base + prices(ids.slice(0, 3)));
+    expect(few).not.toBeNull();
+    expect((few as string).length).toBeLessThanOrEqual(2048);
+    // a price for every fund does not
+    const all = base + prices(ids);
+    expect(S.reencodeShareUrl(all)).toBeNull();
+    expect(`${SITE}/${encode(decode(new URL(all).search))}`.length).toBeGreaterThan(2048);
   });
 
   it("mails a link to each ready-made portfolio the page knows, and to no other", () => {
     for (const id of ["guide2017", "tsp", "research2003"]) {
-      expect(S.reencodeShareUrl(`${SITE}/?u=${id}`), id).toBe(`${SITE}/?u=${id}&lb=5y&d=auto`);
+      expect(S.reencodeShareUrl(`${SITE}/?u=${id}`), id).toBe(`${SITE}/?u=${id}&lb=5y&d=0`);
     }
-    expect(S.reencodeShareUrl(`${SITE}/?u=research2003&c=SPY::30,GE::5&lb=3y`)).toBe(`${SITE}/?u=research2003&c=SPY::30,GE::5&lb=3y&d=auto`);
+    expect(S.reencodeShareUrl(`${SITE}/?u=research2003&c=SPY::30,GE::5&lb=3y`)).toBe(`${SITE}/?u=research2003&c=SPY::30,GE::5&lb=3y&d=0`);
     for (const id of ["research2004", "research2003x", "Research2003", ""]) expect(S.reencodeShareUrl(`${SITE}/?u=${id}`), id).toBeNull();
   });
 
@@ -200,7 +283,7 @@ describe("share by email", () => {
     for (const theme of themes) {
       // the page's codec keeps the same four, so the link is the address bar's own
       expect(decode(`?t=${theme}`).theme, theme).toBe(theme);
-      const canonical = `?u=tsp&lb=5y&d=auto&t=${theme}`;
+      const canonical = `?u=tsp&lb=5y&d=0&t=${theme}`;
       expect(encode(decode(canonical)), theme).toBe(canonical);
       expect(S.reencodeShareUrl(`${SITE}/?t=${theme}&u=tsp`), theme).toBe(`${SITE}/${canonical}`);
     }
@@ -213,7 +296,7 @@ describe("share by email", () => {
       const res = await S.handleShare(post({ ...good, url: `${SITE}/?u=tsp&t=${theme}` }), baseEnv(), allow);
       expect(res.status, theme).toBe(202);
       expect(sent.length, theme).toBe(1);
-      expect(part(sent[0].json, "text/plain"), theme).toContain(`${SITE}/?u=tsp&lb=5y&d=auto&t=${theme}`);
+      expect(part(sent[0].json, "text/plain"), theme).toContain(`${SITE}/?u=tsp&lb=5y&d=0&t=${theme}`);
     }
     sent = [];
     const refused = await S.handleShare(post({ ...good, url: `${SITE}/?u=tsp&t=neon` }), baseEnv(), allow);
@@ -267,7 +350,7 @@ describe("share by email", () => {
     for (const notString of [null, undefined, 7, {}, [], true]) expect(S.reencodeShareUrl(notString)).toBeNull();
     // thirty funds is the limit and is accepted
     const thirty = Array.from({ length: 30 }, (_, i) => `F${i}`).join(",");
-    expect(S.reencodeShareUrl(`${SITE}/?f=${thirty}`)).toBe(`${SITE}/?f=${thirty}&lb=5y&d=auto`);
+    expect(S.reencodeShareUrl(`${SITE}/?f=${thirty}`)).toBe(`${SITE}/?f=${thirty}&lb=5y&d=0`);
   });
 
   it("measures the re-encoded link, which stays under 2,048 characters for every accepted view", () => {

@@ -121,7 +121,7 @@ describe("store: default view", () => {
     const want = Math.min(DOMAIN.s_max, Math.max(DOMAIN.s_safe, s.s));
     expect(s.s).toBe(want);
     if (sigma > ceilingAt(TENSOR, DOMAIN.s_safe) && sigma < ceilingAt(TENSOR, DOMAIN.s_max)) expect(ceilingAt(TENSOR, s.s)).toBeCloseTo(sigma, 12);
-    expect(s.t).toBe("auto");
+    expect(s.t, "the page opens on the best-return mix (owner direction 2026-11-11)").toBe(0);
 
     const withR = await boot("?u=guide2017&r=30.5&d=0.25");
     expect(withR.getState().s).toBe(30.5);
@@ -141,21 +141,21 @@ describe("store: default view", () => {
     const state = decode(last.search);
     expect(state.preset).toBe("guide2017");
     expect(state.unit).toBe("usd");
-    expect(state.d).toBe("auto");
+    expect(state.d).toBe(0);
     expect(state.theme).toBe("ks-dark");
     expect(typeof state.r).toBe("number");
   });
 });
 
 describe("store: transitions", () => {
-  it("a position outside the tensor's domain is clamped and the diversification position returns to suggested", async () => {
+  it("a position outside the tensor's domain is clamped and the diversification position returns to the best-return mix", async () => {
     expect(DOMAIN.s_safe).toBeGreaterThan(0.1);
     const outside = await boot("?u=guide2017&r=0.1&d=0.5");
     expect(outside.getState().s).toBe(DOMAIN.s_safe);
-    expect(outside.getState().t).toBe("auto");
+    expect(outside.getState().t).toBe(0);
     const above = await boot("?u=guide2017&r=99&d=0.5");
     expect(above.getState().s).toBe(DOMAIN.s_max);
-    expect(above.getState().t).toBe("auto");
+    expect(above.getState().t).toBe(0);
     // inside the domain both are kept, also across a lookback switch (clamped on every tensor load)
     const inside = await boot("?u=guide2017&r=20&d=0.5");
     inside.dispatch({ type: "setLookback", lookback: "1y" });
@@ -165,6 +165,35 @@ describe("store: transitions", () => {
     expect(inside.getState().tensor!.lookback.id).toBe("1y");
     expect(inside.getState().s).toBe(20);
     expect(inside.getState().t).toBe(0.5);
+  });
+
+  it("a link without d, or with the old d=auto, opens on the best-return mix; an explicit d is kept (owner direction 2026-11-11)", async () => {
+    for (const search of ["?u=guide2017&r=30.5", "?u=guide2017&r=30.5&d=auto"]) {
+      expect((await boot(search)).getState().t, search).toBe(0);
+    }
+    expect((await boot("?u=guide2017&r=30.5&d=0.25")).getState().t).toBe(0.25);
+  });
+
+  it("the risk slider leaves the diversification position alone, and the slider itself returns it to 0", async () => {
+    const store = await boot("?u=guide2017&r=20&d=0.4");
+    store.dispatch({ type: "riskSlider", s: 25 });
+    expect(store.getState().t).toBe(0.4);
+    store.dispatch({ type: "divSlider", t: 0.7 });
+    expect(store.getState().t).toBe(0.7);
+    store.dispatch({ type: "divSlider", t: 0 });
+    expect(store.getState().t).toBe(0);
+    // there is no separate "back to Optimized" action (owner direction 2026-11-11)
+    store.dispatch({ type: "divSlider", t: 0.5 });
+    store.dispatch({ type: "resetDiv" } as never);
+    expect(store.getState().t, "an unknown action changes nothing").toBe(0.5);
+  });
+
+  it("choosing another portfolio starts again on the best-return mix", async () => {
+    const store = await boot("?u=guide2017&r=20&d=0.4");
+    store.dispatch({ type: "selectPreset", id: "tsp" });
+    await flush();
+    expect(store.getState().preset).toBe("tsp");
+    expect(store.getState().t).toBe(0);
   });
 
   it("a 422 for one window marks only that window and keeps the view", async () => {
@@ -531,7 +560,7 @@ describe("store: menu size by access tier (engines spec 6.2)", () => {
     expect(s.build.status).toBe("ready");
     expect(tensorCalls().map((c) => `${c.method} ${c.path}`)).toEqual([`GET /api/tensors/${G}/${H1}/5y`]);
     // the refused link's position is not carried over to the default view
-    expect(s.t).toBe("auto");
+    expect(s.t).toBe(0);
     // choosing a menu clears the message
     store.dispatch({ type: "selectPreset", id: "tsp" });
     await flush();
@@ -726,5 +755,75 @@ describe("store: a fund list from a CSV file", () => {
       expect(store.getState().menuError).toBeNull();
       expect(store.getState().loadError).toBeNull();
     });
+  });
+});
+
+describe("store: the file's prices in the address", () => {
+  const [A, B, C] = IDS;
+  // 10 shares of A at $200 and 10 shares of B at $50 are $2,000 and $500, whatever the service's closes are
+  const LINK = `f=${A}:10,${B}:10&p=${A}:200,${B}:50&unit=shares`;
+  const lastUrl = async (store: Store) => {
+    store.dispatch({ type: "flushUrl" });
+    await advance(500);
+    return replaced[replaced.length - 1];
+  };
+  const priceOf = (store: Store) => store.getState().rows.map((r) => [r.id, r.price]);
+
+  it("opens a link with prices on the same starting mix as the dollars they stand for", async () => {
+    const withPrices = await boot(LINK);
+    expect(priceOf(withPrices)).toEqual([[A, 200], [B, 50]]);
+    const mix = currentMix(withPrices.getState(), withPrices.getState().tensor as NonNullable<ReturnType<Store["getState"]>["tensor"]>);
+    expect(mix.status).toBe("ok");
+    expect(mix.weights?.[IDS.indexOf(A)]).toBeCloseTo(0.8, 12);
+    expect(mix.weights?.[IDS.indexOf(B)]).toBeCloseTo(0.2, 12);
+    // the slider starts where the entered mix says, as it does for the same mix entered in dollars
+    const inDollars = await boot(`f=${A}:2000,${B}:500&unit=usd`);
+    expect(withPrices.getState().s).toBeCloseTo(inDollars.getState().s, 9);
+  });
+
+  it("writes the prices back, and a reload of that address gives the same rows", async () => {
+    const store = await boot(LINK);
+    const address = await lastUrl(store);
+    expect(address).toContain(`f=${A}:10,${B}:10&p=${A}:200,${B}:50&unit=shares`);
+    const again = await boot(address.slice(address.indexOf("?")));
+    expect(again.getState().rows).toEqual(store.getState().rows);
+  });
+
+  it("keeps a price while its share count is edited, and in the address", async () => {
+    const store = await boot(LINK);
+    store.dispatch({ type: "setAmount", id: A, amount: 30 });
+    store.dispatch({ type: "setAmount", id: B, amount: null });
+    expect(priceOf(store)).toEqual([[A, 200], [B, 50]]);
+    expect(await lastUrl(store)).toContain(`f=${A}:30,${B}&p=${A}:200,${B}:50&unit=shares`);
+  });
+
+  it("forgets the prices when the unit leaves shares, and shares are valued at the service's closes again", async () => {
+    const store = await boot(LINK);
+    store.dispatch({ type: "setUnit", unit: "usd" });
+    expect(priceOf(store)).toEqual([[A, undefined], [B, undefined]]);
+    expect(await lastUrl(store)).not.toContain("p=");
+    store.dispatch({ type: "setUnit", unit: "shares" });
+    expect(priceOf(store)).toEqual([[A, undefined], [B, undefined]]);
+    expect(await lastUrl(store)).not.toContain("p=");
+  });
+
+  it("takes a file's prices with its list only in shares", async () => {
+    const row = (id: string, amount: number | null, price?: number) => ({ id, name: id, amount, ...(price === undefined ? {} : { price }) });
+    const store = await boot("");
+    store.dispatch({ type: "useMenu", rows: [row(A, 10, 200), row(B, 5, 50), row(C, null)], unit: "shares" });
+    expect(priceOf(store)).toEqual([[A, 200], [B, 50], [C, undefined]]);
+    expect(await lastUrl(store)).toContain(`f=${A}:10,${B}:5,${C}&p=${A}:200,${B}:50&unit=shares`);
+    // the same funds again in another unit, and the page's own unit when the list brings none
+    store.dispatch({ type: "useMenu", rows: [row(A, 10, 200), row(B, 5, 50), row(C, null)], unit: "usd" });
+    expect(priceOf(store)).toEqual([[A, undefined], [B, undefined], [C, undefined]]);
+    store.dispatch({ type: "useMenu", rows: [row(A, 10, 200), row(B, 5, 50)] });
+    expect(store.getState().unit).toBe("usd");
+    expect(priceOf(store)).toEqual([[A, undefined], [B, undefined]]);
+  });
+
+  it("opens a link with prices but no shares unit as the link would have been without them", async () => {
+    const store = await boot(`f=${A}:60,${B}:40&p=${A}:200,${B}:50`);
+    expect(priceOf(store)).toEqual([[A, undefined], [B, undefined]]);
+    expect(await lastUrl(store)).not.toContain("p=");
   });
 });
