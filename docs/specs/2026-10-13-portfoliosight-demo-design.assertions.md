@@ -177,10 +177,11 @@ why it is load-bearing.
 - **A-PS-44 — the heatmap renders from the theme ramp under the frontier only.** (S5, DoD 7)
 - **A-PS-45 — the risk slider's readouts are the frontier mix's one-year truth and move together
   with no request but the range of the mix on screen.** (S3, F7, F8, DoD 8)
-- **A-PS-46 — the diversification slider starts at the Optimized point, moves the point down and
-  never right, and the point is drawn where its mix sits.** (S4, F9, S23, DoD 9)
-- **A-PS-47 — the diversification word is quiet, one of four, with thresholds as specified.** (S6,
-  F4, DoD 10)
+- **A-PS-46 — the diversification slider starts at the best-return mix (position 0), moves the
+  point down and never right, and the point is drawn where its mix sits.** (S4, F9, S23, DoD 9;
+  owner direction 2026-11-11)
+- **A-PS-47 — the diversification line is quiet and states the measure; no grade word stands for
+  it.** (S6, F4, DoD 10; owner direction 2026-11-11)
 - **A-PS-48 — the default DOM is plain language, impersonal, with the disclaimer always visible.**
   (S7, F2, F11, M6, M8, DoD 6, DoD 20)
 - **A-PS-49 — four themes with distinct computed tokens and a repainted canvas; the choice is
@@ -998,13 +999,15 @@ Phase 3 · unit (vitest)
 Phase 3 · unit (vitest)
 - **Claim.** `decode(encode(state)) == state` for every reachable state of `web/src/state/url.ts`
   (preset or custom funds with optional amounts, `unit` including `shares`, cap overrides,
-  lookback, ghosts, `r` decimal, `d` auto or decimal, theme, details), unknown keys are ignored,
+  lookback, ghosts, `r` decimal, `d` decimal, theme, details), unknown keys are ignored,
   `r` is clamped into the domain on load, and `encode` emits only the §8.1 keys.
 - **Setup.** A generator over the state space (≥ 500 cases) with fund ids drawn from the fixture
   universe; a URL with an unknown key `zz=1` and a `k=` key; an `r` outside `[s_safe, NX−1]`.
 - **Observation.** Round-trip equality for all cases; the key set of every encoded URL ⊆
-  `{u, f, unit, c, lb, g, r, d, t, x}`; `?u=guide2017&lb=5y&r=19.25&d=auto&t=hud` decodes to the
-  obvious state and re-encodes to the same string; `zz` and `k` are dropped and do not appear
+  `{u, f, unit, c, lb, g, r, d, t, x}`; `?u=guide2017&lb=5y&r=19.25&d=0&t=hud` decodes to the
+  obvious state and re-encodes to the same string; a query with no `d`, and one with the old
+  `d=auto`, decode to `d = 0` (position 0, the best-return mix) and re-encode with `d=0` (owner
+  direction 2026-11-11); `zz` and `k` are dropped and do not appear
   in re-encoded output; out-of-domain `r` decodes to the clamped value. **Must-not-contain:**
   any non-§8.1 key in `encode` output; a `k` value surviving a re-encode. Fail = any.
 - **Kind.** property (≥ 500 generated states).
@@ -1116,7 +1119,8 @@ Phase 3 · ui (desktop 1366×900; all four themes)
   `risk-slider`, `div-slider`, the result strip (`range-low`, `range-typical`, `range-high`,
   `div-word`) and the four chips, no `<table>`, no trade row and no stress card is visible, all
   four sections have `aria-expanded="false"`, each chip expands its matching section, and the
-  SVG overlay's markers are exactly `point-selected`, `point-div` and `point-current`.
+  SVG overlay's markers are exactly `point-selected` and `point-current` (owner direction
+  2026-11-11: the open circle `point-div` is retired).
 - **Setup.** `vite preview` with the static `/api/*` mock serving the fixture as `guide2017`'s 5y
   tensor and the presets body with its allocation; theme set via `?t=`.
 - **Observation.** For each theme: every named test id is within the viewport
@@ -1227,50 +1231,61 @@ Phase 3 · ui
   the drag; the point right of the line. Fail = any.
 - **Kind.** property (five positions; keyboard and drag).
 
-### A-PS-46 — the diversification slider starts at the suggested spot, moves the point down and never right, and the point is drawn where its mix sits
+### A-PS-46 — the diversification slider starts at the best-return mix, moves the point down and never right, and the point is drawn where its mix sits
 Phase 3 · ui
-- **Claim.** On load `div-reset` is hidden and the slider's `t` equals `t_auto(s)` from the
-  tensor; moving toward "More diversified" moves `point-selected` down and never right of
-  `ceiling-line`; at `t = 0` the point lies on the drawn frontier within 1 px; with details on and
-  `r` an integer, `details-enb` at `t = 1` is ≥ its value at `t = 0`; at every tested `(s, t)` the
-  point's pixel position equals the chart scales applied to the test's own `stats(interpolate(s,
-  t))` within 1 px; where both neighbouring ladders are collapsed the slider is disabled with
-  the §3.2 note (skipped only if the fixture has no such pair).
+- **Claim.** On load `d` is 0 (written `d=0`), the slider's readout is "Best-return mix", no
+  `div-reset` button exists then or after a move (owner direction 2026-11-11: the slider alone
+  returns to 0, by Home or End, the arrow keys or a drag) and `point-selected` lies on the drawn frontier within 1 px at every risk
+  setting; there is no `point-div`; moving toward "More diversified" moves `point-selected` down
+  and never right of `ceiling-line`; with `r` an integer, the ENB in `div-word` at `t = 1` is ≥
+  its value at `t = 0`; at every tested `(s, t)` the point's pixel position equals the chart
+  scales applied to the test's own `stats(interpolate(s, t))` within 1 px; where both
+  neighbouring ladders are collapsed the slider is disabled with the §3.2 note (skipped only if
+  the fixture has no such pair). A link with no `d` opens the same way (owner direction
+  2026-11-11).
 - **Setup.** As A-PS-41; the test reuses the TypeScript math (A-PS-34) to compute expected
   positions; `r` set to an integer column for the ENB leg.
-- **Observation.** `div-reset` absent/hidden on load and present after one move; initial `d`
-  decodes to `t_auto(s)` (±1e-6); over five downward steps the point's y increases monotonically
-  and x ≤ line x + 1 px; at the top the point's center is within 1 px of the canvas-drawn curve
-  (sampled by locating the frontier stroke color in the column); `details-enb(t=1) ≥
-  details-enb(t=0)`; the drawn position matches the computed `(σ, μ)` through the axis scales
-  within 1 px at `t ∈ {0, 0.5, 1}` and three `s` values; collapsed pair → `div-slider` has
-  `disabled` and the note "At this risk, the best-return mix is already the most diversified one
-  found." **Must-not-contain:** a visible reset link before any move; a point drawn at the
-  ceiling rather than at its actual σ when they differ by more than 1 px. Fail = any.
+- **Observation.** `div-reset` absent on load, after one move and after Home or End returns `d`
+  to 0, and no button named "Back to …" exists; initial `d`
+  is `0`, also for an address without `d`; the readout (`aria-valuetext`) is "Best-return mix";
+  over five downward steps the point's y increases monotonically and x ≤ line x + 1 px; at the
+  top the point's center is within 1 px of the canvas-drawn curve (sampled by locating the
+  frontier stroke color in the column), and so is it on load; the first number of `div-word`
+  at `t = 1` is ≥ its value at `t = 0`; the drawn position matches the computed `(σ, μ)` through
+  the axis scales within 1 px at `t ∈ {0, 0.5, 1}` and three `s` values; collapsed pair →
+  `div-slider` has `disabled` and the note "At this risk, the best-return mix is already the
+  most diversified one found." **Must-not-contain:** a `div-reset` button or any "Back to …" button;
+  `point-div`; a point drawn at the ceiling rather than at its actual σ when they differ by
+  more than 1 px. Fail = any.
 - **Kind.** property (three `s` × three `t`; the collapsed case).
 
-### A-PS-47 — the diversification word is quiet, one of four, with thresholds as specified
+### A-PS-47 — the diversification line is quiet and states the measure; no grade word stands for it
 Phase 3 · ui + unit
-- **Claim.** `div-word` is one of Good/Average/Fair/Poor, rendered at ≤ 14 px in the theme's
-  `--muted` color, the ENB number is absent until `details-toggle` is on and then reads "spreads
-  risk over the equivalent of N independent bets; highest found on this menu: M" with the ratio
-  matching the word, and the pure mapping uses `q ≥ 0.75` Good, `0.50 ≤ q < 0.75` Average,
-  `0.30 ≤ q < 0.50` Fair, `q < 0.30` Poor.
-- **Setup.** As A-PS-41 for the UI legs; the word function for the unit leg with `q ∈ {0.299,
-  0.30, 0.499, 0.50, 0.749, 0.75, 1.0}`.
-- **Observation.** UI: `div-word` text ∈ the four words; computed `font-size ≤ 14px`; computed
-  `color` equals the computed `--muted` of the active theme; before details, no element's text
-  matches `/\d\.\d+ (independent )?bets|ENB/`; after details, `details-enb` matches the template,
-  its `N / M` ratio falls in the band of the shown word, and the technical name "effective number
-  of bets, minimum torsion" appears. Unit: the seven `q` values map to Poor, Fair, Fair, Average,
-  Average, Good, Good. **Must-not-contain:** a numeric score next to the word in the default
-  view; a font size above 14 px; a word outside the four. Fail = any.
-- **Kind.** property (threshold boundaries; four themes for the style legs).
+- **Claim.** `div-word` reads "This mix spreads risk over the equivalent of N independent bets;
+  highest found on this portfolio: M." with N the mix's own ENB and M the tensor's `enb_ref`
+  (one decimal each), rendered at ≤ 14 px in the theme's `--muted` color; none of Good / Average
+  / Fair / Poor is shown for diversification; the technical name "effective number of bets,
+  minimum torsion" is absent until `details-toggle` is on and then appears. Owner direction
+  2026-11-11: the words and their cut points are retired.
+- **Setup.** As A-PS-41 for the UI legs; the unit leg calls `diversificationLine(enb, enbRef)`
+  from `web/src/copy.ts` for the frontier and most diversified mixes of three columns of the
+  fixture tensor and for a seeded sweep of 600 (ENB, highest) pairs.
+- **Observation.** UI: `div-word` text matches the template; N within half a unit of the last
+  shown decimal of the mix's ENB computed from the tensor; M likewise of `enb_ref`; computed
+  `font-size ≤ 14px`; computed `color` equals the computed `--muted` of the active theme; before
+  details, no element's text matches `/effective number|ENB/`; after details, `details-enb`
+  appears and the technical name is in the page text. The visible text holds none of `Average`,
+  `Fair`, `Poor` and `Good` only as the label of the range's top figure. Unit: each
+  result matches the template, N and M within half a shown unit of the ENB recomputed from the
+  tensor (or of the sweep's pair), with no grade word and no "Optimized". **Must-not-contain:** a grade word for diversification; a font
+  size above 14 px. Fail = any.
+- **Kind.** property (three risk positions; four themes for the style legs).
 
 ### A-PS-48 — the default DOM is plain language, impersonal, with the disclaimer always visible
 Phase 3 · ui (desktop and phone; four themes; both presets of the mock)
 - **Claim.** With details off and every section expanded, the visible text contains none of
-  `bets`, `knee`, `Sharpe`, `tangency`, `covariance`, `sigma`, `quantile`, `significant`,
+  `bets` (outside "independent bets", owner direction 2026-11-11), `Optimized`, `Average`, `Fair`,
+  `Poor`, `knee`, `Sharpe`, `tangency`, `covariance`, `sigma`, `quantile`, `significant`,
   `you should`, `we recommend`, `Risk Number`, `Risk Score`, `login`, `sign in`, `password`
   (case-insensitive, word-bounded), contains every plain label of the §3.6 "Default" column
   that applies to the view, and with details on contains the technical names; the §3.7 footer
@@ -1281,7 +1296,7 @@ Phase 3 · ui (desktop and phone; four themes; both presets of the mock)
 - **Observation.** `document.body.innerText` (details off) matches none of the forbidden
   patterns and contains: "Risk: how much it bounces around in a year", "Expected return per
   year", "How spread out the risk is", "Best-return mix at this risk", "Selected mix", "More
-  return", "More diversified", "Optimized", "Same menu, different years of history", "The mix you
+  return", "More diversified", "Same menu, different years of history", "The mix you
   entered", "Historical math, not investment advice."; the `disclaimer` element's text equals
   the §3.7 paragraph verbatim and its rect is visible with no `aria-expanded="false"` ancestor;
   `footer-cta` contains anchors whose `href`s are exactly the three URLs. Details on:

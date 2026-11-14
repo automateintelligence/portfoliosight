@@ -4,8 +4,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   benchmarkRecords, collapsedPosition, decisionDates, frontAt, mixStats, parsePercent, pickCells, readmeProblems, redact, rgbBasis, ruleMaxPct,
-  sliderDomain, stressOf, universeHash, walkableColumn, wordFor, BACKUP_PATH, LAKE_PATH, type TensorLike,
+  sliderDomain, stressOf, universeHash, walkableColumn, diversificationText, BACKUP_PATH, LAKE_PATH, type TensorLike,
 } from "../e2e/smoke-lib";
+import * as lib from "../e2e/smoke-lib";
 import { portfolioMath } from "../src/math/portfolio";
 import { parseTensor } from "../src/api/client";
 
@@ -60,7 +61,7 @@ describe("the test's own tensor math agrees with the page's", () => {
     }
   });
 
-  it("statistics and the word of a mix", () => {
+  it("statistics of a mix and the line that replaced its word", () => {
     for (const j of [3, 20, 40]) {
       const own = mixStats(tensor, tensor.frontier.w[j]);
       const page = math.stats(tensor.frontier.w[j]);
@@ -68,7 +69,8 @@ describe("the test's own tensor math agrees with the page's", () => {
       expect(own.sigma).toBeCloseTo(page.sigma, 12);
       expect(own.enb).toBeCloseTo(page.enb, 9);
     }
-    expect([0.75, 0.74, 0.5, 0.49, 0.3, 0.29].map(wordFor)).toEqual(["Good", "Average", "Average", "Fair", "Fair", "Poor"]);
+    expect(diversificationText(3.84, 5.1)).toBe("This mix spreads risk over the equivalent of 3.8 independent bets; highest found on this portfolio: 5.1.");
+    expect(Object.keys(lib)).not.toContain("wordFor");
   });
 
   it("stress return, coverage and the default cap rule", () => {

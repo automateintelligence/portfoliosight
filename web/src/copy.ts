@@ -20,12 +20,17 @@ export const plain = {
   rangeTypical: "Typical",
   rangeHigh: "Good",
   diversification: "Diversification",
-  words: ["Good", "Average", "Fair", "Poor"] as const,
   divMoreReturn: "More return",
   divMoreDiversified: "More diversified",
   divDisabled: "At this risk, the best-return mix is already the most diversified one found.",
-  optimized: "Optimized",
-  resetOptimized: "Back to Optimized",
+  /** The diversification slider's readout at position 0 (owner direction 2026-11-11). */
+  divBestReturn: "Best-return mix",
+  /**
+   * The one line from our research on how spread-out risk did against the best-return mix (owner
+   * direction 2026-11-11). Under the diversification slider, with Details on and only then (owner
+   * direction 2026-11-14); the only copy of this text.
+   */
+  testedOnPastData: "In our tests on past data, more diversification did not lose less than the best return (frontier line) at the same risk.",
   frontier: "Best return at each level of risk",
   ghosts: "Same portfolio, different years of history",
   noLimits: "No limits",
@@ -108,25 +113,12 @@ export const technical = {
   enbName: "effective number of bets, minimum torsion",
   divSlider:
     "Walks the mixes that keep the risk at X: every step down gives up return for diversification; the bottom end is the most diversified mix found at that risk",
-  // The "Optimized" rule, kept in these strings only (the tensor says which one applies).
-  optimized: {
-    balanced:
-      "Optimized is the balanced point: going from the best-return mix toward the most diversified mix at this risk, it is where each further step starts buying less diversification than the return it gives up.",
-    peak: "Optimized is the most diversified mix found at this risk.",
-  },
-  optimizedMethod: {
-    balanced:
-      "the knee of diversification (ENB) gained against return given up along the mixes at this risk, both scaled to run from 0 to 1 (the level farthest above the straight line from the best-return mix to the most diversified one)",
-    peak: "the highest ENB found among mixes with exactly this risk",
-  },
   noLimits: "The same frontier with every fund allowed from 0% to 100%",
   rangePending: "The one-year range of this mix comes from the service and is not available right now.",
   frontier:
     "Long-only mean-variance efficient frontier with caps; drawn as the locus of interpolated frontier mixes' actual risk and return",
   ghosts: "Frontier estimated over the 1y/2y/3y/10y/EW window",
   caps: "Editable default: max = max(0.25, 3/N)",
-  cutPoints:
-    "The word tells you how evenly this mix's risk is shared out. We look at how many truly different kinds of investment are carrying the risk, and compare that with the most spread-out mix these funds can make. Good: at least three-quarters as spread out as that best mix. Average: at least half. Fair: at least 30%. Poor: less than that, so one or two holdings carry most of the risk.",
   cellPlace: (risk: string, floor: string) => `At risk ${risk}, earning at least ${floor}`,
 } as const;
 
@@ -173,9 +165,12 @@ export const lookbackShort: Record<string, string> = {
   ew: "Recent-weighted",
 };
 
-/** Words that must never appear in the default (details off) copy. */
+/**
+ * Words that must never appear in the default (details off) copy. "bets" is allowed only inside
+ * "independent bets", the figure that replaced the grade words (owner direction 2026-11-11).
+ */
 export const forbiddenDefault = [
-  "bets", "knee", "Sharpe", "tangency", "covariance", "sigma", "quantile", "significant",
+  "knee", "Sharpe", "tangency", "covariance", "sigma", "quantile", "significant",
   "you should", "we recommend", "Risk Number", "Risk Score",
 ] as const;
 
@@ -197,9 +192,10 @@ export const adminTag = "Admin";
 export const adminLine = (n: number) => `Admin mode: portfolios of up to ${n} funds.`;
 export const fundsTotal = (total: string, gap: string, over: boolean) => `Total: ${total}%, ${gap}% ${over ? "over" : "to go"}`;
 export const staleLine = (asof: string) => `Prices through ${asof}; the nightly refresh has not run since then.`;
-// Behind the details toggle only (it names the technical measure).
 export const enbLine = (n: string, m: string) =>
   `spreads risk over the equivalent of ${n} independent bets; highest found on this portfolio: ${m}`;
+/** What every mix says about its diversification, in place of a grade word (owner direction 2026-11-11). */
+export const diversificationLine = (enb: number, enbRef: number) => `This mix ${enbLine(enb.toFixed(1), enbRef.toFixed(1))}.`;
 /** The strip's bar, spoken: it is drawn on one scale for every mix of this menu and history window. */
 export const rangeBarLabel = (from: string, to: string, low: string, typical: string, high: string) =>
   `One-year range on a fixed scale from ${from} to ${to}, the same for every mix of this portfolio and history window: ${plain.rangeLow} ${low}, ${plain.rangeTypical} ${typical}, ${plain.rangeHigh} ${high}`;
