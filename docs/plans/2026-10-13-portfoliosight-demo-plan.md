@@ -395,6 +395,22 @@ Names as built (run rule 11: where the task text below differs, these are the na
   3. Wording of the "on `main`" checks (DoD-26, A-PS-65): they run against the deployed, reviewed SHA of the run branch, which is the run's integration branch under conductor's run topology; merging the run branch into `main` is the owner's single final review and is never done by a phase. The final handoff names the deployed SHA, the run branch, and H-PS-01 as awaiting the owner.
   4. From the main checkout: `~/.claude/scripts/worktree-cleanup.py` (dry run), then `--apply --remote` for branches whose work is in the run branch and merged; never force-remove, never delete unmerged work (run rule 7). Record the cleanup output in the PR. Then prove the scheduled backup survived the cleanup: re-run the exact cron command of 6.9.2(c) under the same minimal environment → exit 0 and a new sync line in `$HOME/.local/state/portfoliosight/r2_backup.log`; `readlink -f "$HOME/programming/portfoliosight/scripts/r2_backup.sh"` resolves to the durable copy (or to the real file once the owner has merged). Record the result in the runbook and name the symlink in the final handoff so the owner removes it before merging the run branch into `main`.
 
+## Phase 8: Owner-directed changes after the demo, 2026-11-11 (A-PS-36, A-PS-38, A-PS-41, A-PS-46, A-PS-47, A-PS-48, A-PS-51, A-PS-70)
+
+**Source:** owner decisions of 2026-11-11, after the fixed-risk research found that a more diversified mix at the same risk gave no protection against falls (`docs/reviews/2026-11-07-fixed-risk-experiment-v3-report.md`, exploratory sections). Each task's PR updates the spec section it names before or with the code.
+**Recipe:** the per-phase recipe above, with the owner's review loop (at most three rounds), `python3 ~/.claude/scripts/pr-review-threads.py` empty, and merge on the owner's word. One PR per task; 8.1 merges first, then 8.2 is brought up to date with `main` and its checks rerun.
+
+- [ ] 8.1 Retire "Optimized" and the grade words: PR #201, branch `ui/retire-optimized`
+  1. Spec: §3.1 (first screen opens on the best-return mix), §3.2 (diversification slider is explore-only, with end labels "More return" / "More diversified"; no "Back to" button), §3.6 copy rows (no Good/Average/Fair/Poor; the independent-bets sentence; the past-data line), §8.1 URL encoding (a link with no `d`, `d=auto` or an invalid `d` opens at the frontier mix); engines spec wording to match.
+  2. Gate: the frozen tests A-PS-36, 38, 41, 46, 47, 48, 51, `manifest.yaml` and `INTERFACES.md` edited on the owner's word (2026-11-11) to the new wording; no other frozen check changes.
+  3. Includes the Overlay keyboard-focus fix (`web/src/chart/Overlay.tsx`, first tap time starts at minus infinity) with its regression test `web/tests/pin-card.test.tsx`.
+  4. Done when: `npm run lint && npm run typecheck && npm test`, the local e2e suite and the gate tests above pass on the PR head brought up to date with `main`.
+- [ ] 8.2 Funds & amounts "Sort by": PR #200, branch `ui/funds-sort`
+  1. Spec: §3.3 Funds & amounts, the "Sort by" paragraph; §3.6 copy row "Funds table".
+  2. Assertion: A-PS-70 in the assertions file (the PR first numbered it A-PS-69, which this plan already retired as H-PS-01, task 7.3; renumbered when the PR is brought up to date). Not in `manifest.yaml`.
+  3. Done when: the same checks as 8.1 pass on the PR head brought up to date with `main` after 8.1 merges, including `web/e2e/local/app.spec.ts` in full.
+- [ ] 8.3 Deploy: `make deploy`, then `make smoke`, from `main` after 8.1 and 8.2 merge, on the owner's word about what ships (all of `main`, which includes engine 0.3.0, or the page only).
+
 ---
 
 ## Self-review notes (plan author, 2026-10-13)
