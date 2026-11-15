@@ -41,8 +41,10 @@ it("shows both percentage columns in every unit, the entered one from the amount
   ];
   for (const c of cases) {
     show({ unit: c.unit, amounts: c.amounts });
-    expect(screen.getByText("Mix entered %")).toBeTruthy();
-    expect(screen.getByText("Selected mix %")).toBeTruthy();
+    // the column heads (the "Sort by" list names both columns too)
+    const head = within(document.querySelector<HTMLElement>(".row-head")!);
+    expect(head.getByText("Mix entered %")).toBeTruthy();
+    expect(head.getByText("Selected mix %")).toBeTruthy();
     expect(cell("entered", a.id), c.unit).toBe(pct(c.want[0]));
     expect(cell("entered", b.id), c.unit).toBe(pct(c.want[1]));
     expect(cell("entered", funds[2].id), c.unit).toBe("0.0%");

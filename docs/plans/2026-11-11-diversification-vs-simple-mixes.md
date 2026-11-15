@@ -4,9 +4,9 @@ Date: 2026-11-11. Question approved by the owner on 2026-11-11 ("4 a"). Written 
 before any realized outcome of a new mix is computed; revised after review rounds 1 to 4 (the
 review log at the end), still before any realized outcome of a new mix was computed. Round 4
 (2026-11-13) was the last review of this document, by the owner's decision; the implementation
-PR's review checks the code against it. The decisions at the end are open; the run starts only
-after the owner answers them, and an answer that changes the design is recorded here as a dated
-correction before any realized outcome is read.
+PR's review checks the code against it. All decisions at the end were answered by
+2026-11-15, D kept. An answer that changes the design is recorded here as a dated correction
+before any realized outcome is read.
 
 ## Question
 
@@ -537,6 +537,16 @@ records its own CPU seconds as the other checks do.
   realized outcome is read; a stop is reported, not fixed in place.
 
 ## Decisions for the owner
+
+**Owner's answers, recorded 2026-11-15** (given to the session that ended 2026-11-15, before
+any realized outcome of a new mix was computed): 1a (nine tests at 99.44%), 2a (D under the
+menu's limits), 3n (drop the lowest-volatility mix V from the report; the owner's words: "We
+already know that just using the slider is adequate."), 4y (turnover and break-even), 5y (D's
+optimizer check against the whole pool), 6a (15% exclusion share). Dropping V removes a
+described mix only; the tests and their count are unchanged. D, the most-diversified mix, stays
+in the run (owner, 2026-11-15, "2n"): v2 recorded its most-diversified anchors but never
+evaluated them, testing only the interior slider positions 0.25, 0.50 and 0.75, so D's own
+realized comparison has not been run.
 
 1. **How many tests.** (a) Nine tests, three mixes by three fall measures, each at a 99.44%
    interval (recommended: one answer per mix and measure, no second look later; the cost is

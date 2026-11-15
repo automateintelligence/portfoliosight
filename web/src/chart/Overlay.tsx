@@ -2,6 +2,7 @@ import { axisBottom, axisLeft } from "d3-axis";
 import { select } from "d3-selection";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { plain } from "../copy";
+import { useHold } from "../state/interaction";
 import { avoidPinned, type Box, type PinEvent } from "./pin";
 import type { ChartScales } from "./scales";
 
@@ -141,6 +142,8 @@ export function Overlay({ scales, phone, ceiling, selected, current, funds, sele
   // no card. -Infinity means never tapped, so a focus early in the page's life still opens the card.
   const tapped = useRef(-Infinity);
   const [dragging, setDragging] = useState(false);
+  // A drag of the point, or a key held on it, is an interaction in progress for the whole app.
+  const hold = useHold();
   const [tip, setTip] = useState<MarkId | null>(null);
   const [cardH, setCardH] = useState(250);
   const [fundShown, setFundShown] = useState<string | null>(null);
@@ -206,6 +209,7 @@ export function Overlay({ scales, phone, ceiling, selected, current, funds, sele
     }
     if (fromMark) return; // a tap opens the marker's own card; only a real move drags
     setDragging(true);
+    hold.pointer(e.pointerId);
     setTip("selected");
   };
   // The selected point: a press that comes back up without travelling is a click (pin or unpin
@@ -243,6 +247,7 @@ export function Overlay({ scales, phone, ceiling, selected, current, funds, sele
       d.axis = dx >= dy ? "x" : "y";
       if (d.fromMark) {
         setDragging(true);
+        hold.pointer(e.pointerId);
         setTip("selected");
       }
       if (d.axis === "y") {
@@ -257,6 +262,7 @@ export function Overlay({ scales, phone, ceiling, selected, current, funds, sele
   const endDrag = () => {
     drag.current = null;
     setDragging(false);
+    hold.endPointer();
   };
   const onKeyDown = (e: KeyboardEvent<SVGGElement>) => {
     if (e.key === "Enter" || e.key === " ") {
@@ -268,6 +274,7 @@ export function Overlay({ scales, phone, ceiling, selected, current, funds, sele
     const move = moves[e.key];
     if (!move || busy) return;
     e.preventDefault();
+    hold.key(); // a held key is one interaction, ended by its release
     onNudge(move[0], move[1]);
   };
 

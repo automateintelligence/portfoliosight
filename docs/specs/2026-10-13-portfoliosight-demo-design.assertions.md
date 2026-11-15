@@ -33,7 +33,7 @@ not regress.
 | Phase 0 (data) | A-PS-02 … A-PS-14 |
 | Phase 1 (engine) | A-PS-15 … A-PS-25 |
 | Phase 2 (API, nightly, container) | A-PS-26 … A-PS-33 |
-| Phase 3 (front end) | A-PS-34 … A-PS-53 |
+| Phase 3 (front end) | A-PS-34 … A-PS-53, A-PS-70 |
 | Phase 4 (production deployment) | A-PS-54 … A-PS-60, A-PS-66, A-PS-67, A-PS-68 |
 | Phase 5 (smoke tests and docs) | A-PS-61 … A-PS-65 |
 
@@ -190,6 +190,9 @@ why it is load-bearing.
 - **A-PS-51 — the address reproduces the view in a fresh context.** (S17, S22, DoD 19)
 - **A-PS-52 — the bundle carries no secret, no gate header and no origin host.** (M2, §9.4)
 - **A-PS-53 — cap edits are validated inline and sent only when valid.** (S12, DoD 14 local part)
+- **A-PS-70 — Funds & amounts "Sort by" orders the table as chosen, holds still while the selected
+  mix is being moved or an amount field is in use, and sorts once on release.** (owner direction
+  2026-11-11, §3.3) Without it a row would jump out from under a finger or a cursor.
 
 **Phase 4 — production deployment**
 - **A-PS-54 — the page loads with the header on both viewports.** (S20, DoD 1 header part)
@@ -1686,9 +1689,57 @@ Phase 5 · static + unit
   missing or duplicated `DoD-NN`; a coverage row under the thresholds. Fail = any.
 - **Kind.** contract (gates) with property legs (every test file; all 31 names).
 
+### A-PS-70 — Funds & amounts "Sort by" orders the table as chosen, holds still while the selected mix is being moved or an amount field is in use, and sorts once on release
+Phase 3 · unit + ui (owner direction 2026-11-11, §3.3)
+- **Claim.** A native drop-down with the accessible name "Sort by" sits in the Funds toolbar at both
+  viewports, offers "As entered", "Ticker", "Fund name", "Amount", "Mix entered %" and "Selected
+  mix %" in that order, and starts on "As entered". Each option orders the rows: names A to Z
+  without regard to case; numbers largest first, "Amount" being the amount column's own number in
+  the unit shown (so 20 shares sorts above 5 shares whatever each is worth); a blank after every
+  number and a zero before a blank; funds that show the same figure keep the entered order. While
+  the risk slider or the diversification slider is dragged, or the selected point or the starting-
+  mix square on the chart, or a key is held on any of them, the row order does not change and the
+  Selected mix % figures keep updating in place; the list re-sorts once on pointerup, pointercancel,
+  lost capture or key release (a single key press re-sorts on its release). While focus is anywhere
+  inside the rows (an amount field or a Remove button) the order holds, Tab from an amount field to
+  its Remove button and on to the next amount field included, and it re-sorts when focus leaves the
+  rows or when the row holding focus leaves the list. Adding or
+  removing a fund, and choosing another sort, put the list in sorted order at once. The choice is
+  remembered in the browser, is "As entered" when storage throws or holds anything else, holds for
+  the rest of the visit through closing and reopening the section when storage refuses it, and is
+  not in the share link.
+- **Setup.** Unit legs: the pure `sortFunds` over hand-made rows (every option, blanks, ties, the
+  three units, two mixes that show as the same percent) and `readSort` / `writeSort` over a storage
+  that throws; `Funds` in jsdom with a stateful list, `selected` replaced step by step, the
+  interaction flag raised and lowered, an amount field focused and blurred, focus moved field to
+  Remove button to field, and the row of the focused field removed from `rows`; the sliders and the
+  chart's point in jsdom with the interaction signal; the whole page in jsdom (a sized chart) with a
+  pointer drag of `risk-slider`, so the page's wiring of the signal to the table is covered. UI leg: as A-PS-41, Funds open (the sidebar
+  on desktop, the section on the phone), sort on "Selected mix %"; a mouse drag of `risk-slider`
+  in twelve steps and a held ArrowRight; the table's row ids and `mix-selected-*` texts read
+  after every step.
+- **Observation.** Option labels equal the six names; `funds-sort` is a `select`. Row order after
+  each option equals the order a reference sort of the displayed figures gives. During the drag
+  the row id list equals the one before the press at every step while the `mix-selected-*` texts
+  differ from the start at some step; after pointerup the texts read largest first and the id list
+  differs from the one before the drag. A held ArrowRight (forty key-downs) leaves the id list
+  unchanged until its key-up, after which it is sorted. With an amount field focused and its value
+  raised above every other, the id list is unchanged until focus leaves the rows (through that
+  row's Remove button and the next amount field) and then lists that fund first. With that row
+  removed while its field has focus, the next change of amounts re-sorts at once.
+  Removing a fund while the flag is up gives the sorted order of the new figures; adding a fund
+  while it is up lists the new fund in its sorted place. After choosing "Ticker", a reload shows
+  "Ticker" selected and the rows A to Z, and the address has no sort parameter; with `getItem` and
+  `setItem` both throwing the page opens on "As entered" and still sorts, and "Ticker" chosen then
+  is still selected after the table unmounts and mounts again. **Must-not-contain:** a
+  row that changes place between a press and its release; a re-sort on every key repeat; a sort
+  choice in the address; an uncaught error from storage. Fail = any.
+- **Kind.** property (six options × the three units; drag, held key, field focus, add, remove, two
+  viewports).
+
 ---
 
-End of machine assertions. 68 specs: A-PS-01 … A-PS-68. Owner-gated group: none (see §0).
+End of machine assertions. 69 specs: A-PS-01 … A-PS-68 and A-PS-70 (A-PS-69 is the human item H-PS-01, below). Owner-gated group: none (see §0).
 
 ## 4. Human verification (not in the gate)
 

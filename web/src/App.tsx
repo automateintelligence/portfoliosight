@@ -18,6 +18,7 @@ import { Funds } from "./sections/Funds";
 import { Settings } from "./sections/Settings";
 import { Stress } from "./sections/Stress";
 import { Trades } from "./sections/Trades";
+import { createInteraction, InteractionContext, useInteracting, type Interaction } from "./state/interaction";
 import { createStore, currentMix, enteredValue, LOOKBACKS, type LookbackId } from "./state/store";
 import { useExactRange } from "./state/useExactRange";
 import { applyTheme, useMediaQuery, useThemeEpoch } from "./theme/useTheme";
@@ -84,7 +85,18 @@ function Accordion({ id, title, open, onToggle, children }: { id: SectionId; tit
   );
 }
 
+/** The page, with the "interaction in progress" signal (a drag or a held key on a slider) its controls report to. */
 export default function App() {
+  const interaction = useMemo(createInteraction, []);
+  return (
+    <InteractionContext.Provider value={interaction}>
+      <Page interaction={interaction} />
+    </InteractionContext.Provider>
+  );
+}
+
+function Page({ interaction }: { interaction: Interaction }) {
+  const interacting = useInteracting(interaction);
   const store = useMemo(() => {
     const created = createStore({ search: typeof window !== "undefined" ? window.location.search : "" });
     applyTheme(created.getState().theme);
@@ -342,6 +354,7 @@ export default function App() {
       menuMax={state.tier.menuMax}
       selected={view?.weights ?? null}
       upload={state.upload}
+      interacting={interacting}
       onUnit={(unit) => dispatch({ type: "setUnit", unit })}
       onAmount={(id, amount) => dispatch({ type: "setAmount", id, amount })}
       onUseMenu={(rows, unit) => dispatch({ type: "useMenu", rows, unit })}
