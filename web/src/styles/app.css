@@ -1125,17 +1125,22 @@ button {
 }
 
 /* The pinned card is the one that must leave the selected point clear in a 345 px frame: it drops
- * the "over one year" caption, and its closing note shares the title row, at its right edge. */
+ * the "over one year" caption, and its closing note shares the title row, at its right edge. The
+ * note comes first and floats, so with larger text the title wraps beside or below it, never under. */
 .pinned-card.is-compact .mixcard .tip-sub-range {
   display: none;
 }
 
 .pinned-card.is-compact .tip-more {
-  position: absolute;
-  top: 6px;
-  right: 9px;
-  margin: 0;
-  line-height: 12px;
+  float: right;
+  max-width: 60%;
+  margin: 0 0 0 8px;
+  line-height: 1.2;
+}
+
+/* A title too wide for the room beside the note moves below it instead of running under it. */
+.pinned-card.is-compact .mixcard h3 {
+  min-width: min-content;
 }
 
 /* One card for every mix the chart names (the three markers and the spot under the pointer). */

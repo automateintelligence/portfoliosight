@@ -245,8 +245,9 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
           aria-label={`${plain.selectedMix}, pinned`}
           style={{ left: pinBox.left, top: pinBox.top, width: pinBox.width, maxHeight: scales.height - pinBox.top - 4 }}
         >
+          {phone && <p className="tip-more">{plain.pinnedPhone}</p>}
           {card("selected", plain.selectedMix, selMix)}
-          <p className="tip-more">{phone ? plain.pinnedPhone : plain.pinned}</p>
+          {!phone && <p className="tip-more">{plain.pinned}</p>}
         </div>
       );
     }

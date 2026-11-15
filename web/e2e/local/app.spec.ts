@@ -1188,6 +1188,34 @@ const dragBy = async (page: Page, phone: boolean, x: number, y: number, dx: numb
   await cdp.detach();
 };
 
+test("on a phone the pinned card's closing note sits on the title row and never overlaps the title, even with larger text", async ({ page }, testInfo) => {
+  if (!isPhone(testInfo.project.name)) return; // the note shares the title row only on a phone
+  await open(page);
+  const pinned = page.getByTestId("mix-card-pinned");
+  const p0 = await centre(page, "point-selected");
+  await press(page, true, p0.x, p0.y);
+  await expect(pinned).toBeVisible();
+  type Box = { x: number; y: number; width: number; height: number };
+  // the title row is as wide as the card, so measure each line of the title's own text, not its box
+  const titleLines = () =>
+    pinned.locator(".mixcard h3").evaluate((h) => {
+      const r = document.createRange();
+      r.selectNodeContents(h);
+      return [...r.getClientRects()].filter((b) => b.width > 0).map((b) => ({ x: b.x, y: b.y, width: b.width, height: b.height }));
+    });
+  const note = async () => (await pinned.locator(".tip-more").boundingBox())! as Box;
+  const overlap = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  const t0 = await titleLines();
+  const n0 = await note();
+  expect(t0.some((t) => overlap(t, n0)), "default text: the note does not overlap the title").toBe(false);
+  expect(n0.y < t0[0].y + t0[0].height && n0.y + n0.height > t0[0].y, "default text: the note shares the title row").toBe(true);
+  // a reader's larger text setting (Chromium's minimum font size of 14 px reproduces it)
+  await page.addStyleTag({ content: ".pinned-card, .pinned-card * { font-size: 14px !important; }" });
+  const t1 = await titleLines();
+  const n1 = await note();
+  expect(t1.some((t) => overlap(t, n1)), "larger text: the note does not overlap the title").toBe(false);
+});
+
 test("a click or tap on the selected point pins its card; it follows both sliders and a drag of the point, and keeps its place", async ({ page }, testInfo) => {
   const phone = isPhone(testInfo.project.name);
   await open(page);
