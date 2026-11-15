@@ -1027,65 +1027,66 @@ button {
   visibility: hidden;
 }
 
-/* On a phone the pinned card is short, so a corner can leave the selected point clear: the
- * per-year note goes (the card's own figures say "Risk" and "Expected return") and the largest
- * holdings run in three columns without their bars. */
-.pinned-card.is-compact {
+/* On a phone every mix card (the pinned one, the square's, the point's) is short, so it fits the
+ * 345 px chart frame and a corner can leave the selected point clear: the per-year note goes (the
+ * card's own figures say "Risk" and "Expected return") and the largest holdings run in three
+ * columns without their bars. */
+.tooltip.is-compact {
   padding: 6px 9px;
   font-size: 11px;
 }
 
-.pinned-card.is-compact .mixcard h3 {
+.tooltip.is-compact .mixcard h3 {
   margin-bottom: 2px;
   font-size: 10px;
 }
 
-.pinned-card.is-compact .mixcard .tip-range {
+.tooltip.is-compact .mixcard .tip-range {
   font-size: 12.5px;
 }
 
-.pinned-card.is-compact .mixcard .tip-range span {
+.tooltip.is-compact .mixcard .tip-range span {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0 4px;
 }
 
-.pinned-card.is-compact .mixcard .tip-range small {
+.tooltip.is-compact .mixcard .tip-range small {
   display: inline;
 }
 
-.pinned-card.is-compact .mixcard .tip-sub-year,
-.pinned-card.is-compact .mixcard .wbar {
+.tooltip.is-compact .mixcard .tip-sub-year,
+.tooltip.is-compact .mixcard .wbar {
   display: none;
 }
 
-.pinned-card.is-compact .mixcard .tip-facts,
-.pinned-card.is-compact .mixcard ul {
+.tooltip.is-compact .mixcard .tip-facts,
+.tooltip.is-compact .mixcard ul {
   margin-top: 3px;
   padding-top: 3px;
 }
 
 /* Risk and expected return share a line; the diversification line takes the next two, its name
  * left to screen readers, so the card stays as short as it was with the word. */
-.pinned-card.is-compact .mixcard .tip-facts {
+.tooltip.is-compact .mixcard .tip-facts {
   justify-content: start;
   gap: 1px 14px;
   margin-top: 3px;
   padding-top: 3px;
 }
 
-.pinned-card.is-compact .mixcard .tip-facts > div {
+.tooltip.is-compact .mixcard .tip-facts > div {
   display: flex;
   align-items: baseline;
   gap: 5px;
 }
 
-.pinned-card.is-compact .mixcard .tip-facts > div:last-child {
+.tooltip.is-compact .mixcard .tip-facts > div:last-child {
   display: block;
 }
 
-.pinned-card.is-compact .mixcard .tip-facts > div:last-child dt {
+.tooltip.is-compact .mixcard .tip-facts > div:last-child dt {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -1095,32 +1096,46 @@ button {
   white-space: nowrap;
 }
 
-.pinned-card.is-compact .mixcard .tip-facts > div:last-child dd {
+.tooltip.is-compact .mixcard .tip-facts > div:last-child dd {
   font-size: 10.5px;
   line-height: 1.25;
 }
 
-.pinned-card.is-compact .mixcard ul {
+.tooltip.is-compact .mixcard ul {
   display: flex;
   flex-wrap: wrap;
   gap: 1px 12px;
 }
 
-.pinned-card.is-compact .mixcard li {
+.tooltip.is-compact .mixcard li {
   display: flex;
   gap: 4px;
   white-space: nowrap;
 }
 
-.pinned-card.is-compact .mixcard .tip-tech {
+.tooltip.is-compact .mixcard .tip-tech {
   margin-top: 4px;
   font-size: 10px;
   line-height: 1.3;
 }
 
-.pinned-card.is-compact .tip-more {
+.tooltip.is-compact .tip-more {
   margin-top: 2px;
   font-size: 10px;
+}
+
+/* The pinned card is the one that must leave the selected point clear in a 345 px frame: it drops
+ * the "over one year" caption, and its closing note shares the title row, at its right edge. */
+.pinned-card.is-compact .mixcard .tip-sub-range {
+  display: none;
+}
+
+.pinned-card.is-compact .tip-more {
+  position: absolute;
+  top: 6px;
+  right: 9px;
+  margin: 0;
+  line-height: 12px;
 }
 
 /* One card for every mix the chart names (the three markers and the spot under the pointer). */

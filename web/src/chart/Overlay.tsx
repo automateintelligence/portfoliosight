@@ -420,7 +420,7 @@ export function Overlay({ scales, phone, ceiling, selected, current, funds, sele
         )}
       </svg>
       {tip && placed && cards[tip] && (
-        <div ref={cardRef} id={CARD_ID} className="tooltip" role="tooltip" style={{ left: placed.left, top: placed.top, width: cardW }}>
+        <div ref={cardRef} id={CARD_ID} className={phone ? "tooltip is-compact" : "tooltip"} role="tooltip" style={{ left: placed.left, top: placed.top, width: cardW }}>
           {cards[tip]}
           {tip === "selected" && <p className="tip-more">{phone ? plain.pinHintPhone : plain.pinHint}</p>}
         </div>
