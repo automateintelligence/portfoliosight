@@ -138,6 +138,49 @@ test("a failed build offers Retry, and Retry sends the same request", async ({ p
   expect(JSON.stringify(sent[1])).toBe(JSON.stringify(sent[0]));
 });
 
+// The service refuses a build for too many requests and says how long to wait (Retry-After); the
+// mock never does, so these answer that request from the browser side.
+const tooMany = (retryAfter: string) => ({
+  status: 429,
+  headers: { "content-type": "application/json", "cache-control": "no-store", "retry-after": retryAfter },
+  body: JSON.stringify({ error: { code: "rate_limited", message: "Too many requests; try again in a minute.", details: null } }),
+});
+
+test("a build refused for too many requests counts down and the chart loads without a click", async ({ page }) => {
+  let sent = 0;
+  await page.route("**/api/tensors", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    sent += 1;
+    return sent === 1 ? route.fulfill(tooMany("2")) : route.continue();
+  });
+  await page.goto("/?f=SGOV:50,VTIP:50&unit=pct");
+  await expect(page.getByTestId("rate-wait-notice")).toHaveText(/^Too many charts in a minute\. Trying again in [12] s\.$/);
+  await expect(page.getByTestId("build-retry")).toHaveCount(0);
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  await expect(page.getByTestId("rate-wait-notice")).toHaveCount(0);
+  expect(sent).toBe(2);
+  // the second request went through to the mock, and it is the build that was refused
+  expect((await posts(page)).map((p) => p.funds.map((f) => f.id))).toEqual([["SGOV", "VTIP"]]);
+});
+
+test("a build refused twice offers Retry with the message and is not sent again by itself", async ({ page }) => {
+  let sent = 0;
+  await page.route("**/api/tensors", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    sent += 1;
+    return route.fulfill(tooMany("1"));
+  });
+  await page.goto("/?f=SGOV:50,VTIP:50&unit=pct");
+  await expect(page.getByTestId("rate-wait-notice")).toContainText("Trying again in 1 s.");
+  await expect(page.getByTestId("build-retry")).toBeVisible();
+  await expect(page.getByTestId("building-notice")).toContainText("Too many charts in a minute. Try again in a moment.");
+  await page.waitForTimeout(2500);
+  expect(sent).toBe(2);
+  await page.unroute("**/api/tensors");
+  await page.getByTestId("build-retry").click();
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+});
+
 test("a ghost frontier can be switched on and off again", async ({ page }) => {
   await open(page);
   await section(page, "settings");
