@@ -13,7 +13,7 @@ realized outcome:
   risk (`F@E`, `F@D`, `F@D10`).
 
 This module so far holds the mixes (`most_diversified`, `frontier_exact`, `recorded_columns`,
-`month_mixes`).
+`month_mixes`) and the two pre-registered lists (`E_EXCLUDED`, `U_EXCLUDED`).
 """
 
 from __future__ import annotations
@@ -36,6 +36,17 @@ from portfoliosight.research.fixedrisk import region3 as G
 TOL = optimize.TOL  # 1e-6 in annual volatility and model return (protocol, "Inputs, fixed")
 U_TOL = 2e-6  # U's risk match to F's recorded row: both sit on one line within TOL
 D10_CAP = 0.10  # D10's flat limit on every holding
+
+# Pre-registered in the protocol from its model-side check ("Cells at or above a frontier's top"):
+# the start months whose equal-weight risk is at or above the limited top, and the U cells
+# whose risk is at or above the unlimited top. The run must reproduce both (the list gate).
+E_EXCLUDED = (
+    "2008-11", "2008-12", "2009-01", "2009-02", "2009-03", "2009-04", "2009-05", "2009-06",
+    "2009-07", "2009-08", "2009-09", "2009-10", "2009-11", "2009-12", "2010-01", "2010-02",
+    "2010-03", "2010-04", "2010-05", "2010-06", "2010-08", "2010-09", "2010-10", "2020-03",
+    "2020-05",
+)  # fmt: skip
+U_EXCLUDED = (("2008-09", 0.85), ("2010-08", 0.85))  # (start month, risk setting)
 
 F, F_ARM1, U, E, D, D10 = "F", "F_arm1", "U", "E", "D", "D10"
 COMPARATOR = {U: F, E: "F@E", D: "F@D", D10: "F@D10"}  # the row a mix is paired with

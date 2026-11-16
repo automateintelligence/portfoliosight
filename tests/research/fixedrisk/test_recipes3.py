@@ -434,3 +434,16 @@ def test_recorded_columns_refuses_a_repeated_setting_and_a_missing_weight(rec12)
         holed = [dict(rows[0], **{name: None}), *rows[1:]]
         with pytest.raises(ValueError, match=name):
             RC.recorded_columns(pd.DataFrame(holed), MONTH)
+
+
+# ------------------------------------------------------------- the pre-registered lists
+
+
+def test_the_pre_registered_lists_are_the_protocols():
+    months = RC.E_EXCLUDED
+    assert len(months) == 25
+    assert list(months) == sorted(set(months))  # in order, each once
+    assert months[0] == "2008-11" and months[-1] == "2020-05"
+    assert max(months) < "2021-09"  # E keeps 161 of the 186 five-year start months
+    assert [m for m in months if m.startswith("2009")] == [f"2009-{k:02d}" for k in range(1, 13)]
+    assert RC.U_EXCLUDED == (("2008-09", 0.85), ("2010-08", 0.85))
