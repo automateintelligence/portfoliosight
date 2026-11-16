@@ -82,6 +82,12 @@ table of every mix it evaluated.
 
 ## Open issues for the owner
 
+**Owner's answers, 2026-11-15:** 1y (a stopped run keeps its record), 2a (the full run after
+the four code PRs merge, from `main`), 3y (Task D4, the model-only dry run, is in), 4y (the five
+passages get a dated correction in the protocol). Plan approval is pending; the owner asked
+first for an outline of the tests and arms, and for a long-history side description (protocol
+"Limits", lookback), whose length is being settled against the data's start dates.
+
 Nothing found blocks the build: every input the protocol names exists (checked 2026-11-15 on
 the devbox, model side only: 246 pool files, 246 column files with 1,476 three-year rows, none
 missing `w_F` or `w_app_frontier`; the `dr2` column is present and never empty in the
