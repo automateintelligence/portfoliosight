@@ -342,7 +342,7 @@ export const ROADMAP_ITEMS = ["Paid tier", "Data license", "exact-ENB", "FERS pl
  */
 export const TENSOR_POST_LIMIT = { posts: 5, windowMs: 60_000 } as const;
 
-/** Slack on top of the window, for timer granularity: a stamp is taken when the answer arrives, which is after the server counted the request. */
+/** Slack on top of the window. An answered request is stamped after the server counted it; one still in flight is stamped as it left, before the server counted it, and this covers that gap. */
 export const TENSOR_POST_MARGIN_MS = 2_000;
 
 /** True for a request that asks the service to build a tensor (the only calls the allowance counts). */
@@ -350,13 +350,18 @@ export function isTensorBuildPost(method: string, url: string): boolean {
   return method.toUpperCase() === "POST" && new URL(url).pathname === "/api/tensors";
 }
 
-/** The stamps (epoch ms) of a record kept one to a line; lines that are not a whole number are skipped. */
+/**
+ * The stamps of the record, one per request. A line is `<id> <ms>`; a request is stamped when it
+ * leaves and again when it is answered (same id), and counts once at the later stamp. A request
+ * whose worker died before the answer counts at the stamp it left with. Other lines are skipped.
+ */
 export function parseTensorPostLedger(text: string): number[] {
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => /^\d+$/.test(line))
-    .map(Number);
+  const latest = new Map<string, number>();
+  for (const line of text.split("\n")) {
+    const found = /^(\S+) (\d+)$/.exec(line.trim());
+    if (found) latest.set(found[1], Math.max(latest.get(found[1]) ?? 0, Number(found[2])));
+  }
+  return [...latest.values()];
 }
 
 /**

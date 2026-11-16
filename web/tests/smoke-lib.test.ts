@@ -218,10 +218,16 @@ describe("pacing of live tensor builds", () => {
     expect(results).toEqual([...Array(posts).fill(true), false]);
   });
 
-  it("parses the record: one epoch-milliseconds stamp a line, anything else skipped", () => {
-    expect(parseTensorPostLedger("1700000000000\n1700000001500\n")).toEqual([1_700_000_000_000, 1_700_000_001_500]);
-    expect(parseTensorPostLedger("1700000000000\n\nnot a stamp\n17000000\n17000000015")).toEqual([1_700_000_000_000, 17_000_000, 17_000_000_015]);
+  it("parses the record: a request is stamped when it leaves and again when it is answered, and counts once at the later stamp", () => {
+    const text = ["a 1000", "b 1500", "a 1800", "c 4000", "b 4100"].join("\n");
+    expect(parseTensorPostLedger(`${text}\n`).sort((x, y) => x - y)).toEqual([1_800, 4_000, 4_100]);
+    // a request whose worker died before the answer counts at the stamp it left with
+    expect(parseTensorPostLedger("orphan 2500\n")).toEqual([2_500]);
+  });
+
+  it("skips lines of the record that are not an id and a whole number", () => {
     expect(parseTensorPostLedger("")).toEqual([]);
+    expect(parseTensorPostLedger("1700000000000\n\nnot a stamp\nx 12 34\nid -5\nid 7.5\nok 9\n")).toEqual([9]);
   });
 
   it("counts only POSTs to /api/tensors as builds", () => {

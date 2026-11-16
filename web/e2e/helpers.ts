@@ -7,6 +7,7 @@
 // test itself go through `site`, which sets the header per call and only for the site's own hosts.
 import { expect, request as playwrightRequest, test as base, type APIRequestContext, type APIResponse, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -34,28 +35,32 @@ const BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, l
 // calls `paceTensorPosts` before the step that causes one.
 //   Where: the gate route (a request a test answers with its own route never gets there, so it is
 //   not counted) and `site.post`.
-//   When: the stamp is taken when the answer arrives, which is after the server counted the
-//   request, so the site's window never ends before ours. A request still in flight counts as sent
-//   now. A refused request is stamped too, which only waits longer.
+//   When: twice, under one id. Once as the request leaves, so a worker that dies mid-request still
+//   leaves it on record. Again when the answer arrives, which is after the server counted the
+//   request, so the site's window never ends before ours (the margin covers the rest). A refused
+//   request is stamped too, which only waits longer.
 //   Clock: the monotonic clock (`process.hrtime`), the same for every process of a boot and immune
-//   to the wall clock being set. After a reboot an old stamp reads as later than now and is ignored.
+//   to the wall clock being set. After a reboot an old stamp reads as later than now and is ignored
+//   (the file is usually gone then as well): do not start a run within a minute of a reboot.
 //   File: in the temp directory, not the Playwright output directory, which Playwright empties at
-//   the start of a run: the allowance does not reset between runs. One line per POST, appended in
+//   the start of a run: the allowance does not reset between runs. One line per stamp, appended in
 //   one write, so workers and repeats share it. The check and the send are not one step, which is
 //   safe because the suite runs with one worker.
 const TENSOR_POST_LEDGER = path.join(os.tmpdir(), `portfoliosight-smoke-tensor-posts-${process.getuid?.() ?? "user"}.log`);
-let tensorPostsInFlight = 0;
 
 const monotonicMs = (): number => Number(process.hrtime.bigint() / 1_000_000n);
 
-function tensorPostSent(): void {
-  if (!DRY_RUN) tensorPostsInFlight += 1;
-}
-
-function tensorPostAnswered(): void {
-  if (DRY_RUN) return;
-  tensorPostsInFlight -= 1;
-  fs.appendFileSync(TENSOR_POST_LEDGER, `${monotonicMs()}\n`);
+/** Runs `send`, stamping the tensor POST it makes before it leaves and after it is answered. */
+async function stampingTensorPost<T>(isBuild: boolean, send: () => Promise<T>): Promise<T> {
+  if (!isBuild || DRY_RUN) return send();
+  const id = randomUUID();
+  const stamp = () => fs.appendFileSync(TENSOR_POST_LEDGER, `${id} ${monotonicMs()}\n`);
+  stamp();
+  try {
+    return await send();
+  } finally {
+    stamp();
+  }
 }
 
 /**
@@ -67,8 +72,7 @@ export async function paceTensorPosts(count = 1): Promise<void> {
   if (DRY_RUN) return;
   for (;;) {
     const now = monotonicMs();
-    const stamps = parseTensorPostLedger(fs.existsSync(TENSOR_POST_LEDGER) ? fs.readFileSync(TENSOR_POST_LEDGER, "utf8") : "");
-    const delay = pacingDelayMs([...stamps, ...Array<number>(tensorPostsInFlight).fill(now)], now, count);
+    const delay = pacingDelayMs(parseTensorPostLedger(fs.existsSync(TENSOR_POST_LEDGER) ? fs.readFileSync(TENSOR_POST_LEDGER, "utf8") : ""), now, count);
     if (delay <= 0) return;
     await test.step(`wait ${(delay / 1000).toFixed(1)} s for the site's allowance of tensor builds`, () => new Promise<void>((resolve) => setTimeout(resolve, delay)));
   }
@@ -119,15 +123,10 @@ function makeSite(ctx: APIRequestContext, baseURL: string): Site {
     www: hosts.www,
     api: hosts.api,
     get: (url, options = {}) => ctx.get(absolute(url), { headers: headers(absolute(url), options.gate ?? true), maxRedirects: 0, failOnStatusCode: false }),
-    post: async (url, data, options = {}) => {
-      const counted = isTensorBuildPost("POST", absolute(url));
-      if (counted) tensorPostSent();
-      try {
-        return await ctx.post(absolute(url), { headers: { ...headers(absolute(url), options.gate ?? true), origin: hosts.site }, data, maxRedirects: 0, failOnStatusCode: false });
-      } finally {
-        if (counted) tensorPostAnswered();
-      }
-    },
+    post: (url, data, options = {}) =>
+      stampingTensorPost(isTensorBuildPost("POST", absolute(url)), () =>
+        ctx.post(absolute(url), { headers: { ...headers(absolute(url), options.gate ?? true), origin: hosts.site }, data, maxRedirects: 0, failOnStatusCode: false }),
+      ),
     async json(url) {
       const response = await site.get(url);
       expect(response.status(), `GET ${url} with the gate header`).toBe(200);
@@ -153,14 +152,9 @@ export async function gateContext(context: BrowserContext, baseURL: string): Pro
     await context.route(
       (url) => url.origin === origin,
       async (route) => {
-        const counted = isTensorBuildPost(route.request().method(), route.request().url());
-        if (counted) tensorPostSent();
-        let response;
-        try {
-          response = await route.fetch({ headers: { ...route.request().headers(), [GATE_HEADER]: secret }, maxRedirects: 0 });
-        } finally {
-          if (counted) tensorPostAnswered();
-        }
+        const response = await stampingTensorPost(isTensorBuildPost(route.request().method(), route.request().url()), () =>
+          route.fetch({ headers: { ...route.request().headers(), [GATE_HEADER]: secret }, maxRedirects: 0 }),
+        );
         await route.fulfill({ response });
       },
     );
