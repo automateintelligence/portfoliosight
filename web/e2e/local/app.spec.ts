@@ -391,6 +391,97 @@ test("every frontier line is named at its right end and the names do not collide
   await expect(page.getByTestId("ghost-tip")).toHaveCount(0);
 });
 
+// owner direction 2026-11-15: a Settings checkbox for the No allocation limits line. The default view is
+// unchanged (the box is checked and the address says nothing); unchecking takes away the line, its
+// name and its legend key, and the address carries nl=0 so a reload or a shared link keeps it.
+const noLimitsBox = (page: Page) => page.getByRole("checkbox", { name: /No allocation limits/ });
+const nlOf = (page: Page) => new URL(page.url()).searchParams.get("nl");
+const lineDrawn = async (page: Page, drawn: boolean) => {
+  await expect(page.getByTestId("frontier-label-nolimits")).toHaveCount(drawn ? 1 : 0);
+  await expect(page.getByTestId("key-nolimits")).toHaveCount(drawn ? 1 : 0);
+};
+// The line itself is drawn on the chart's canvas: a hash of its pixels shows whether the drawing changed.
+const ink = (page: Page) =>
+  page.getByTestId("chart-canvas").evaluate(async (canvas: HTMLCanvasElement) => {
+    const { data } = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height);
+    const digest = await crypto.subtle.digest("SHA-256", data);
+    return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+  });
+
+test("the No allocation limits line is drawn by default; its Settings checkbox takes the line, its name and its key away, keeps the choice in the address and across a reload, and brings them back", async ({ page }) => {
+  await open(page);
+  await lineDrawn(page, true);
+  await expect(page.getByTestId("frontier-label-nolimits")).toHaveText("No allocation limits");
+  await section(page, "settings");
+  const withLine = await ink(page);
+  const box = noLimitsBox(page);
+  await expect(box).toBeChecked();
+  await expect(box).toBeEnabled();
+  // hide: the line, its label and its key go; the primary line and its name stay; the address carries nl=0
+  await box.uncheck();
+  await lineDrawn(page, false);
+  await expect.poll(() => ink(page), "the canvas is redrawn without the line").not.toBe(withLine);
+  const withoutLine = await ink(page);
+  await expect(page.getByTestId("frontier-label-5y")).toHaveText("5 years (Efficient frontier)");
+  await expect.poll(() => nlOf(page)).toBe("0");
+  // a reload opens with the line off and the box unchecked
+  await page.reload();
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  await lineDrawn(page, false);
+  await expect.poll(() => ink(page), "the same drawing after the reload").toBe(withoutLine);
+  await section(page, "settings");
+  await expect(noLimitsBox(page)).not.toBeChecked();
+  // show again from the keyboard: the line returns and the address is back to saying nothing of it
+  await noLimitsBox(page).focus();
+  await page.keyboard.press("Space");
+  await expect(noLimitsBox(page)).toBeChecked();
+  await lineDrawn(page, true);
+  await expect.poll(() => ink(page), "the line is drawn as it was").toBe(withLine);
+  await expect.poll(() => new URL(page.url()).searchParams.has("nl")).toBe(false);
+  expect(new URL(page.url()).search, "the default adds nothing to the address").not.toContain("nl");
+});
+
+test("a link with nl=0 opens with the No allocation limits line off, and the line stays off through a change of window", async ({ page }) => {
+  await open(page, "nl=0");
+  await lineDrawn(page, false);
+  await section(page, "settings");
+  await expect(noLimitsBox(page)).not.toBeChecked();
+  await page.getByTestId("lookback-10y").check({ force: true });
+  await expect(page.getByTestId("frontier-label-10y")).toHaveText("10 years (Efficient frontier)");
+  await lineDrawn(page, false);
+  await expect.poll(() => nlOf(page)).toBe("0");
+});
+
+test("with limits that change nothing there is no line; the checkbox stays, disabled, keeps its choice and says why", async ({ page }) => {
+  // the mock's custom two-fund menu has the same frontier with and without limits
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await expect(page.getByTestId("frontier-label-nolimits")).toHaveCount(0);
+  await expect(page.getByTestId("key-nolimits")).toHaveCount(0);
+  await section(page, "settings");
+  await expect(noLimitsBox(page)).toBeDisabled();
+  await expect(noLimitsBox(page)).toBeChecked();
+  await expect(page.getByTestId("nolimits-line-note")).toHaveText("Nothing to show: your limits do not change the best-return line.");
+  // the note is part of the box's name for a screen reader
+  await expect(page.getByRole("checkbox", { name: /Nothing to show/ })).toBeDisabled();
+  // the stored choice does not go: opened with nl=0 the box is unchecked, still disabled, still no line
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct&nl=0");
+  await section(page, "settings");
+  await expect(noLimitsBox(page)).toBeDisabled();
+  await expect(noLimitsBox(page)).not.toBeChecked();
+  await expect(page.getByTestId("frontier-label-nolimits")).toHaveCount(0);
+});
+
+test("the Settings checkbox for the No allocation limits line is as big to hit as the other checkboxes", async ({ page }) => {
+  await open(page);
+  await section(page, "settings");
+  const own = await noLimitsBox(page).locator("xpath=ancestor::label").boundingBox();
+  const ghost = await page.getByTestId("ghost-10y").locator("xpath=ancestor::label").boundingBox();
+  expect(own!.height).toBeGreaterThanOrEqual(ghost!.height);
+  expect(own!.width).toBeGreaterThanOrEqual(ghost!.width);
+  const width = page.viewportSize()!.width;
+  expect(own!.x + own!.width, "inside the screen").toBeLessThanOrEqual(width);
+});
+
 test("whichever window is the main line, its name ends in (Efficient frontier), as shown in every theme, and fits inside the chart clear of the ghost names", async ({ page }) => {
   for (const [theme, upper] of [["ks-dark", false], ["hud", true]] as const) {
     for (const [lb, name] of [["10y", "10 years"], ["ew", "Weighted recent"]] as const) {

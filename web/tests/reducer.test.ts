@@ -421,6 +421,29 @@ describe("store: transitions", () => {
     expect(shares.getState().preset).toBe("guide2017");
   });
 
+  it("the no-limits line is on by default and the address stays silent; turning it off writes nl=0, turning it on takes the key away, and a link with nl=0 opens with it off", async () => {
+    const store = await boot("");
+    expect(store.getState().noLimitsLine).toBe(true);
+    store.dispatch({ type: "flushUrl" });
+    expect(replaced[replaced.length - 1]).not.toMatch(/nl=/);
+    const fetches = tensorCalls().length;
+    store.dispatch({ type: "setNoLimitsLine", show: false });
+    expect(store.getState().noLimitsLine).toBe(false);
+    store.dispatch({ type: "flushUrl" });
+    expect(new URLSearchParams(replaced[replaced.length - 1].split("?")[1]).get("nl")).toBe("0");
+    expect(tensorCalls().length, "a drawing choice asks the service for nothing").toBe(fetches);
+    store.dispatch({ type: "setNoLimitsLine", show: true });
+    store.dispatch({ type: "flushUrl" });
+    expect(replaced[replaced.length - 1]).not.toMatch(/nl=/);
+    const again = await boot("?nl=0");
+    expect(again.getState().noLimitsLine).toBe(false);
+    // a choice made before a new menu is loaded survives it
+    again.dispatch({ type: "selectPreset", id: "tsp" });
+    await flush();
+    await advance(500);
+    expect(again.getState().noLimitsLine).toBe(false);
+  });
+
   it("theme and details are kept and stored", async () => {
     const store = await boot("?t=hud&x=1");
     expect(store.getState().theme).toBe("hud");

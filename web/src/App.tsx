@@ -198,16 +198,17 @@ function Page({ interaction }: { interaction: Interaction }) {
     return makeScales(size.width, size.height, extent, phone);
   }, [tensor, size.width, size.height, currentStats, lookbackGhosts, state.details, phone, state.theme]);
 
-  // The same menu with every limit lifted, drawn like a ghost whenever the limits bind. It does not
+  // The same menu with every limit lifted, drawn like a ghost whenever the limits bind and the visitor
+  // has not turned the line off in Settings (its label and legend key go with it). It does not
   // widen the chart: where it rises above the view it is cut at the edge and named there.
   const chartGhosts = useMemo(() => {
     if (!tensor || !scales) return lookbackGhosts;
-    if (!limitsBind(tensor)) return lookbackGhosts;
+    if (!state.noLimitsLine || !limitsBind(tensor)) return lookbackGhosts;
     const [xMin, xMax] = scales.x.domain();
     const [yMin, yMax] = scales.y.domain();
     const curve = clipCurve(tensor.frontier_uncapped, { xMin, xMax, yMin, yMax });
     return curve.sigma.length >= 2 ? [...lookbackGhosts, { id: NO_LIMITS, curve }] : lookbackGhosts;
-  }, [tensor, scales, lookbackGhosts]);
+  }, [tensor, scales, lookbackGhosts, state.noLimitsLine]);
 
   // The first paint of a chart wipes in once; later redraws (theme, ghosts) are immediate.
   const [reveal, setReveal] = useState(true);
@@ -541,12 +542,14 @@ function Page({ interaction }: { interaction: Interaction }) {
               caps={state.caps}
               unavailable={state.unavailable}
               details={state.details}
+              showNoLimits={state.noLimitsLine}
               busy={busy}
               problem={state.menuError}
               adminMenuMax={state.tier.tier === "admin" ? state.tier.menuMax : null}
               onLookback={(lookback: LookbackId) => dispatch({ type: "setLookback", lookback })}
               onGhost={(lookback: LookbackId) => dispatch({ type: "toggleGhost", lookback })}
               onCaps={(caps) => dispatch({ type: "setCaps", caps })}
+              onNoLimitsLine={(show) => dispatch({ type: "setNoLimitsLine", show })}
               onShare={openShare}
             />
           ) : null}

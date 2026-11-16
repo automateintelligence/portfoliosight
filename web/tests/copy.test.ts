@@ -92,6 +92,9 @@ describe("copy (spec 3.6, 3.7)", () => {
     expect(copy.plain.noLimits).toBe("No limits");
     expect(copy.lookbackLine.nolimits).toBe("No allocation limits");
     expect(copy.plain.noAllocationLimits).toBe("No allocation limits");
+    // owner direction 2026-11-15: the Settings checkbox for that line
+    expect(copy.plain.showNoLimitsLine).toBe('Show the "No allocation limits" line');
+    expect(copy.plain.noLimitsLineNothing).toBe("Nothing to show: your limits do not change the best-return line.");
     expect([copy.plain.rangeLow, copy.plain.rangeTypical, copy.plain.rangeHigh]).toEqual(["Bad", "Typical", "Good"]);
     expect([copy.plain.riskBad, copy.plain.riskTypical, copy.plain.resultStripSuffix]).toEqual(["Bad year", "Typical year", "over one year"]);
     expect(copy.plain.frontier).toBe("Best return at each level of risk");

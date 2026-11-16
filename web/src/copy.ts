@@ -38,6 +38,10 @@ export const plain = {
   /** The legend's and the line's name for the No limits curve (owner direction 2026-10-13). */
   noAllocationLimits: "No allocation limits",
   resetLimits: "Reset limits",
+  /** The Settings checkbox for the No allocation limits line (owner direction 2026-11-15). */
+  showNoLimitsLine: 'Show the "No allocation limits" line',
+  /** Beside that checkbox while the limits change nothing, so there is no line to show. */
+  noLimitsLineNothing: "Nothing to show: your limits do not change the best-return line.",
   currentMix: "Your starting mix",
   selectedMix: "Selected mix",
   cellMix: "The mix at this spot",

@@ -177,6 +177,7 @@ describe("share by email", () => {
       ["?unit=pct&u=tsp", "?u=tsp&lb=5y&d=0"],
       ["?g=1y,10y&x=1&d=0.5&lb=ew&c=VTI::10,BND:5:&unit=shares&f=VTI:60,BND:40,VNQ", "?f=VTI:60,BND:40,VNQ&unit=shares&c=VTI::10,BND:5:&lb=ew&g=1y,10y&d=0.5&x=1"],
       ["?f=VTI%3A60%2CBND%3A40.5&unit=usd", "?f=VTI:60,BND:40.5&unit=usd&lb=5y&d=0"],
+      ["?nl=0&x=1&u=tsp", "?u=tsp&lb=5y&d=0&x=1&nl=0"],
       ["?f=BRK.B:10,BF-B&t=ks-dark&d=1", "?f=BRK.B:10,BF-B&lb=5y&d=1&t=ks-dark"],
     ];
     for (const [submitted, canonical] of cases) {
@@ -330,6 +331,10 @@ describe("share by email", () => {
       `${SITE}/?lb=7y`,
       `${SITE}/?unit=euro`,
       `${SITE}/?x=0`,
+      `${SITE}/?nl=1`,
+      `${SITE}/?nl=`,
+      `${SITE}/?nl=off`,
+      `${SITE}/?nl=0&nl=0`,
       `${SITE}/?x=true`,
       `${SITE}/?r=abc`,
       `${SITE}/?r=1e9`,
