@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  ARTIFACTS, DRY_RUN, REPO, RUNBOOK, WEB, benchmarkRecords, canvasPixels, canvasPrint, channelDistance, chartScales, choosePreset, collapsedPosition,
+  ARTIFACTS, DRY_RUN, EDGE_INJECTED_ORIGINS, REPO, RUNBOOK, WEB, benchmarkRecords, canvasPixels, canvasPrint, channelDistance, chartScales, choosePreset, collapsedPosition,
   decisionDates, env, expect, frontAt, fundRowIds, gateContext, generationDate, idleQueue, losAngelesHour, mixStats, nudge, openApp, openSection,
   levelRangePct, pageWords, param, parsePercent, pickCells, pressDivEnd, python, readmeProblems, rectOf, rgbBasis, riskPosition, ruleMaxPct, run,
   samePrint, secretValues, sessionWindow, setMenu, settledPrint, shownTensor, sliderDomain, stressOf, test, themeColors, towardDiversified, typeFund,
@@ -1033,7 +1033,7 @@ test("DoD-19 the address describes the view: a fresh browser reproduces it, and 
   await expect(copy.getByTestId("preset-menu")).toHaveAttribute("aria-label", `Portfolio: ${other.name}`);
   await copy.getByTestId("chip-settings").click();
   await expect(copy.getByTestId("lookback-3y")).toBeChecked();
-  expect([...foreign]).toEqual([]);
+  expect([...foreign].filter((origin) => !EDGE_INJECTED_ORIGINS.has(origin)), "origins other than the site's own that the fresh browser contacted").toEqual([]);
   await fresh.close();
 
   // Copy link puts exactly that address on the clipboard.

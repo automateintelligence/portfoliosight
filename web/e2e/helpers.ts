@@ -106,6 +106,15 @@ export async function gateContext(context: BrowserContext, baseURL: string): Pro
   return foreign;
 }
 
+/**
+ * Origins a page contacts although the page does not name them: Cloudflare's edge injects its
+ * analytics beacon script into the HTML. Exact origin match, no pattern. Allowed during the
+ * private preview (owner, 2026-10-13; DoD-19 too, 2026-11-15); revisit before public launch.
+ * Allowing an origin here only means a page may contact it: the gate header is never sent to it,
+ * because the route in `gateContext` matches the site's own origin alone.
+ */
+export const EDGE_INJECTED_ORIGINS: ReadonlySet<string> = new Set(["https://static.cloudflareinsights.com"]);
+
 type Fixtures = {
   /** Auto: the gate header for the site's own origin, and a failure if a page contacts any other. */
   gate: Set<string>;
@@ -119,10 +128,7 @@ export const test = base.extend<Fixtures>({
       const foreign = await gateContext(context, baseURL as string);
       await provide(foreign);
       // Fonts are self-hosted and the page names no other origin (run rule 15, INTERFACES.md).
-      // Cloudflare's edge injects its analytics beacon into browser requests; the page does not
-      // name it. Allowed during the private preview (owner, 2026-10-13); revisit before public launch.
-      const edgeInjected = new Set(["https://static.cloudflareinsights.com"]);
-      expect([...foreign].filter((o) => !edgeInjected.has(o)), "origins other than the site's own that a page contacted").toEqual([]);
+      expect([...foreign].filter((o) => !EDGE_INJECTED_ORIGINS.has(o)), "origins other than the site's own that a page contacted").toEqual([]);
     },
     { auto: true },
   ],
