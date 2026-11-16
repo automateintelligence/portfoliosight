@@ -22,7 +22,7 @@ import math
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -522,7 +522,9 @@ def build_report(
         out.append(
             f"**Warning: {EXPECTED_JOBS} jobs expected; the run is incomplete or has extras.**"
         )
-    n_sel = study.sel.groupby(["menu", "engine", "kind"]).size().reset_index(name="rows")
+    n_sel = cast(pd.Series, study.sel.groupby(["menu", "engine", "kind"]).size()).reset_index(
+        name="rows"
+    )
     out.append("\n" + table(["Menu", "Engine", "Kind", "Selections"], n_sel.values.tolist()))
     out.append("## Caveats stated by the protocol\n")
     out.extend(f"- {c}" for c in CAVEATS)
@@ -751,7 +753,7 @@ def run_report(
 
 
 def main(argv: Sequence[str] | None = None, study_options: Mapping[str, Any] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=cast(str, __doc__).splitlines()[0])
     parser.add_argument("--run-dir", required=True, type=Path)
     parser.add_argument("--snapshot", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)

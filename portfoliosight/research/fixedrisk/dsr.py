@@ -55,9 +55,12 @@ def benchmark_sr(variance: float, n_eff: float) -> float:
     if n_eff < 2.0 or not math.isfinite(variance):
         return 0.0
     ppf = stats.norm.ppf
-    return math.sqrt(variance) * (
-        (1.0 - EULER_GAMMA) * ppf(1.0 - 1.0 / n_eff)
-        + EULER_GAMMA * ppf(1.0 - 1.0 / (n_eff * math.e))
+    return float(
+        math.sqrt(variance)
+        * (
+            (1.0 - EULER_GAMMA) * ppf(1.0 - 1.0 / n_eff)
+            + EULER_GAMMA * ppf(1.0 - 1.0 / (n_eff * math.e))
+        )
     )
 
 

@@ -69,6 +69,7 @@ import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -163,7 +164,8 @@ def origin_history(ctx: OriginContext) -> pd.DataFrame:
     index = history.index
     if not isinstance(index, pd.DatetimeIndex) or len(index) < 2:
         raise ValueError("the history is indexed by at least two dates")
-    if not index.is_monotonic_increasing or index[-1] > pd.Timestamp(ctx.origin):
+    last = cast(pd.Timestamp, index[-1])
+    if not index.is_monotonic_increasing or last > pd.Timestamp(ctx.origin):
         raise ValueError("the history must be in date order and end on or before the origin")
     return history
 

@@ -70,7 +70,7 @@ def cmd_estimate(args: argparse.Namespace) -> int:
     _require_blas()
     base = Path(args.out_dir) if args.out_dir else Path(args.snapshot).parent.parent / "estimates"
     inputs = data.load_inputs(args.snapshot, ledger_cache=base / "ledger_cache")
-    solvers = dict.fromkeys(C.ENGINES, args.solver)
+    solvers: dict[str, str] = dict.fromkeys(C.ENGINES, args.solver)
     hooks = driver.load_hooks(args.hooks, solvers)
     out = base / f"{args.host_label}_{args.engine}"
     result = estimate.run_estimate(inputs, args.engine, args.host_label, hooks, out)
