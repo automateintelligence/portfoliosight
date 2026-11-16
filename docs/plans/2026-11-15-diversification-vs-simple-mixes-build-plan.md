@@ -19,16 +19,20 @@ No new dependency.
 
 **Spec:** `docs/plans/2026-11-11-diversification-vs-simple-mixes.md` ("the protocol"; line
 numbers below are of commit `3233583`). The protocol is fixed. This plan implements it and does
-not redesign it.
+not redesign it. The protocol's section "Corrections and additions, 2026-11-15" (its lines
+631-779, added after that commit; no line above it moved) holds the dated corrections and the
+long-history side description, which this plan also builds (Tasks C5, C6 and D5).
 
-Written 2026-11-15. No code, run or commit was made while writing it.
+Written 2026-11-15. No code, run or commit was made while writing it. Approved by the owner on
+2026-11-15 ("2 yes").
 
 Names used throughout, as in the protocol: **F** the frontier mix with the weight limits, **U**
 the frontier mix with no weight limits, **E** equal weight, **D** the most-diversified mix
 under the menu's limits, **D10** the same with a flat 10% limit (described only), **V** the
 lowest-volatility mix (dropped, see below). A **cell** is a start month and a risk. A
 **setting** is one of the six risk settings 0.10 to 0.85. The **pool** is the run's recorded
-table of every mix it evaluated.
+table of every mix it evaluated. The **long history** of a start month is its 9-year lookback
+(protocol lines 686-691); a **9-year start month** is a start month that has one.
 
 ## Global constraints
 
@@ -39,8 +43,11 @@ table of every mix it evaluated.
 - Effect of 3n on the protocol text: V is not built as a reported mix and appears in no result
   or report. The minimum-variance program is still solved, because `F(s)` needs it (line 97).
   The protocol's test "the identity of V and the frontier's first node" (line 495) stays as
-  the lowest-branch test of `F(s)` (Task A2). Lines 199-207, 293 ("24 for V"), 417, 438-440,
+  the lowest-branch test of `F(s)` (Task A2). Lines 199-207, 294 ("24 for V"), 417, 438-440,
   521-525 (V's grid and comparator) are otherwise not implemented.
+- The long-history side description (protocol lines 672-779) is described only: it carries no
+  label, interval or bar, changes no test, reading or decision, and never stops the run. Its
+  mixes are built after the gates have passed and before any realized outcome is read.
 - Exploratory only: every result is labelled exploratory; the TSP portfolio is not run (lines
   28-31).
 - Tolerances, from the protocol: `1e-6` in annual volatility and model return
@@ -84,15 +91,34 @@ table of every mix it evaluated.
 
 **Owner's answers, 2026-11-15:** 1y (a stopped run keeps its record), 2a (the full run after
 the four code PRs merge, from `main`), 3y (Task D4, the model-only dry run, is in), 4y (the five
-passages get a dated correction in the protocol). Plan approval is pending; the owner asked
-first for an outline of the tests and arms, and for a long-history side description (protocol
-"Limits", lookback), whose length is being settled against the data's start dates.
+passages get a dated correction in the protocol; confirmed "6y" and recorded at protocol lines
+641-670). **The plan is approved** (owner, 2026-11-15, "2 yes"), after the outline of the tests
+and arms he asked for.
+
+**The long-history side description** the owner asked for is settled at 9 years and recorded
+at protocol lines 672-779. His words: "measure 9 years ... aligns with three 3-year periods
+... keep the 3-year as the test but also record how almost 10 years perform as a side
+description", and "make sure that the start day/month of the first 9 years is the same as one
+of the 3-year periods, otherwise you might as well report 10-years instead of 9-years."
+
+- Definition: for a start month, every row from the first row of the 3-year window of the
+  start month 72 months earlier through the last row its own 3-year window uses, each once.
+- What it reports: for F, U, E and D built from that history, the mean one-year fall,
+  five-year fall where it exists, worst-years fall, one-year and five-year return and
+  realized volatility, beside the 3-year mixes' figures on the same start months. Described
+  only; no effect on the nine tests or the decision.
+- Checked on 2026-11-15 against the run's 3-year ledger (dates and row counts only): 174
+  start months have a long history, 2012-04 to 2026-09, 162 of them with a realized year (to
+  2025-09). The first history runs 2003-04-30 to 2012-04-30. A history holds 2,262 to 2,268
+  rows, because a 3-year window is 756 rows, not three calendar years.
+- Tasks C5 and C6 (PR C) and D5 (PR D) build it. PR A, already being built, is unchanged.
 
 Nothing found blocks the build: every input the protocol names exists (checked 2026-11-15 on
 the devbox, model side only: 246 pool files, 246 column files with 1,476 three-year rows, none
 missing `w_F` or `w_app_frontier`; the `dr2` column is present and never empty in the
 4,029,646 main-pool rows; the 25 equal-weight months and the two U cells of lines 216-224
-reproduce from the earlier model-side table). Four decisions remain, and one list of readings.
+reproduce from the earlier model-side table). The four decisions below are answered (above);
+one list of readings follows them.
 
 1. **A run that a gate stops: keep its result file?** A stopped run writes its gate results
    and no outcome. y (recommended): it takes the name `recipes_check.json` and is recorded
@@ -115,7 +141,7 @@ reproduce from the earlier model-side table). Four decisions remain, and one lis
 4. **Note five protocol passages that no longer match, as a dated correction?** None changes
    a test. y (recommended): one documentation-only note in the protocol. n: they stay listed
    only here.
-   - V passages (lines 199-207, 293, 417, 438-440, 521-525) after answer 3n.
+   - V passages (lines 199-207, 291 and 294, 417, 438-440, 521-525) after answer 3n.
    - Line 90 cites `engine/optimize.py:83-86`; `frontier_point` is at 84-87.
    - Line 485 says "at most 15 mixes" per start month; this plan computes outcomes for up to
      24 weight vectors (6 U, 6 F, 6 arm 1, E, D, D10 and their three comparators).
@@ -166,7 +192,7 @@ in the task that owns the code.
 
 | File | Change | Responsibility |
 |---|---|---|
-| `portfoliosight/research/fixedrisk/recipes3.py` | new | mixes, gates, outcomes, statistics, job, result |
+| `portfoliosight/research/fixedrisk/recipes3.py` | new | mixes, gates, outcomes, statistics, long history, job, result |
 | `portfoliosight/research/fixedrisk/cli.py` | modify 1-24, after 310, after 443 | command `v3-recipes` |
 | `portfoliosight/research/fixedrisk/safety3.py` | modify 594-611 | `_publish(folder, text, stem=FULL_STEM)` |
 | `scripts/fixedrisk_geometry_check.py` | new | model-only geometry table and the pre-registered lists |
@@ -195,7 +221,8 @@ Existing code reused, each line range checked against `main` at `3233583`:
 | Output rules, no-replace writer | `safety3.check_output` 574-591, `_publish` 594-611, `write_result` 614-632 |
 | Job and command to mirror | `safety3.safety_job` 652-727; `cli.cmd_v3_safety` 288-310, parser 433-443, `_v3_inputs` 201-209 |
 | Training side of a start month | `data.origin_context`, data.py:303-330; menu limits `menus.RESEARCH2003`, menus.py:19-24 |
-| Test helpers | `optimizer_data.synthetic_context` 14-49; test_safety3.py `_values` 464-468, `_pool` 471-482, `_write` 504-507, `_job` 510-526, `_returns` 529-531, `_callables` 534-550, `_command` 942-953; script loading test_gates.py:15-24 |
+| Training side of a long history (checked at `8e69742`) | `evaluate.origin_model`, evaluate.py:361-416 (returns 384, window 385, estimators 400-401); harness.py: `rows_through` 497-501, `record_dates` 446-456, `Ledger.row` 213-217, `OriginRow.training_eligible` 172-174, `MenuOrigin.window_start` 144; `returns.build_returns` 137-156, `window_sample` 159-164; `stats.estimate_moments` 49, `menu_beta_blend` 88; `windows.LOOKBACK_ROWS` 22 |
+| Test helpers | `optimizer_data.synthetic_context` 14-49; test_safety3.py `_values` 464-468, `_pool` 471-482, `_write` 504-507, `_job` 510-526, `_returns` 529-531, `_callables` 534-550, `_command` 942-953; script loading test_gates.py:15-24; `fakes.synthetic_inputs` 216-220, `fakes.ALPHA` 41; test_data.py:150-165 |
 
 ## PRs and merge order
 
@@ -210,15 +237,15 @@ Branches: `research/recipes-mixes`, `research/recipes-gates`, `research/recipes-
 |---|---|---|---|---|
 | 1 | A: the mixes and the model-side script | A1-A4 | "Inputs, fixed" 52-84; "How each mix is built" 86-170, 193-197, 211-225 | sonnet, xhigh |
 | 2 | B: the model-side gates | B1-B4 | failed cells 117-129; reconstruction check 131-141; checks on D 172-191; list gate 227-229; model-side gates 238-273 | opus, high |
-| 3 | C: outcomes, statistics, tests, decision | C1-C4 | "Outcomes, per cell" 275-350; "Statistics" 352-368; "Pass/fail tests" 370-402; "Decision rules" 404-418; 15% share 231-236 | opus, high |
-| 4 | D: the job, the result file, the command | D1-D3 (D4 if decision 3 is y) | "Output and code" 490-537; "Compute size" 469-488 | opus, high |
+| 3 | C: outcomes, statistics, tests, decision | C1-C6 | "Outcomes, per cell" 275-350; "Statistics" 352-368; "Pass/fail tests" 370-402; "Decision rules" 404-418; 15% share 231-236; the long history and its description 672-766 | opus, high |
+| 4 | D: the job, the result file, the command | D1-D5 (decision 3 is y, so D4 is in) | "Output and code" 490-537; "Compute size" 469-488; the long history in the job 764-771 | opus, high |
 | 5 | The run | R1-R4 | all gates, then outcomes | this session |
 | 6 | The report (documentation only, one file, straight to `main`) | P1 | line 535; "Limits known in advance" 420-467 | fable, high |
 
 Care needed: nothing runs concurrently (one process, as the region and safety checks). Scoring
-care: B2, B3 (gates must fail closed), C3, C4 (labels and decision). State care: D1 (a stopped
-run reads no outcome) and D2 (no file replaced, the record updated last). These are the opus
-tasks.
+care: B2, B3 (gates must fail closed), C3, C4 (labels and decision), C6 and D5 (the side
+description changes no test and no decision). State care: D1 (a stopped run reads no outcome)
+and D2 (no file replaced, the record updated last). These are the opus tasks.
 
 ---
 
@@ -763,6 +790,128 @@ rules", lines 404-418.
     "uninformative".
 - [ ] Implement, tests pass, checks pass, commit.
 
+### Task C5: the long history and its mixes
+
+**Protocol:** "Addition: the long-history side description": the 9-year history, lines
+686-691; how the windows are counted, lines 693-723; the mixes, lines 725-745.
+
+**Produces:**
+- `LONG_MONTHS_BACK = 72`.
+- `LongHistory` (frozen dataclass): `month`, `origin`, `start` (its first day), `rows` (the
+  calendar rows from `start` through `origin`), `complete_rows` (those on which every holding
+  has a return), `mu_s`, `cov`.
+- `long_history_context(inputs: data.ResearchInputs, menu: MenuSpec, month: str, *,
+  months_back: int = LONG_MONTHS_BACK) -> LongHistory | None`, on the menu's 3-year ledger
+  (`inputs.ledger(menu)`): None unless `month` and the month `months_back` months before it
+  are both scheduled (the ledger row and its menu entry training-eligible). `start` is the
+  earlier month's `window_start`. The returns are built from the records cut at the origin,
+  as evaluate.py:384; the sample is `window_sample(returns, holdings, start, origin)`; `cov`
+  is `estimate_moments(sample).cov` and `mu_s` is `menu_beta_blend(moments.mu, moments.cov,
+  row.risk_free_rate)[0]`, as evaluate.py:400-401. `months_back` is there for the tests; the
+  job and the command never pass it.
+- `long_month_mixes(month: str, mu_s, cov, lower, upper) -> pd.DataFrame`, 14 rows with the
+  columns of `month_mixes` (Task A3), so that `cell_outcomes` takes them as they are;
+  `comparator` is None and every gap column but `risk_gap` is empty. **F** at each setting:
+  `frontier_exact` at `r_j = sigma_min + a_j (sigma_top - sigma_min)` over `analysis3.RFS`,
+  with `sigma_min` and `sigma_top` the risks of `programs.min_variance()` and of
+  `caps.greedy_fill` under these inputs. **U** at the same `r_j`, programs
+  `MenuPrograms(mu_s, cov, zeros, ones)`: excluded when `at_or_above_top(r_j, sigma_top_U)`.
+  **E**, `1/N` each. **D**, `most_diversified` with `sqrt(diag(cov))` and `upper`. `risk_gap`
+  of an F or U row is `abs(sigma - r_j)`. Failed: a `SolveError`; an F or U row with
+  `risk_gap > TOL`; every F and U row when the limited minimum-variance program fails. E and
+  D are never excluded: no comparator is built.
+- `long_side(months: Sequence[str], long_context: Callable[[str], LongHistory | None], lower,
+  upper) -> pd.DataFrame`: `long_month_mixes` of every month that has a history, with the
+  columns `origin`, `start` and `rows` added. A month with `complete_rows < rows` gets its 14
+  rows failed, reason "the long history has a row without a return", and no weights. A month
+  without a history has no row.
+
+- [ ] Tests, failing first. The first five use `INPUTS = fakes.synthetic_inputs()` (made-up
+  prices from 2018-01-02; its 3-year ledger schedules 2020-12 to 2025-09, checked
+  2026-11-15), the menu `fakes.ALPHA` and `months_back=24`:
+  - `test_the_long_history_starts_where_the_earlier_months_window_starts`: for "2023-01",
+    `h.start == ledger.row("2021-01").menu("research2003").window_start`,
+    `h.origin == ledger.row("2023-01").origin`, `h.rows == h.complete_rows` and
+    `h.rows > 756`.
+  - `test_no_long_history_before_the_first_scheduled_month_plus_the_step`: None for
+    "2022-11" (2020-11 is not scheduled) and for "2019-06" (not scheduled itself); a
+    history for "2022-12", whose `start` is the window start of "2020-12".
+  - `test_a_long_history_counts_its_rows_without_a_return`: for "2022-12",
+    `h.complete_rows == h.rows - 1` (the calendar's first row has no return).
+  - `test_a_step_of_zero_is_the_three_year_model`: with `months_back=0`, for "2023-03":
+    `h.rows == 756`, and `h.mu_s` and `h.cov` equal those of `data.origin_context(INPUTS,
+    fakes.ALPHA, "2023-03")` (`np.allclose(..., rtol=0, atol=1e-12)`).
+  - `test_the_long_history_reads_nothing_after_the_start_month`: with every record value
+    dated after the origin of "2023-03" multiplied by 3 (as test_data.py:150-165), `mu_s`
+    and `cov` are unchanged (`np.array_equal`).
+  - `test_long_month_mixes_sit_on_their_lines`: on `MENU12`: the six F rows are kept with
+    `risk_gap <= 1e-6` and their `mu` and `sigma` are within `1e-6` of the `w_app` rows of
+    `_recorded(...)` (the 3-year F is built the same way); the six U rows are kept with
+    `risk_gap <= 1e-6` and `mu >= mu(F) - 1e-6` at the same setting; E's weights are all
+    `1/12`; D's weights equal `most_diversified(sqrt(diag(cov)), cov, upper)`; no row is
+    named `F_arm1`, `D10`, `F@E` or `F@D`.
+  - `test_a_long_u_at_or_above_the_unlimited_top_is_excluded`: on `THREE_U`, U's statuses
+    by setting are kept, kept, kept, excluded, excluded, excluded; excluded rows have no
+    weights.
+  - `test_equal_weight_above_the_top_is_kept_in_the_long_history`: on `THREE_E`, E is kept.
+  - `test_a_month_with_an_incomplete_long_history_fails_and_the_rest_go_on`: `long_side`
+    over three made-up months whose contexts are a `LongHistory` on `MENU12`, one with
+    `complete_rows = rows - 1`, and None: the first month has kept rows; the second has 14
+    failed rows with the reason and no weights; the third has no row.
+- [ ] Implement, tests pass, checks pass, commit.
+
+### Task C6: the long-history description beside the 3-year results
+
+**Protocol:** described only, lines 679-684; "The same setting is not the same risk", lines
+747-750; "What is reported", lines 752-762.
+
+**Produces:**
+- `LONG_MIXES = (F, U, E, D)`; `LONG_OUTCOMES = ("fall_1y", "fall_5y", "tail_fall",
+  "return_1y", "return_5y", "volatility_1y")`, names of `OUTCOMES` (Task C3).
+- `long_history(cells: pd.DataFrame, long_cells: pd.DataFrame, months: Sequence[str]) ->
+  dict`. Both frames hold `cell_outcomes` rows; `months` is the schedule. Per mix and
+  outcome, two grids as in Task C3 (six settings for F and U, one row for E and D): the
+  9-year side from the kept rows of `long_cells`, the 3-year side from the rows of `cells`
+  that are not failed. Both are masked to the cells where both are finite (the mask of
+  `safety3.paired`, safety3.py:398-400); each mean is the point value `safety3.describe`
+  gives on its grid. No resample is drawn. Keys:
+  - `months`: `history` (start months with a row in `long_cells`), `one_year` and
+    `five_year` (those with a finite `dd_1y`, a finite `fall_5y`), `first`, `last`.
+  - `cells`: per mix `all`, `kept`, `excluded`, `failed` of the 9-year side, each failed
+    cell with its reason.
+  - `mixes[mix][outcome]`: `mean_9y`, `mean_3y`, `cells`, `start_months`.
+  - `model[mix]`: `sigma_9y` and `sigma_3y`, the mean model risk of each side over the
+    cells of `fall_1y`; for E and D also `a_9y` and `a_3y`.
+- `assemble` gains the keyword `long_cells: pd.DataFrame | None = None` and the output key
+  `long_history`: the dict above, or None without `long_cells`. No other key reads it.
+
+- [ ] Tests, failing first (cells from `_cells(k, ...)` of Task C3, values made up):
+  - `test_the_long_history_means_sit_beside_the_three_year_means`: 30 months; the 3-year D
+    falls 0.99 in the first 10 and 0.15 in the last 20; the 9-year D exists in the last 20
+    and falls 0.12: `mean_9y == approx(0.12)`, `mean_3y == approx(0.15)`,
+    `start_months == 20`.
+  - `test_a_cell_missing_on_either_side_leaves_both_means`: a 9-year U excluded at one
+    setting, and a failed 3-year F cell, each given an outlying value on the other side:
+    neither mean moves and `cells` drops by one each.
+  - `test_an_excluded_three_year_e_month_still_counts`: a 3-year E row with status
+    excluded and weights enters `mean_3y`.
+  - `test_the_settings_of_a_month_are_averaged_before_the_months_in_the_long_history`: F's
+    9-year falls set to `0.01 * j` by setting `j`, one setting failed in half the months:
+    `mean_9y` is the mean over months of each month's mean over its kept settings.
+  - `test_the_worst_tenth_is_ranked_within_each_side`: 30 months, the three largest falls
+    of the 9-year D and of the 3-year D in different months: `tail_fall` gives each side
+    the mean of its own three.
+  - `test_five_year_figures_use_the_months_that_have_them`: `fall_5y` finite in 12 of 20
+    months: `mixes["D"]["fall_5y"]["start_months"] == 12` and `months["five_year"] == 12`.
+  - `test_equal_weight_has_the_same_outcomes_on_both_sides`: E rows with equal outcomes on
+    both sides and different `sigma`: `mean_9y == mean_3y` for every outcome, and
+    `model["E"]["sigma_9y"] != model["E"]["sigma_3y"]`.
+  - `test_the_long_history_holds_no_label_interval_or_bound`: walking the dict, no key is
+    `label`, `difference` or `lower_95`, and none starts with `interval`.
+  - `test_the_long_history_changes_no_test_and_no_decision`: `assemble` with and without
+    `long_cells` gives equal results once `long_history` is removed.
+- [ ] Implement, tests pass, checks pass, commit.
+
 ---
 
 ## PR D: the job, the result file, the command
@@ -876,6 +1025,52 @@ the file is written like a smoke run's, outside the run folder, unrecorded.
   raising `AssertionError`; the result has `"model"` and no `"tests"`; the record has no
   `"recipes"` entry. Implement, checks pass, commit.
 
+### Task D5: the long history in the job, the result and the command
+
+**Protocol:** lines 679-684 (described only, never a stop); "Expected counts", lines 764-766;
+"What it costs", lines 768-771.
+
+**Produces:**
+- `LONG_EXPECTED = {"history": 174, "one_year": 162, "five_year": 114, "first": "2012-04"}`.
+- `recipes_job` gains `long_context: Callable[[str], LongHistory | None] | None = None`.
+  After step 4, only when no gate stopped the run: `long_cells = long_side(months in scope,
+  long_context, *bounds)`, and `body["model"]["long_history"]` gets the months with a
+  history, the first and the last, the smallest and largest `rows`, the first `start`, and
+  per mix the kept, excluded and failed counts with each failed cell and its reason. A
+  model-only run (Task D4) does this too, then returns. In step 5, `cell_outcomes` also runs
+  on the `long_cells` rows of each eligible month in scope, and `assemble` gets
+  `long_cells=...`. `definitions` gains `long_months_back` and `long_expected`;
+  `long_history["as_expected"]` says whether `long_history["months"]` matches
+  `LONG_EXPECTED` (None in a smoke run). Nothing here adds a stop. With
+  `long_context=None`, `long_history` is None.
+- `cmd_v3_recipes` passes `long_context=lambda month: recipes3.long_history_context(inputs,
+  spec, month)`.
+
+- [ ] Tests, failing first (the recorded job of Task D1; `long_context` returns, for two of
+  the job's eligible months, a `LongHistory` with the `mu_s` and `cov` of
+  `synthetic_context(funds=12, rows=1200, cap=0.4, seed=11)`, and None for the others;
+  `expected=((), ())` unless stated):
+  - `test_the_job_reports_the_long_history`: `body["long_history"]["months"]["history"]
+    == 2`, `mixes` has F, U, E and D, and `body["model"]["long_history"]` counts 28 rows.
+  - `test_the_long_history_changes_nothing_else_in_the_result`: the bodies with and
+    without `long_context` are equal once `long_history`, `model["long_history"]`,
+    `definitions` and `cpu_seconds` are removed.
+  - `test_a_stopped_run_builds_no_long_history`: `expected` left at its default and
+    `long_context` raising `AssertionError`: no error, `status == "stopped"`.
+  - `test_a_failed_long_history_month_never_stops_the_run`: one month's `LongHistory` with
+    `complete_rows = rows - 1`: `status == "complete"`, the month's 14 cells are listed as
+    failed with the reason, and `body["tests"]` equals that of the run without it.
+  - `test_counts_that_differ_from_the_expected_ones_are_reported_not_stopped`: the made-up
+    full run has `as_expected` false and `status == "complete"`; with `months=[...]`,
+    `as_expected` is None.
+  - `test_model_only_counts_the_long_history_and_reads_no_outcome`: `horizon` and `span`
+    raising `AssertionError`: `body["model"]["long_history"]` is there, and neither
+    `"tests"` nor `"long_history"` is in the body.
+  - `test_the_command_passes_the_long_history`: with `recipes3.long_history_context`
+    replaced by the made-up one (`monkeypatch.setattr`), the written file's `long_history`
+    is not None.
+- [ ] Implement, tests pass, checks pass, commit.
+
 ---
 
 ## The run
@@ -892,7 +1087,9 @@ libraries. No file is copied to or from another machine.
 on 19 holdings, about 4,700 in all over 246 months; one read of the 246 pool files (1.2 GB
 on disk); outcomes for the 234 eligible months over one and five years; 10,000 resamples per
 block length over a 246-month index. One process. No runtime is estimated; the result
-records its CPU seconds.
+records its CPU seconds. The long-history side description adds 15 programs for each of its
+174 start months, 2,610 in all, and outcomes for up to 13 more weight vectors on 162 start
+months (protocol lines 768-771).
 
 - [ ] **R1, preconditions.** PRs A to D merged by the owner (or decision 2b: PR D's review
   done). In the main checkout: `git pull github main`; `git status --porcelain` prints
@@ -905,12 +1102,17 @@ records its CPU seconds.
   commit. If decision 3 is y, also
   `<py> -m portfoliosight.research.fixedrisk.cli v3-recipes --run-dir <run> --snapshot <snapshot> --model-only --out <scratch>/recipes_model.json`.
   **Stop** on exit 1 or any entry in `model.stops`: report the gate and its detail to the
-  owner; change nothing.
-- [ ] **R3, smoke run.** Two eligible months that exercise both exclusions:
-  `<py> -m portfoliosight.research.fixedrisk.cli v3-recipes --run-dir <run> --snapshot <snapshot> --months 2008-09 2009-01 --out <scratch>/recipes_smoke.json`.
+  owner; change nothing. Expected in `model.long_history` (protocol lines 693-723): 174
+  months, 2012-04 to 2026-09, `rows` from 2,262 to 2,268, first `start` 2003-04-30, no month
+  failed for a row without a return. A difference there is reported with the rest; it is
+  not a stop.
+- [ ] **R3, smoke run.** Two eligible months that exercise both exclusions, and the first
+  9-year start month:
+  `<py> -m portfoliosight.research.fixedrisk.cli v3-recipes --run-dir <run> --snapshot <snapshot> --months 2008-09 2009-01 2012-04 --out <scratch>/recipes_smoke.json`.
   Read only `status`, `model` and `cpu_seconds`, not the outcomes. Expected: exit 0,
-  `status` "complete", U excluded at (2008-09, 0.85), E excluded at 2009-01, nothing new in
-  the run folder. **Stop** otherwise and report.
+  `status` "complete", U excluded at (2008-09, 0.85), E excluded at 2009-01, a long history
+  for 2012-04 alone (2003-04-30 to 2012-04-30, 2,268 rows), nothing new in the run folder.
+  **Stop** otherwise and report.
 - [ ] **R4, the full run.** Same command without `--months` and `--out`, started in the
   background with its output in `<scratch>/recipes_check.log`. The session that starts it
   owns it and checks its exit itself. Exit 0: `fr-run-v3/analysis/recipes_check.json`
@@ -928,7 +1130,7 @@ records its CPU seconds.
 ### Task P1: the exploratory section
 
 **Protocol:** line 535; "Limits known in advance", lines 420-467; "Decision rules", lines
-404-418.
+404-418; the long-history side description, lines 672-779.
 
 **File:** `docs/reviews/2026-11-07-fixed-risk-experiment-v3-report.md`, a new section before
 "## Limits stated by the protocol" (line 401), headed
@@ -948,6 +1150,13 @@ number is copied from the result file, none computed by hand.
   15% share); the gates (reconstruction check, list gate, check (b), U gates, ties, every
   tolerated failed cell with its reason); the limits of lines 420-467, including what a "no"
   does and does not rule out. V does not appear.
+- [ ] After the tests and the decision, under its own heading that says "described only":
+  the long-history side description. Its rule in one sentence (protocol lines 686-691) and
+  that a window is counted in rows; the counts of start months found against the expected
+  ones; one table per mix with the 9-year and the 3-year mean of each figure on the same
+  start months, the model risk of each side and the counts; that the same setting is not the
+  same risk; that E's outcomes are equal by construction; every failed or excluded cell;
+  its limits (protocol lines 773-776). No difference is called a result.
 - [ ] Follow the project memory `explaining-results-to-owner.md`: state the risk level and
   what each table row and column means, one name per mix throughout, lead with the owner's
   question, define each model term once.
