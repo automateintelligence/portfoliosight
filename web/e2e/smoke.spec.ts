@@ -10,7 +10,7 @@ import path from "node:path";
 import {
   ARTIFACTS, DRY_RUN, EDGE_INJECTED_ORIGINS, REPO, RUNBOOK, WEB, benchmarkRecords, canvasPixels, canvasPrint, channelDistance, chartScales, choosePreset, collapsedPosition,
   decisionDates, env, expect, frontAt, fundRowIds, gateContext, generationDate, idleQueue, losAngelesHour, mixStats, nudge, openApp, openSection,
-  levelRangePct, pageWords, param, parsePercent, pickCells, pressDivEnd, python, readmeProblems, rectOf, rgbBasis, riskPosition, ruleMaxPct, run,
+  levelRangePct, limitsBind, pageWords, param, parsePercent, pickCells, pressDivEnd, python, readmeProblems, rectOf, rgbBasis, riskPosition, ruleMaxPct, run,
   samePrint, secretValues, sessionWindow, setMenu, settledPrint, shownTensor, sliderDomain, stressOf, test, themeColors, towardDiversified, typeFund,
   universeHash, walkableColumn, watchApi, diversificationText, ROADMAP_ITEMS, type TensorLike,
 } from "./helpers";
@@ -261,7 +261,9 @@ test("DoD-05 default view: the Example Portfolio with its allocation; TSP loads 
 });
 
 test("DoD-06 no tangency point and no jargon in the default page", async ({ page }) => {
+  const api = watchApi(page);
   await openApp(page);
+  const tensor = await shownTensor(api, "5y");
   const banned = [/sharpe/i, /\bbets\b/i, /\bknee\b/i, /significant/i, /tangen/i];
   // "bets" is allowed only as "independent bets", the figure that replaced the grade words (owner direction 2026-11-11)
   const hits = (text: string) => banned.filter((pattern) => pattern.test(text.replace(/independent bets/gi, ""))).map(String);
@@ -273,7 +275,8 @@ test("DoD-06 no tangency point and no jargon in the default page", async ({ page
   const marks = await page.getByTestId("chart").evaluate((chart) => Array.from(chart.querySelectorAll("svg [data-testid]")).map((el) => el.getAttribute("data-testid")));
   // Beside them the overlay holds only the names of the frontier lines (text, one per line drawn).
   const names = marks.filter((id) => (id ?? "").startsWith("frontier-label-"));
-  expect(names, "the primary frontier line is named").toEqual(["frontier-label-5y"]);
+  // The "No limits" line is drawn, and named, when the portfolio's limits change its frontier.
+  expect(names, "the primary frontier line is named, and the No limits line when the limits bind").toEqual(limitsBind(tensor) ? ["frontier-label-5y", "frontier-label-nolimits"] : ["frontier-label-5y"]);
   expect(marks.filter((id) => !names.includes(id)).sort()).toEqual(["ceiling-line", "point-current", "point-selected"]);
   const ids = await page.evaluate(() => Array.from(document.querySelectorAll("[data-testid]")).map((el) => el.getAttribute("data-testid") ?? ""));
   expect(ids.filter((id) => /tangen|sharpe|cml|capital/i.test(id))).toEqual([]);

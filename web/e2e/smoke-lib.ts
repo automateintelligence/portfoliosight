@@ -65,6 +65,7 @@ export type TensorLike = {
   frontier: { x: number[]; y: number[]; w: number[][]; s_safe: number; range: { bad: number[]; typical: number[]; good: number[] } };
   ladder: { w: number[][][]; range: { bad: number[][]; typical: number[][]; good: number[][] } };
   frontier_curve: { sigma: number[]; mu: number[] };
+  frontier_uncapped: { sigma: number[]; mu: number[] };
   grid: { y: number[]; z: (number | null)[][]; w: (number[] | null)[][]; k_div: number[]; y_div: number[]; w_div: number[][] };
   stress: Record<string, { label: string; r: (number | null)[] }>;
 };
@@ -102,6 +103,31 @@ export function frontAt(tensor: TensorLike, s: number) {
   const mu = lerp(tensor.frontier_curve.mu, s * SUBSTEPS);
   const r = tensor.frontier.range;
   return { sigma, mu, low: 100 * lerp(r.bad, s), typical: 100 * lerp(r.typical, s), high: 100 * lerp(r.good, s) };
+}
+
+/**
+ * Whether the portfolio's limits change its frontier, so the page draws the "No limits" line (the
+ * rule of `limitsBind` in web/src/math/view.ts): the frontier with every limit lifted ends at a
+ * different risk (by more than 1e-6), or earns more than the drawn frontier (by more than 1e-4)
+ * at some node's risk.
+ */
+export function limitsBind(tensor: TensorLike): boolean {
+  const free = tensor.frontier_uncapped;
+  const { x, y } = tensor.frontier;
+  if (free.sigma.length === 0 || x.length === 0) return false;
+  if (Math.abs(free.sigma[0] - x[0]) > 1e-6 || Math.abs(free.sigma[free.sigma.length - 1] - x[x.length - 1]) > 1e-6) return true;
+  const freeMuAt = (sigma: number): number => {
+    if (sigma <= free.sigma[0]) return free.mu[0];
+    for (let i = 1; i < free.sigma.length; i++) {
+      if (free.sigma[i] >= sigma) {
+        const span = free.sigma[i] - free.sigma[i - 1];
+        const f = span > 0 ? (sigma - free.sigma[i - 1]) / span : 0;
+        return (1 - f) * free.mu[i - 1] + f * free.mu[i];
+      }
+    }
+    return free.mu[free.mu.length - 1];
+  };
+  return x.some((sigma, j) => freeMuAt(sigma) - y[j] > 1e-4);
 }
 
 /** The risk slider's domain: from the tensor's `frontier.s_safe` (the engine's rule, spec 4.9) to the last column. */
