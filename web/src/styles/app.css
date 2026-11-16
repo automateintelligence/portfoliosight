@@ -1027,65 +1027,66 @@ button {
   visibility: hidden;
 }
 
-/* On a phone the pinned card is short, so a corner can leave the selected point clear: the
- * per-year note goes (the card's own figures say "Risk" and "Expected return") and the largest
- * holdings run in three columns without their bars. */
-.pinned-card.is-compact {
+/* On a phone every mix card (the pinned one, the square's, the point's) is short, so it fits the
+ * 345 px chart frame and a corner can leave the selected point clear: the per-year note goes (the
+ * card's own figures say "Risk" and "Expected return") and the largest holdings run in three
+ * columns without their bars. */
+.tooltip.is-compact {
   padding: 6px 9px;
   font-size: 11px;
 }
 
-.pinned-card.is-compact .mixcard h3 {
+.tooltip.is-compact .mixcard h3 {
   margin-bottom: 2px;
   font-size: 10px;
 }
 
-.pinned-card.is-compact .mixcard .tip-range {
+.tooltip.is-compact .mixcard .tip-range {
   font-size: 12.5px;
 }
 
-.pinned-card.is-compact .mixcard .tip-range span {
+.tooltip.is-compact .mixcard .tip-range span {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0 4px;
 }
 
-.pinned-card.is-compact .mixcard .tip-range small {
+.tooltip.is-compact .mixcard .tip-range small {
   display: inline;
 }
 
-.pinned-card.is-compact .mixcard .tip-sub-year,
-.pinned-card.is-compact .mixcard .wbar {
+.tooltip.is-compact .mixcard .tip-sub-year,
+.tooltip.is-compact .mixcard .wbar {
   display: none;
 }
 
-.pinned-card.is-compact .mixcard .tip-facts,
-.pinned-card.is-compact .mixcard ul {
+.tooltip.is-compact .mixcard .tip-facts,
+.tooltip.is-compact .mixcard ul {
   margin-top: 3px;
   padding-top: 3px;
 }
 
 /* Risk and expected return share a line; the diversification line takes the next two, its name
  * left to screen readers, so the card stays as short as it was with the word. */
-.pinned-card.is-compact .mixcard .tip-facts {
+.tooltip.is-compact .mixcard .tip-facts {
   justify-content: start;
   gap: 1px 14px;
   margin-top: 3px;
   padding-top: 3px;
 }
 
-.pinned-card.is-compact .mixcard .tip-facts > div {
+.tooltip.is-compact .mixcard .tip-facts > div {
   display: flex;
   align-items: baseline;
   gap: 5px;
 }
 
-.pinned-card.is-compact .mixcard .tip-facts > div:last-child {
+.tooltip.is-compact .mixcard .tip-facts > div:last-child {
   display: block;
 }
 
-.pinned-card.is-compact .mixcard .tip-facts > div:last-child dt {
+.tooltip.is-compact .mixcard .tip-facts > div:last-child dt {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -1095,32 +1096,51 @@ button {
   white-space: nowrap;
 }
 
-.pinned-card.is-compact .mixcard .tip-facts > div:last-child dd {
+.tooltip.is-compact .mixcard .tip-facts > div:last-child dd {
   font-size: 10.5px;
   line-height: 1.25;
 }
 
-.pinned-card.is-compact .mixcard ul {
+.tooltip.is-compact .mixcard ul {
   display: flex;
   flex-wrap: wrap;
   gap: 1px 12px;
 }
 
-.pinned-card.is-compact .mixcard li {
+.tooltip.is-compact .mixcard li {
   display: flex;
   gap: 4px;
   white-space: nowrap;
 }
 
-.pinned-card.is-compact .mixcard .tip-tech {
+.tooltip.is-compact .mixcard .tip-tech {
   margin-top: 4px;
   font-size: 10px;
   line-height: 1.3;
 }
 
-.pinned-card.is-compact .tip-more {
+.tooltip.is-compact .tip-more {
   margin-top: 2px;
   font-size: 10px;
+}
+
+/* The pinned card is the one that must leave the selected point clear in a 345 px frame: it drops
+ * the "over one year" caption, and its closing note shares the title row, at its right edge. The
+ * note comes first and floats, so with larger text the title wraps beside or below it, never under. */
+.pinned-card.is-compact .mixcard .tip-sub-range {
+  display: none;
+}
+
+.pinned-card.is-compact .tip-more {
+  float: right;
+  max-width: 60%;
+  margin: 0 0 0 8px;
+  line-height: 1.2;
+}
+
+/* A title too wide for the room beside the note moves below it instead of running under it. */
+.pinned-card.is-compact .mixcard h3 {
+  min-width: min-content;
 }
 
 /* One card for every mix the chart names (the three markers and the spot under the pointer). */
@@ -2780,7 +2800,18 @@ button {
 
   .app {
     --gutter: 16px;
-    --chart-h: min(calc(100vw - 32px), 60vh);
+    /* As high as it is wide and at most 60 vh, and no higher than leaves the chip row within the first 1.2 screen heights
+       (A-PS-42): 470 px is what stands above and below the chart (header, strip, sliders, risk note, chips) and a margin;
+       the bound itself never takes the chart below 240 px. */
+    --chart-h: min(calc(100vw - 32px), 60vh, max(240px, calc(120vh - 470px)));
+  }
+
+  /* The small viewport height (browser toolbars shown) where supported, so a phone browser's collapsing
+     toolbar cannot lift the bound above the visible screen. */
+  @supports (height: 1svh) {
+    .app {
+      --chart-h: min(calc(100vw - 32px), 60vh, max(240px, calc(120svh - 470px)));
+    }
   }
 
   .hdr {
