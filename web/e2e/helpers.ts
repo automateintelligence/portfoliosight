@@ -8,9 +8,10 @@
 import { expect, request as playwrightRequest, test as base, type APIRequestContext, type APIResponse, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { redact, SECRET_NAMES, type FundPolicy, type Rgb, type TensorLike } from "./smoke-lib";
+import { isTensorBuildPost, pacingDelayMs, parseTensorPostLedger, redact, SECRET_NAMES, type FundPolicy, type Rgb, type TensorLike } from "./smoke-lib";
 
 export * from "./smoke-lib";
 export { expect };
@@ -25,6 +26,38 @@ export const RUNBOOK = path.join(REPO, "docs", "plans", "2026-10-13-ks001-cloudf
 export const DRY_RUN = process.env.PS_SMOKE_DRY_RUN === "1";
 export const GATE_HEADER = "x-ps-gate";
 const BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+
+// ── Pacing of live tensor builds ─────────────────────────────────────────────
+//
+// The site refuses a 6th tensor POST from one address inside a minute (TENSOR_POST_LIMIT), and the
+// page does not retry by itself. So every real POST to /api/tensors is stamped in a file, and a test
+// calls `paceTensorPosts` before the step that causes one. The stamp is taken where the request
+// leaves for the live site: the gate route (a request a test answers with its own route never gets
+// there, and is not counted) and `site.post`. The file is in the temp directory, not the Playwright
+// output directory, which Playwright empties at the start of a run: the allowance does not reset
+// between runs. One line per POST, appended in one write, so workers and repeats share it. The
+// check and the send are not one step, which is safe because the suite runs with one worker.
+const TENSOR_POST_LEDGER = path.join(os.tmpdir(), `portfoliosight-smoke-tensor-posts-${process.getuid?.() ?? "user"}.log`);
+
+function noteTensorPost(): void {
+  if (DRY_RUN) return;
+  fs.appendFileSync(TENSOR_POST_LEDGER, `${Date.now()}\n`);
+}
+
+/**
+ * Waits until `count` more tensor POSTs (default one) fit the site's allowance, counting every one
+ * sent from this machine in the last minute. Call it before the step that triggers a build; a
+ * build's own clock (a 120 s limit, a timing) starts after it. A local dry run has no allowance.
+ */
+export async function paceTensorPosts(count = 1): Promise<void> {
+  if (DRY_RUN) return;
+  for (;;) {
+    const stamps = parseTensorPostLedger(fs.existsSync(TENSOR_POST_LEDGER) ? fs.readFileSync(TENSOR_POST_LEDGER, "utf8") : "");
+    const delay = pacingDelayMs(stamps, Date.now(), count);
+    if (delay <= 0) return;
+    await test.step(`wait ${(delay / 1000).toFixed(1)} s for the site's allowance of tensor builds`, () => new Promise<void>((resolve) => setTimeout(resolve, delay)));
+  }
+}
 
 /** A required environment variable; its absence is a failure that names the variable. */
 export function env(name: string): string {
@@ -71,8 +104,10 @@ function makeSite(ctx: APIRequestContext, baseURL: string): Site {
     www: hosts.www,
     api: hosts.api,
     get: (url, options = {}) => ctx.get(absolute(url), { headers: headers(absolute(url), options.gate ?? true), maxRedirects: 0, failOnStatusCode: false }),
-    post: (url, data, options = {}) =>
-      ctx.post(absolute(url), { headers: { ...headers(absolute(url), options.gate ?? true), origin: hosts.site }, data, maxRedirects: 0, failOnStatusCode: false }),
+    post: (url, data, options = {}) => {
+      if (isTensorBuildPost("POST", absolute(url))) noteTensorPost();
+      return ctx.post(absolute(url), { headers: { ...headers(absolute(url), options.gate ?? true), origin: hosts.site }, data, maxRedirects: 0, failOnStatusCode: false });
+    },
     async json(url) {
       const response = await site.get(url);
       expect(response.status(), `GET ${url} with the gate header`).toBe(200);
@@ -98,6 +133,7 @@ export async function gateContext(context: BrowserContext, baseURL: string): Pro
     await context.route(
       (url) => url.origin === origin,
       async (route) => {
+        if (isTensorBuildPost(route.request().method(), route.request().url())) noteTensorPost();
         const response = await route.fetch({ headers: { ...route.request().headers(), [GATE_HEADER]: secret }, maxRedirects: 0 });
         await route.fulfill({ response });
       },
