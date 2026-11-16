@@ -1159,7 +1159,7 @@ test("DoD-22 provider gate: live Tiingo rows, recorded limits, and the ledger's 
   expect(String(recorded.measured_on)).toMatch(/^\d{4}-\d{2}-\d{2}/);
 });
 
-test("DoD-23 nightly freshness: today's generation, a clean run, twelve tensors, a small cache", async ({ site }) => {
+test("DoD-23 nightly freshness: today's generation, a clean run, a tensor per preset and lookback, a small cache", async ({ site }) => {
   test.setTimeout(180_000);
   expect(losAngelesHour(), "this check is meaningful at or after 08:00 in Los Angeles; run it later").toBeGreaterThanOrEqual(8);
   const expected = generationDate();
@@ -1179,7 +1179,7 @@ test("DoD-23 nightly freshness: today's generation, a clean run, twelve tensors,
   const presets = (await site.json("/api/presets")) as Presets;
   expect(presets.generation).toBe(health.generation);
   const urls = presets.presets.flatMap((preset) => LOOKBACKS.map((lookback) => preset.lookbacks[lookback]?.url));
-  expect(new Set(urls).size, "distinct preset tensors").toBe(12);
+  expect(new Set(urls).size, "distinct preset tensors: one per preset and lookback").toBe(presets.presets.length * LOOKBACKS.length);
   for (const url of urls) {
     const tensor = (await site.json(url)) as TensorLike;
     expect(tensor.asof, `${url}: asof`).toBe(expected);
