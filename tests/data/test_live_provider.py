@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, date, datetime
+from typing import cast
 
 import pandas as pd
 import pytest
@@ -46,7 +47,7 @@ def test_live_frames_carry_the_four_fields(frames, symbol):
     assert not frame.isna().to_numpy().any()
     assert isinstance(frame.index, pd.DatetimeIndex) and frame.index.tz is None
     assert frame.index.is_monotonic_increasing and frame.index.is_unique
-    assert frame.index[0] >= pd.Timestamp(START)
+    assert cast(pd.Timestamp, frame.index[0]) >= pd.Timestamp(START)
     assert (frame["close"] > 0).all() and (frame["split_factor"] > 0).all()
 
 

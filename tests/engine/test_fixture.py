@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+from typing import cast
 
 import exchange_calendars as xcals
 import numpy as np
@@ -55,8 +56,8 @@ def test_frame_is_the_returns_parquet_shape(frame):
     calendar = xcals.get_calendar("XNYS", start="2005-01-01", end="2026-12-31")
     sessions = calendar.sessions_in_range("2005-01-03", "2026-10-12")
     assert frame.index.equals(pd.DatetimeIndex(sessions.tz_localize(None), name="date"))
-    assert frame.index[0] == pd.Timestamp("2005-01-03")
-    assert frame.index[-1] == pd.Timestamp("2026-10-12")
+    assert cast(pd.Timestamp, frame.index[0]) == pd.Timestamp("2005-01-03")
+    assert cast(pd.Timestamp, frame.index[-1]) == pd.Timestamp("2026-10-12")
     values = frame.to_numpy()
     assert np.isfinite(values[~np.isnan(values)]).all()
     assert np.abs(np.nan_to_num(values)).max() < 0.25

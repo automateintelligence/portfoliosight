@@ -30,6 +30,7 @@ from collections.abc import Callable, Iterable, Sequence
 from datetime import date
 from pathlib import Path
 from types import ModuleType
+from typing import cast
 
 import exchange_calendars as xcals
 import numpy as np
@@ -456,7 +457,9 @@ def test_read_snapshot_hashes_the_bytes_it_reads(snapshot: Path, freeze: ModuleT
     inputs = harness.read_snapshot(snapshot, freeze.verify_snapshot)
     assert (inputs.d_star, inputs.root) == (BASE_D_STAR, snapshot.resolve())
     assert inputs.menus == {"example": tuple(EXAMPLE), "tsp": tuple(TSP)}
-    assert len(inputs.records) == 29 and inputs.sessions[0] == pd.Timestamp("2021-01-04")
+    assert len(inputs.records) == 29 and cast(pd.Timestamp, inputs.sessions[0]) == pd.Timestamp(
+        "2021-01-04"
+    )
     assert inputs.tensors == {freeze.INVESTIGATION_TENSOR: b'{"schema": 2}'}
     manifest = freeze.verify_snapshot(snapshot)
     forged = {
@@ -540,7 +543,7 @@ def test_undercovered_window_is_rejected_at_ninety_percent() -> None:
 
 def _set_price(records: dict[str, pd.DataFrame], symbol: str, day: str, value: float) -> None:
     frame = records[symbol].copy()
-    hit = frame["date"] == pd.Timestamp(day)
+    hit = cast(pd.Series, frame["date"] == pd.Timestamp(day))
     assert hit.sum() == 1, f"{symbol} has no row on {day}"
     frame.loc[hit, "tr_index"] = value
     records[symbol] = frame
@@ -1089,7 +1092,8 @@ def test_leakage_fixture_has_the_origins_it_claims(leak_base: _Leak) -> None:
         assert row.menu("tsp").horizon_end is not None
     assert leak_base.ledger.row("2024-03").menu("tsp").horizon_end == _d("2025-04-01")
     for symbol in ("LATE", "NEWF"):
-        assert pd.DatetimeIndex(_leak_indices()[symbol].index)[0] > pd.Timestamp(O_TSP_G)
+        first_day = cast(pd.Timestamp, pd.DatetimeIndex(_leak_indices()[symbol].index)[0])
+    assert first_day > pd.Timestamp(O_TSP_G)
 
 
 @pytest.mark.parametrize("name", list(AFTER_ORIGIN))
