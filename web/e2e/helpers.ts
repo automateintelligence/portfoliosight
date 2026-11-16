@@ -127,6 +127,7 @@ export const test = base.extend<Fixtures>({
     async ({ context, baseURL }, provide) => {
       const foreign = await gateContext(context, baseURL as string);
       await provide(foreign);
+      await context.unrouteAll({ behavior: "ignoreErrors" });
       // Fonts are self-hosted and the page names no other origin (run rule 15, INTERFACES.md).
       expect([...foreign].filter((o) => !EDGE_INJECTED_ORIGINS.has(o)), "origins other than the site's own that a page contacted").toEqual([]);
     },

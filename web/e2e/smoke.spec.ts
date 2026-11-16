@@ -1037,6 +1037,7 @@ test("DoD-19 the address describes the view: a fresh browser reproduces it, and 
   await copy.getByTestId("chip-settings").click();
   await expect(copy.getByTestId("lookback-3y")).toBeChecked();
   expect([...foreign].filter((origin) => !EDGE_INJECTED_ORIGINS.has(origin)), "origins other than the site's own that the fresh browser contacted").toEqual([]);
+  await fresh.unrouteAll({ behavior: "ignoreErrors" });
   await fresh.close();
 
   // Copy link puts exactly that address on the clipboard.
