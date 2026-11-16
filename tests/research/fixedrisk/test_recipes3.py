@@ -20,6 +20,12 @@ from tests.research.fixedrisk.optimizer_data import synthetic_context
 MENU12 = synthetic_context(funds=12, rows=400, cap=0.4, seed=7)
 
 
+def _programs(ctx) -> optimize.MenuPrograms:
+    return optimize.MenuPrograms(
+        ctx.mu_s, ctx.cov, np.array(ctx.menu.lower), np.array(ctx.menu.upper)
+    )
+
+
 def _cov(vols, corr) -> np.ndarray:
     v = np.asarray(vols, dtype=float)
     return np.outer(v, v) * np.asarray(corr, dtype=float)
@@ -64,3 +70,61 @@ def test_most_diversified_without_a_feasible_mix_is_a_solve_error():
     cov = _cov(sigma, np.eye(5))
     with pytest.raises(optimize.SolveError):
         RC.most_diversified(sigma, cov, 0.10)
+
+
+# ------------------------------------------------ the exact-line frontier mix, risk position
+
+
+@pytest.fixture(scope="module")
+def frontier12():
+    """MENU12's programs, its 8-node app frontier and the two ends the recorded columns hold."""
+    programs = _programs(MENU12)
+    front = optimize.frontier(programs, 8)
+    return programs, front, float(front.x[0]), float(front.x[-1])
+
+
+def test_frontier_exact_inside_matches_the_app_frontier(frontier12):
+    programs, front, smin, stop = frontier12
+    for j in range(1, 7):
+        w = RC.frontier_exact(programs, front.w[0], front.w[-1], float(front.x[j]), smin, stop)
+        assert w is not None
+        assert abs(programs.sigma(w) - front.x[j]) <= 1e-6
+        assert abs(programs.mu @ w - front.y[j]) <= 1e-6
+
+
+def test_frontier_exact_at_the_minimum_risk_is_the_frontiers_first_node(frontier12):
+    programs, front, smin, stop = frontier12
+    for s in (smin, smin + 5e-7, smin + 1e-6):
+        w = RC.frontier_exact(programs, front.w[0], front.w[-1], s, smin, stop)
+        assert w is not None
+        assert np.array_equal(w, front.w[0])
+    assert np.array_equal(programs.min_variance(), front.w[0])
+
+
+def test_frontier_exact_at_the_top_is_excluded(frontier12):
+    programs, front, smin, stop = frontier12
+    for s in (stop - 1e-6, stop - 5e-7, stop, stop + 0.01):
+        assert RC.frontier_exact(programs, front.w[0], front.w[-1], s, smin, stop) is None
+        assert RC.at_or_above_top(s, stop)
+    s = stop - 2e-6
+    assert not RC.at_or_above_top(s, stop)
+    w = RC.frontier_exact(programs, front.w[0], front.w[-1], s, smin, stop)
+    assert w is not None
+    assert abs(programs.sigma(w) - s) <= 1e-6
+
+
+def test_frontier_exact_lands_on_the_line_when_expected_returns_tie():
+    mu = np.full(3, 0.05)
+    programs = optimize.MenuPrograms(mu, np.diag([0.01, 0.04, 0.09]), np.zeros(3), np.ones(3))
+    front = optimize.frontier(programs, 8)
+    smin, stop = float(front.x[0]), float(front.x[-1])
+    s = (smin + stop) / 2
+    w = RC.frontier_exact(programs, front.w[0], front.w[-1], s, smin, stop)
+    assert w is not None
+    assert abs(programs.sigma(w) - s) <= 1e-6
+    assert abs(programs.mu @ w - 0.05) <= 1e-9
+
+
+def test_risk_position():
+    assert RC.risk_position(0.07, 0.05, 0.09) == pytest.approx(0.5)
+    assert RC.risk_position(0.10, 0.05, 0.09) > 1

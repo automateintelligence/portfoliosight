@@ -45,3 +45,40 @@ def most_diversified(sigma: np.ndarray, cov: np.ndarray, hi) -> np.ndarray:
     )
     solved = optimize.solve_with_retries(problem, y, "most-diversified mix")
     return solved / solved.sum()
+
+
+def at_or_above_top(s: float, sigma_top: float) -> bool:
+    """The exclusion rule: a risk `s` within `TOL` of a frontier's top, or above it, has no frontier
+    mix to pair with (the last node is the max-return greedy fill)."""
+    return s >= sigma_top - TOL
+
+
+def risk_position(s: float, sigma_min: float, sigma_top: float) -> float:
+    """`a = (s - sigma_min) / (sigma_top - sigma_min)`: a risk on the axis of the six settings."""
+    return (s - sigma_min) / (sigma_top - sigma_min)
+
+
+def frontier_exact(
+    programs: optimize.MenuPrograms,
+    lowest: np.ndarray,
+    top: np.ndarray,
+    s: float,
+    sigma_min: float,
+    sigma_top: float,
+) -> np.ndarray | None:
+    """`F(s)`, the exact-line frontier mix with the limits, at any risk `s`.
+
+    `lowest` (the minimum-variance mix) when `s <= sigma_min + TOL`; `None` when `s` is at or
+    above the top (`at_or_above_top`: the cell is excluded); otherwise `programs.frontier_point(s)`,
+    moved toward `top` (the greedy fill) with `optimize.onto_risk` when it sits more than `TOL`
+    inside the ceiling, so that `|sigma(F) - s| <= TOL`. There is no retry on the risk gap;
+    `SolveError` propagates.
+    """
+    if s <= sigma_min + TOL:
+        return lowest
+    if at_or_above_top(s, sigma_top):
+        return None
+    mix = programs.frontier_point(s)
+    if s - programs.sigma(mix) > TOL:
+        mix = optimize.onto_risk(mix, top, s, programs.cov)
+    return mix
