@@ -13,6 +13,7 @@ import subprocess
 from datetime import date
 from pathlib import Path
 from types import ModuleType
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -27,6 +28,7 @@ from portfoliosight.research.fixedrisk.menus import (
 )
 from tests.research.fixedrisk import fakes
 from tests.research.fixtures import load_module
+from tests.research.helpers import col, ts
 
 ROOT = Path(__file__).resolve().parents[3]
 GIT_ENV = {
@@ -84,8 +86,8 @@ def test_schedule_starts_after_the_first_full_window(inputs: data.ResearchInputs
     # 756 union-calendar rows after the first price (2018-01-02): the first origin is the first
     # month end with at least 756 rows on or before it.
     sessions = fakes.sessions_index()
-    rows = np.searchsorted(sessions, pd.Timestamp("2018-01-02"))
-    first_row = sessions[rows + 755]
+    rows = int(np.searchsorted(sessions.to_numpy(), ts("2018-01-02").to_datetime64()))
+    first_row = cast(pd.Timestamp, sessions[rows + 755])
     expected = next(
         r.month
         for r in ledger.rows
@@ -169,14 +171,17 @@ def test_horizon_returns_are_the_next_252_rows(inputs: data.ResearchInputs) -> N
     month = data.schedule(inputs, fakes.ALPHA)[5]
     horizon = data.horizon_returns(inputs, fakes.ALPHA, month)
     ctx = data.origin_context(inputs, fakes.ALPHA, month)
-    assert horizon.status == "complete" and horizon.returns.shape == (252, 4)
+    assert horizon.status == "complete"
+    assert horizon.returns is not None and horizon.returns.shape == (252, 4)
     assert horizon.days[0] > ctx.origin
     assert horizon.days[-1] <= fakes.D_STAR
 
 
 def test_ledger_cache_round_trip(tmp_path: Path) -> None:
     records = fakes.synthetic_records()
-    kwargs = dict(menus=fakes.TEST_MENUS, manifest_sha256="a" * 64, ledger_cache=tmp_path)
+    kwargs: dict[str, Any] = dict(
+        menus=fakes.TEST_MENUS, manifest_sha256="a" * 64, ledger_cache=tmp_path
+    )
     first = data.build_inputs(records, fakes.sessions_index(), fakes.D_STAR, **kwargs)
     built = first.ledger(fakes.BETA)
     assert len(list(tmp_path.glob("*.pkl"))) == 1
@@ -205,7 +210,7 @@ def freeze() -> ModuleType:
 D_STAR = date(2026, 10, 16)
 
 
-def _bdays(first: str, last: str) -> pd.DatetimeIndex:
+def _bdays(first: str | pd.Timestamp, last: str) -> pd.DatetimeIndex:
     return pd.bdate_range(first, last)
 
 
@@ -229,7 +234,7 @@ def _provider_for(frame: pd.DataFrame, extra_to: str | None = None) -> pd.DataFr
     adj = pd.Series(good["tr_index"].to_numpy() * 2.0, index=pd.DatetimeIndex(good["date"]))
     close = pd.Series(good["close"].to_numpy(), index=adj.index)
     if extra_to is not None:
-        more = _bdays(adj.index[-1] + pd.Timedelta(days=1), extra_to)
+        more = _bdays(ts(ts(adj.index[-1]) + pd.Timedelta(days=1)), extra_to)
         steps = np.arange(1, len(more) + 1)
         adj = pd.concat([adj, pd.Series(adj.iloc[-1] * (1 + 0.002 * steps), index=more)])
         close = pd.concat([close, pd.Series(close.iloc[-1] * (1 + 0.002 * steps), index=more)])
@@ -318,14 +323,14 @@ def test_freeze_builds_a_verified_snapshot(freeze: ModuleType, tmp_path: Path) -
     # every record is cut at D*
     for symbol in ALL_SYMBOLS:
         frame = pd.read_parquet(snapshot / "prices" / f"{symbol}.parquet")
-        assert frame["date"].max() <= pd.Timestamp(D_STAR)
-        assert frame["tr_index"].notna().all()
+        assert col(frame, "date").max() <= pd.Timestamp(D_STAR)
+        assert col(frame, "tr_index").notna().all()
     wmt = pd.read_parquet(snapshot / "prices" / "WMT.parquet")
-    assert wmt["date"].max() == pd.Timestamp(D_STAR) and len(wmt) == len(
+    assert col(wmt, "date").max() == pd.Timestamp(D_STAR) and len(wmt) == len(
         _bdays("2026-01-05", D_STAR.isoformat())
     )
     repair = manifest["repairs"]["WMT"]
-    holes = int(frames["WMT"]["tr_index"].isna().sum())
+    holes = int(col(frames["WMT"], "tr_index").isna().sum())
     assert holes > 100
     assert (
         repair["rows_spliced"] == holes + 4 and repair["overlap_max_abs_return_difference"] < 1e-6
@@ -343,7 +348,7 @@ def test_freeze_builds_a_verified_snapshot(freeze: ModuleType, tmp_path: Path) -
     # the data layer reads it back
     inputs = data.load_inputs(snapshot)
     assert inputs.manifest_sha256 == manifest["manifest_sha256"]
-    assert inputs.records["WMT"]["tr_index"].notna().all()
+    assert col(inputs.records["WMT"], "tr_index").notna().all()
     assert inputs.cpi.iloc[-1] == 325.0
     assert inputs.dgs10.index[-1] == pd.Timestamp("2026-10-16") and np.isnan(inputs.dgs10.iloc[-1])
     assert len(inputs.market_caps) == 10

@@ -1,4 +1,5 @@
 import math
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -39,7 +40,8 @@ def test_purge_and_embargo_on_known_endpoints():
 
 def test_closed_interval_touching_endpoints_are_purged():
     origins = pd.date_range("2000-01-01", periods=8, freq="MS")
-    ends = origins.to_series().shift(-1).fillna(origins[-1] + pd.Timedelta(days=30)).to_numpy()
+    last_end = cast(pd.Timestamp, origins[-1] + pd.Timedelta(days=30))
+    ends = origins.to_series().shift(-1).fillna(last_end).to_numpy()
     m = cscv.cscv_masks(origins, ends, blocks=8)  # one origin per block; end(i) == origin(i+1)
     split = next(s for s in m.splits if s.train_blocks == (0, 2, 4, 6))
     # every training origin touches the next (test) origin at a single day: all purged
@@ -86,7 +88,8 @@ def test_rank_lambda_and_pbo_on_constructed_case():
     assert second["chosen"] == 0 and second["rank"] == 1.0
     expected = np.mean([r["lambda"] < 0 for r in res.evaluable])
     assert res.pbo == pytest.approx(expected)
-    assert res.pbo >= 2 / 70  # at least the two pure-half splits have lambda < 0
+    # at least the two pure-half splits have lambda < 0
+    assert res.pbo is not None and res.pbo >= 2 / 70
     assert len(res.choice_shares(("U1", "U2", "U3", "U4"))) == 4
 
 

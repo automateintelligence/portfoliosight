@@ -1,6 +1,7 @@
 import json
 import shutil
 from datetime import date
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -78,11 +79,11 @@ def test_rows_without_a_mix_are_excluded_and_counted(tmp_path):
     build_run(tmp_path, n_months=30, engines=("replay",))
     t = M.load_run(tmp_path)
     sel = t.selections
-    hit = (sel["kind"] == "main") & (sel["cell"] == "free") & (sel["arm"] == "U1")
+    hit = cast(pd.Series, (sel["kind"] == "main") & (sel["cell"] == "free") & (sel["arm"] == "U1"))
     hit &= sel["month"].isin(["2010-01", "2010-02"])
     sel.loc[hit, "status"] = C.NOT_FOUND
     sel.loc[hit, "weights"] = pd.Series([[]] * int(hit.sum()), index=sel.index[hit], dtype=object)
-    lone = sel.index[(sel["kind"] == "main") & (sel["cell"] == "d25")][0]
+    lone = sel.index[cast(pd.Series, (sel["kind"] == "main") & (sel["cell"] == "d25"))][0]
     sel.loc[lone, "status"] = C.INSUFFICIENT_STARTS  # still a locked mix: kept
     s = M.Study(t, fake_realized(sel), disjoint=PUBLISHED)
     u1 = s.pick("m1", "replay", kind="main", arm="U1", cell="free", pooled=True)
@@ -246,7 +247,7 @@ def test_stability_rules(run):
     assert not any(r["pass"] for r in rows)  # random weights: L1 is far above .20
     # identical weights and identical own-bank Bad across the five stability banks pass v1's rules
     sel = s.sel
-    stab = (sel["kind"] == "stability") & (sel["engine"] == "replay")
+    stab = cast(pd.Series, (sel["kind"] == "stability") & (sel["engine"] == "replay"))
     key = ["month", "rf", "cell"]
     primary = sel[stab & (sel["seed"] == C.PRIMARY_SEED)].set_index(key)
     keys = list(
@@ -259,7 +260,7 @@ def test_stability_rules(run):
     rows = s.stability("m1", "replay")["rows"]
     assert all(r["median_l1"] == 0 and r["pass"] for r in rows)
     # only the stability procedure's own rows and Bad enter: main rows and test banks do not
-    main = (sel["kind"] == "main") & (sel["engine"] == "replay")
+    main = cast(pd.Series, (sel["kind"] == "main") & (sel["engine"] == "replay"))
     sel.loc[main, "weights"] = pd.Series(
         [[1.0, 0.0, 0.0]] * int(main.sum()), index=sel.index[main], dtype=object
     )

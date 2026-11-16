@@ -568,7 +568,8 @@ def test_cpu_budget_breach_stops_the_job_and_keeps_artifacts(
 ) -> None:
     make_parent(inputs, tmp_path)
     result = run(tmp_path, meter=FixedMeter(cpu=10 * 3600.0), limits={"cpu_hours": 1.0})
-    assert result.status == "incomplete" and result.breach["rule"] == "cpu_hours"
+    assert result.status == "incomplete"
+    assert result.breach is not None and result.breach["rule"] == "cpu_hours"
     assert result.tasks_done == 0
     info = json.loads((tmp_path / "tsp_replay" / "job.json").read_text())
     assert info["incomplete"] and info["breach"]["rule"] == "cpu_hours"
@@ -578,7 +579,8 @@ def test_cpu_budget_breach_stops_the_job_and_keeps_artifacts(
 def test_memory_breach_stops_the_job(inputs: data.ResearchInputs, tmp_path: Path) -> None:
     make_parent(inputs, tmp_path)
     result = run(tmp_path, meter=FixedMeter(rss=5 * 2**30))
-    assert result.breach["rule"] == "aggregate_peak_rss" and result.status == "incomplete"
+    assert result.breach is not None and result.breach["rule"] == "aggregate_peak_rss"
+    assert result.status == "incomplete"
 
 
 def test_a_slow_selection_is_a_breach_and_its_task_is_not_done(
@@ -586,7 +588,8 @@ def test_a_slow_selection_is_a_breach_and_its_task_is_not_done(
 ) -> None:
     parent = make_parent(inputs, tmp_path)
     result = run(tmp_path, limits={"arm_seconds": 0.005})  # the fake's selections take 0.01 s
-    assert result.breach["rule"] == "arm_seconds" and result.status == "incomplete"
+    assert result.breach is not None and result.breach["rule"] == "arm_seconds"
+    assert result.status == "incomplete"
     assert result.tasks_done == 0 and "selection tsp|" in result.breach["detail"]
     job = tmp_path / "tsp_replay"
     assert not list((job / "tasks").rglob("*.parquet"))  # no marker, no partial tables
@@ -607,7 +610,8 @@ def test_the_task_wall_alarm_stops_a_running_task(
     assert cells == 120 + 120 + (48 * 19 + 120 + 12)  # main, stability, showcase and its sens.
     monkeypatch.setattr(fakes, "SLEEP", 0.05)  # each search sleeps; the alarm is 0.12 s here
     result = run(tmp_path, limits={"arm_seconds": 0.12 / cells})
-    assert result.breach["rule"] == "arm_seconds" and "task wall alarm" in result.breach["detail"]
+    assert result.breach is not None and result.breach["rule"] == "arm_seconds"
+    assert "task wall alarm" in result.breach["detail"]
     assert result.tasks_done == 0
     job = tmp_path / "tsp_replay"
     assert not list((job / "tasks").rglob("*.parquet"))
@@ -673,7 +677,8 @@ def test_an_owner_override_resumes_a_budget_breach_with_plumbing_only_changes(
 ) -> None:
     make_parent(inputs, tmp_path)
     stopped = run(tmp_path, meter=FixedMeter(cpu=10 * 3600.0), limits={"cpu_hours": 1.0})
-    assert stopped.breach["rule"] == "cpu_hours" and stopped.tasks_done == 0
+    assert stopped.breach is not None and stopped.breach["rule"] == "cpu_hours"
+    assert stopped.tasks_done == 0
     monkeypatch.setattr(manifest, "code_head", lambda repo=manifest.REPO: "f" * 40)
     monkeypatch.setattr(manifest, "changed_paths", lambda rec, repo=manifest.REPO: ["a/cli.py"])
     with pytest.raises(RuntimeError, match=r"changed outside the allowed paths: \['a/cli.py'\]"):
@@ -727,7 +732,8 @@ def test_cpu_of_earlier_attempts_counts_against_the_budget(
     (tmp_path / "tsp_replay").mkdir()
     (tmp_path / "tsp_replay" / "usage.json").write_text(json.dumps({"cpu_seconds": 10 * 3600.0}))
     result = run(tmp_path, limits={"cpu_hours": 5.0})
-    assert result.breach["rule"] == "cpu_hours" and result.breach["value"] >= 10 * 3600.0
+    assert result.breach is not None and result.breach["rule"] == "cpu_hours"
+    assert result.breach["value"] >= 10 * 3600.0
 
 
 def test_one_job_at_a_time_per_host(inputs: data.ResearchInputs, tmp_path: Path) -> None:
