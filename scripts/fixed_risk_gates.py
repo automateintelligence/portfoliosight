@@ -26,6 +26,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 
@@ -34,14 +35,15 @@ from portfoliosight.research.fixedrisk import contracts as C
 
 CASES_PER_MENU = 15
 NARROW_PER_MENU = 5
-_STATE: dict[str, object] = {}
+_STATE: dict[str, data.ResearchInputs] = {}
+AgreementJob = tuple[int, str, str, float, str, C.Engine]  # case, menu, month, r, cell, engine
 
 
 def _init(snapshot: str, cache: str) -> None:
     _STATE["inputs"] = data.load_inputs(snapshot, ledger_cache=cache)
 
 
-def _ctx_bank(menu: str, month: str, engine: str):
+def _ctx_bank(menu: str, month: str, engine: C.Engine):
     inputs = _STATE["inputs"]
     ctx = data.origin_context(inputs, menu, month)
     return ctx, driver.real_make_bank(ctx, engine, C.PRIMARY_SEED)
@@ -52,7 +54,7 @@ def _failure(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-def _agreement_case(job: tuple[int, str, str, float, str, str]) -> list[dict]:
+def _agreement_case(job: AgreementJob) -> list[dict]:
     """The case's rows under the four solvers; a case that cannot be solved (its bank fails, e.g.
     `garch_fit_failed`) yields -inf rows, so each of its pairs is failed for every solver."""
     k, menu, month, r_fraction, cell, engine = job
@@ -71,14 +73,14 @@ def _agreement_case(job: tuple[int, str, str, float, str, str]) -> list[dict]:
     return rows
 
 
-def _fd(job: tuple[str, str, str]) -> dict:
+def _fd(job: tuple[str, str, C.Engine]) -> dict:
     menu, month, engine = job
     try:
         ctx, bank = _ctx_bank(menu, month, engine)
         result = agreement.fdcheck(bank, ctx)
     except Exception as exc:  # recorded as a failed check, never a crashed pool
         return {"menu": menu, "month": month, "passed": False, "error": _failure(exc)}
-    out = {"menu": menu, "month": month}
+    out: dict[str, Any] = {"menu": menu, "month": month}
     out.update(
         {
             k: (v if isinstance(v, (bool, int, float, str)) else str(v))
@@ -88,7 +90,7 @@ def _fd(job: tuple[str, str, str]) -> dict:
     return out
 
 
-def draw_cases(inputs, engine: str) -> list[tuple[int, str, str, float, str, str]]:
+def draw_cases(inputs, engine: C.Engine) -> list[AgreementJob]:
     rng = np.random.default_rng(agreement.derived_seed("agreement-cases", engine))
     cases = []
     for menu in ("research2003", "tsp"):
@@ -105,7 +107,7 @@ def draw_cases(inputs, engine: str) -> list[tuple[int, str, str, float, str, str
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=cast(str, __doc__).splitlines()[0])
     parser.add_argument("--snapshot", required=True)
     parser.add_argument("--engine", required=True, choices=C.ENGINES)
     parser.add_argument("--out", required=True, type=Path)
