@@ -1039,6 +1039,43 @@ describe("store: a build refused for too many requests (429)", () => {
     expect(waiting(store).status).toBe("ready");
   });
 
+  it("the retry repeats the request that was refused, even when an amount edit has since made the preset a custom menu", async () => {
+    let refuseOnce = true;
+    tensorRoute = (call) => {
+      if (call.method === "GET" && refuseOnce) {
+        refuseOnce = false;
+        return refusal("2");
+      }
+      return ok(call);
+    };
+    const store = await boot("");
+    const preset = `GET /api/tensors/${G}/${H1}/5y`;
+    expect(waiting(store)).toMatchObject({ status: "build-wait", waitS: 2 });
+    expect(tensorCalls().map((c) => `${c.method} ${c.path}`)).toEqual([preset]);
+    store.dispatch({ type: "setAmount", id: IDS[0], amount: 500 });
+    expect(store.getState().preset, "the edit made it a custom menu").toBeNull();
+    await advance(2000);
+    expect(tensorCalls().map((c) => `${c.method} ${c.path}`)).toEqual([preset, preset]);
+    expect(waiting(store).status).toBe("ready");
+  });
+
+  it("start-up still waiting on the tier does not send a build the visitor's own action has already sent", async () => {
+    let releaseTier: (answer: Response) => void = () => undefined;
+    tierRoute = () => new Promise<Response>((resolve) => (releaseTier = resolve));
+    tensorRoute = () => refusal("1");
+    const store = await boot(MENU);
+    store.dispatch({ type: "useMenu", rows: IDS.slice(2, 5).map((id) => ({ id, name: id, amount: null })) });
+    await flush();
+    await advance(1000);
+    expect(posts(), "the recalculation and its one automatic retry").toHaveLength(2);
+    expect(waiting(store).status).toBe("build-retry");
+    releaseTier(json(404, {}));
+    await flush();
+    await advance(10_000);
+    expect(posts(), "start-up adds nothing").toHaveLength(2);
+    expect(waiting(store).status).toBe("build-retry");
+  });
+
   describe("when the page is left while a request is out", () => {
     let release: (answer: Response) => void = () => undefined;
     const holdTheAnswer = () => {

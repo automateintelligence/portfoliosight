@@ -54,11 +54,11 @@ describe("the page and a build refused for too many requests", () => {
       return json(202, { status: "queued", generation: "g", hash: "h", position: 0, eta_s: 5 });
     };
     await open();
-    expect(screen.getByTestId("rate-wait-notice").textContent).toBe(rateWaitLine(3));
-    expect(screen.getByTestId("rate-wait-notice").textContent).toBe("Too many charts in a minute. Trying again in 3 s.");
+    expect(screen.getByTestId("rate-wait-line").textContent).toBe(rateWaitLine(3));
+    expect(screen.getByTestId("rate-wait-line").textContent).toBe("Too many charts in a minute. Trying again in 3 s.");
     expect(screen.queryByTestId("build-retry")).toBeNull();
     await seconds(1);
-    expect(screen.getByTestId("rate-wait-notice").textContent).toBe(rateWaitLine(2));
+    expect(screen.getByTestId("rate-wait-line").textContent).toBe(rateWaitLine(2));
     await seconds(2);
     expect(posts()).toHaveLength(2);
     expect(screen.queryByTestId("rate-wait-notice")).toBeNull();
@@ -94,7 +94,7 @@ describe("the page and a build refused for too many requests", () => {
     render(<App />);
     await seconds(0);
     await seconds(1);
-    expect(screen.getByTestId("rate-wait-notice").textContent).toBe(rateWaitLine(2));
+    expect(screen.getByTestId("rate-wait-line").textContent).toBe(rateWaitLine(2));
     cleanup(); // the app unmounts
     await seconds(120);
     expect(posts()).toHaveLength(1);
@@ -128,6 +128,20 @@ describe("the page and a build refused for too many requests", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(posts()).toHaveLength(2);
-    expect(screen.getByTestId("rate-wait-notice").textContent).toBe(rateWaitLine(3));
+    expect(screen.getByTestId("rate-wait-line").textContent).toBe(rateWaitLine(3));
+  });
+
+  it("the screen reader is told once; the per-second line is kept out of the live region", async () => {
+    tensorAnswer = () => refusal("3");
+    await open();
+    const line = screen.getByTestId("rate-wait-line");
+    const live = screen.getByTestId("rate-wait-live");
+    expect(line.getAttribute("aria-hidden")).toBe("true");
+    expect(live.getAttribute("role")).toBe("status");
+    expect(live.textContent).toBe(plain.rateWaiting);
+    await seconds(2);
+    expect(screen.getByTestId("rate-wait-line").textContent).toBe(rateWaitLine(1));
+    expect(screen.getByTestId("rate-wait-live").textContent, "the announced text does not change with the count").toBe(plain.rateWaiting);
+    expect(screen.getByTestId("rate-wait-notice").getAttribute("role")).toBeNull();
   });
 });

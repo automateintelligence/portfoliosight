@@ -154,7 +154,7 @@ test("a build refused for too many requests counts down and the chart loads with
     return sent === 1 ? route.fulfill(tooMany("2")) : route.continue();
   });
   await page.goto("/?f=SGOV:50,VTIP:50&unit=pct");
-  await expect(page.getByTestId("rate-wait-notice")).toHaveText(/^Too many charts in a minute\. Trying again in [12] s\.$/);
+  await expect(page.getByTestId("rate-wait-line")).toHaveText(/^Too many charts in a minute\. Trying again in [12] s\.$/);
   await expect(page.getByTestId("build-retry")).toHaveCount(0);
   await expect(page.getByTestId("point-selected")).toBeVisible();
   await expect(page.getByTestId("rate-wait-notice")).toHaveCount(0);
@@ -171,7 +171,7 @@ test("a build refused twice offers Retry with the message and is not sent again 
     return route.fulfill(tooMany("1"));
   });
   await page.goto("/?f=SGOV:50,VTIP:50&unit=pct");
-  await expect(page.getByTestId("rate-wait-notice")).toContainText("Trying again in 1 s.");
+  await expect(page.getByTestId("rate-wait-line")).toContainText("Trying again in 1 s.");
   await expect(page.getByTestId("build-retry")).toBeVisible();
   await expect(page.getByTestId("building-notice")).toContainText("Too many charts in a minute. Try again in a moment.");
   await page.waitForTimeout(2500);

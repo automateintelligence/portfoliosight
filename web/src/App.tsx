@@ -308,10 +308,15 @@ function Page({ interaction }: { interaction: Interaction }) {
     );
   } else if (state.build.status === "build-wait") {
     notice = (
-      <div className={tensor ? "notice notice-late" : "notice"} data-testid="rate-wait-notice" role="status">
+      <div className={tensor ? "notice notice-late" : "notice"} data-testid="rate-wait-notice">
         <div className="notice-card">
           <span className="ring" aria-hidden="true" />
-          <p>{rateWaitLine(state.build.waitS ?? 0)}</p>
+          <p data-testid="rate-wait-line" aria-hidden="true">
+            {rateWaitLine(state.build.waitS ?? 0)}
+          </p>
+          <p className="sr-only" role="status" data-testid="rate-wait-live">
+            {plain.rateWaiting}
+          </p>
         </div>
       </div>
     );

@@ -275,8 +275,8 @@ export function createStore(init: { search: string }): Store {
   let autoRetried = false;
   // the page is not live (the app unmounted or the browser hid it): no countdown starts until `start` says it is back
   let left = false;
-  // whether the last load bypassed the cache; a retry repeats it
-  let lastFresh = false;
+  // the request the last load made: a retry repeats it exactly (a forced POST, a preset's own GET), however the menu was edited meanwhile
+  let lastRequest: { lookback: LookbackId; fresh: boolean; req: ReturnType<typeof requestFor> } | null = null;
   const ghostTimers = new Set<ReturnType<typeof setTimeout>>();
   let loadSeq = 0;
   let failures = 0;
@@ -484,10 +484,10 @@ export function createStore(init: { search: string }): Store {
     const seq = ++loadSeq;
     clearPoll();
     if (!opts.auto) autoRetried = false;
-    // A retry repeats the request it retries, a forced POST included.
-    const fresh = opts.retry ? lastFresh : opts.fresh === true;
-    lastFresh = fresh;
-    const req = requestFor(lookback, fresh);
+    const again = opts.retry && lastRequest !== null && lastRequest.lookback === lookback ? lastRequest : null;
+    const fresh = again ? again.fresh : opts.fresh === true;
+    const req = again ? again.req : requestFor(lookback, fresh);
+    lastRequest = { lookback, fresh, req };
     if ("unavailable" in req) {
       // Any load this one replaced is cancelled, so the build status must settle here too.
       set({
@@ -651,6 +651,7 @@ export function createStore(init: { search: string }): Store {
   async function start() {
     if (started || halted) return;
     started = true;
+    const startSeq = loadSeq;
     let custom = state.preset === null && state.rows.length > 0;
     const tierJob = fetchTier().then(
       (tier) => set({ tier }, false),
@@ -697,6 +698,8 @@ export function createStore(init: { search: string }): Store {
       if (state.unit === "pct" && (unitOfPreset(preset) ?? "pct") !== "pct") state = { ...state, preset: null };
       emit();
     }
+    // A visitor's own action may have loaded this menu while start-up waited: not a second time.
+    if (loadSeq !== startSeq) return;
     await load(state.lookback);
   }
 

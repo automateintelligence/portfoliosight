@@ -61,6 +61,8 @@ export const plain = {
   retry: "Retry",
   /** The Retry button's line when the service refused the build for too many requests and no wait could be shown. */
   rateLimited: "Too many charts in a minute. Try again in a moment.",
+  /** Read out once while the wait is counted down on screen (the per-second line itself is not read out). */
+  rateWaiting: "Too many charts in a minute. Trying again shortly.",
   shareCopy: "Copy link",
   shareEmail: "Send this view by email",
   shareSend: "Send",
