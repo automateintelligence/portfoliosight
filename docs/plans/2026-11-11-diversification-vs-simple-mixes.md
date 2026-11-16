@@ -6,7 +6,7 @@ review log at the end), still before any realized outcome of a new mix was compu
 (2026-11-13) was the last review of this document, by the owner's decision; the implementation
 PR's review checks the code against it. All decisions at the end were answered by
 2026-11-15, D kept. An answer that changes the design is recorded here as a dated correction
-before any realized outcome is read.
+before any realized outcome is read: see "Corrections and additions, 2026-11-15" at the end.
 
 ## Question
 
@@ -546,7 +546,7 @@ optimizer check against the whole pool), 6a (15% exclusion share). Dropping V re
 described mix only; the tests and their count are unchanged. D, the most-diversified mix, stays
 in the run (owner, 2026-11-15, "2n"): v2 recorded its most-diversified anchors but never
 evaluated them, testing only the interior slider positions 0.25, 0.50 and 0.75, so D's own
-realized comparison has not been run.
+realized comparison has not been run. Later answers of 2026-11-15: the section at the end.
 
 1. **How many tests.** (a) Nine tests, three mixes by three fall measures, each at a 99.44%
    interval (recommended: one answer per mix and measure, no second look later; the cost is
@@ -627,3 +627,153 @@ exclusion rule; P1-10 the conclusion claims only what the rules decide and keeps
 conditional reading of U; P2-11 the five-year return named in the output contract; P2-12 choice
 2's consequence for the pool gate's domain added, the choice left open; P2-13 recorded columns
 named with their schema lines, turnover and the new mixes named as new computation.
+
+## Corrections and additions, 2026-11-15
+
+Recorded 2026-11-15, before any realized outcome of a new mix was computed: `fr-run-v3/analysis`
+holds no `recipes_check` file, and `main` has no `recipes3.py` yet, so no code of this check
+can read an outcome. The text above stays as it was reviewed, apart from the two pointers to
+this section (lines 9 and 549); this section says where it no longer holds and what was added.
+Its line numbers are this file's, the same above this section as at commit `3233583`. The
+build plan, `docs/plans/2026-11-15-diversification-vs-simple-mixes-build-plan.md`, was
+approved by the owner on 2026-11-15 ("2 yes").
+
+### Corrections
+
+By the owner's answer of 2026-11-15, "6y": the passages that no longer match get a dated
+correction (the build plan's open issue 4). None changes a test, a bar or a decision rule.
+
+1. **The lowest-volatility mix V is dropped** (answer 3n, line 543). Superseded: "Mix 5, V"
+   (lines 199-207); V's worst-years tail, "24 for V (234)" (lines 291 and 294); V in the list
+   of described items (line 417); "V's test is degenerate" (lines 438-440); V's place on the
+   one-row grid and its comparator in the assembler (lines 521 and 525). V is also named in
+   passing at lines 21, 23, 49, 70, 278, 356, 374 and 422; read those without it. V is not
+   built as a reported mix and has no cell, no outcome and no line in the result or the
+   report. Two things stay: the minimum-variance program is still solved, because `F(s)` needs
+   it (line 97; "which is also V" at line 474 now reads "which `F(s)` needs"), and the test
+   "the identity of V and the frontier's first node" (line 495) stays as the lowest-branch
+   test of `F(s)`.
+2. **Line 90** cites `engine/optimize.py:83-86` for `MenuPrograms.frontier_point`. It is at
+   `portfoliosight/engine/optimize.py:84-87` (the `def` at 84, the solve at 87; `main` at
+   `8e69742`).
+3. **Line 485**, "at most 15 mixes per eligible start month": the count is up to 24 weight
+   vectors: 6 F rows, 6 arm 1 rows and 6 U at the settings, then E, D, D10 and their three
+   comparators `F(sigma(E))`, `F(sigma(D))` and `F(sigma(D10))` (build plan, Task A3). The
+   long-history side description below adds up to 13 on its own start months.
+4. **Line 484**, "about 4.1 million main-pool rows": the main-pool rows number 4,029,646. The
+   4,155,755 of line 253 is every recorded row of the 246 pool files and stays right where it
+   stands. Both were counted again on 2026-11-15 from the pool files, the main pool with the
+   filters of `region3.read_month_pool` (region3.py:137-149); no realized outcome was read.
+5. **Line 488**, "the run records its own CPU seconds as the other checks do": the region and
+   safety results hold no CPU seconds (`region_check.json` and `safety_check.json` have no
+   such key; only the v3 analysis has one, analysis3.py:717). This check records them itself:
+   `cpu_seconds` in its result, `time.process_time()` over the job (build plan, Task D1).
+
+### Addition: the long-history side description
+
+The owner's words (2026-11-15): "measure 9 years ... aligns with three 3-year periods ... keep
+the 3-year as the test but also record how almost 10 years perform as a side description", and
+"make sure that the start day/month of the first 9 years is the same as one of the 3-year
+periods, otherwise you might as well report 10-years instead of 9-years."
+
+**What it is.** The history a mix is chosen from, the lookback before the start month, is
+lengthened from 3 years to 9. The same four recipes F, U, E and D are built from the longer
+history, and their realized outcomes are shown beside those of the 3-year mixes on the same
+start months. It is described only: no pass/fail label, no interval, no bar. It does not enter
+the nine tests, the weight-limits reading or the decision rules, and nothing in it can stop
+the run. The 3-year lookback stays the test.
+
+**The 9-year history of a start month `m`.** Every row of the portfolio's returns calendar
+from the first row of the 3-year lookback window of the start month 72 months before `m`,
+through the last row the 3-year window of `m` uses (the last session of `m`), each row once.
+`m` is a 9-year start month when the month 72 months earlier is a scheduled start month, so
+the first one is the first scheduled start month plus 72 months, and the history always
+starts on the first day of a 3-year window.
+
+**How the windows are counted**, checked on 2026-11-15 against the code and the run's own
+3-year ledger (`fr-run-v3/ledger_cache/b0ef68baceaa1479_research2003_3y.pkl`; dates and row
+counts only, no realized outcome):
+
+- A 3-year window is counted in rows, not in calendar dates: the last 756 rows of the
+  calendar ending at the start month's last session (`LOOKBACK_ROWS`, engine/windows.py:22;
+  `select_window`, windows.py:84-86 and 108-109; the ledger takes its window start from it,
+  research/harness.py:555, and `evaluate.origin_model` rebuilds the same window,
+  research/evaluate.py:384-385). All 246 scheduled windows hold 756 rows, every one complete.
+- The first scheduled start month is 2006-04, its window 2003-04-30 to 2006-04-28. No earlier
+  month can be scheduled: the last holding to start is EEM (first price 2003-04-11), and
+  2006-03's window would begin before a holding has a price.
+- So the first 9-year start month is **2012-04**, its history 2003-04-30 to 2012-04-30: 2,268
+  rows, three 3-year windows end to end (2003-04-30 to 2006-04-28, 2006-05-01 to 2009-04-30,
+  2009-05-01 to 2012-04-30).
+- **174** scheduled 9-year start months, 2012-04 to 2026-09; **162** of them have a complete
+  realized year, 2012-04 to 2025-09. The five-year outcomes exist for the start months to
+  2021-09 (line 287), which leaves 114; that last count is arithmetic from line 287, not read
+  from the ledger.
+- Because a window is 756 rows and 36 calendar months hold a few rows more or fewer, the
+  3-year windows of `m - 72`, `m - 36` and `m` do not always join exactly: over the 174 months
+  two neighbours overlap by up to 5 rows or leave up to 2 rows between them, and both joins
+  are exact in 3 months (2012-04 among them). The definition above takes the whole span once,
+  gaps included and overlaps not doubled: 2,262 to 2,268 rows (2,266 most often; 2,268 is
+  three times 756), 8.99 to 9.01 calendar years. The last one, 2026-09, runs 2017-09-29 to
+  2026-09-30 with 2,262 rows.
+- The other reading, the last 2,268 rows before the start month, was not taken: its first day
+  would miss a 3-year window's first day by up to 6 rows, against the owner's second sentence.
+- Every row of every 9-year history is complete (each holding has a return): the 246
+  scheduled 3-year windows are complete and together cover every row from 2003-04-30 to
+  2026-09-30.
+
+**The mixes.** The training side is the rows of that span, with the 3-year model's own
+estimators (`estimate_moments`, then `menu_beta_blend` with the start month's risk-free rate,
+as evaluate.py:400-401) and the same weight limits. From it:
+
+- **F**: the exact-line frontier mix with the limits, `F(s)` of lines 95-115, at the six
+  settings of the 9-year geometry: `r = sigma_min + a (sigma_top - sigma_min)`, with
+  `sigma_min` the minimum-variance risk and `sigma_top` the greedy fill's risk under the
+  9-year inputs. The run recorded nothing for a 9-year lookback, so nothing is reconstructed
+  and no pool gate applies.
+- **U**: the frontier with no weight limits at the same six risks. A cell at or above the
+  unlimited top is excluded and counted, as line 156.
+- **E**: equal weight. Its weights do not depend on the history, so its realized outcomes
+  equal the 3-year E's by construction; only its model risk and risk position differ. It is
+  listed so the table is complete.
+- **D**: the most-diversified mix under the menu's limits (lines 164-170), from the 9-year
+  volatilities and covariance.
+
+No D10, no arm 1 row and no comparator `F(sigma(M))` are built, so E and D are never excluded
+here. A cell that cannot be built (a `SolveError`, a risk gap above `1e-6` for F or U, or a
+history with a row on which a holding has no return) is left out, counted and listed with its
+reason; the 1% rule does not apply and the run goes on.
+
+**The same setting is not the same risk.** The 9-year F and the 3-year F at one setting sit at
+the same place on their own risk range, each under its own covariance, not at the same model
+risk. The mean model risk of each side is reported beside every figure, and realized
+volatility shows the risk each side had.
+
+**What is reported**, per mix, for the 9-year mix and beside it the 3-year mix of the main
+check at the same start month and setting: the mean one-year fall, the mean five-year fall
+where the start month has five years, the worst-years fall (the mean of the largest tenth of
+the one-year falls, each side ranked on its own), the mean one-year return, the mean five-year
+return where it exists, the mean realized volatility, the mean model risk, and the counts of
+cells and start months. A mean uses only the cells where both sides have the outcome. The
+3-year side is every cell of the main check that has weights and is not a failed cell, so a
+start month where E or D is left out of the tests for want of a comparator still counts
+here. For F and U the six settings of a start month are averaged with equal weight, then the
+start months, as under "Statistics". The largest tenth is 17 of 162 start months per setting
+when every cell is kept.
+
+**Expected counts**, fixed here: 174 start months with a 9-year history, 162 with a one-year
+outcome, 114 with a five-year outcome, the first 2012-04. The result records what it finds; a
+difference is reported, not a stop.
+
+**What it costs.** Per 9-year start month, 15 more conic programs (the limited
+minimum-variance program and six frontier programs, the same seven without the limits, one
+for D): 2,610 over the 174 months. Outcomes for up to 13 more weight vectors on 162 start
+months. No pool read and no bootstrap.
+
+**Limits.** It covers the start months from 2012-04 only, so no start month of the 2008-09
+crisis, though the 9-year histories of the first years contain it. It is one more description
+on start months already looked at five times, read after the tests: a difference seen in it
+is not a finding and reopens no test.
+
+Code and tests: `recipes3.py`, the result key `long_history` of `recipes_check.json`, and the
+build plan's Tasks C5, C6 and D5.
