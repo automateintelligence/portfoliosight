@@ -107,6 +107,10 @@ describe("copy (spec 3.6, 3.7)", () => {
   it("carries the technical strings behind details", () => {
     expect(copy.technical.xAxis).toBe("Standard deviation of yearly return");
     expect(copy.technical.enbName).toBe("effective number of bets, minimum torsion");
+    // owner direction 2026-11-15: the slider's note says the risk is constant, not "at X"
+    expect(copy.technical.divSlider).toBe(
+      "Walks the mixes that keep the risk constant: every step down gives up return for diversification; the bottom end is the most diversified mix found at that risk",
+    );
     // A-PS-48 requires this technical name behind details
     expect(copy.technical.resultStrip).toMatch(/^Estimated central 95% range of the one-year return: .* over 2,000 one-year paths/);
     expect(copy.technical.bellCurve("−9.0%", "+6.0%", "+21.0%")).toBe("Textbook bell-curve figure (normal, μ ± 1.96σ): −9.0% to +21.0% around +6.0%");

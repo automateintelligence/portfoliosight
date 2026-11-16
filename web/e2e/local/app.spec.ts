@@ -486,6 +486,10 @@ test("the past-data line shows once under the diversification slider with Detail
   expect((await page.locator("body").innerText()).split(PAST_DATA_LINE).length - 1, "not stated with Details off").toBe(0);
   await page.getByTestId("details-toggle").click();
   await expect(page.getByTestId("details-tested")).toHaveCount(0);
+  // owner direction 2026-11-15: the slider's own note says the risk is constant
+  await expect(page.locator(".divs-note").filter({ hasText: "Walks the mixes" })).toHaveText(
+    "Walks the mixes that keep the risk constant: every step down gives up return for diversification; the bottom end is the most diversified mix found at that risk",
+  );
   await expect(page.getByTestId("past-data-line")).toHaveText(PAST_DATA_LINE);
   await expect(page.getByTestId("past-data-line")).toBeVisible();
   const lineId = await page.getByTestId("past-data-line").getAttribute("id");

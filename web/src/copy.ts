@@ -118,7 +118,7 @@ export const technical = {
   bellCurve: (low: string, mid: string, high: string) => `Textbook bell-curve figure (normal, μ ± 1.96σ): ${low} to ${high} around ${mid}`,
   enbName: "effective number of bets, minimum torsion",
   divSlider:
-    "Walks the mixes that keep the risk at X: every step down gives up return for diversification; the bottom end is the most diversified mix found at that risk",
+    "Walks the mixes that keep the risk constant: every step down gives up return for diversification; the bottom end is the most diversified mix found at that risk",
   noLimits: "The same frontier with every fund allowed from 0% to 100%",
   rangePending: "The one-year range of this mix comes from the service and is not available right now.",
   frontier:
