@@ -342,7 +342,7 @@ export const ROADMAP_ITEMS = ["Paid tier", "Data license", "exact-ENB", "FERS pl
  */
 export const TENSOR_POST_LIMIT = { posts: 5, windowMs: 60_000 } as const;
 
-/** Slack on top of the window: our stamp is taken just before the server's own, and clocks differ a little. */
+/** Slack on top of the window, for timer granularity: a stamp is taken when the answer arrives, which is after the server counted the request. */
 export const TENSOR_POST_MARGIN_MS = 2_000;
 
 /** True for a request that asks the service to build a tensor (the only calls the allowance counts). */
@@ -362,13 +362,14 @@ export function parseTensorPostLedger(text: string): number[] {
 /**
  * Milliseconds to wait from `now` before `count` more tensor POSTs can go out without the
  * site's allowance refusing one, given the stamps `sentAt` of those already sent. A sent request
- * keeps counting until the window plus the margin has passed. 0 when `count` more fit now.
+ * keeps counting until the window plus the margin has passed. 0 when `count` more fit now. A
+ * stamp later than `now` is from another clock (another boot's monotonic reading) and is ignored.
  */
 export function pacingDelayMs(sentAt: readonly number[], now: number, count = 1): number {
   const { posts, windowMs } = TENSOR_POST_LIMIT;
   if (!Number.isInteger(count) || count < 1 || count > posts) throw new RangeError(`a batch of ${count} tensor POSTs cannot fit the allowance of ${posts}`);
   const holdMs = windowMs + TENSOR_POST_MARGIN_MS;
-  const counting = sentAt.filter((at) => at > now - holdMs).sort((a, b) => a - b);
+  const counting = sentAt.filter((at) => at > now - holdMs && at <= now).sort((a, b) => a - b);
   const excess = counting.length + count - posts;
   return excess <= 0 ? 0 : counting[excess - 1] + holdMs - now;
 }

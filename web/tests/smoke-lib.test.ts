@@ -179,6 +179,16 @@ describe("pacing of live tensor builds", () => {
     expect(pacingDelayMs(stamps, 1_004_500)).toBe(pacingDelayMs([...stamps].sort((a, b) => a - b), 1_004_500));
   });
 
+  it("counts a request stamped at this very moment, and ignores a stamp later than now (another clock)", () => {
+    const now = 7_000_000;
+    // four stamped now plus one more: the allowance is full, the oldest of them leaves a window plus margin from now
+    expect(pacingDelayMs(Array(posts - 1).fill(now), now)).toBe(0);
+    expect(pacingDelayMs(Array(posts).fill(now), now)).toBe(windowMs + TENSOR_POST_MARGIN_MS);
+    // a stamp from a clock that is ahead of ours (another boot's monotonic reading) is not a request of this window
+    expect(pacingDelayMs([...Array(posts - 1).fill(now), now + 3_600_000], now)).toBe(0);
+    expect(pacingDelayMs(Array(posts).fill(now + 1), now)).toBe(0);
+  });
+
   it("refuses a batch the allowance can never hold", () => {
     expect(() => pacingDelayMs([], 0, posts + 1)).toThrow(RangeError);
     expect(() => pacingDelayMs([], 0, 0)).toThrow(RangeError);
