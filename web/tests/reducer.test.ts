@@ -22,7 +22,7 @@ type Call = { method: string; path: string; body: string | null };
 let calls: Call[] = [];
 let replaced: string[] = [];
 let health: () => Response;
-let tensorRoute: (call: Call) => Response;
+let tensorRoute: (call: Call) => Response | Promise<Response>;
 let tierRoute: () => Response;
 let tickerRoute: () => Response | Promise<Response>;
 let presetsAsof = RAW.asof as string;
@@ -973,6 +973,78 @@ describe("store: a build refused for too many requests (429)", () => {
     const ready = await boot("");
     ready.dispatch({ type: "leave" });
     expect(ready.getState().build.status).toBe("ready");
+  });
+
+  it("a refusal never uses up the three-failure budget: the Retry button stays", async () => {
+    tensorRoute = () => refusal();
+    const store = await boot(MENU);
+    for (let n = 0; n < 4; n++) {
+      expect(waiting(store), `after refusal ${n + 1}`).toEqual({ status: "build-retry", error: plain.rateLimited, position: null });
+      store.dispatch({ type: "retryBuild" });
+      await flush();
+    }
+    expect(posts()).toHaveLength(5);
+    // and a refusal after two builds that really failed is not the third failure
+    const failed = () => json(409, { status: "failed", error: "build_failed", attempts: 1, retry: true });
+    let step = 0;
+    tensorRoute = () => (step++ < 2 ? failed() : refusal());
+    const again = await boot(MENU);
+    again.dispatch({ type: "retryBuild" });
+    await flush();
+    again.dispatch({ type: "retryBuild" });
+    await flush();
+    expect(again.getState().build).toEqual({ status: "build-retry", error: plain.rateLimited, position: null });
+  });
+
+  it("the automatic retry keeps the original request's forced POST: a refused limits reset is sent again, not answered from the cache", async () => {
+    const store = await boot("");
+    store.dispatch({ type: "setCaps", caps: [{ id: IDS[0], min: null, max: 60 }] });
+    await flush();
+    await advance(500);
+    expect(posts()).toHaveLength(1);
+    let refuseOnce = true;
+    tensorRoute = (call) => {
+      if (call.method === "POST" && refuseOnce) {
+        refuseOnce = false;
+        return refusal("1");
+      }
+      return ok(call);
+    };
+    store.dispatch({ type: "setCaps", caps: [] });
+    await flush();
+    expect(waiting(store)).toMatchObject({ status: "build-wait", waitS: 1 });
+    await advance(1000);
+    expect(posts(), "the reset was sent, refused, and sent again").toHaveLength(3);
+    expect(waiting(store).status).toBe("ready");
+  });
+
+  describe("when the page is left while a request is out", () => {
+    let release: (answer: Response) => void = () => undefined;
+    const holdTheAnswer = () => {
+      tensorRoute = () => new Promise<Response>((resolve) => (release = resolve));
+    };
+
+    it("its late 429 starts no countdown and sends nothing more", async () => {
+      holdTheAnswer();
+      const store = await boot(MENU);
+      expect(waiting(store).status).toBe("building");
+      store.dispatch({ type: "leave" });
+      release(refusal("2"));
+      await flush();
+      expect(waiting(store)).toEqual({ status: "build-retry", error: plain.rateLimited, position: null });
+      await advance(120_000);
+      expect(posts()).toHaveLength(1);
+    });
+
+    it("a remount that follows at once (React strict mode) is the same page, and the countdown works", async () => {
+      holdTheAnswer();
+      const store = await boot(MENU);
+      store.dispatch({ type: "leave" });
+      store.dispatch({ type: "start" });
+      release(refusal("2"));
+      await flush();
+      expect(waiting(store)).toMatchObject({ status: "build-wait", waitS: 2 });
+    });
   });
 
   it("a refusal while polling a build that is in the queue waits the same way, then asks again", async () => {
