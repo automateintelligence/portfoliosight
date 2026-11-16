@@ -267,3 +267,31 @@ def test_a_request_over_the_sixty_a_minute_limit_says_how_long_to_wait(make_clie
     # A caller refused for the gate is not counted and gets no wait.
     forbidden = client.get("/v1/health", headers={"CF-Connecting-IP": ip})
     assert forbidden.status_code == 403 and "retry-after" not in forbidden.headers
+
+
+def test_a_post_refused_by_the_request_limiter_waits_for_the_post_limiter_too(make_client):
+    clock = FakeClock()
+    client = make_client(start_worker=False, clock=clock, build_fn=lambda *a, **k: None)
+    ids = ["VTI", "VTV", "VOE", "VB", "VBR", "VEA", "VWO"]
+    ip = "203.0.113.60"
+
+    def post(n: int):
+        funds = [{"id": ids[0]}, {"id": ids[n + 1]}]
+        return client.post(
+            "/v1/tensors", json={"funds": funds, "lookback": "1y"}, headers=headers(ip)
+        )
+
+    # 55 requests at 0 s, then 5 POSTs at 50 s: both limiters are full at 50 s. The request
+    # limiter frees a slot at 60 s, the post limiter not before 110 s.
+    for _ in range(55):
+        assert client.get("/v1/health", headers=headers(ip)).status_code == 200
+    clock.t += 50.0
+    for n in range(5):
+        assert post(n).status_code == 202
+    refused = post(5)
+    assert refused.status_code == 429
+    assert refused.headers["retry-after"] == "60"  # not 10: waiting 10 s would be refused again
+    # A request that is not a POST of a tensor waits for the request limiter alone.
+    assert client.get("/v1/health", headers=headers(ip)).headers["retry-after"] == "10"
+    clock.t += 60.0
+    assert post(5).status_code == 202  # the advertised wait was enough

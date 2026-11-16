@@ -87,6 +87,11 @@ def _no_generation() -> ApiError:
     return ApiError(503, "no_generation", "No generation has been published yet.")
 
 
+def _wait_s(ip: str, *limiters: RateLimiter) -> int:
+    """The longest wait among the limiters a request answers to: when it would pass all of them."""
+    return max(limiter.retry_after(ip) for limiter in limiters)
+
+
 def _rate_limited(wait_s: int) -> JSONResponse:
     """The 429 of both limiters; ``Retry-After`` is the seconds until the caller is admitted."""
     response = error_response(429, "rate_limited", "Too many requests; try again in a minute.")
@@ -195,7 +200,9 @@ def create_app(
             return forbidden()
         ip = _client_ip(request)
         if not requests_limiter.admit(ip):
-            return _rate_limited(requests_limiter.retry_after(ip))
+            is_tensor_post = request.method == "POST" and request.url.path == "/v1/tensors"
+            limiters = (requests_limiter, posts_limiter) if is_tensor_post else (requests_limiter,)
+            return _rate_limited(_wait_s(ip, *limiters))
         try:
             return await call_next(request)
         except Exception as exc:
@@ -276,9 +283,7 @@ def create_app(
     async def post_tensors(request: Request) -> JSONResponse:
         ip = _client_ip(request)
         if not posts_limiter.admit(ip):
-            # The requests limiter counted this POST too, but its window is the same length and
-            # holds every POST, so it has room again no later than the posts limiter does.
-            return _rate_limited(posts_limiter.retry_after(ip))
+            return _rate_limited(_wait_s(ip, posts_limiter, requests_limiter))
         parsed = parse_tensor_request(await _read_body(request), max_funds=_menu_max(request))
         return await run_in_threadpool(_submit, parsed)
 
