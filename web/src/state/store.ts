@@ -21,7 +21,7 @@ import {
 } from "../api/http";
 import type { Tensor } from "../api/tensor";
 import { MAX_TICKERS_PER_REQUEST, TICKER_SHAPE, type TickerSource } from "../api/tickerShape";
-import { linkTooManyFunds } from "../copy";
+import { linkTooManyFunds, plain } from "../copy";
 import { amountsToWeights, amountsValue, fundsWithPrices, percentTotal } from "../math/amounts";
 import { portfolioMath } from "../math/portfolio";
 import { positionOfCeiling } from "../math/view";
@@ -49,7 +49,8 @@ export const withoutPrices = (rows: Row[]): Row[] =>
  * the fund list they wait for). Page state only: it is not part of the address.
  */
 export type UploadReport = { error: string | null; skipped: string[]; notes: string[]; pending: PendingCheck[]; menu: string[] };
-export type BuildStatus = "idle" | "building" | "ready" | "build-retry" | "build-failed-final";
+/** `build-wait`: the service refused the build for too many requests and the page counts the wait down (`build.waitS`). */
+export type BuildStatus = "idle" | "building" | "ready" | "build-wait" | "build-retry" | "build-failed-final";
 
 export const LOOKBACKS: LookbackId[] = ["1y", "2y", "3y", "5y", "10y", "ew"];
 export const MIN_FUNDS = 2;
@@ -59,6 +60,8 @@ export const CAPS_INFEASIBLE = "These limits cannot all be met at once. Loosen o
 const POLL_MS = 2000;
 const URL_DEBOUNCE_MS = 250;
 const MAX_FAILURES = 3;
+/** The service's window is a minute, so no honest wait is longer; a longer `Retry-After` is not counted down on screen. */
+const MAX_AUTO_WAIT_S = 60;
 
 export type State = {
   preset: string | null;
@@ -83,7 +86,7 @@ export type State = {
   /** Lookback of the tensor on screen (differs from `lookback` while a switch is loading). */
   tensorLookback: LookbackId | null;
   ghostTensors: Partial<Record<LookbackId, Tensor>>;
-  build: { status: BuildStatus; error: string | null; position: number | null };
+  build: { status: BuildStatus; error: string | null; position: number | null; waitS?: number };
   /** Lookbacks that cannot be shown for this menu, with the one-sentence note. */
   unavailable: Partial<Record<LookbackId, string>>;
   /** Set when the price data is behind: the `asof` date to show (expectation F13). */
@@ -101,6 +104,7 @@ export type Action =
   | { type: "divSlider"; t: number }
   | { type: "setLookback"; lookback: LookbackId }
   | { type: "retryBuild" }
+  | { type: "leave" }
   | { type: "selectPreset"; id: string }
   | { type: "setTheme"; theme: ThemeId }
   | { type: "setDetails"; details: boolean }
@@ -266,6 +270,9 @@ export function createStore(init: { search: string }): Store {
   let started = false;
   let urlTimer: ReturnType<typeof setTimeout> | null = null;
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  let waitTimer: ReturnType<typeof setTimeout> | null = null;
+  // set once the page has sent a refused build again by itself; a build the visitor asks for starts afresh
+  let autoRetried = false;
   const ghostTimers = new Set<ReturnType<typeof setTimeout>>();
   let loadSeq = 0;
   let failures = 0;
@@ -296,9 +303,12 @@ export function createStore(init: { search: string }): Store {
       if (!halted) writeUrl();
     }, URL_DEBOUNCE_MS);
   }
+  /** Stops the poll of a build and the countdown of a refused one. */
   const clearPoll = () => {
     if (pollTimer !== null) clearTimeout(pollTimer);
     pollTimer = null;
+    if (waitTimer !== null) clearTimeout(waitTimer);
+    waitTimer = null;
   };
 
   /** Spec 3.2: keep the state in the URL, reload at top level so the interstitial can run. */
@@ -430,14 +440,44 @@ export function createStore(init: { search: string }): Store {
       });
       return;
     }
+    if (answer.status === 429) {
+      const wait = answer.retryAfterS;
+      if (!autoRetried && wait !== null && wait <= MAX_AUTO_WAIT_S) return countDownThenRetry(wait, lookback, previous);
+      return fail(plain.rateLimited, true);
+    }
     fail(answer.code, true);
   }
 
+  /**
+   * The service said how long to wait: show the seconds going down, then send the same build
+   * again, once. Any load (a changed menu, window or limits) clears the timer first, and
+   * `leave` clears it too, so a countdown never fires for a build that is no longer wanted.
+   */
+  function countDownThenRetry(seconds: number, lookback: LookbackId, previous: LookbackId | null) {
+    const seq = loadSeq;
+    set({ build: { status: "build-wait", error: null, position: null, waitS: seconds } }, false);
+    const tick = (left: number) => {
+      waitTimer = setTimeout(() => {
+        waitTimer = null;
+        if (halted || seq !== loadSeq) return;
+        if (left > 1) {
+          set({ build: { status: "build-wait", error: null, position: null, waitS: left - 1 } }, false);
+          tick(left - 1);
+          return;
+        }
+        autoRetried = true;
+        void load(lookback, { retry: true, previous, auto: true });
+      }, 1000);
+    };
+    tick(seconds);
+  }
+
   /** Loads the primary tensor for `lookback`. Idempotent by (generation, hash, lookback) on the server. */
-  async function load(lookback: LookbackId, opts: { retry?: boolean; previous?: LookbackId | null; fresh?: boolean } = {}) {
+  async function load(lookback: LookbackId, opts: { retry?: boolean; previous?: LookbackId | null; fresh?: boolean; auto?: boolean } = {}) {
     if (halted) return;
     const seq = ++loadSeq;
     clearPoll();
+    if (!opts.auto) autoRetried = false;
     const req = requestFor(lookback, opts.fresh === true);
     if ("unavailable" in req) {
       // Any load this one replaced is cancelled, so the build status must settle here too.
@@ -687,6 +727,13 @@ export function createStore(init: { search: string }): Store {
       case "retryBuild":
         if (state.build.status !== "build-retry") return;
         void load(state.lookback, { retry: true, previous: state.tensorLookback });
+        return;
+      case "leave":
+        // The page is going away (or the app is unmounting): a countdown must not fire later. The
+        // Retry button is what a page restored from the back-forward cache would then show.
+        if (state.build.status !== "build-wait") return;
+        clearPoll();
+        set({ build: { status: "build-retry", error: plain.rateLimited, position: null } }, false);
         return;
       case "selectPreset": {
         const preset = state.presets?.presets.find((p) => p.id === action.id);
