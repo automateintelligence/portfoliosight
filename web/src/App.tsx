@@ -105,12 +105,16 @@ function Page({ interaction }: { interaction: Interaction }) {
   const state = useSyncExternalStore(store.subscribe, store.getState, store.getState);
   const dispatch = store.dispatch;
   useEffect(() => dispatch({ type: "start" }), [dispatch]);
-  // A countdown to a retry must not fire once the page is left: stop it on unmount and on pagehide.
+  // A countdown to a retry must not fire once the page is left: stop it on unmount and on pagehide,
+  // and say the page is live again on pageshow (start is idempotent).
   useEffect(() => {
     const leave = () => dispatch({ type: "leave" });
+    const back = () => dispatch({ type: "start" });
     window.addEventListener("pagehide", leave);
+    window.addEventListener("pageshow", back);
     return () => {
       window.removeEventListener("pagehide", leave);
+      window.removeEventListener("pageshow", back);
       leave();
     };
   }, [dispatch]);

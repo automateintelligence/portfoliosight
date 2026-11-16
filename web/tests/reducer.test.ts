@@ -23,7 +23,7 @@ let calls: Call[] = [];
 let replaced: string[] = [];
 let health: () => Response;
 let tensorRoute: (call: Call) => Response | Promise<Response>;
-let tierRoute: () => Response;
+let tierRoute: () => Response | Promise<Response>;
 let tickerRoute: () => Response | Promise<Response>;
 let presetsAsof = RAW.asof as string;
 
@@ -1018,6 +1018,27 @@ describe("store: a build refused for too many requests (429)", () => {
     expect(waiting(store).status).toBe("ready");
   });
 
+  it("a click on Retry after a refused limits reset repeats the forced POST too, not the cached preset", async () => {
+    const store = await boot("");
+    store.dispatch({ type: "setCaps", caps: [{ id: IDS[0], min: null, max: 60 }] });
+    await flush();
+    await advance(500);
+    expect(posts()).toHaveLength(1);
+    tensorRoute = () => refusal("1");
+    store.dispatch({ type: "setCaps", caps: [] });
+    await flush();
+    await advance(1000);
+    expect(waiting(store).status).toBe("build-retry");
+    expect(posts(), "the reset and its automatic retry, both refused").toHaveLength(3);
+    tensorRoute = ok;
+    store.dispatch({ type: "retryBuild" });
+    await flush();
+    await advance(500);
+    expect(posts()).toHaveLength(4);
+    expect(posts()[3].body).toBe(posts()[1].body);
+    expect(waiting(store).status).toBe("ready");
+  });
+
   describe("when the page is left while a request is out", () => {
     let release: (answer: Response) => void = () => undefined;
     const holdTheAnswer = () => {
@@ -1031,6 +1052,22 @@ describe("store: a build refused for too many requests (429)", () => {
       store.dispatch({ type: "leave" });
       release(refusal("2"));
       await flush();
+      expect(waiting(store)).toEqual({ status: "build-retry", error: plain.rateLimited, position: null });
+      await advance(120_000);
+      expect(posts()).toHaveLength(1);
+    });
+
+    it("start-up that was still waiting on the tier when the page was left sends no countdown afterwards", async () => {
+      let releaseTier: (answer: Response) => void = () => undefined;
+      tierRoute = () => new Promise<Response>((resolve) => (releaseTier = resolve));
+      tensorRoute = () => refusal("2");
+      const store = await boot(MENU);
+      expect(posts()).toHaveLength(0);
+      store.dispatch({ type: "leave" });
+      releaseTier(json(404, {}));
+      await flush();
+      await advance(500);
+      expect(posts()).toHaveLength(1);
       expect(waiting(store)).toEqual({ status: "build-retry", error: plain.rateLimited, position: null });
       await advance(120_000);
       expect(posts()).toHaveLength(1);

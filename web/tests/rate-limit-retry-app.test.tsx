@@ -112,4 +112,22 @@ describe("the page and a build refused for too many requests", () => {
     await seconds(120);
     expect(posts()).toHaveLength(1);
   });
+
+  it("a page that comes back from the browser's memory counts down again for a build the visitor starts", async () => {
+    tensorAnswer = () => refusal("3");
+    await open();
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    expect(screen.getByTestId("build-retry")).toBeTruthy();
+    act(() => {
+      window.dispatchEvent(new Event("pageshow"));
+    });
+    await act(async () => {
+      screen.getByTestId("build-retry").click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(posts()).toHaveLength(2);
+    expect(screen.getByTestId("rate-wait-notice").textContent).toBe(rateWaitLine(3));
+  });
 });

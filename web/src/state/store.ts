@@ -273,8 +273,10 @@ export function createStore(init: { search: string }): Store {
   let waitTimer: ReturnType<typeof setTimeout> | null = null;
   // set once the page has sent a refused build again by itself; a build the visitor asks for starts afresh
   let autoRetried = false;
-  // the page was left (the app unmounted or the browser hid it): no countdown starts until the page is used again
+  // the page is not live (the app unmounted or the browser hid it): no countdown starts until `start` says it is back
   let left = false;
+  // whether the last load bypassed the cache; a retry repeats it
+  let lastFresh = false;
   const ghostTimers = new Set<ReturnType<typeof setTimeout>>();
   let loadSeq = 0;
   let failures = 0;
@@ -417,7 +419,7 @@ export function createStore(init: { search: string }): Store {
     });
   }
 
-  function refused(answer: Extract<TensorAnswer, { kind: "refused" }>, lookback: LookbackId, previous: LookbackId | null, fresh: boolean) {
+  function refused(answer: Extract<TensorAnswer, { kind: "refused" }>, lookback: LookbackId, previous: LookbackId | null) {
     clearPoll();
     const reason = typeof answer.details?.reason === "string" ? answer.details.reason : "";
     if (answer.status === 422 && reason === NOT_ENOUGH_HISTORY) return windowUnavailable(lookback, previous);
@@ -444,7 +446,7 @@ export function createStore(init: { search: string }): Store {
     }
     if (answer.status === 429) {
       const wait = answer.retryAfterS;
-      if (!left && !autoRetried && wait !== null && wait <= MAX_AUTO_WAIT_S) return countDownThenRetry(wait, lookback, previous, fresh);
+      if (!left && !autoRetried && wait !== null && wait <= MAX_AUTO_WAIT_S) return countDownThenRetry(wait, lookback, previous);
       // Too many requests is not a failed build: it does not count toward the three that take Retry away.
       set({ build: { status: "build-retry", error: plain.rateLimited, position: null } }, false);
       return;
@@ -457,7 +459,7 @@ export function createStore(init: { search: string }): Store {
    * again, once. Any load (a changed menu, window or limits) clears the timer first, and
    * `leave` clears it too, so a countdown never fires for a build that is no longer wanted.
    */
-  function countDownThenRetry(seconds: number, lookback: LookbackId, previous: LookbackId | null, fresh: boolean) {
+  function countDownThenRetry(seconds: number, lookback: LookbackId, previous: LookbackId | null) {
     const seq = loadSeq;
     set({ build: { status: "build-wait", error: null, position: null, waitS: seconds } }, false);
     const tick = (left: number) => {
@@ -470,7 +472,7 @@ export function createStore(init: { search: string }): Store {
           return;
         }
         autoRetried = true;
-        void load(lookback, { retry: true, previous, auto: true, fresh });
+        void load(lookback, { retry: true, previous, auto: true });
       }, 1000);
     };
     tick(seconds);
@@ -481,11 +483,11 @@ export function createStore(init: { search: string }): Store {
     if (halted) return;
     const seq = ++loadSeq;
     clearPoll();
-    if (!opts.auto) {
-      autoRetried = false;
-      left = false;
-    }
-    const req = requestFor(lookback, opts.fresh === true);
+    if (!opts.auto) autoRetried = false;
+    // A retry repeats the request it retries, a forced POST included.
+    const fresh = opts.retry ? lastFresh : opts.fresh === true;
+    lastFresh = fresh;
+    const req = requestFor(lookback, fresh);
     if ("unavailable" in req) {
       // Any load this one replaced is cancelled, so the build status must settle here too.
       set({
@@ -497,7 +499,7 @@ export function createStore(init: { search: string }): Store {
     }
     // Tensors are immutable per request (a declared URL, or a menu-and-caps body): keep them.
     const key = "get" in req ? req.get : req.post;
-    const cached = opts.fresh ? undefined : cache.get(key);
+    const cached = fresh ? undefined : cache.get(key);
     if (cached) {
       applyTensor(cached, lookback);
       return;
@@ -531,7 +533,7 @@ export function createStore(init: { search: string }): Store {
           set({ menuError: CAPS_INFEASIBLE, lookback: shown(), build: { status: state.tensor ? "ready" : "idle", error: null, position: null } });
         } else fail(answer.error, answer.retry);
       } else {
-        refused(answer, lookback, opts.previous ?? null, opts.fresh === true);
+        refused(answer, lookback, opts.previous ?? null);
       }
     };
     let lastPoll: string | null = null;
@@ -739,8 +741,8 @@ export function createStore(init: { search: string }): Store {
       case "leave":
         // The page is going away (or the app is unmounting): a countdown must not fire later, and
         // a refusal that is still on its way starts none. The Retry button is what a page
-        // restored from the back-forward cache would show. A remount that follows at once (React
-        // strict mode) sends "start" again, which clears this.
+        // restored from the back-forward cache would show. "start" says the page is live again
+        // (a remount that follows at once in React strict mode, or pageshow).
         left = true;
         if (state.build.status !== "build-wait") return;
         clearPoll();
