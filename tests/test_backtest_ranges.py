@@ -1093,7 +1093,7 @@ def test_leakage_fixture_has_the_origins_it_claims(leak_base: _Leak) -> None:
     assert leak_base.ledger.row("2024-03").menu("tsp").horizon_end == _d("2025-04-01")
     for symbol in ("LATE", "NEWF"):
         first_day = cast(pd.Timestamp, pd.DatetimeIndex(_leak_indices()[symbol].index)[0])
-    assert first_day > pd.Timestamp(O_TSP_G)
+        assert first_day > pd.Timestamp(O_TSP_G)
 
 
 @pytest.mark.parametrize("name", list(AFTER_ORIGIN))
