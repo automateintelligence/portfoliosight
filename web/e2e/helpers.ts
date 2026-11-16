@@ -472,17 +472,22 @@ export async function fundRowIds(page: Page): Promise<string[]> {
   return page.locator('[data-testid^="fund-row-"]').evaluateAll((rows) => rows.map((row) => (row.getAttribute("data-testid") ?? "").slice("fund-row-".length)));
 }
 
-/** Types into the fund picker and commits: the matching option if one shows, else Enter. */
+/**
+ * Types into the fund picker and commits: the picker option whose ticker is exactly `id` if one
+ * shows, else Enter. The ticker is read from the option's own ticker span, never from the whole
+ * option text (ticker and name sit side by side with no space, and a name can contain the id).
+ */
 export async function typeFund(page: Page, id: string): Promise<void> {
   const input = page.getByTestId("fund-add");
   await input.fill(id);
-  const exact = new RegExp(`(^|[^A-Z0-9-])${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^A-Z0-9-])`);
-  const option = page.getByRole("option").filter({ hasText: exact }).first();
-  try {
-    await option.click({ timeout: 2_500 });
-  } catch {
-    await input.press("Enter");
-  }
+  const ticker = new RegExp(`^\\s*${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`);
+  const option = page.getByRole("listbox", { name: "Matching funds" }).getByRole("option").filter({ has: page.locator(".tk", { hasText: ticker }) });
+  const shown = await option.first().waitFor({ timeout: 2_500 }).then(
+    () => true,
+    () => false,
+  );
+  if (shown) await option.first().click();
+  else await input.press("Enter");
 }
 
 /** Makes the Funds table hold exactly `ids` (a draft until "Recalculate with these funds"). */
