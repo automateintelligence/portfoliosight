@@ -10,61 +10,25 @@ from __future__ import annotations
 import dataclasses
 import math
 from collections import Counter
-from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from portfoliosight.engine import caps, optimize, torsion
+from portfoliosight.engine import optimize, torsion
 from portfoliosight.research.fixedrisk import analysis3 as A
-from portfoliosight.research.fixedrisk import anchors, knee
+from portfoliosight.research.fixedrisk import anchors
 from portfoliosight.research.fixedrisk import recipes3 as RC
-from tests.research.fixedrisk.optimizer_data import synthetic_context
-
-# Made-up inputs, defined once. 12 holdings with 40% limits: at least 11 holdings are needed, or
-# D10's 10% limits cannot sum to 100%.
-MENU12 = synthetic_context(funds=12, rows=400, cap=0.4, seed=7)
-# Three uncorrelated holdings with limits 40% each, where the unlimited top (100% in the first
-# holding, risk 0.10) sits inside the limited range (0.0726 to 0.1266): the settings 0.1023 and
-# above are over the unlimited top.
-THREE_U = SimpleNamespace(
-    mu_s=np.array([0.10, 0.08, 0.01]),
-    cov=np.diag(np.array([0.10, 0.30, 0.02]) ** 2),
-    lower=np.zeros(3),
-    upper=np.full(3, 0.4),
+from tests.research.fixedrisk.recipe_data import (
+    M12,
+    M12_OPEN,
+    MENU12,
+    THREE_E,
+    THREE_U,
+    programs,
+    recorded,
 )
-# Three uncorrelated holdings, limits 100%: equal weight has risk 0.1424, the top has risk 0.05.
-THREE_E = SimpleNamespace(
-    mu_s=np.array([0.10, 0.02, 0.01]),
-    cov=np.diag(np.array([0.05, 0.30, 0.30]) ** 2),
-    lower=np.zeros(3),
-    upper=np.ones(3),
-)
-M12 = SimpleNamespace(
-    mu_s=MENU12.mu_s,
-    cov=MENU12.cov,
-    lower=np.array(MENU12.menu.lower),
-    upper=np.array(MENU12.menu.upper),
-)
-M12_OPEN = SimpleNamespace(mu_s=MENU12.mu_s, cov=MENU12.cov, lower=np.zeros(12), upper=np.ones(12))
-
-
-def _programs(m) -> optimize.MenuPrograms:
-    return optimize.MenuPrograms(m.mu_s, m.cov, m.lower, m.upper)
-
-
-def _recorded(m) -> RC.Recorded:
-    """What the run would have recorded: the ends of the limited domain, the six risks on them and
-    the app's frontier mix at each (`knee.side_frontier_node`, the code that made the real rows)."""
-    programs = _programs(m)
-    sigma_min = programs.sigma(programs.min_variance())
-    sigma_top = programs.sigma(caps.greedy_fill(m.mu_s, m.lower, m.upper))
-    front = optimize.frontier(programs)
-    r = np.array([sigma_min + a * (sigma_top - sigma_min) for a in A.RFS])
-    w = np.vstack([knee.side_frontier_node(programs, front, float(x)) for x in r])
-    return RC.Recorded(r=r, sigma_min=sigma_min, sigma_top=sigma_top, w_f=w, w_app=w.copy())
 
 
 def _cov(vols, corr) -> np.ndarray:
@@ -119,9 +83,9 @@ def test_most_diversified_without_a_feasible_mix_is_a_solve_error():
 @pytest.fixture(scope="module")
 def frontier12():
     """MENU12's programs, its 8-node app frontier and the two ends the recorded columns hold."""
-    programs = _programs(M12)
-    front = optimize.frontier(programs, 8)
-    return programs, front, float(front.x[0]), float(front.x[-1])
+    menu = programs(M12)
+    front = optimize.frontier(menu, 8)
+    return menu, front, float(front.x[0]), float(front.x[-1])
 
 
 def test_frontier_exact_inside_matches_the_app_frontier(frontier12):
@@ -184,7 +148,7 @@ Row = dict[str, Any]
 
 @pytest.fixture(scope="module")
 def rec12() -> RC.Recorded:
-    return _recorded(M12)
+    return recorded(M12)
 
 
 @pytest.fixture(scope="module")
@@ -277,7 +241,7 @@ def test_equal_weight_and_its_comparator_sit_at_the_same_risk(mixes12, rec12):
 
 
 def test_a_mix_at_or_above_the_top_is_excluded_without_a_comparator():
-    rows = _mixes(THREE_E, _recorded(THREE_E))
+    rows = _mixes(THREE_E, recorded(THREE_E))
     e = _row(rows, RC.E)
     assert e["status"] == RC.EXCLUDED and e["a"] > 1
     assert e["weights"] is not None
@@ -285,7 +249,7 @@ def test_a_mix_at_or_above_the_top_is_excluded_without_a_comparator():
 
 
 def test_u_is_solved_below_the_unlimited_top_and_excluded_at_or_above_it():
-    u = _rows(_mixes(THREE_U, _recorded(THREE_U)), RC.U)
+    u = _rows(_mixes(THREE_U, recorded(THREE_U)), RC.U)
     assert _col(u, "status") == [RC.KEPT] * 3 + [RC.EXCLUDED] * 3
     assert max(_col(u[:3], "risk_gap")) <= 2e-6
     assert all(r["weights"] is not None for r in u[:3])
@@ -293,7 +257,7 @@ def test_u_is_solved_below_the_unlimited_top_and_excluded_at_or_above_it():
 
 
 def test_a_u_that_keeps_the_limits_equals_f():
-    kept = [r for r in _rows(_mixes(M12_OPEN, _recorded(M12_OPEN)), RC.U) if r["status"] == RC.KEPT]
+    kept = [r for r in _rows(_mixes(M12_OPEN, recorded(M12_OPEN)), RC.U) if r["status"] == RC.KEPT]
     assert len(kept) > 0
     assert min(_col(kept, "mu_gap")) >= -1e-6
     assert max(_col(kept, "l1")) <= 1e-4
@@ -301,7 +265,7 @@ def test_a_u_that_keeps_the_limits_equals_f():
 
 
 def test_u_beyond_the_limits_is_flagged_when_it_breaks_one():
-    kept = [r for r in _rows(_mixes(THREE_U, _recorded(THREE_U)), RC.U) if r["status"] == RC.KEPT]
+    kept = [r for r in _rows(_mixes(THREE_U, recorded(THREE_U)), RC.U) if r["status"] == RC.KEPT]
     assert all(_col(kept, "breaks_limit"))  # 100% in one holding at the top, over the 40% limit
     assert min(_col(kept, "mu_gap")) >= -1e-6
     assert max(_col(kept, "l1")) > 1e-4
@@ -321,7 +285,7 @@ def test_every_row_carries_its_model_figures(mixes12, rec12):
 
 
 def test_a_row_without_weights_has_no_figures():
-    row = _rows(_mixes(THREE_U, _recorded(THREE_U)), RC.U)[5]
+    row = _rows(_mixes(THREE_U, recorded(THREE_U)), RC.U)[5]
     assert row["weights"] is None
     for name in ("mu", "sigma", "a", "enb", "dr2", "risk_gap", "mu_gap", "l1"):
         assert math.isnan(row[name])
@@ -339,7 +303,7 @@ def test_a_torsion_failure_leaves_enb_empty_and_the_rest(monkeypatch, rec12, fai
 
 
 def test_a_mix_that_cannot_be_solved_fails_alone_and_has_no_comparator():
-    rows = _mixes(THREE_U, _recorded(THREE_U))  # three holdings cannot sum to 100% at 10% each
+    rows = _mixes(THREE_U, recorded(THREE_U))  # three holdings cannot sum to 100% at 10% each
     d10 = _row(rows, RC.D10)
     assert d10["status"] == RC.FAILED and d10["weights"] is None
     assert _rows(rows, "F@D10") == []
