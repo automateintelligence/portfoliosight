@@ -33,6 +33,8 @@ type Props = {
   cards: Record<MarkId, ReactNode>;
   /** The frontier lines to label, the primary one included. */
   lines: LineEnd[];
+  /** Width of one character of a line's name in this theme (`labelCharWidth`). */
+  lineCharW: number;
   /** The ghost line under the pointer, redrawn at full strength. */
   hot: { id: string; path: string } | null;
   /** Horizontal drag: the pixel x the ceiling should move to. */
@@ -85,6 +87,12 @@ export function placeFundLabels(funds: { id: string; px: number; py: number }[],
   });
 }
 
+/**
+ * The width one character of a frontier name is taken to have, in px. The HUD theme sets the
+ * names in capitals with wide tracking, so its characters are wider than the other themes'.
+ */
+export const labelCharWidth = (theme: string | null | undefined, phone: boolean): number => (theme === "hud" ? (phone ? 6.0 : 7.0) : phone ? 5.7 : 6.3);
+
 export type PlacedLabel = LineEnd & { ex: number; ey: number; x: number; y: number; anchor: "start" | "end"; leader: string | null };
 
 /**
@@ -92,8 +100,7 @@ export type PlacedLabel = LineEnd & { ex: number; ey: number; x: number; y: numb
  * above the end. Labels that would touch are stepped apart and joined to their line by a short
  * elbow, the primary line keeping its place.
  */
-export function placeLabels(lines: LineEnd[], scales: ChartScales, phone: boolean): PlacedLabel[] {
-  const charW = phone ? 5.7 : 6.3;
+export function placeLabels(lines: LineEnd[], scales: ChartScales, phone: boolean, charW = labelCharWidth(null, phone)): PlacedLabel[] {
   const placed: (PlacedLabel & { w: number })[] = [];
   const ordered = [...lines].sort((a, b) => Number(b.primary) - Number(a.primary) || scales.y(a.mu) - scales.y(b.mu));
   for (const line of ordered) {
@@ -130,7 +137,7 @@ export function placeLabels(lines: LineEnd[], scales: ChartScales, phone: boolea
  * frontier lines and the markers, each drawn at its mix's actual risk and return. Updates on
  * every slider tick.
  */
-export function Overlay({ scales, phone, ceiling, selected, current, funds, selectedLabel, currentLabel, position, busy, cards, lines, hot, onRiskPixel, onDivDrag, onNudge, pinned, pinnedBox, pinnedId, onPin }: Props) {
+export function Overlay({ scales, phone, ceiling, selected, current, funds, selectedLabel, currentLabel, position, busy, cards, lines, lineCharW, hot, onRiskPixel, onDivDrag, onNudge, pinned, pinnedBox, pinnedId, onPin }: Props) {
   const xAxisRef = useRef<SVGGElement>(null);
   const yAxisRef = useRef<SVGGElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -181,7 +188,7 @@ export function Overlay({ scales, phone, ceiling, selected, current, funds, sele
     if (h) setCardH((was) => (Math.abs(h - was) > 1 ? h : was));
   }, [tip, cards]);
 
-  const labels = useMemo(() => placeLabels(lines, scales, phone), [lines, scales, phone]);
+  const labels = useMemo(() => placeLabels(lines, scales, phone, lineCharW), [lines, scales, phone, lineCharW]);
   const fundLabels = useMemo(() => (funds ? placeFundLabels(funds.map((f) => ({ id: f.id, px: x(f.sigma), py: y(f.mu) })), scales.width) : []), [funds, x, y, scales.width]);
 
   const sx = x(selected.sigma);

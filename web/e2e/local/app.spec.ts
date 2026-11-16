@@ -352,11 +352,12 @@ test("the table always shows the mix entered and the selected mix, and the selec
 
 test("every frontier line is named at its right end and the names do not collide", async ({ page }, testInfo) => {
   await open(page);
-  await expect(page.getByTestId("frontier-label-5y")).toHaveText("5 years");
+  // owner direction 2026-11-15: the main line also carries the term for the line
+  await expect(page.getByTestId("frontier-label-5y")).toHaveText("5 years (Efficient frontier)");
   await open(page, "g=10y,ew,1y");
   await expect(page.getByTestId("chart")).toHaveAttribute("data-ghost-count", "3");
   // the No limits line is named like the history windows, and is not one of them in the count
-  const want: Record<string, string> = { "5y": "5 years", "10y": "10 years", ew: "Weighted recent", "1y": "1 year", nolimits: "No allocation limits" };
+  const want: Record<string, string> = { "5y": "5 years (Efficient frontier)", "10y": "10 years", ew: "Weighted recent", "1y": "1 year", nolimits: "No allocation limits" };
   for (const [id, text] of Object.entries(want)) await expect(page.getByTestId(`frontier-label-${id}`)).toHaveText(text);
   const chart = await boxOf(page, "chart");
   const boxes = await Promise.all(Object.keys(want).map(async (id) => ({ id, box: (await page.getByTestId(`frontier-label-${id}`).locator("text").boundingBox())! })));
@@ -388,6 +389,40 @@ test("every frontier line is named at its right end and the names do not collide
   await expect(end).toHaveClass(/is-hot/);
   await page.mouse.move(chart.x + 20, chart.y + 20);
   await expect(page.getByTestId("ghost-tip")).toHaveCount(0);
+});
+
+test("whichever window is the main line, its name ends in (Efficient frontier), as shown in every theme, and fits inside the chart clear of the ghost names", async ({ page }) => {
+  for (const [theme, upper] of [["ks-dark", false], ["hud", true]] as const) {
+    for (const [lb, name] of [["10y", "10 years"], ["ew", "Weighted recent"]] as const) {
+      await open(page, `lb=${lb}&g=1y,3y&t=${theme}`);
+      const label = page.getByTestId(`frontier-label-${lb}`);
+      const text = `${name} (Efficient frontier)`;
+      await expect(label).toHaveText(text);
+      // the rendered text: the stylesheet of the HUD theme sets every line name in capitals
+      const shown = await label.locator("text").evaluate((el) => {
+        const t = el.textContent ?? "";
+        return getComputedStyle(el).textTransform === "uppercase" ? t.toUpperCase() : t;
+      });
+      expect(shown, `${theme} ${lb}`).toBe(upper ? text.toUpperCase() : text);
+      // the ghosts and no-limits names are as before
+      await expect(page.getByTestId("frontier-label-1y")).toHaveText("1 year");
+      await expect(page.getByTestId("frontier-label-3y")).toHaveText("3 years");
+      const chart = await boxOf(page, "chart");
+      const ids = [lb, "1y", "3y"];
+      const boxes = await Promise.all(ids.map(async (id) => ({ id, box: (await page.getByTestId(`frontier-label-${id}`).locator("text").boundingBox())! })));
+      for (const { id, box } of boxes) {
+        expect(box.x >= chart.x && box.x + box.width <= chart.x + chart.width && box.y >= chart.y && box.y + box.height <= chart.y + chart.height, `${theme} ${lb}: ${id} label is inside the chart`).toBe(true);
+      }
+      for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+          const a = boxes[i].box;
+          const b = boxes[j].box;
+          const apart = a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y + 1 || b.y + b.height <= a.y + 1;
+          expect(apart, `${theme} ${lb}: ${boxes[i].id} and ${boxes[j].id} labels overlap`).toBe(true);
+        }
+      }
+    }
+  }
 });
 
 const DIVERSIFICATION_LINE = /^This mix spreads risk over the equivalent of \d+\.\d independent bets; highest found on this portfolio: \d+\.\d\.$/;

@@ -162,6 +162,12 @@ export const lookbackLine: Record<string, string> = {
   nolimits: "No allocation limits",
 };
 
+/**
+ * The main frontier line's name: its history window, then the term for the line (owner direction
+ * 2026-11-15). Ghost lines and the No limits line keep the plain name above.
+ */
+export const primaryLineName = (id: string): string => `${lookbackLine[id] ?? id} (Efficient frontier)`;
+
 export const lookbackShort: Record<string, string> = {
   "1y": "1y",
   "2y": "2y",

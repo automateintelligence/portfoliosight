@@ -2,10 +2,10 @@
 import { describe, expect, it } from "vitest";
 import { placeLabels, type LineEnd } from "../src/chart/Overlay";
 import { makeScales } from "../src/chart/scales";
-import { lookbackLine } from "../src/copy";
+import { lookbackLine, primaryLineName } from "../src/copy";
 
 const scales = (phone: boolean) => makeScales(phone ? 358 : 1040, phone ? 358 : 540, { xMin: 0, xMax: 0.3, yMin: 0, yMax: 0.2 }, phone);
-const line = (id: string, sigma: number, mu: number, primary = false): LineEnd => ({ id, label: lookbackLine[id], primary, sigma, mu });
+const line = (id: string, sigma: number, mu: number, primary = false): LineEnd => ({ id, label: primary ? primaryLineName(id) : lookbackLine[id], primary, sigma, mu });
 const box = (l: ReturnType<typeof placeLabels>[number], charW: number) => {
   const w = l.label.length * charW;
   return { x0: l.anchor === "start" ? l.x : l.x - w, x1: l.anchor === "start" ? l.x + w : l.x, y: l.y };
@@ -23,6 +23,37 @@ describe("placeLabels", () => {
     expect(lookbackLine["10y"]).toBe("10 years");
     expect(lookbackLine.ew).toBe("Weighted recent");
   });
+
+  it("names the main line by its window and then the term for the line; ghost lines and the no-limits line keep their names (owner direction 2026-11-15)", () => {
+    expect(primaryLineName("10y")).toBe("10 years (Efficient frontier)");
+    expect(primaryLineName("5y")).toBe("5 years (Efficient frontier)");
+    expect(primaryLineName("ew")).toBe("Weighted recent (Efficient frontier)");
+    expect(lookbackLine["10y"]).toBe("10 years");
+    expect(lookbackLine.nolimits).toBe("No allocation limits");
+  });
+
+  for (const phone of [false, true]) {
+    for (const primary of ["1y", "5y", "10y", "ew"]) {
+      it(`keeps the longer main-line name inside the chart and clear of the other names, ${primary} as the main line (${phone ? "phone" : "desktop"})`, () => {
+        const s = scales(phone);
+        const others = ["1y", "3y", "10y", "ew", "nolimits"].filter((id) => id !== primary);
+        // the main line ends far right; the ghosts end at the same place, and at spread-out places
+        const ends = [line(primary, 0.28, 0.15, true), ...others.map((id, i) => line(id, i % 2 === 0 ? 0.28 : 0.2 + 0.015 * i, i % 2 === 0 ? 0.15 + 0.001 * i : 0.1 + 0.01 * i))];
+        const placed = placeLabels(ends, s, phone);
+        const charW = phone ? 5.7 : 6.3;
+        expect(placed.length).toBe(ends.length);
+        expect(overlaps(placed, charW)).toBe(0);
+        for (const l of placed) {
+          const b = box(l, charW);
+          expect(b.x0, `${l.id} starts inside the chart`).toBeGreaterThanOrEqual(0);
+          expect(b.x1, `${l.id} ends inside the chart`).toBeLessThanOrEqual(s.width);
+          expect(l.y, `${l.id} is below the top`).toBeGreaterThan(0);
+          expect(l.y, `${l.id} is above the axis`).toBeLessThan(s.plot.bottom);
+        }
+        expect(placed.find((l) => l.primary)!.leader, "the main line keeps its place").toBeNull();
+      });
+    }
+  }
 
   it("labels every line, the primary included, to the right of its end on a desktop", () => {
     const s = scales(false);
