@@ -167,3 +167,103 @@ def test_limiter_window_slides_and_idle_keys_are_swept():
     for n in range(1024):
         assert limiter.admit(f"k{n}")
     assert "a" not in limiter._admitted and "b" not in limiter._admitted
+
+
+def test_retry_after_is_whole_seconds_until_the_next_admission():
+    clock = FakeClock(1_000.0)
+    limiter = RateLimiter(3, clock, window=60.0)
+    assert limiter.retry_after("a") == 0  # a key never seen would be admitted now
+    for at in (1_000.0, 1_010.0, 1_025.5):
+        clock.t = at
+        assert limiter.admit("a")
+    assert limiter.retry_after("a") == 35  # 1_000 + 60 - 1_025.5 = 34.5, rounded up
+    clock.t = 1_040.0
+    assert limiter.retry_after("a") == 20
+    clock.t = 1_059.0
+    assert limiter.retry_after("a") == 1
+    clock.t = 1_059.01
+    assert limiter.retry_after("a") == 1  # under a second left still says 1, never 0
+    clock.t = 1_060.0
+    assert limiter.retry_after("a") == 0  # the oldest has left the window: a slot is free
+    assert limiter.admit("a")
+    assert limiter.retry_after("a") == 10  # the next oldest, 1_010, leaves at 1_070
+
+
+def test_retry_after_counts_nothing_and_is_per_key():
+    clock = FakeClock(0.0)
+    limiter = RateLimiter(1, clock, window=60.0)
+    assert limiter.admit("a")
+    clock.t = 20.0
+    assert limiter.retry_after("a") == 40
+    assert limiter.retry_after("a") == 40  # asking does not change the answer
+    assert limiter.retry_after("b") == 0
+    assert limiter.admit("b")  # asking about "b" did not use up its slot
+    clock.t = 60.0
+    assert limiter.admit("a")  # nor did asking about "a"
+
+
+def test_a_refused_post_says_how_long_to_wait(make_client):
+    clock = FakeClock()
+    client = make_client(start_worker=False, clock=clock, build_fn=lambda *a, **k: None)
+    ids = ["VTI", "VTV", "VOE", "VB", "VBR", "VEA", "VWO"]
+    ip = "203.0.113.7"
+
+    def post(n: int, from_ip: str = ip):
+        funds = [{"id": ids[0]}, {"id": ids[n + 1]}]
+        return client.post(
+            "/v1/tensors", json={"funds": funds, "lookback": "1y"}, headers=headers(from_ip)
+        )
+
+    for n in range(5):
+        accepted = post(n)
+        assert accepted.status_code == 202 and "retry-after" not in accepted.headers
+        clock.t += 10.0
+    # The five admitted POSTs left at 0, 10, ..., 40 s; the first leaves the window at 60 s.
+    limited = post(5)
+    assert limited.status_code == 429
+    assert limited.headers["retry-after"] == "10"
+    assert limited.headers["cache-control"] == "no-store"
+    # The envelope is the spec 6 one; the wait is in the header only.
+    assert limited.json() == {
+        "error": {
+            "code": "rate_limited",
+            "message": "Too many requests; try again in a minute.",
+            "details": None,
+        }
+    }
+    clock.t += 4.5
+    again = post(5)
+    assert again.status_code == 429 and again.headers["retry-after"] == "6"  # 5.5 s, rounded up
+    # Waiting what the header says is enough.
+    clock.t += 6.0
+    assert post(5).status_code == 202
+    # A caller who is not limited gets no header, and neither does another kind of refusal.
+    other = post(5, "198.51.100.9")
+    assert other.status_code == 202 and "retry-after" not in other.headers
+    invalid = client.post("/v1/tensors", json={"funds": [], "lookback": "1y"}, headers=headers())
+    assert invalid.status_code == 422 and "retry-after" not in invalid.headers
+
+
+def test_a_request_over_the_sixty_a_minute_limit_says_how_long_to_wait(make_client):
+    clock = FakeClock()
+    client = make_client(start_worker=False, clock=clock)
+    ip = "203.0.113.50"
+    for _ in range(60):
+        ok = client.get("/v1/health", headers=headers(ip))
+        assert ok.status_code == 200 and "retry-after" not in ok.headers
+        clock.t += 0.5
+    # The first request was 30 s ago; it leaves the window in 30 more.
+    over = client.get("/v1/symbols", headers=headers(ip))
+    assert over.status_code == 429 and over.headers["retry-after"] == "30"
+    assert over.json()["error"]["code"] == "rate_limited"
+    # A POST over this limit is refused by it first, with its wait.
+    post = client.post("/v1/tensors", json={"funds": [], "lookback": "1y"}, headers=headers(ip))
+    assert post.status_code == 429 and post.headers["retry-after"] == "30"
+    clock.t += 0.25
+    later = client.get("/v1/symbols", headers=headers(ip))
+    assert later.status_code == 429 and later.headers["retry-after"] == "30"  # 29.75 s, rounded up
+    clock.t += 30.0
+    assert client.get("/v1/health", headers=headers(ip)).status_code == 200
+    # A caller refused for the gate is not counted and gets no wait.
+    forbidden = client.get("/v1/health", headers={"CF-Connecting-IP": ip})
+    assert forbidden.status_code == 403 and "retry-after" not in forbidden.headers
