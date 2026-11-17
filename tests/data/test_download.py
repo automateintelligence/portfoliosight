@@ -98,8 +98,10 @@ class FakeProvider:
         return SymbolMeta(f"{symbol} Fund", RECORD_START, self._through(symbol), self.kind)
 
 
-def _put_record(store, symbol: str, prices_through: date, adjusted_through: date) -> None:
-    days = [d for d in SESSIONS if RECORD_START <= d <= prices_through]
+def _put_record(
+    store, symbol: str, prices_through: date, adjusted_through: date, start: date = RECORD_START
+) -> None:
+    days = [d for d in SESSIONS if start <= d <= prices_through]
     closes = np.array([_close(symbol, d) for d in days])
     tr = closes / closes[0]
     tr[np.array([d > adjusted_through for d in days])] = np.nan
@@ -165,6 +167,7 @@ def _go(mode, store, provider, clock, symbols, **kwargs) -> tuple[int, list]:
 
 
 FEB20, FEB23, FEB26, FEB27 = (date(2026, 2, d) for d in (20, 23, 26, 27))
+SHORT_START = date(2026, 2, 17)  # a short history: 2026-02-17 to 2026-02-27 is nine sessions
 
 
 def test_catch_up_end_to_end_with_the_recorded_fixtures(tmp_path, monkeypatch):
@@ -948,15 +951,34 @@ def test_failed_tsp_fetch_marks_due_funds_stale_until_a_fetch_succeeds(tmp_path)
     assert restored["last_date"] == d_g.isoformat()
 
 
+class ShortHistoryProvider(FakeProvider):
+    """A ``FakeProvider`` whose history starts on ``SHORT_START``: nine rows a frame at most."""
+
+    def fetch_daily(self, symbol, start, end=None):
+        return super().fetch_daily(symbol, max(start, SHORT_START), end)
+
+
 def test_the_walk_never_fetches_a_requested_ticker_that_has_no_record(tmp_path, monkeypatch):
     """Spec 4.1: a requested ticker is offered once the lake has checked it, so the provider walk
     must not start one, also on the Power plan, which fetches every tier 3 symbol without a
     record. A requested ticker that already has a record is refreshed as before."""
     store = _seed_store(
         tmp_path,
-        {"ZZZR": _entry("tiingo", "ok", FEB20, FEB20, name="ZZZR Corp", kind="stock", tier=3)},
-        {"ZZZR": (FEB20, FEB20)},
+        {
+            "ZZZR": _entry(
+                "tiingo",
+                "ok",
+                FEB20,
+                FEB20,
+                name="ZZZR Corp",
+                kind="stock",
+                tier=3,
+                first_date=SHORT_START.isoformat(),
+            )
+        },
+        {},
     )
+    _put_record(store, "ZZZR", FEB20, FEB20, start=SHORT_START)  # four rows
     power = limits.ProviderLimits(
         tier=limits.TIER_POWER,
         req_per_hour=9_000,
@@ -978,7 +1000,7 @@ def test_the_walk_never_fetches_a_requested_ticker_that_has_no_record(tmp_path, 
     )
     monkeypatch.setattr(download, "load_tiers", lambda: universe)
 
-    provider = FakeProvider(default_available=FEB27)
+    provider = ShortHistoryProvider(default_available=FEB27)
     clock = Clock(FEB27, 13)
     code = download.run(
         "refresh",
