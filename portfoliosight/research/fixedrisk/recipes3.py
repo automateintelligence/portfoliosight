@@ -404,10 +404,102 @@ def read_month_pool_dr2(path: Path) -> pd.DataFrame:
     return G.read_month_pool(path, columns=POOL_COLUMNS_DR2)
 
 
+def _inside(pool: pd.DataFrame, lower, upper) -> np.ndarray:
+    if pool.empty:
+        return np.zeros(0, dtype=bool)
+    return G.in_domain(np.vstack(pool["weights"].to_list()), lower, upper)
+
+
 def allowed_mixes(pool: pd.DataFrame, lower, upper) -> pd.DataFrame:
     """The pool's distinct mixes inside the weight limits: `region3.in_domain`, then
-    `region3.distinct_mixes` (which carries `dr2` through)."""
-    if pool.empty:
-        return G.distinct_mixes(pool)
-    inside = G.in_domain(np.vstack(pool["weights"].to_list()), lower, upper)
-    return G.distinct_mixes(A._frame(pool.loc[inside]).reset_index(drop=True))
+    `region3.distinct_mixes` (which carries `dr2` through). `ValueError` when an allowed row lacks
+    a model measure or `dr2`: such a row is never left out."""
+    allowed = A._frame(pool.loc[_inside(pool, lower, upper)]).reset_index(drop=True)
+    missing = int(np.isnan(allowed["dr2"].to_numpy(dtype=float)).sum())
+    if missing:
+        raise ValueError(f"{missing} allowed main-pool row(s) lack dr2")
+    return G.distinct_mixes(allowed)
+
+
+# ------------------------------------------------------- the pool checks of one start month
+
+POOL_CHECKS = ("pool_dr2_max", "pool_mu_bound", "pool_mu_at_risk", "tie")
+REFUTED = "the comparator missed a better recorded mix"
+UNDECIDED = "the strict gap cannot be decided: a model return is missing"
+RECIPES = (E, D, D10)
+
+
+def _built(weights: Any) -> bool:
+    """A row carries weights (a mix that was built), not None or a missing value."""
+    return weights is not None and np.ndim(weights) == 1
+
+
+def _best(values: np.ndarray, where: np.ndarray) -> float:
+    """The largest of `values` where `where` holds; `-inf` when it holds nowhere."""
+    return float(values[where].max()) if where.any() else -math.inf
+
+
+def month_pool_checks(mixes: pd.DataFrame, pool: pd.DataFrame, lower, upper) -> pd.DataFrame:
+    """`mixes` (one start month's `month_mixes`) with the pool's four columns, and the tie rule
+    applied (protocol, check (b) on D and "Model-side gates"). `pool` is the month's
+    `read_month_pool_dr2`, before any domain filter.
+
+    - `pool_dr2_max`: every D row with weights, the largest `dr2` of the allowed mixes; every D10
+      row with weights, the same over the allowed mixes within `D10_CAP` on every holding.
+    - `pool_mu_bound`: kept U rows, the largest `mu` of every pool row with `sigma <= r`, no
+      tolerance, rows that break a limit included.
+    - `pool_mu_at_risk`: kept E, D and D10 rows, the largest `mu` of the allowed mixes with
+      `sigma <= sigma(M)`.
+    - `tie`: a kept E, D or D10 row whose model return gap `mu_gap` is at most `TOL` and which the
+      pool does not refute (`pool_mu_at_risk <= mu + TOL`): kept, "on the frontier". When the
+      pool refutes it, or the gap or the return is missing, the row and its comparator fail.
+
+    Each maximum is `-inf` when no row qualifies. `ValueError` naming the month when a pool row
+    lacks `mu` or `sigma`, or an allowed row lacks a model measure or `dr2`."""
+    out = A._frame(mixes.copy()).reset_index(drop=True)
+    month = str(out["month"].iloc[0]) if len(out) else "?"
+    try:
+        for name in ("mu", "sigma"):
+            if np.isnan(pool[name].to_numpy(dtype=float)).any():
+                raise ValueError(f"main-pool row(s) lack {name}")
+        allowed = allowed_mixes(pool, lower, upper)
+    except ValueError as exc:
+        raise ValueError(f"{month}: {exc}; the recipes check stops") from exc
+    sigma_all = pool["sigma"].to_numpy(dtype=float)
+    mu_all = pool["mu"].to_numpy(dtype=float)
+    sigma_ok = allowed["sigma"].to_numpy(dtype=float)
+    mu_ok = allowed["mu"].to_numpy(dtype=float)
+    dr2_ok = allowed["dr2"].to_numpy(dtype=float)
+    within_d10 = _inside(allowed, np.zeros(len(lower)), np.full(len(lower), D10_CAP))
+    dr2_max = {D: _best(dr2_ok, np.ones(len(allowed), dtype=bool)), D10: _best(dr2_ok, within_d10)}
+    rows = out.to_dict("records")
+    for row in rows:
+        mix, kept = row["mix"], row["status"] == KEPT
+        row.update(pool_dr2_max=math.nan, pool_mu_bound=math.nan, pool_mu_at_risk=math.nan,
+                   tie=False)  # fmt: skip
+        if mix in dr2_max and _built(row["weights"]):
+            row["pool_dr2_max"] = dr2_max[mix]
+        if mix == U and kept:
+            row["pool_mu_bound"] = _best(mu_all, sigma_all <= float(row["r"]))
+        if mix in RECIPES and kept:
+            row["pool_mu_at_risk"] = _best(mu_ok, sigma_ok <= float(row["sigma"]))
+    _ties(rows)
+    return pd.DataFrame(rows, columns=[*out.columns, *POOL_CHECKS])
+
+
+def _ties(rows: list[dict[str, Any]]) -> None:
+    """The strict gap: `mu(F(sigma(M))) - mu(M) > TOL`, else a tie the pool must not refute."""
+    for row in rows:
+        if row["mix"] not in RECIPES or row["status"] != KEPT:
+            continue
+        gap, bound, mu = float(row["mu_gap"]), float(row["pool_mu_at_risk"]), float(row["mu"])
+        if gap > TOL:
+            continue
+        if gap <= TOL and bound <= mu + TOL:
+            row["tie"] = True
+            continue
+        reason = REFUTED if gap <= TOL and bound > mu + TOL else UNDECIDED
+        pair = (row["mix"], COMPARATOR[row["mix"]])
+        for other in rows:
+            if other["month"] == row["month"] and other["mix"] in pair:
+                other.update(status=FAILED, reason=reason)

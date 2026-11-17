@@ -520,3 +520,154 @@ def test_allowed_mixes_drops_rows_outside_the_limits_and_repeats(tmp_path):
     allowed = RC.allowed_mixes(RC.read_month_pool_dr2(path), *POOL_LIMITS)
     assert len(allowed) == 1
     assert allowed["dr2"].iloc[0] == 1.5
+
+
+# --------------------------------------------------------- the pool checks of one start month
+
+POOL_CHECKS = ("pool_dr2_max", "pool_mu_bound", "pool_mu_at_risk", "tie")
+
+
+def _cell(mix: str, **values: Any) -> Row:
+    """One made-up row of `month_mixes`: every column, kept, in `MONTH`."""
+    row: Row = dict.fromkeys(COLUMNS, math.nan)
+    row.update(month=MONTH, mix=mix, status=RC.KEPT, reason="", weights=None, comparator=None,
+               breaks_limit=None)  # fmt: skip
+    if mix in RC.COMPARATOR:
+        row["comparator"] = RC.COMPARATOR[mix]
+    row.update(values)
+    return row
+
+
+def _pool(rows: list[Row]) -> pd.DataFrame:
+    """A made-up pool as `read_month_pool_dr2` returns it: each row gives `weights` and any of
+    `sigma`, `mu`, `dr2`; the other measures are filled in."""
+    full = [
+        {"record": k, "lookback": "3y", "seed": C.PRIMARY_SEED, "r_fraction": 0.10,
+         "lam": math.nan, "in_wide": True, "sigma": 0.1, "mu": 0.05, "tdd": 0.2, "enb": 1.5,
+         "h": 0.3, "dr2": 1.0, **row, "weights": np.asarray(row["weights"], dtype=float)}
+        for k, row in enumerate(rows)
+    ]  # fmt: skip
+    return pd.DataFrame(full, columns=list(RC.POOL_COLUMNS_DR2))
+
+
+def _checked(cells: list[Row], pool: list[Row], limits=POOL_LIMITS) -> list[Row]:
+    return _records(RC.month_pool_checks(pd.DataFrame(cells), _pool(pool), *limits))
+
+
+def test_month_pool_checks_adds_four_columns_and_keeps_every_row():
+    cells = [_cell(RC.F, rf=0.1, r=0.1), _cell(RC.E, mu=0.05, sigma=0.1, mu_gap=0.01),
+             _cell("F@E", mu=0.06, sigma=0.1)]  # fmt: skip
+    out = RC.month_pool_checks(pd.DataFrame(cells), _pool([]), *POOL_LIMITS)
+    assert list(out.columns) == [*pd.DataFrame(cells).columns, *POOL_CHECKS]
+    assert list(out["mix"]) == [RC.F, RC.E, "F@E"]
+
+
+def test_check_b_reads_the_largest_recorded_ratio_in_the_mixes_domain():
+    n = 12
+    limits = (np.zeros(n), np.full(n, 0.4))
+    pool = [
+        {"weights": np.full(n, 1 / n), "dr2": 1.2},  # every weight at most 10%
+        {"weights": [0.3, *np.full(n - 1, 0.7 / (n - 1))], "dr2": 1.4},  # one weight 30%
+        {"weights": [0.5, *np.full(n - 1, 0.5 / (n - 1))], "dr2": 9.0},  # above the 40% limit
+    ]
+    built = {"weights": np.full(n, 1 / n), "dr2": 2.0}
+    cells = [_cell(RC.D, **built), _cell(RC.D10, **built), _cell(RC.D10, status=RC.FAILED)]
+    d, d10, unbuilt = _checked(cells, pool, limits)
+    assert d["pool_dr2_max"] == 1.4
+    assert d10["pool_dr2_max"] == 1.2
+    assert math.isnan(unbuilt["pool_dr2_max"])  # a mix not built is the failed-cell rule's
+
+
+def test_check_b_reads_the_ratio_for_an_excluded_d_too():
+    cells = [_cell(RC.D, status=RC.EXCLUDED, weights=np.array(INSIDE), dr2=2.0)]
+    (d,) = _checked(cells, [{"weights": INSIDE, "dr2": 1.7}])
+    assert d["pool_dr2_max"] == 1.7
+
+
+def test_the_u_bound_uses_rows_at_or_below_the_risk_with_no_tolerance():
+    r = 0.1
+    cells = [_cell(RC.U, rf=0.1, r=r, mu=0.08, sigma=r)]
+    pool = [
+        {"weights": INSIDE, "sigma": r, "mu": 0.05},
+        {"weights": INSIDE, "sigma": r + 1e-9, "mu": 0.09},
+    ]
+    (u,) = _checked(cells, pool)
+    assert u["pool_mu_bound"] == 0.05
+    breaking = [*pool, {"weights": [0.8, 0.1, 0.1], "sigma": r, "mu": 0.07}]
+    (u,) = _checked(cells, breaking)
+    assert u["pool_mu_bound"] == 0.07
+
+
+def test_the_u_bound_is_left_empty_on_an_excluded_or_failed_u():
+    cells = [_cell(RC.U, rf=0.1, r=0.1, status=RC.EXCLUDED),
+             _cell(RC.U, rf=0.25, r=0.1, status=RC.FAILED)]  # fmt: skip
+    for u in _checked(cells, [{"weights": INSIDE, "sigma": 0.05, "mu": 0.05}]):
+        assert math.isnan(u["pool_mu_bound"])
+
+
+def _pair(mu_gap: float = 0.0, **e: Any) -> list[Row]:
+    """E kept at model return 0.05 and risk 0.10, with its comparator `F@E`."""
+    return [_cell(RC.E, mu=0.05, sigma=0.10, mu_gap=mu_gap, **e),
+            _cell("F@E", mu=0.05 + mu_gap, sigma=0.10)]  # fmt: skip
+
+
+def test_a_mix_on_the_frontier_is_a_kept_tie():
+    e, comp = _checked(_pair(), [{"weights": INSIDE, "sigma": 0.09, "mu": 0.049}])
+    assert e["tie"] is True and e["status"] == RC.KEPT
+    assert e["pool_mu_at_risk"] == 0.049
+    assert comp["status"] == RC.KEPT
+
+
+def test_a_comparator_that_misses_a_better_pool_row_is_a_failed_cell():
+    e, comp = _checked(_pair(), [{"weights": INSIDE, "sigma": 0.10, "mu": 0.06}])
+    assert e["tie"] is False
+    assert e["status"] == comp["status"] == RC.FAILED
+    assert e["reason"] == comp["reason"] == "the comparator missed a better recorded mix"
+
+
+def test_rows_above_the_risk_or_outside_the_limits_do_not_refute_a_tie():
+    above = {"weights": INSIDE, "sigma": 0.11, "mu": 0.06}
+    outside = {"weights": [0.8, 0.1, 0.1], "sigma": 0.09, "mu": 0.06}
+    for pool in ([above], [outside]):
+        e, comp = _checked(_pair(), pool)
+        assert e["tie"] is True
+        assert e["status"] == comp["status"] == RC.KEPT
+
+
+def test_a_gap_above_the_tolerance_is_no_tie():
+    e, comp = _checked(_pair(mu_gap=2e-6), [{"weights": INSIDE, "sigma": 0.09, "mu": 0.5}])
+    assert e["tie"] is False
+    assert e["status"] == comp["status"] == RC.KEPT
+
+
+def test_a_gap_at_the_tolerance_is_a_tie_decided_by_the_pool():
+    e, _ = _checked(_pair(mu_gap=1e-6), [{"weights": INSIDE, "sigma": 0.09, "mu": 0.05 + 1e-6}])
+    assert e["tie"] is True and e["status"] == RC.KEPT
+    e, _ = _checked(_pair(mu_gap=1e-6), [{"weights": INSIDE, "sigma": 0.09, "mu": 0.05 + 2e-6}])
+    assert e["status"] == RC.FAILED
+
+
+def test_a_kept_mix_without_a_return_gap_fails_its_cell():
+    e, comp = _checked(_pair(mu_gap=math.nan), [])
+    assert e["tie"] is False
+    assert e["status"] == comp["status"] == RC.FAILED
+
+
+def test_a_cell_with_no_pool_row_at_its_risk_passes():
+    cells = [_cell(RC.U, rf=0.1, r=0.1, mu=0.08, sigma=0.1), *_pair()]
+    u, e, _ = _checked(cells, [{"weights": INSIDE, "sigma": 0.2, "mu": 0.5}])
+    assert u["pool_mu_bound"] == -math.inf
+    assert e["pool_mu_at_risk"] == -math.inf
+    assert e["tie"] is True and e["status"] == RC.KEPT
+    u, e, _ = _checked(cells, [])
+    assert u["pool_mu_bound"] == -math.inf
+
+
+def test_a_pool_row_without_a_model_measure_stops_naming_the_month():
+    cells = [_cell(RC.D, dr2=2.0)]
+    for missing in ("mu", "sigma", "dr2"):
+        with pytest.raises(ValueError, match=MONTH):
+            _checked(cells, [{"weights": INSIDE, missing: math.nan}])
+    outside = {"weights": [0.8, 0.1, 0.1], "mu": math.nan}  # the U bound reads it too
+    with pytest.raises(ValueError, match=MONTH):
+        _checked(cells, [outside])
