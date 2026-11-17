@@ -1,11 +1,11 @@
 import { forwardRef, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import type { Tensor } from "../api/tensor";
-import { diversificationLine, lookbackLine, plain, technical } from "../copy";
+import { diversificationLine, lookbackLine, plain, primaryLineName, technical } from "../copy";
 import { pct, signedPct } from "../format";
 import type { Range, Stats, View } from "../math/view";
 import { Heatmap, NO_LIMITS, type Ghost } from "./Heatmap";
 import { MixCard, topHoldings, type CardMix } from "./MixCard";
-import { Overlay, type LineEnd, type MarkId } from "./Overlay";
+import { Overlay, labelCharWidth, type LineEnd, type MarkId } from "./Overlay";
 import { avoidPinned, CLICK_SLOP, KEEPS_PIN, PIN_START, PIN_WIDTH, pinnedPlacement, pinStep } from "./pin";
 import { X_TITLE_GAP, type ChartScales } from "./scales";
 
@@ -126,10 +126,12 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
     const end = (curve: { sigma: number[]; mu: number[] }) => ({ sigma: curve.sigma[curve.sigma.length - 1], mu: curve.mu[curve.mu.length - 1] });
     const name = (id: string) => lookbackLine[id] ?? id;
     return [
-      { id: tensor.lookback.id, label: name(tensor.lookback.id), primary: true, ...end(tensor.frontier_curve) },
+      { id: tensor.lookback.id, label: primaryLineName(tensor.lookback.id), primary: true, ...end(tensor.frontier_curve) },
       ...ghosts.filter((g) => g.curve.sigma.length > 0).map((g) => ({ id: g.id, label: name(g.id), primary: false, ...end(g.curve) })),
     ];
   }, [tensor, ghosts]);
+  // The theme is on <html> by the time `themeEpoch` bumps; the HUD theme's names are wider.
+  const lineCharW = useMemo(() => labelCharWidth(typeof document === "undefined" ? null : document.documentElement.getAttribute("data-theme"), phone), [phone, themeEpoch]); // eslint-disable-line react-hooks/exhaustive-deps
   const ghostPixels = useMemo(
     () => (scales ? ghosts.map((g) => ({ id: g.id, pts: g.curve.sigma.map((sigma, i) => [scales.x(sigma), scales.y(g.curve.mu[i])] as const) })) : []),
     [ghosts, scales],
@@ -266,6 +268,7 @@ export const Chart = forwardRef<HTMLDivElement, Props>(function Chart(
           current: curMix ? card("current", plain.currentMix, curMix, current?.range ? undefined : ` ${technical.rangePending}`) : null,
         }}
         lines={lines}
+        lineCharW={lineCharW}
         hot={hot}
         onRiskPixel={onRiskPixel}
         onDivDrag={onDivDrag}

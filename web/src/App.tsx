@@ -2,6 +2,7 @@ import { BarChart3, ChevronDown, ExternalLink, ListChecks, PanelRightClose, Pane
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Chart, MarkKeys } from "./chart/Chart";
 import { NO_LIMITS } from "./chart/Heatmap";
+import { labelCharWidth } from "./chart/Overlay";
 import { clipCurve, DESKTOP_MARGINS, makeScales, paddedExtent, type ChartScales } from "./chart/scales";
 import { DivSlider } from "./controls/DivSlider";
 import { PresetMenu } from "./controls/PresetMenu";
@@ -9,7 +10,7 @@ import { ResultStrip } from "./controls/ResultStrip";
 import { RiskSlider } from "./controls/RiskSlider";
 import { ShareDialog } from "./controls/ShareDialog";
 import { ThemeSwitch } from "./controls/ThemeSwitch";
-import { disclaimer, family, lookbackLine, lookbackNames, plain } from "./copy";
+import { disclaimer, family, lookbackLine, lookbackNames, plain, primaryLineName } from "./copy";
 import { fundsWithPrices } from "./math/amounts";
 import { portfolioMath, type YearRange } from "./math/portfolio";
 import { stripScale, tensorBounds } from "./math/stripScale";
@@ -187,26 +188,27 @@ function Page({ interaction }: { interaction: Interaction }) {
     if (!phone) {
       // Room to the right of every frontier line for the name of its history window.
       const plotW = size.width - DESKTOP_MARGINS.left - DESKTOP_MARGINS.right;
-      const ends = [{ id: tensor.lookback.id as string, curve }, ...lookbackGhosts].filter((l) => l.curve.sigma.length > 0);
+      const ends = [{ id: tensor.lookback.id as string, label: primaryLineName(tensor.lookback.id), curve }, ...lookbackGhosts.map((g) => ({ ...g, label: lookbackLine[g.id] ?? g.id }))].filter((l) => l.curve.sigma.length > 0);
       for (const line of ends) {
-        const need = 20 + (lookbackLine[line.id] ?? line.id).length * 6.3 - (DESKTOP_MARGINS.right - 4);
+        const need = 20 + line.label.length * labelCharWidth(state.theme, false) - (DESKTOP_MARGINS.right - 4);
         const reach = line.curve.sigma[line.curve.sigma.length - 1] - extent.xMin;
         if (plotW - need > 120) extent.xMax = Math.max(extent.xMax, extent.xMin + (reach * plotW) / (plotW - need));
       }
     }
     return makeScales(size.width, size.height, extent, phone);
-  }, [tensor, size.width, size.height, currentStats, lookbackGhosts, state.details, phone]);
+  }, [tensor, size.width, size.height, currentStats, lookbackGhosts, state.details, phone, state.theme]);
 
-  // The same menu with every limit lifted, drawn like a ghost whenever the limits bind. It does not
+  // The same menu with every limit lifted, drawn like a ghost whenever the limits bind and the visitor
+  // has not turned the line off in Settings (its label and legend key go with it). It does not
   // widen the chart: where it rises above the view it is cut at the edge and named there.
   const chartGhosts = useMemo(() => {
     if (!tensor || !scales) return lookbackGhosts;
-    if (!limitsBind(tensor)) return lookbackGhosts;
+    if (!state.noLimitsLine || !limitsBind(tensor)) return lookbackGhosts;
     const [xMin, xMax] = scales.x.domain();
     const [yMin, yMax] = scales.y.domain();
     const curve = clipCurve(tensor.frontier_uncapped, { xMin, xMax, yMin, yMax });
     return curve.sigma.length >= 2 ? [...lookbackGhosts, { id: NO_LIMITS, curve }] : lookbackGhosts;
-  }, [tensor, scales, lookbackGhosts]);
+  }, [tensor, scales, lookbackGhosts, state.noLimitsLine]);
 
   // The first paint of a chart wipes in once; later redraws (theme, ghosts) are immediate.
   const [reveal, setReveal] = useState(true);
@@ -540,12 +542,14 @@ function Page({ interaction }: { interaction: Interaction }) {
               caps={state.caps}
               unavailable={state.unavailable}
               details={state.details}
+              showNoLimits={state.noLimitsLine}
               busy={busy}
               problem={state.menuError}
               adminMenuMax={state.tier.tier === "admin" ? state.tier.menuMax : null}
               onLookback={(lookback: LookbackId) => dispatch({ type: "setLookback", lookback })}
               onGhost={(lookback: LookbackId) => dispatch({ type: "toggleGhost", lookback })}
               onCaps={(caps) => dispatch({ type: "setCaps", caps })}
+              onNoLimitsLine={(show) => dispatch({ type: "setNoLimitsLine", show })}
               onShare={openShare}
             />
           ) : null}

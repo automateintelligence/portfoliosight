@@ -352,11 +352,12 @@ test("the table always shows the mix entered and the selected mix, and the selec
 
 test("every frontier line is named at its right end and the names do not collide", async ({ page }, testInfo) => {
   await open(page);
-  await expect(page.getByTestId("frontier-label-5y")).toHaveText("5 years");
+  // owner direction 2026-11-15: the main line also carries the term for the line
+  await expect(page.getByTestId("frontier-label-5y")).toHaveText("5 years (Efficient frontier)");
   await open(page, "g=10y,ew,1y");
   await expect(page.getByTestId("chart")).toHaveAttribute("data-ghost-count", "3");
   // the No limits line is named like the history windows, and is not one of them in the count
-  const want: Record<string, string> = { "5y": "5 years", "10y": "10 years", ew: "Weighted recent", "1y": "1 year", nolimits: "No allocation limits" };
+  const want: Record<string, string> = { "5y": "5 years (Efficient frontier)", "10y": "10 years", ew: "Weighted recent", "1y": "1 year", nolimits: "No allocation limits" };
   for (const [id, text] of Object.entries(want)) await expect(page.getByTestId(`frontier-label-${id}`)).toHaveText(text);
   const chart = await boxOf(page, "chart");
   const boxes = await Promise.all(Object.keys(want).map(async (id) => ({ id, box: (await page.getByTestId(`frontier-label-${id}`).locator("text").boundingBox())! })));
@@ -388,6 +389,131 @@ test("every frontier line is named at its right end and the names do not collide
   await expect(end).toHaveClass(/is-hot/);
   await page.mouse.move(chart.x + 20, chart.y + 20);
   await expect(page.getByTestId("ghost-tip")).toHaveCount(0);
+});
+
+// owner direction 2026-11-15: a Settings checkbox for the No allocation limits line. The default view is
+// unchanged (the box is checked and the address says nothing); unchecking takes away the line, its
+// name and its legend key, and the address carries nl=0 so a reload or a shared link keeps it.
+const noLimitsBox = (page: Page) => page.getByRole("checkbox", { name: /No allocation limits/ });
+const nlOf = (page: Page) => new URL(page.url()).searchParams.get("nl");
+const lineDrawn = async (page: Page, drawn: boolean) => {
+  await expect(page.getByTestId("frontier-label-nolimits")).toHaveCount(drawn ? 1 : 0);
+  await expect(page.getByTestId("key-nolimits")).toHaveCount(drawn ? 1 : 0);
+};
+// The line itself is drawn on the chart's canvas: a hash of its pixels shows whether the drawing changed.
+const ink = (page: Page) =>
+  page.getByTestId("chart-canvas").evaluate(async (canvas: HTMLCanvasElement) => {
+    const { data } = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height);
+    const digest = await crypto.subtle.digest("SHA-256", data);
+    return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+  });
+
+test("the No allocation limits line is drawn by default; its Settings checkbox takes the line, its name and its key away, keeps the choice in the address and across a reload, and brings them back", async ({ page }) => {
+  await open(page);
+  await lineDrawn(page, true);
+  await expect(page.getByTestId("frontier-label-nolimits")).toHaveText("No allocation limits");
+  await section(page, "settings");
+  const withLine = await ink(page);
+  const box = noLimitsBox(page);
+  await expect(box).toBeChecked();
+  await expect(box).toBeEnabled();
+  // hide: the line, its label and its key go; the primary line and its name stay; the address carries nl=0
+  await box.uncheck();
+  await lineDrawn(page, false);
+  await expect.poll(() => ink(page), "the canvas is redrawn without the line").not.toBe(withLine);
+  const withoutLine = await ink(page);
+  await expect(page.getByTestId("frontier-label-5y")).toHaveText("5 years (Efficient frontier)");
+  await expect.poll(() => nlOf(page)).toBe("0");
+  // a reload opens with the line off and the box unchecked
+  await page.reload();
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  await lineDrawn(page, false);
+  await expect.poll(() => ink(page), "the same drawing after the reload").toBe(withoutLine);
+  await section(page, "settings");
+  await expect(noLimitsBox(page)).not.toBeChecked();
+  // show again from the keyboard: the line returns and the address is back to saying nothing of it
+  await noLimitsBox(page).focus();
+  await page.keyboard.press("Space");
+  await expect(noLimitsBox(page)).toBeChecked();
+  await lineDrawn(page, true);
+  await expect.poll(() => ink(page), "the line is drawn as it was").toBe(withLine);
+  await expect.poll(() => new URL(page.url()).searchParams.has("nl")).toBe(false);
+  expect(new URL(page.url()).search, "the default adds nothing to the address").not.toContain("nl");
+});
+
+test("a link with nl=0 opens with the No allocation limits line off, and the line stays off through a change of window", async ({ page }) => {
+  await open(page, "nl=0");
+  await lineDrawn(page, false);
+  await section(page, "settings");
+  await expect(noLimitsBox(page)).not.toBeChecked();
+  await page.getByTestId("lookback-10y").check({ force: true });
+  await expect(page.getByTestId("frontier-label-10y")).toHaveText("10 years (Efficient frontier)");
+  await lineDrawn(page, false);
+  await expect.poll(() => nlOf(page)).toBe("0");
+});
+
+test("with limits that change nothing there is no line; the checkbox stays, disabled, keeps its choice and says why", async ({ page }) => {
+  // the mock's custom two-fund menu has the same frontier with and without limits
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct");
+  await expect(page.getByTestId("frontier-label-nolimits")).toHaveCount(0);
+  await expect(page.getByTestId("key-nolimits")).toHaveCount(0);
+  await section(page, "settings");
+  await expect(noLimitsBox(page)).toBeDisabled();
+  await expect(noLimitsBox(page)).toBeChecked();
+  await expect(page.getByTestId("nolimits-line-note")).toHaveText("Nothing to show: your limits do not change the best-return line.");
+  // the note is part of the box's name for a screen reader
+  await expect(page.getByRole("checkbox", { name: /Nothing to show/ })).toBeDisabled();
+  // the stored choice does not go: opened with nl=0 the box is unchecked, still disabled, still no line
+  await open(page, "f=SGOV:50,VTIP:50&unit=pct&nl=0");
+  await section(page, "settings");
+  await expect(noLimitsBox(page)).toBeDisabled();
+  await expect(noLimitsBox(page)).not.toBeChecked();
+  await expect(page.getByTestId("frontier-label-nolimits")).toHaveCount(0);
+});
+
+test("the Settings checkbox for the No allocation limits line is as big to hit as the other checkboxes", async ({ page }) => {
+  await open(page);
+  await section(page, "settings");
+  const own = await noLimitsBox(page).locator("xpath=ancestor::label").boundingBox();
+  const ghost = await page.getByTestId("ghost-10y").locator("xpath=ancestor::label").boundingBox();
+  expect(own!.height).toBeGreaterThanOrEqual(ghost!.height);
+  expect(own!.width).toBeGreaterThanOrEqual(ghost!.width);
+  const width = page.viewportSize()!.width;
+  expect(own!.x + own!.width, "inside the screen").toBeLessThanOrEqual(width);
+});
+
+test("whichever window is the main line, its name ends in (Efficient frontier), as shown in every theme, and fits inside the chart clear of the ghost names", async ({ page }) => {
+  for (const [theme, upper] of [["ks-dark", false], ["hud", true]] as const) {
+    for (const [lb, name] of [["10y", "10 years"], ["ew", "Weighted recent"]] as const) {
+      await open(page, `lb=${lb}&g=1y,3y&t=${theme}`);
+      const label = page.getByTestId(`frontier-label-${lb}`);
+      const text = `${name} (Efficient frontier)`;
+      await expect(label).toHaveText(text);
+      // the rendered text: the stylesheet of the HUD theme sets every line name in capitals
+      const shown = await label.locator("text").evaluate((el) => {
+        const t = el.textContent ?? "";
+        return getComputedStyle(el).textTransform === "uppercase" ? t.toUpperCase() : t;
+      });
+      expect(shown, `${theme} ${lb}`).toBe(upper ? text.toUpperCase() : text);
+      // the ghosts and no-limits names are as before
+      await expect(page.getByTestId("frontier-label-1y")).toHaveText("1 year");
+      await expect(page.getByTestId("frontier-label-3y")).toHaveText("3 years");
+      const chart = await boxOf(page, "chart");
+      const ids = [lb, "1y", "3y"];
+      const boxes = await Promise.all(ids.map(async (id) => ({ id, box: (await page.getByTestId(`frontier-label-${id}`).locator("text").boundingBox())! })));
+      for (const { id, box } of boxes) {
+        expect(box.x >= chart.x && box.x + box.width <= chart.x + chart.width && box.y >= chart.y && box.y + box.height <= chart.y + chart.height, `${theme} ${lb}: ${id} label is inside the chart`).toBe(true);
+      }
+      for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+          const a = boxes[i].box;
+          const b = boxes[j].box;
+          const apart = a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y + 1 || b.y + b.height <= a.y + 1;
+          expect(apart, `${theme} ${lb}: ${boxes[i].id} and ${boxes[j].id} labels overlap`).toBe(true);
+        }
+      }
+    }
+  }
 });
 
 const DIVERSIFICATION_LINE = /^This mix spreads risk over the equivalent of \d+\.\d independent bets; highest found on this portfolio: \d+\.\d\.$/;
@@ -475,7 +601,7 @@ test("hovering the colour map shows a plain card for the mix there", async ({ pa
   await expect(card).toContainText(/At risk \d+\.\d%, earning at least \d+\.\d%/);
 });
 
-const PAST_DATA_LINE = "In our tests on past data, more diversification did not lose less than the best return (frontier line) at the same risk.";
+const PAST_DATA_LINE = "In our tests on past data, more diversification did not result in lower \"Bad\" return than the best return (frontier line) at the same risk.";
 
 test("the past-data line shows once under the diversification slider with Details on, not in the details panel, and is not on the page with Details off, and the details name the measure and explain no grade word and no Optimized mix", async ({ page }) => {
   await open(page);
@@ -486,6 +612,10 @@ test("the past-data line shows once under the diversification slider with Detail
   expect((await page.locator("body").innerText()).split(PAST_DATA_LINE).length - 1, "not stated with Details off").toBe(0);
   await page.getByTestId("details-toggle").click();
   await expect(page.getByTestId("details-tested")).toHaveCount(0);
+  // owner direction 2026-11-15: the slider's own note says the risk is constant
+  await expect(page.locator(".divs-note").filter({ hasText: "Walks the mixes" })).toHaveText(
+    "Walks the mixes that keep the risk constant: every step down gives up return for diversification; the bottom end is the most diversified mix found at that risk",
+  );
   await expect(page.getByTestId("past-data-line")).toHaveText(PAST_DATA_LINE);
   await expect(page.getByTestId("past-data-line")).toBeVisible();
   const lineId = await page.getByTestId("past-data-line").getAttribute("id");

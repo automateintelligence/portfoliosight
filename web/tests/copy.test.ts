@@ -92,6 +92,9 @@ describe("copy (spec 3.6, 3.7)", () => {
     expect(copy.plain.noLimits).toBe("No limits");
     expect(copy.lookbackLine.nolimits).toBe("No allocation limits");
     expect(copy.plain.noAllocationLimits).toBe("No allocation limits");
+    // owner direction 2026-11-15: the Settings checkbox for that line
+    expect(copy.plain.showNoLimitsLine).toBe('Show the "No allocation limits" line');
+    expect(copy.plain.noLimitsLineNothing).toBe("Nothing to show: your limits do not change the best-return line.");
     expect([copy.plain.rangeLow, copy.plain.rangeTypical, copy.plain.rangeHigh]).toEqual(["Bad", "Typical", "Good"]);
     expect([copy.plain.riskBad, copy.plain.riskTypical, copy.plain.resultStripSuffix]).toEqual(["Bad year", "Typical year", "over one year"]);
     expect(copy.plain.frontier).toBe("Best return at each level of risk");
@@ -107,10 +110,14 @@ describe("copy (spec 3.6, 3.7)", () => {
   it("carries the technical strings behind details", () => {
     expect(copy.technical.xAxis).toBe("Standard deviation of yearly return");
     expect(copy.technical.enbName).toBe("effective number of bets, minimum torsion");
+    // owner direction 2026-11-15: the slider's note says the risk is constant, not "at X"
+    expect(copy.technical.divSlider).toBe(
+      "Walks the mixes that keep the risk constant: every step down gives up return for diversification; the bottom end is the most diversified mix found at that risk",
+    );
     // A-PS-48 requires this technical name behind details
     expect(copy.technical.resultStrip).toMatch(/^Estimated central 95% range of the one-year return: .* over 2,000 one-year paths/);
     expect(copy.technical.bellCurve("−9.0%", "+6.0%", "+21.0%")).toBe("Textbook bell-curve figure (normal, μ ± 1.96σ): −9.0% to +21.0% around +6.0%");
-    expect(copy.plain.testedOnPastData).toBe("In our tests on past data, more diversification did not lose less than the best return (frontier line) at the same risk.");
+    expect(copy.plain.testedOnPastData).toBe("In our tests on past data, more diversification did not result in lower \"Bad\" return than the best return (frontier line) at the same risk.");
     // nothing on the page speaks of six months any more
     const all = JSON.stringify({ plain: copy.plain, technical: { ...copy.technical, bellCurve: "", cellPlace: "" } });
     expect(all).not.toMatch(/six|6 months|six-month/i);

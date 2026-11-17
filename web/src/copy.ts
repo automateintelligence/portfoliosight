@@ -30,7 +30,7 @@ export const plain = {
    * direction 2026-11-11). Under the diversification slider, with Details on and only then (owner
    * direction 2026-11-14); the only copy of this text.
    */
-  testedOnPastData: "In our tests on past data, more diversification did not lose less than the best return (frontier line) at the same risk.",
+  testedOnPastData: "In our tests on past data, more diversification did not result in lower \"Bad\" return than the best return (frontier line) at the same risk.",
   frontier: "Best return at each level of risk",
   ghosts: "Same portfolio, different years of history",
   noLimits: "No limits",
@@ -38,6 +38,10 @@ export const plain = {
   /** The legend's and the line's name for the No limits curve (owner direction 2026-10-13). */
   noAllocationLimits: "No allocation limits",
   resetLimits: "Reset limits",
+  /** The Settings checkbox for the No allocation limits line (owner direction 2026-11-15). */
+  showNoLimitsLine: 'Show the "No allocation limits" line',
+  /** Beside that checkbox while the limits change nothing, so there is no line to show. */
+  noLimitsLineNothing: "Nothing to show: your limits do not change the best-return line.",
   currentMix: "Your starting mix",
   selectedMix: "Selected mix",
   cellMix: "The mix at this spot",
@@ -118,7 +122,7 @@ export const technical = {
   bellCurve: (low: string, mid: string, high: string) => `Textbook bell-curve figure (normal, μ ± 1.96σ): ${low} to ${high} around ${mid}`,
   enbName: "effective number of bets, minimum torsion",
   divSlider:
-    "Walks the mixes that keep the risk at X: every step down gives up return for diversification; the bottom end is the most diversified mix found at that risk",
+    "Walks the mixes that keep the risk constant: every step down gives up return for diversification; the bottom end is the most diversified mix found at that risk",
   noLimits: "The same frontier with every fund allowed from 0% to 100%",
   rangePending: "The one-year range of this mix comes from the service and is not available right now.",
   frontier:
@@ -161,6 +165,12 @@ export const lookbackLine: Record<string, string> = {
   // not a history window: the same menu with every fund allowed 0% to 100% (owner's wording)
   nolimits: "No allocation limits",
 };
+
+/**
+ * The main frontier line's name: its history window, then the term for the line (owner direction
+ * 2026-11-15). Ghost lines and the No limits line keep the plain name above.
+ */
+export const primaryLineName = (id: string): string => `${lookbackLine[id] ?? id} (Efficient frontier)`;
 
 export const lookbackShort: Record<string, string> = {
   "1y": "1y",
