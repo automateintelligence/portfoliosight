@@ -49,7 +49,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -156,7 +156,7 @@ class CachedTiingo:
         if key not in self._memory:
             path = None if self.cache_dir is None else self.cache_dir / f"{symbol}_{end}.pkl"
             if path is not None and path.is_file():
-                self._memory[key] = pd.read_pickle(path)
+                self._memory[key] = cast(pd.DataFrame, pd.read_pickle(path))
             else:
                 frame = self.fetch(symbol, TIINGO_START, end)
                 if path is not None:
@@ -164,7 +164,10 @@ class CachedTiingo:
                     frame.to_pickle(path)
                 self._memory[key] = frame
         frame = self._memory[key]
-        return frame[(frame.index >= pd.Timestamp(start)) & (frame.index <= pd.Timestamp(end))]
+        return cast(
+            pd.DataFrame,
+            frame[(frame.index >= pd.Timestamp(start)) & (frame.index <= pd.Timestamp(end))],
+        )
 
 
 # --------------------------------------------------------------------------------- the repair
@@ -191,7 +194,7 @@ def repair_record(
     if not good.any():
         raise FreezeError("repair: the record has no good tr_index value", 3)
     last_good = int(np.flatnonzero(good)[-1])
-    last_date = dates[last_good]
+    last_date = cast(pd.Timestamp, dates[last_good])
     if not good[: last_good + 1].all():
         raise FreezeError(
             "repair: tr_index has NaN before its last good value; the splice needs a clean prefix",
@@ -261,8 +264,8 @@ def repair_record(
     report = {
         "source": "tiingo daily adjClose",
         "window": [
-            provider.index.min().date().isoformat(),
-            provider.index.max().date().isoformat(),
+            cast(pd.Timestamp, provider.index.min()).date().isoformat(),
+            cast(pd.Timestamp, provider.index.max()).date().isoformat(),
         ],
         "last_good_date": last_date.date().isoformat(),
         "last_good_tr_index": base,
@@ -318,15 +321,15 @@ def action_days(record: pd.DataFrame) -> list[dict[str, Any]]:
 def yearly_comparison(record: pd.DataFrame, adj: pd.Series) -> list[dict[str, Any]]:
     """Calendar-year return of tr_index against Tiingo's adjClose, on the days both have."""
     frame = record.set_index(pd.DatetimeIndex(record["date"]))["tr_index"].sort_index()
-    both = frame.index.intersection(adj.index)
+    both = cast(pd.DatetimeIndex, frame.index.intersection(adj.index))
     tr, ad = frame.loc[both], adj.loc[both]
     rows = []
     years = sorted(set(both.year))
     previous: pd.Timestamp | None = None
     for year in years:
-        in_year = both[both.year == year]
-        end = in_year.max()
-        start = previous if previous is not None else in_year.min()
+        in_year = cast(pd.DatetimeIndex, both[both.year == year])
+        end = cast(pd.Timestamp, in_year.max())
+        start = previous if previous is not None else cast(pd.Timestamp, in_year.min())
         if end == start:
             previous = end
             continue
@@ -356,7 +359,7 @@ def corporate_action_report(
         try:
             provider = tiingo(symbol, TIINGO_START, d_star)
             adj = provider["adj_close"].astype(float)
-            adj = adj[adj.index <= pd.Timestamp(d_star)]
+            adj = cast(pd.Series, adj[adj.index <= pd.Timestamp(d_star)])
             years = yearly_comparison(records[symbol], adj)
             entry["adj_close_available"] = True
             entry["years"] = years
@@ -454,7 +457,7 @@ def prepare_records(
         raw_digest[v1.price_path(symbol)] = v1._digest(raw)
         frame = pd.read_parquet(io.BytesIO(raw))
         frame["date"] = pd.to_datetime(frame["date"])
-        frame = frame[frame["date"] <= stamp].reset_index(drop=True)
+        frame = cast(pd.DataFrame, frame[frame["date"] <= stamp]).reset_index(drop=True)
         if symbol in REPAIRED:
             provider = tiingo(symbol, REPAIRED[symbol], d_star)
             frame, report = repair_record(frame, provider, d_star)

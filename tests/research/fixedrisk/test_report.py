@@ -1,6 +1,7 @@
 import json
 import sys
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -112,6 +113,7 @@ def test_main_uses_piece_two_data_module(run_dir, tmp_path, monkeypatch):
     _, _, cpi, dgs = _series()
     horizon = synth_horizon(30, 16)
     parent = report.read_parent(run_dir)
+    assert parent is not None
 
     def load_inputs(snapshot):
         assert str(snapshot).endswith("snap")
@@ -158,7 +160,9 @@ def test_make_callables_reads_horizon_fields():
         horizon_returns=lambda i, menu, month: complete if month == "2020-01" else immature
     )
     horizon, *_ = report.make_callables(inputs, data)
-    got_days, values, funds = horizon("m", "2020-01")
+    loaded = horizon("m", "2020-01")
+    assert loaded is not None
+    got_days, values, funds = loaded
     assert len(got_days) == 252 and values.shape == (252, 2) and funds == ("A", "B")
     assert horizon("m", "2025-01") is None
 
@@ -190,8 +194,8 @@ def test_an_incomplete_or_foreign_run_is_refused_or_reported_as_interim(tmp_path
         "job m1-replay has 1 task files of another parent digest",
     ]
     _, spy, cpi, dgs = _series()
-    kwargs = dict(horizon=synth_horizon(12, 6), span=None, cpi=cpi, spy_tr=spy, dgs10=dgs,
-                  study_options=FAST)  # fmt: skip
+    kwargs: dict[str, Any] = dict(horizon=synth_horizon(12, 6), span=None, cpi=cpi, spy_tr=spy,
+                                  dgs10=dgs, study_options=FAST)  # fmt: skip
     with pytest.raises(report.RunNotReady) as caught:
         report.run_report(tmp_path, **kwargs)
     assert caught.value.problems == problems

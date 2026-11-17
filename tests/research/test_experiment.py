@@ -25,7 +25,7 @@ from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -284,7 +284,9 @@ def test_a_forced_failed_cell_stays_in_the_denominator(
     failed = cells[cells["cell_status"] == search.FAILED_ARM]
     assert list(zip(failed["menu"], failed["ceiling_id"], strict=True)) == [("example", "x50")]
     locked = _frame(result.directory, "locked.parquet")
-    assert not ((locked["menu"] == "example") & (locked["ceiling_id"] == "x50")).any()
+    assert not cast(
+        pd.Series, (locked["menu"] == "example") & (locked["ceiling_id"] == "x50")
+    ).any()
     assert len(set(zip(locked["menu"], locked["ceiling_id"], strict=True))) == 5
     manifest = json.loads((result.directory / "manifest.json").read_text())
     assert manifest["status"]["denominator"]["by_status"] == {"failed_arm": 1, "ok": 5}
