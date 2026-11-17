@@ -8,9 +8,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  ARTIFACTS, DRY_RUN, REPO, RUNBOOK, WEB, benchmarkRecords, canvasPixels, canvasPrint, channelDistance, chartScales, choosePreset, collapsedPosition,
+  ARTIFACTS, DRY_RUN, EDGE_INJECTED_ORIGINS, REPO, RUNBOOK, WEB, benchmarkRecords, canvasPixels, canvasPrint, channelDistance, chartScales, choosePreset, collapsedPosition,
   decisionDates, env, expect, frontAt, fundRowIds, gateContext, generationDate, idleQueue, losAngelesHour, mixStats, nudge, openApp, openSection,
-  levelRangePct, pageWords, param, parsePercent, pickCells, pressDivEnd, python, readmeProblems, rectOf, rgbBasis, riskPosition, ruleMaxPct, run,
+  levelRangePct, limitsBind, paceTensorPosts, pageWords, param, parsePercent, pickCells, pressDivEnd, python, readmeProblems, rectOf, rgbBasis, riskPosition, ruleMaxPct, run,
   samePrint, secretValues, sessionWindow, setMenu, settledPrint, shownTensor, sliderDomain, stressOf, test, themeColors, towardDiversified, typeFund,
   universeHash, walkableColumn, watchApi, diversificationText, ROADMAP_ITEMS, type TensorLike,
 } from "./helpers";
@@ -261,7 +261,9 @@ test("DoD-05 default view: the Example Portfolio with its allocation; TSP loads 
 });
 
 test("DoD-06 no tangency point and no jargon in the default page", async ({ page }) => {
+  const api = watchApi(page);
   await openApp(page);
+  const tensor = await shownTensor(api, "5y");
   const banned = [/sharpe/i, /\bbets\b/i, /\bknee\b/i, /significant/i, /tangen/i];
   // "bets" is allowed only as "independent bets", the figure that replaced the grade words (owner direction 2026-11-11)
   const hits = (text: string) => banned.filter((pattern) => pattern.test(text.replace(/independent bets/gi, ""))).map(String);
@@ -273,7 +275,8 @@ test("DoD-06 no tangency point and no jargon in the default page", async ({ page
   const marks = await page.getByTestId("chart").evaluate((chart) => Array.from(chart.querySelectorAll("svg [data-testid]")).map((el) => el.getAttribute("data-testid")));
   // Beside them the overlay holds only the names of the frontier lines (text, one per line drawn).
   const names = marks.filter((id) => (id ?? "").startsWith("frontier-label-"));
-  expect(names, "the primary frontier line is named").toEqual(["frontier-label-5y"]);
+  // The "No limits" line is drawn, and named, when the portfolio's limits change its frontier.
+  expect(names, "the primary frontier line is named, and the No limits line when the limits bind").toEqual(limitsBind(tensor) ? ["frontier-label-5y", "frontier-label-nolimits"] : ["frontier-label-5y"]);
   expect(marks.filter((id) => !names.includes(id)).sort()).toEqual(["ceiling-line", "point-current", "point-selected"]);
   const ids = await page.evaluate(() => Array.from(document.querySelectorAll("[data-testid]")).map((el) => el.getAttribute("data-testid") ?? ""));
   expect(ids.filter((id) => /tangen|sharpe|cml|capital/i.test(id))).toEqual([]);
@@ -555,6 +558,7 @@ test("DoD-12 custom menu: four served funds build within 120 s; failure, unknown
     await expect(page.getByTestId("build-retry")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("building-notice")).toContainText("We couldn't compute this portfolio");
     await expect(page.getByTestId("building-notice")).toContainText("build_failed");
+    await paceTensorPosts();
     await page.getByTestId("build-retry").click();
     await expect(page.getByTestId("build-retry")).toHaveCount(0, { timeout: 150_000 });
     await expect(page.getByTestId("point-selected")).toBeVisible({ timeout: 150_000 });
@@ -597,6 +601,7 @@ test("DoD-12 custom menu: four served funds build within 120 s; failure, unknown
     await expect(page.getByTestId("use-menu")).toHaveText("Recalculate with these funds");
     const mine = () => api.loaded().filter((entry) => entry.path.includes(`/${hash}/`));
     const notice = page.getByTestId("building-notice");
+    await paceTensorPosts();
     const started = Date.now();
     await page.getByTestId("use-menu").click();
     let sawNotice = false;
@@ -706,6 +711,7 @@ test("DoD-13 funds and trades: dollar and share changes, the 100% rule, tickers 
   await test.step("percent mode: the running total gates the mix, with nothing to press; tickers only hides Trades", async () => {
     const catalog = ((await site.json("/api/symbols")) as Symbols).symbols.map((symbol) => symbol.id);
     const pair = ["SGOV", "VTIP"].every((id) => catalog.includes(id)) ? ["SGOV", "VTIP"] : ["VTI", "BND"];
+    await paceTensorPosts();
     await page.goto(`/?f=${pair[0]}:60,${pair[1]}:32&unit=pct`);
     await expect(page.getByTestId("point-selected")).toBeVisible({ timeout: 150_000 });
     await openSection(page, "funds");
@@ -748,6 +754,7 @@ test("DoD-14 caps: a 10% ceiling on VTI holds in every mix; bad limits are refus
   await expect(max).toHaveValue(String(rule));
   expect(base.bounds.max[base.universe.funds.findIndex((fund) => fund.id === "VTI")], "before the edit VTI's ceiling is the rule's").toBeCloseTo(rule / 100, 9);
 
+  await paceTensorPosts();
   await max.fill("10");
   await max.blur();
   await expect.poll(() => api.tensorPosts().length, { timeout: 15_000 }).toBe(1);
@@ -790,6 +797,7 @@ test("DoD-14 caps: a 10% ceiling on VTI holds in every mix; bad limits are refus
   expect(await param(page, "c")).toBe("VTI::10");
 
   // Reset: the rule's values are back in the table and in the tensor the page shows.
+  await paceTensorPosts();
   await page.getByTestId("caps-reset").click();
   await expect(max).toHaveValue(String(rule));
   await expect(min).toHaveValue("0");
@@ -837,6 +845,7 @@ test("DoD-15 lookbacks: 10 years redraws and lists the computed exclusions; a gh
     const old = ["BND", "VTI", "AGG", "VNQ"].filter((id) => firstDate.has(id) && (firstDate.get(id) as string) <= window.start).slice(0, 2);
     expect(old.length, "two served funds older than the 10-year window").toBe(2);
     const [youngId, youngFirst] = young as [string, string];
+    await paceTensorPosts();
     await page.goto(`/?f=${[...old, youngId].join(",")}&lb=10y`);
     await expect(page.getByTestId("point-selected")).toBeVisible({ timeout: 150_000 });
     const custom = await shownTensor(api, "10y");
@@ -898,6 +907,7 @@ test("DoD-16 stress cards: three windows with the mix's own numbers and coverage
   expect(STRESS_IDS.some((id) => stressOf(weights, tensor.stress[id].r).value !== null), "a card with a number").toBe(true);
 
   // A mix of two funds that both started after 2008: no number is made up for that window.
+  await paceTensorPosts();
   await page.goto("/?f=SGOV,VTIP");
   await expect(page.getByTestId("point-selected")).toBeVisible({ timeout: 150_000 });
   const custom = await shownTensor(api);
@@ -1033,7 +1043,8 @@ test("DoD-19 the address describes the view: a fresh browser reproduces it, and 
   await expect(copy.getByTestId("preset-menu")).toHaveAttribute("aria-label", `Portfolio: ${other.name}`);
   await copy.getByTestId("chip-settings").click();
   await expect(copy.getByTestId("lookback-3y")).toBeChecked();
-  expect([...foreign]).toEqual([]);
+  expect([...foreign].filter((origin) => !EDGE_INJECTED_ORIGINS.has(origin)), "origins other than the site's own that the fresh browser contacted").toEqual([]);
+  await fresh.unrouteAll({ behavior: "ignoreErrors" });
   await fresh.close();
 
   // Copy link puts exactly that address on the clipboard.
@@ -1116,6 +1127,7 @@ test("DoD-21 presets and tensors come from R2, and a build request for the defau
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
+  await paceTensorPosts();
   const posted = await site.post("/api/tensors", { funds: guide.funds.map((fund) => ({ id: fund.id, min: null, max: null })), lookback: "5y" });
   expect(posted.status(), "a build request for a stored key answers at once").toBe(200);
   const ready = (await posted.json()) as { status: string; url: string; hash: string };
@@ -1159,7 +1171,7 @@ test("DoD-22 provider gate: live Tiingo rows, recorded limits, and the ledger's 
   expect(String(recorded.measured_on)).toMatch(/^\d{4}-\d{2}-\d{2}/);
 });
 
-test("DoD-23 nightly freshness: today's generation, a clean run, twelve tensors, a small cache", async ({ site }) => {
+test("DoD-23 nightly freshness: today's generation, a clean run, a tensor per preset and lookback, a small cache", async ({ site }) => {
   test.setTimeout(180_000);
   expect(losAngelesHour(), "this check is meaningful at or after 08:00 in Los Angeles; run it later").toBeGreaterThanOrEqual(8);
   const expected = generationDate();
@@ -1179,7 +1191,7 @@ test("DoD-23 nightly freshness: today's generation, a clean run, twelve tensors,
   const presets = (await site.json("/api/presets")) as Presets;
   expect(presets.generation).toBe(health.generation);
   const urls = presets.presets.flatMap((preset) => LOOKBACKS.map((lookback) => preset.lookbacks[lookback]?.url));
-  expect(new Set(urls).size, "distinct preset tensors").toBe(12);
+  expect(new Set(urls).size, "distinct preset tensors: one per preset and lookback").toBe(presets.presets.length * LOOKBACKS.length);
   for (const url of urls) {
     const tensor = (await site.json(url)) as TensorLike;
     expect(tensor.asof, `${url}: asof`).toBe(expected);
@@ -1375,6 +1387,7 @@ test("DoD-30 build benchmark: the runbook's measurement and a fresh 23-fund buil
   for (let step = 0; step < 5 && accepted === null; step++) {
     const cap = Number((0.24 - ((second + step) % 86_400) * 1e-6).toFixed(6));
     const body = { funds: ids.map((id, index) => ({ id, min: null, max: index === 0 ? cap : null })), lookback: "5y" };
+    await paceTensorPosts();
     let started = Date.now();
     let answer = await site.post("/api/tensors", body);
     if (answer.status() === 429) {

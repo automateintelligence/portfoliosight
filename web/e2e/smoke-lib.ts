@@ -65,6 +65,7 @@ export type TensorLike = {
   frontier: { x: number[]; y: number[]; w: number[][]; s_safe: number; range: { bad: number[]; typical: number[]; good: number[] } };
   ladder: { w: number[][][]; range: { bad: number[][]; typical: number[][]; good: number[][] } };
   frontier_curve: { sigma: number[]; mu: number[] };
+  frontier_uncapped: { sigma: number[]; mu: number[] };
   grid: { y: number[]; z: (number | null)[][]; w: (number[] | null)[][]; k_div: number[]; y_div: number[]; w_div: number[][] };
   stress: Record<string, { label: string; r: (number | null)[] }>;
 };
@@ -102,6 +103,31 @@ export function frontAt(tensor: TensorLike, s: number) {
   const mu = lerp(tensor.frontier_curve.mu, s * SUBSTEPS);
   const r = tensor.frontier.range;
   return { sigma, mu, low: 100 * lerp(r.bad, s), typical: 100 * lerp(r.typical, s), high: 100 * lerp(r.good, s) };
+}
+
+/**
+ * Whether the portfolio's limits change its frontier, so the page draws the "No limits" line (the
+ * rule of `limitsBind` in web/src/math/view.ts): the frontier with every limit lifted ends at a
+ * different risk (by more than 1e-6), or earns more than the drawn frontier (by more than 1e-4)
+ * at some node's risk.
+ */
+export function limitsBind(tensor: TensorLike): boolean {
+  const free = tensor.frontier_uncapped;
+  const { x, y } = tensor.frontier;
+  if (free.sigma.length === 0 || x.length === 0) return false;
+  if (Math.abs(free.sigma[0] - x[0]) > 1e-6 || Math.abs(free.sigma[free.sigma.length - 1] - x[x.length - 1]) > 1e-6) return true;
+  const freeMuAt = (sigma: number): number => {
+    if (sigma <= free.sigma[0]) return free.mu[0];
+    for (let i = 1; i < free.sigma.length; i++) {
+      if (free.sigma[i] >= sigma) {
+        const span = free.sigma[i] - free.sigma[i - 1];
+        const f = span > 0 ? (sigma - free.sigma[i - 1]) / span : 0;
+        return (1 - f) * free.mu[i - 1] + f * free.mu[i];
+      }
+    }
+    return free.mu[free.mu.length - 1];
+  };
+  return x.some((sigma, j) => freeMuAt(sigma) - y[j] > 1e-4);
 }
 
 /** The risk slider's domain: from the tensor's `frontier.s_safe` (the engine's rule, spec 4.9) to the last column. */
@@ -305,3 +331,50 @@ export function readmeProblems(text: string): string[] {
 
 /** Appendix B's items plus the tester-login item (run rule 10) that ROADMAP.md must carry. */
 export const ROADMAP_ITEMS = ["Paid tier", "Data license", "exact-ENB", "FERS planner", "authorized email domains", "one-time code", "30-day session"];
+
+// ── Pacing of live tensor builds ─────────────────────────────────────────────
+
+/**
+ * The site's allowance of tensor build requests per client address: 5 POSTs to /api/tensors in
+ * any 60 s (POSTS_PER_MINUTE and WINDOW_SECONDS, portfoliosight/api/limiter.py:10-11; applied at
+ * portfoliosight/api/app.py:273). The 6th inside the window answers 429, and the page does not
+ * retry by itself. Keep in step with limiter.py.
+ */
+export const TENSOR_POST_LIMIT = { posts: 5, windowMs: 60_000 } as const;
+
+/** Slack on top of the window. An answered request is stamped after the server counted it; one still in flight is stamped as it left, before the server counted it, and this covers that gap. */
+export const TENSOR_POST_MARGIN_MS = 2_000;
+
+/** True for a request that asks the service to build a tensor (the only calls the allowance counts). */
+export function isTensorBuildPost(method: string, url: string): boolean {
+  return method.toUpperCase() === "POST" && new URL(url).pathname === "/api/tensors";
+}
+
+/**
+ * The stamps of the record, one per request. A line is `<id> <ms>`; a request is stamped when it
+ * leaves and again when it is answered (same id), and counts once at the later stamp. A request
+ * whose worker died before the answer counts at the stamp it left with. Other lines are skipped.
+ */
+export function parseTensorPostLedger(text: string): number[] {
+  const latest = new Map<string, number>();
+  for (const line of text.split("\n")) {
+    const found = /^(\S+) (\d+)$/.exec(line.trim());
+    if (found) latest.set(found[1], Math.max(latest.get(found[1]) ?? 0, Number(found[2])));
+  }
+  return [...latest.values()];
+}
+
+/**
+ * Milliseconds to wait from `now` before `count` more tensor POSTs can go out without the
+ * site's allowance refusing one, given the stamps `sentAt` of those already sent. A sent request
+ * keeps counting until the window plus the margin has passed. 0 when `count` more fit now. A
+ * stamp later than `now` is from another clock (another boot's monotonic reading) and is ignored.
+ */
+export function pacingDelayMs(sentAt: readonly number[], now: number, count = 1): number {
+  const { posts, windowMs } = TENSOR_POST_LIMIT;
+  if (!Number.isInteger(count) || count < 1 || count > posts) throw new RangeError(`a batch of ${count} tensor POSTs cannot fit the allowance of ${posts}`);
+  const holdMs = windowMs + TENSOR_POST_MARGIN_MS;
+  const counting = sentAt.filter((at) => at > now - holdMs && at <= now).sort((a, b) => a - b);
+  const excess = counting.length + count - posts;
+  return excess <= 0 ? 0 : counting[excess - 1] + holdMs - now;
+}

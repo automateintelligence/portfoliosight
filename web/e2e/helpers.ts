@@ -7,10 +7,12 @@
 // test itself go through `site`, which sets the header per call and only for the site's own hosts.
 import { expect, request as playwrightRequest, test as base, type APIRequestContext, type APIResponse, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { redact, SECRET_NAMES, type FundPolicy, type Rgb, type TensorLike } from "./smoke-lib";
+import { isTensorBuildPost, pacingDelayMs, parseTensorPostLedger, redact, SECRET_NAMES, type FundPolicy, type Rgb, type TensorLike } from "./smoke-lib";
 
 export * from "./smoke-lib";
 export { expect };
@@ -25,6 +27,56 @@ export const RUNBOOK = path.join(REPO, "docs", "plans", "2026-10-13-ks001-cloudf
 export const DRY_RUN = process.env.PS_SMOKE_DRY_RUN === "1";
 export const GATE_HEADER = "x-ps-gate";
 const BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+
+// ── Pacing of live tensor builds ─────────────────────────────────────────────
+//
+// The site refuses a 6th tensor POST from one address inside a minute (TENSOR_POST_LIMIT), and the
+// page does not retry by itself. So every real POST to /api/tensors is stamped in a file, and a test
+// calls `paceTensorPosts` before the step that causes one.
+//   Where: the gate route (a request a test answers with its own route never gets there, so it is
+//   not counted) and `site.post`.
+//   When: twice, under one id. Once as the request leaves, so a worker that dies mid-request still
+//   leaves it on record. Again when the answer arrives, which is after the server counted the
+//   request, so the site's window never ends before ours (the margin covers the rest). A refused
+//   request is stamped too, which only waits longer.
+//   Clock: the monotonic clock (`process.hrtime`), the same for every process of a boot and immune
+//   to the wall clock being set. After a reboot an old stamp reads as later than now and is ignored
+//   (the file is usually gone then as well): do not start a run within a minute of a reboot.
+//   File: in the temp directory, not the Playwright output directory, which Playwright empties at
+//   the start of a run: the allowance does not reset between runs. One line per stamp, appended in
+//   one write, so workers and repeats share it. The check and the send are not one step, which is
+//   safe because the suite runs with one worker.
+const TENSOR_POST_LEDGER = path.join(os.tmpdir(), `portfoliosight-smoke-tensor-posts-${process.getuid?.() ?? "user"}.log`);
+
+const monotonicMs = (): number => Number(process.hrtime.bigint() / 1_000_000n);
+
+/** Runs `send`, stamping the tensor POST it makes before it leaves and after it is answered. */
+async function stampingTensorPost<T>(isBuild: boolean, send: () => Promise<T>): Promise<T> {
+  if (!isBuild || DRY_RUN) return send();
+  const id = randomUUID();
+  const stamp = () => fs.appendFileSync(TENSOR_POST_LEDGER, `${id} ${monotonicMs()}\n`);
+  stamp();
+  try {
+    return await send();
+  } finally {
+    stamp();
+  }
+}
+
+/**
+ * Waits until `count` more tensor POSTs (default one) fit the site's allowance, counting every one
+ * sent from this machine in the last minute. Call it before the step that triggers a build; a
+ * build's own clock (a 120 s limit, a timing) starts after it. A local dry run has no allowance.
+ */
+export async function paceTensorPosts(count = 1): Promise<void> {
+  if (DRY_RUN) return;
+  for (;;) {
+    const now = monotonicMs();
+    const delay = pacingDelayMs(parseTensorPostLedger(fs.existsSync(TENSOR_POST_LEDGER) ? fs.readFileSync(TENSOR_POST_LEDGER, "utf8") : ""), now, count);
+    if (delay <= 0) return;
+    await test.step(`wait ${(delay / 1000).toFixed(1)} s for the site's allowance of tensor builds`, () => new Promise<void>((resolve) => setTimeout(resolve, delay)));
+  }
+}
 
 /** A required environment variable; its absence is a failure that names the variable. */
 export function env(name: string): string {
@@ -72,7 +124,9 @@ function makeSite(ctx: APIRequestContext, baseURL: string): Site {
     api: hosts.api,
     get: (url, options = {}) => ctx.get(absolute(url), { headers: headers(absolute(url), options.gate ?? true), maxRedirects: 0, failOnStatusCode: false }),
     post: (url, data, options = {}) =>
-      ctx.post(absolute(url), { headers: { ...headers(absolute(url), options.gate ?? true), origin: hosts.site }, data, maxRedirects: 0, failOnStatusCode: false }),
+      stampingTensorPost(isTensorBuildPost("POST", absolute(url)), () =>
+        ctx.post(absolute(url), { headers: { ...headers(absolute(url), options.gate ?? true), origin: hosts.site }, data, maxRedirects: 0, failOnStatusCode: false }),
+      ),
     async json(url) {
       const response = await site.get(url);
       expect(response.status(), `GET ${url} with the gate header`).toBe(200);
@@ -98,13 +152,24 @@ export async function gateContext(context: BrowserContext, baseURL: string): Pro
     await context.route(
       (url) => url.origin === origin,
       async (route) => {
-        const response = await route.fetch({ headers: { ...route.request().headers(), [GATE_HEADER]: secret }, maxRedirects: 0 });
+        const response = await stampingTensorPost(isTensorBuildPost(route.request().method(), route.request().url()), () =>
+          route.fetch({ headers: { ...route.request().headers(), [GATE_HEADER]: secret }, maxRedirects: 0 }),
+        );
         await route.fulfill({ response });
       },
     );
   }
   return foreign;
 }
+
+/**
+ * Origins a page contacts although the page does not name them: Cloudflare's edge injects its
+ * analytics beacon script into the HTML. Exact origin match, no pattern. Allowed during the
+ * private preview (owner, 2026-10-13; DoD-19 too, 2026-11-15); revisit before public launch.
+ * Allowing an origin here only means a page may contact it: the gate header is never sent to it,
+ * because the route in `gateContext` matches the site's own origin alone.
+ */
+export const EDGE_INJECTED_ORIGINS: ReadonlySet<string> = new Set(["https://static.cloudflareinsights.com"]);
 
 type Fixtures = {
   /** Auto: the gate header for the site's own origin, and a failure if a page contacts any other. */
@@ -118,11 +183,9 @@ export const test = base.extend<Fixtures>({
     async ({ context, baseURL }, provide) => {
       const foreign = await gateContext(context, baseURL as string);
       await provide(foreign);
+      await context.unrouteAll({ behavior: "ignoreErrors" });
       // Fonts are self-hosted and the page names no other origin (run rule 15, INTERFACES.md).
-      // Cloudflare's edge injects its analytics beacon into browser requests; the page does not
-      // name it. Allowed during the private preview (owner, 2026-10-13); revisit before public launch.
-      const edgeInjected = new Set(["https://static.cloudflareinsights.com"]);
-      expect([...foreign].filter((o) => !edgeInjected.has(o)), "origins other than the site's own that a page contacted").toEqual([]);
+      expect([...foreign].filter((o) => !EDGE_INJECTED_ORIGINS.has(o)), "origins other than the site's own that a page contacted").toEqual([]);
     },
     { auto: true },
   ],
@@ -466,17 +529,22 @@ export async function fundRowIds(page: Page): Promise<string[]> {
   return page.locator('[data-testid^="fund-row-"]').evaluateAll((rows) => rows.map((row) => (row.getAttribute("data-testid") ?? "").slice("fund-row-".length)));
 }
 
-/** Types into the fund picker and commits: the matching option if one shows, else Enter. */
+/**
+ * Types into the fund picker and commits: the picker option whose ticker is exactly `id` if one
+ * shows, else Enter. The ticker is read from the option's own ticker span, never from the whole
+ * option text (ticker and name sit side by side with no space, and a name can contain the id).
+ */
 export async function typeFund(page: Page, id: string): Promise<void> {
   const input = page.getByTestId("fund-add");
   await input.fill(id);
-  const exact = new RegExp(`(^|[^A-Z0-9-])${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^A-Z0-9-])`);
-  const option = page.getByRole("option").filter({ hasText: exact }).first();
-  try {
-    await option.click({ timeout: 2_500 });
-  } catch {
-    await input.press("Enter");
-  }
+  const ticker = new RegExp(`^\\s*${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`);
+  const option = page.getByRole("listbox", { name: "Matching funds" }).getByRole("option").filter({ has: page.locator(".tk", { hasText: ticker }) });
+  const shown = await option.first().waitFor({ timeout: 2_500 }).then(
+    () => true,
+    () => false,
+  );
+  if (shown) await option.first().click();
+  else await input.press("Enter");
 }
 
 /** Makes the Funds table hold exactly `ids` (a draft until "Recalculate with these funds"). */
