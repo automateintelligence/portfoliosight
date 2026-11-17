@@ -368,6 +368,9 @@ class _Ingest:
             entry is not None and entry.adjusted_through is not None and entry.last_date is not None
         )
         if entry is None or not has_record:
+            known = self.info.get(symbol)
+            if known is not None and known.requested:
+                return  # a requested ticker is offered once the lake has checked it (spec 4.1)
             if not self._taken_by_lake(symbol):
                 self._full(symbol, self.manifest.symbols.get(symbol))
             return
