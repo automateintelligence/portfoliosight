@@ -671,3 +671,361 @@ def test_a_pool_row_without_a_model_measure_stops_naming_the_month():
     outside = {"weights": [0.8, 0.1, 0.1], "mu": math.nan}  # the U bound reads it too
     with pytest.raises(ValueError, match=MONTH):
         _checked(cells, [outside])
+
+
+# ---------------------------------------------------------------- the gates across months
+
+NO_LISTS: tuple[tuple[str, ...], tuple[tuple[str, float], ...]] = ((), ())
+
+
+def _months(k: int, start: int = 2012) -> list[str]:
+    return [f"{start + i // 12}-{i % 12 + 1:02d}" for i in range(k)]
+
+
+def _model_cells(months: list[str]) -> pd.DataFrame:
+    """Made-up `month_pool_checks` rows of `months` that pass every gate: F, arm 1 and U kept at
+    the six settings; E, D and D10 kept off the frontier, each with its comparator."""
+    w = np.array([0.5, 0.5])
+    rows: list[Row] = []
+
+    def add(month: str, mix: str, **values: Any) -> None:
+        row = _cell(mix, month=month, weights=w, pool_dr2_max=math.nan, pool_mu_bound=math.nan,
+                    pool_mu_at_risk=math.nan, tie=False)  # fmt: skip
+        row.update(values)
+        rows.append(row)
+
+    for m in months:
+        for j, rf in enumerate(A.RFS):
+            r = 0.05 + 0.01 * j
+            add(m, RC.F, rf=rf, r=r, mu=0.05, sigma=r, rebuilt_mu_gap=0.0,
+                rebuilt_sigma_gap=0.0, rebuilt_l1=0.0, ends_gap=0.0)  # fmt: skip
+            add(m, RC.F_ARM1, rf=rf, r=r, mu=0.05, sigma=r)
+        for j, rf in enumerate(A.RFS):
+            r = 0.05 + 0.01 * j
+            add(m, RC.U, rf=rf, r=r, mu=0.051, sigma=r, risk_gap=0.0, mu_gap=0.001, l1=0.1,
+                breaks_limit=False, pool_mu_bound=0.04)  # fmt: skip
+        for mix, dr2, a in ((RC.E, 1.2, 0.5), (RC.D, 1.5, 0.2), (RC.D10, 1.3, 0.3)):
+            add(m, mix, mu=0.04, sigma=0.08, a=a, mu_gap=0.01, l1=0.2, dr2=dr2,
+                pool_dr2_max=dr2 - 0.1, pool_mu_at_risk=0.03)  # fmt: skip
+            add(m, RC.COMPARATOR[mix], mu=0.05, sigma=0.08, risk_gap=0.0)
+    return pd.DataFrame(rows)
+
+
+def _at(cells: pd.DataFrame, month: str, mix: str, rf: float | None = None) -> np.ndarray:
+    mask = (cells["month"].to_numpy() == month) & (cells["mix"].to_numpy() == mix)
+    if rf is not None:
+        mask &= np.isclose(cells["rf"].to_numpy(dtype=float), rf)
+    assert mask.sum() == 1
+    return mask
+
+
+def _set(cells: pd.DataFrame, month: str, mix: str, rf: float | None = None, **values) -> None:
+    mask = _at(cells, month, mix, rf)
+    for name, value in values.items():
+        cells.loc[mask, name] = value
+
+
+def _exclude(cells: pd.DataFrame, month: str, mix: str, rf: float | None = None) -> pd.DataFrame:
+    """`mix` excluded at the cell, as `month_mixes` leaves it: no comparator row; U unbuilt."""
+    if mix == RC.U:
+        _set(cells, month, mix, rf, status=RC.EXCLUDED, mu=math.nan, mu_gap=math.nan,
+             risk_gap=math.nan, pool_mu_bound=math.nan)  # fmt: skip
+        cells.loc[_at(cells, month, mix, rf), "weights"] = None
+        return cells
+    _set(cells, month, mix, status=RC.EXCLUDED, a=1.2, mu_gap=math.nan, pool_mu_at_risk=math.nan)
+    return cells.loc[~_at(cells, month, RC.COMPARATOR[mix])].reset_index(drop=True)
+
+
+def _fail(cells: pd.DataFrame, month: str, mix: str, rf: float | None = None,
+          reason: str = "solver: made up") -> None:  # fmt: skip
+    _set(cells, month, mix, rf, status=RC.FAILED, reason=reason)
+    if mix in RC.RECIPES:
+        _set(cells, month, RC.COMPARATOR[mix], status=RC.FAILED, reason=reason)
+
+
+def _stops(checks: dict) -> list[str]:
+    return [s["gate"] for s in checks["stops"]]
+
+
+def test_a_consistent_table_passes_every_gate():
+    months = _months(4)
+    checks = RC.gates(_model_cells(months), months, expected=NO_LISTS)
+    assert checks["stops"] == []
+    assert checks["reconstruction"]["cells"] == 24
+    assert checks["failed_cells"][RC.U]["cells"] == 24
+    assert checks["check_b"][RC.D]["months"] == 4
+
+
+def test_reconstruction_stops_above_one_percent():
+    months = _months(50)  # 300 F cells: 3 failed are 1%, 4 are above
+    cells = _model_cells(months)
+    for k in range(3):
+        _fail(cells, months[k], RC.F, A.RFS[k], reason=RC.RECONSTRUCTION)
+        _fail(cells, months[k], RC.U, A.RFS[k], reason="the F row of this setting failed")
+    checks = RC.gates(cells, months, expected=NO_LISTS)
+    assert "reconstruction" not in _stops(checks)
+    assert checks["reconstruction"]["failed"] == 3
+    assert len(checks["reconstruction"]["failed_cells"]) == 3
+    _fail(cells, months[3], RC.F, A.RFS[0], reason=RC.RECONSTRUCTION)
+    assert "reconstruction" in _stops(RC.gates(cells, months, expected=NO_LISTS))
+
+
+def test_a_kept_f_row_with_a_gap_above_the_tolerance_counts_as_failed():
+    months = _months(1)
+    cells = _model_cells(months)
+    _set(cells, months[0], RC.F, A.RFS[0], rebuilt_sigma_gap=2e-6)
+    checks = RC.gates(cells, months, expected=NO_LISTS)
+    assert checks["reconstruction"]["failed"] == 1
+    assert "reconstruction" in _stops(checks)
+    _set(cells, months[0], RC.F, A.RFS[0], rebuilt_sigma_gap=math.nan)
+    assert RC.gates(cells, months, expected=NO_LISTS)["reconstruction"]["failed"] == 1
+    cells = _model_cells(months)
+    cells["rebuilt_mu_gap"] = cells["rebuilt_mu_gap"].astype(object)
+    cells.loc[_at(cells, months[0], RC.F, A.RFS[1]), "rebuilt_mu_gap"] = None
+    assert RC.gates(cells, months, expected=NO_LISTS)["reconstruction"]["failed"] == 1
+
+
+def test_list_gate():
+    months = ["2009-01", "2009-02", "2015-01", "2015-02"]
+    expected = (("2009-01", "2009-02"), (("2015-01", 0.85),))
+    base = _model_cells(months)
+    for month in ("2009-01", "2009-02"):
+        base = _exclude(base, month, RC.E)
+    _exclude(base, "2015-01", RC.U, 0.85)
+
+    checks = RC.gates(base, months, expected=expected)
+    assert "list gate" not in _stops(checks)
+    assert checks["list_gate"]["e_excluded"] == ["2009-01", "2009-02"]
+    assert checks["exclusions"][RC.E]["excluded"] == 2
+    assert checks["exclusions"][RC.E]["list"] == ["2009-01", "2009-02"]
+    assert checks["exclusions"][RC.U]["list"] == [{"month": "2015-01", "rf": 0.85}]
+
+    more = _exclude(base.copy(), "2015-02", RC.E)
+    assert "list gate" in _stops(RC.gates(more, months, expected=expected))
+    fewer = RC.gates(base, months, expected=(("2009-01", "2009-02", "2015-02"), expected[1]))
+    assert "list gate" in _stops(fewer)
+    extra_u = base.copy()
+    _exclude(extra_u, "2015-02", RC.U, 0.85)
+    assert "list gate" not in _stops(RC.gates(extra_u, months, expected=expected))
+    missing_u = RC.gates(base, months, expected=(expected[0], (("2015-02", 0.85),)))
+    assert "list gate" in _stops(missing_u)
+    assert missing_u["list_gate"]["u_missing"] == [{"month": "2015-02", "rf": 0.85}]
+
+    scoped = A._frame(base.loc[base["month"].isin(["2009-01", "2015-01"])])
+    checks = RC.gates(scoped, months, expected=expected, scope=["2009-01", "2015-01"])
+    assert checks["list_gate"]["e_expected"] == ["2009-01"]
+    assert checks["stops"] == []
+
+
+def test_the_pre_registered_lists_are_the_default_expectation(monkeypatch):
+    months = ["2009-01", "2015-01"]
+    cells = _exclude(_model_cells(months), "2009-01", RC.E)
+    _exclude(cells, "2015-01", RC.U, 0.85)
+    monkeypatch.setattr(RC, "E_EXCLUDED", ("2009-01",))
+    monkeypatch.setattr(RC, "U_EXCLUDED", (("2015-01", 0.85),))
+    assert RC.gates(cells, months)["stops"] == []
+    monkeypatch.setattr(RC, "E_EXCLUDED", ("2009-01", "2015-01"))
+    assert "list gate" in _stops(RC.gates(cells, months))
+
+
+@pytest.mark.parametrize("mix", [RC.D, RC.D10])
+def test_check_b_stops_on_one_month(mix):
+    months = _months(3)
+    cells = _model_cells(months)
+    _set(cells, months[1], mix, dr2=1.5, pool_dr2_max=1.5000005)
+    checks = RC.gates(cells, months, expected=NO_LISTS)
+    assert "check (b)" not in _stops(checks)
+    assert checks["check_b"][mix]["smallest_margin"] == pytest.approx(-5e-7, abs=1e-12)
+    _set(cells, months[1], mix, pool_dr2_max=1.50001)
+    checks = RC.gates(cells, months, expected=NO_LISTS)
+    assert "check (b)" in _stops(checks)
+    assert [f["month"] for f in checks["check_b"][mix]["failed"]] == [months[1]]
+
+
+@pytest.mark.parametrize("mix", [RC.D, RC.D10])
+def test_check_b_fails_closed(mix):
+    months = _months(2)
+    cells = _model_cells(months)
+    _set(cells, months[0], mix, dr2=math.nan)
+    assert "check (b)" in _stops(RC.gates(cells, months, expected=NO_LISTS))
+    cells = _model_cells(months)
+    _set(cells, months[0], mix, pool_dr2_max=math.nan)  # never read against the pool
+    assert "check (b)" in _stops(RC.gates(cells, months, expected=NO_LISTS))
+    cells = _model_cells(months)
+    for month in months:  # no month to judge
+        _fail(cells, month, mix)
+        cells.loc[_at(cells, month, mix), "weights"] = None
+    assert "check (b)" in _stops(RC.gates(cells, months, expected=NO_LISTS))
+
+
+def test_check_b_passes_a_month_without_an_allowed_row_and_lists_it():
+    months = _months(2)
+    cells = _model_cells(months)
+    _set(cells, months[0], RC.D10, pool_dr2_max=-math.inf)
+    checks = RC.gates(cells, months, expected=NO_LISTS)
+    assert "check (b)" not in _stops(checks)
+    assert checks["check_b"][RC.D10]["without_rows"] == [months[0]]
+
+
+def test_check_b_judges_an_excluded_d():
+    months = _months(2)
+    cells = _exclude(_model_cells(months), months[0], RC.D)
+    _set(cells, months[0], RC.D, dr2=1.0, pool_dr2_max=1.2)
+    assert "check (b)" in _stops(RC.gates(cells, months, expected=NO_LISTS))
+
+
+def test_u_gates():
+    months = _months(2)
+    m, rf = months[1], A.RFS[2]
+    cells = _model_cells(months)
+    _set(cells, m, RC.U, rf, mu_gap=-5e-7)
+    assert "U return" not in _stops(RC.gates(cells, months, expected=NO_LISTS))
+    _set(cells, m, RC.U, rf, mu_gap=-2e-6)
+    checks = RC.gates(cells, months, expected=NO_LISTS)
+    assert "U return" in _stops(checks)
+    assert checks["u_return"]["failed"] == [{"month": m, "rf": rf, "mu_gap": -2e-6}]
+
+    cells = _model_cells(months)
+    _set(cells, m, RC.U, rf, mu=0.05, pool_mu_bound=0.05 + 5e-7)
+    assert "U pool bound" not in _stops(RC.gates(cells, months, expected=NO_LISTS))
+    _set(cells, m, RC.U, rf, pool_mu_bound=0.05 + 2e-6)
+    assert "U pool bound" in _stops(RC.gates(cells, months, expected=NO_LISTS))
+
+
+def test_u_gates_fail_closed():
+    months = _months(2)
+    for column in ("mu_gap", "pool_mu_bound"):
+        cells = _model_cells(months)
+        _set(cells, months[0], RC.U, A.RFS[0], **{column: math.nan})
+        stops = _stops(RC.gates(cells, months, expected=NO_LISTS))
+        assert ("U return" if column == "mu_gap" else "U pool bound") in stops
+    cells = _model_cells(months)
+    for month in months:
+        for rf in A.RFS:
+            _fail(cells, month, RC.U, rf)
+    stops = _stops(RC.gates(cells, months, expected=NO_LISTS))
+    assert {"U return", "U pool bound"} <= set(stops)  # no kept U cell to judge
+
+
+def test_a_u_cell_without_a_pool_row_at_its_risk_passes_and_is_listed():
+    months = _months(2)
+    cells = _model_cells(months)
+    _set(cells, months[0], RC.U, A.RFS[0], pool_mu_bound=-math.inf)
+    checks = RC.gates(cells, months, expected=NO_LISTS)
+    assert checks["stops"] == []
+    assert checks["u_pool_bound"]["without_rows"] == [{"month": months[0], "rf": A.RFS[0]}]
+
+
+def test_failed_cells_use_the_kept_cells_of_the_eligible_months():
+    eligible = _months(100)
+    other = "2030-01"
+    cells = _model_cells([*eligible, other])
+    for k in range(20):
+        _exclude(cells, eligible[k], RC.U, A.RFS[k % 6])
+    for k in range(5):
+        _fail(cells, eligible[50 + k], RC.U, A.RFS[k], reason=f"made up {k}")
+    _fail(cells, other, RC.U, A.RFS[0])
+    checks = RC.gates(cells, eligible, expected=NO_LISTS)
+    u = checks["failed_cells"][RC.U]
+    assert (u["cells"], u["failed"]) == (580, 5)
+    assert [c["reason"] for c in u["list"]] == [f"made up {k}" for k in range(5)]
+    assert u["other_months"] == [{"month": other, "rf": A.RFS[0], "reason": "solver: made up"}]
+    assert "failed cells" not in _stops(checks)
+    _fail(cells, eligible[60], RC.U, A.RFS[0])
+    checks = RC.gates(cells, eligible, expected=NO_LISTS)
+    assert checks["failed_cells"][RC.U]["failed"] == 6
+    assert "failed cells" in _stops(checks)
+
+
+@pytest.mark.parametrize("mix", [RC.E, RC.D, RC.D10])
+def test_failed_cells_of_a_recipe_stop_above_one_percent(mix):
+    eligible = _months(100)
+    cells = _model_cells(eligible)
+    _fail(cells, eligible[0], mix)
+    checks = RC.gates(cells, eligible, expected=NO_LISTS)
+    assert checks["failed_cells"][mix]["failed"] == 1
+    assert "failed cells" not in _stops(checks)
+    _fail(cells, eligible[1], mix)
+    assert "failed cells" in _stops(RC.gates(cells, eligible, expected=NO_LISTS))
+
+
+def test_a_kept_cell_off_its_risk_line_counts_as_failed():
+    months = _months(1)
+    cells = _model_cells(months)
+    _set(cells, months[0], RC.U, A.RFS[0], risk_gap=3e-6)
+    _set(cells, months[0], "F@E", risk_gap=2e-6)
+    checks = RC.gates(cells, months, expected=NO_LISTS)
+    assert checks["failed_cells"][RC.U]["failed"] == 1
+    assert checks["failed_cells"][RC.E]["failed"] == 1
+    assert checks["risk_gap"][RC.U]["above"] == 1
+    cells = A._frame(cells.loc[~_at(cells, months[0], "F@D")])  # a kept D with no comparator
+    assert RC.gates(cells, months, expected=NO_LISTS)["failed_cells"][RC.D]["failed"] == 1
+
+
+def test_a_mix_with_no_cell_to_judge_stops():
+    months = _months(2)
+    cells = _model_cells(months)
+    for month in months:
+        cells = _exclude(cells, month, RC.D)
+    assert "failed cells" in _stops(RC.gates(cells, months, expected=NO_LISTS))
+
+
+def test_an_eligible_month_without_cells_stops_unless_out_of_scope():
+    months = _months(3)
+    cells = _model_cells(months[:2])
+    assert "coverage" in _stops(RC.gates(cells, months, expected=NO_LISTS))
+    checks = RC.gates(cells, months, expected=NO_LISTS, scope=months[:2])
+    assert checks["stops"] == []
+
+
+def test_a_u_that_keeps_the_limits_is_reported_as_equal_to_f(rec12):
+    mixes = RC.month_mixes(MONTH, M12_OPEN.mu_s, M12_OPEN.cov, M12_OPEN.lower, M12_OPEN.upper,
+                           recorded(M12_OPEN))  # fmt: skip
+    cells = RC.month_pool_checks(mixes, _pool([]), M12_OPEN.lower, M12_OPEN.upper)
+    checks = RC.gates(cells, [MONTH], expected=NO_LISTS)
+    assert checks["u_limits"] == {"breaks_share": 0.0, "l1_above_share": 0.0}
+    assert checks["u_return"]["failed"] == []
+
+
+def test_strict_gap_report():
+    months = _months(3)
+    cells = _model_cells(months)
+    _set(cells, months[0], RC.D, mu_gap=0.0, tie=True, l1=5e-5)
+    _fail(cells, months[1], RC.D, reason=RC.REFUTED)
+    checks = RC.gates(cells, months, expected=NO_LISTS)
+    assert checks["strict_gap"][RC.D] == {"ties_kept": 1, "ties_refuted": 1, "undecided": 0,
+                                          "l1_below": 1}  # fmt: skip
+    assert checks["strict_gap"][RC.E] == {"ties_kept": 0, "ties_refuted": 0, "undecided": 0,
+                                          "l1_below": 0}  # fmt: skip
+
+
+def test_risk_position_counts_months_at_or_above_the_top():
+    months = _months(5)
+    cells = _model_cells(months)
+    for month, a in zip(months, (0.12, 0.5, 0.3, 0.86), strict=False):
+        _set(cells, month, RC.E, a=a)
+    cells = _exclude(cells, months[4], RC.E)
+    _set(cells, months[4], RC.E, a=1.3)
+    position = RC.gates(cells, months[1:], expected=NO_LISTS)["risk_position"]
+    every = position[RC.E]["all"]
+    assert every["at_or_above_top"] == 1
+    assert every["nearest"] == {0.10: 1, 0.25: 1, 0.40: 0, 0.55: 1, 0.70: 0, 0.85: 1}
+    assert every["months"] == 5
+    assert every["median"] == pytest.approx(0.5)
+    assert every["mean"] == pytest.approx((0.12 + 0.5 + 0.3 + 0.86 + 1.3) / 5)
+    assert every["p5"] == pytest.approx(np.percentile([0.12, 0.5, 0.3, 0.86, 1.3], 5))
+    eligible = position[RC.E]["eligible"]
+    assert eligible["months"] == 4
+    assert eligible["nearest"] == {0.10: 0, 0.25: 1, 0.40: 0, 0.55: 1, 0.70: 0, 0.85: 1}
+
+
+def test_flagged_months_and_geometry():
+    months = _months(2)
+    cells = _model_cells(months)
+    _fail(cells, months[1], RC.F, A.RFS[3], reason=RC.RECONSTRUCTION)
+    _set(cells, months[0], RC.F, A.RFS[0], ends_gap=3e-7)
+    checks = RC.gates(cells, months, expected=NO_LISTS)
+    assert checks["flagged_months"] == [
+        {"month": months[1], "settings": [A.RFS[3]], "kept": [RC.E, RC.D, RC.D10]}
+    ]
+    assert checks["geometry"]["largest_ends_gap"] == 3e-7
