@@ -879,3 +879,53 @@ def gates(
         "flagged_months": _flagged(rows),
         "stops": stops,
     }
+
+
+# -------------------------------------------------------------- the model side of a job
+
+
+@dataclass(frozen=True)
+class ModelSide:
+    """Every start month's model-side cells (`month_pool_checks` rows with an `origin` column)
+    and the gates judged over them (`gates`)."""
+
+    cells: pd.DataFrame
+    checks: dict[str, Any]
+
+
+def model_side(
+    months: Sequence[str],
+    context: Callable[[str], Any],
+    columns: pd.DataFrame,
+    pool_path: Callable[[str], Path],
+    lower,
+    upper,
+    eligible: Sequence[str],
+    *,
+    expected: tuple[Sequence[str], Sequence[tuple[str, float]]] | None = None,
+    restricted: bool = False,
+    progress: Callable[[str], None] | None = None,
+) -> ModelSide:
+    """The model side of the recipes check, before any realized outcome is read (protocol,
+    "Model-side gates, before any realized outcome is read"). Per start month: the recorded
+    columns, the mixes, the pool with `dr2` and its checks; then the gates over all months
+    (`scope=months` when the run is `restricted` to chosen months). `context(month)` gives the
+    training side (`mu_s`, `cov`, `origin`). A month without pool rows is allowed; a pool row
+    without a model measure stops with a `ValueError` naming the month. No realized outcome is an
+    argument, so none can be read."""
+    parts = []
+    for month in months:
+        ctx = context(month)
+        mixes = month_mixes(
+            month, ctx.mu_s, ctx.cov, lower, upper, recorded_columns(columns, month)
+        )
+        pool = read_month_pool_dr2(pool_path(month))
+        part = month_pool_checks(mixes, pool, lower, upper)
+        part["origin"] = ctx.origin
+        parts.append(part)
+        if progress is not None:
+            progress(f"{month}: {len(pool)} main rows, {len(part)} model-side rows")
+        del pool
+    cells = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    checks = gates(cells, eligible, expected=expected, scope=list(months) if restricted else None)
+    return ModelSide(cells=cells, checks=checks)

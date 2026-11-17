@@ -8,10 +8,13 @@ month's mixes with their statuses. No data file, fixed seeds."""
 from __future__ import annotations
 
 import dataclasses
+import itertools
+import json
 import math
 from collections import Counter
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -26,6 +29,7 @@ from portfoliosight.research.fixedrisk import recipes3 as RC
 from portfoliosight.research.fixedrisk import region3 as G
 from portfoliosight.research.fixedrisk.objectives3 import FIELDS
 from portfoliosight.research.fixedrisk.pool import PoolBuffer, write_pool
+from tests.research.fixedrisk.optimizer_data import synthetic_context
 from tests.research.fixedrisk.recipe_data import (
     M12,
     M12_OPEN,
@@ -1029,3 +1033,106 @@ def test_flagged_months_and_geometry():
         {"month": months[1], "settings": [A.RFS[3]], "kept": [RC.E, RC.D, RC.D10]}
     ]
     assert checks["geometry"]["largest_ends_gap"] == 3e-7
+
+
+# ------------------------------------------------------------- the model side of a job
+
+SIDE_MONTHS = ["2015-01", "2015-02", "2015-03"]  # made up; none is on the pre-registered lists
+_POOL_FILES = itertools.count()
+
+
+@pytest.fixture(scope="module")
+def side_inputs(tmp_path_factory):
+    """Three made-up start months on 12-holding menus (seeds 7, 8, 9) with the recorded columns
+    the run would hold and a pool file each of 50 mixes inside the limits, scored with their true
+    model return, risk and diversification ratio."""
+    folder = tmp_path_factory.mktemp("side")
+    contexts, column_rows, pools = {}, [], {}
+    for k, month in enumerate(SIDE_MONTHS):
+        ctx = synthetic_context(funds=12, rows=400, cap=0.4, seed=7 + k)
+        menu = SimpleNamespace(mu_s=ctx.mu_s, cov=ctx.cov, lower=M12.lower, upper=M12.upper)
+        contexts[month] = SimpleNamespace(mu_s=ctx.mu_s, cov=ctx.cov, origin=date(2015, k + 1, 28))
+        column_rows += _column_rows(recorded(menu), month=month)
+        rng = np.random.default_rng(100 + k)
+        rows = []
+        for _ in range(50):
+            w = anchors.project_box_simplex(rng.normal(0.0, 0.3, 12), M12.lower, M12.upper)
+            rows.append({"weights": w, "mu": float(ctx.mu_s @ w),
+                         "sigma": float(np.sqrt(w @ ctx.cov @ w)),
+                         "dr2": anchors.dr2(w, ctx.sigma, ctx.cov), "tdd": 0.2, "enb": 1.5,
+                         "h": 0.3})  # fmt: skip
+        pools[month] = rows
+    return contexts, pd.DataFrame(column_rows), pools, folder
+
+
+def _side(side_inputs, pools=None, **kwargs) -> RC.ModelSide:
+    contexts, columns, default_pools, folder = side_inputs
+    pools = default_pools if pools is None else pools
+    paths = {}
+    for month, rows in pools.items():
+        paths[month] = _pool_file(folder / f"{month}-{next(_POOL_FILES)}.parquet", rows)
+    return RC.model_side(SIDE_MONTHS, contexts.__getitem__, columns, paths.__getitem__,
+                         M12.lower, M12.upper, SIDE_MONTHS, **kwargs)  # fmt: skip
+
+
+@pytest.fixture(scope="module")
+def side3(side_inputs) -> RC.ModelSide:
+    return _side(side_inputs, expected=NO_LISTS)
+
+
+def test_model_side_passes_on_a_consistent_run(side3, side_inputs):
+    assert side3.checks["stops"] == []
+    assert list(dict.fromkeys(side3.cells["month"])) == SIDE_MONTHS
+    assert len(side3.cells) == 3 * 24
+    origins = side3.cells.groupby("month")["origin"].unique()
+    assert {m: list(v) for m, v in origins.items()} == {
+        m: [side_inputs[0][m].origin] for m in SIDE_MONTHS
+    }
+    assert set(RC.POOL_CHECKS) <= set(side3.cells.columns)
+
+
+def test_model_side_reports_each_month(side_inputs):
+    said: list[str] = []
+    _side(side_inputs, expected=NO_LISTS, progress=said.append)
+    assert len(said) == 3 and all(m in s for m, s in zip(SIDE_MONTHS, said, strict=True))
+
+
+def test_the_pre_registered_lists_are_the_default(side_inputs):
+    assert "list gate" in _stops(_side(side_inputs).checks)
+
+
+def test_a_restricted_run_requires_only_the_listed_months_it_chose(side_inputs):
+    assert "list gate" not in _stops(_side(side_inputs, restricted=True).checks)
+
+
+def test_an_inflated_recorded_ratio_stops_at_check_b(side_inputs):
+    pools = dict(side_inputs[2])
+    month = SIDE_MONTHS[1]
+    pools[month] = [{**pools[month][0], "dr2": 99.0}, *pools[month][1:]]
+    checks = _side(side_inputs, pools=pools, expected=NO_LISTS).checks
+    assert "check (b)" in _stops(checks)
+    assert [f["month"] for f in checks["check_b"][RC.D]["failed"]] == [month]
+
+
+def test_a_month_without_pool_rows_is_allowed(side_inputs):
+    pools = dict(side_inputs[2])
+    month = SIDE_MONTHS[0]
+    pools[month] = [{**row, "lookback": "5y"} for row in pools[month]]  # no main row
+    checks = _side(side_inputs, pools=pools, expected=NO_LISTS).checks
+    assert checks["stops"] == []
+    assert checks["check_b"][RC.D]["without_rows"] == [month]
+    assert len([c for c in checks["u_pool_bound"]["without_rows"] if c["month"] == month]) == 6
+
+
+def test_an_allowed_pool_row_without_a_model_measure_stops_naming_the_month(side_inputs):
+    pools = dict(side_inputs[2])
+    month = SIDE_MONTHS[2]
+    pools[month] = [{**pools[month][0], "tdd": math.nan}, *pools[month][1:]]
+    with pytest.raises(ValueError, match=month):
+        _side(side_inputs, pools=pools, expected=NO_LISTS)
+
+
+def test_model_side_is_deterministic(side3, side_inputs):
+    again = _side(side_inputs, expected=NO_LISTS)
+    pd.testing.assert_frame_equal(again.cells, side3.cells)
+    assert json.dumps(again.checks, sort_keys=True) == json.dumps(side3.checks, sort_keys=True)
