@@ -127,7 +127,6 @@ const urlKeys = (maxFunds: number): ReadonlyArray<readonly [string, Shape]> => [
   ["d", matching(/^(?:auto|0(?:\.\d{1,12})?|1(?:\.0{1,12})?)$/)],
   ["t", pageTheme],
   ["x", matching(/^1$/)],
-  ["nl", matching(/^0$/)],
 ];
 // Written by the page even at their defaults; `unit=pct` is the default the page leaves out.
 

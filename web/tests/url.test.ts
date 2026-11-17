@@ -1,12 +1,12 @@
-// URL codec (spec 8.1): the eleven keys, their canonical order and formats, and the debounced write.
+// URL codec (spec 8.1): the ten keys, their canonical order and formats, and the debounced write.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LOOKBACKS, clampR, decode, encode, scheduleUrlWrite, writeUrl, type UrlState } from "../src/state/url";
 
-const EMPTY: UrlState = { preset: null, funds: [], unit: "pct", caps: [], lookback: "5y", ghosts: [], r: null, d: 0, theme: null, details: false, noLimitsLine: true };
+const EMPTY: UrlState = { preset: null, funds: [], unit: "pct", caps: [], lookback: "5y", ghosts: [], r: null, d: 0, theme: null, details: false };
 const GUIDE: UrlState = { ...EMPTY, preset: "guide2017" };
-const KEYS = ["u", "f", "unit", "c", "lb", "g", "r", "d", "t", "x", "nl"];
+const KEYS = ["u", "f", "unit", "c", "lb", "g", "r", "d", "t", "x"];
 const keysOf = (search: string) => Array.from(new URLSearchParams(search).keys());
 const valueOf = (search: string, key: string) => new URLSearchParams(search).get(key);
 
@@ -28,7 +28,6 @@ describe("encode and decode", () => {
       d: 0.5,
       theme: null,
       details: true,
-      noLimitsLine: true,
     });
     expect(encode(decode(custom))).toBe(custom);
   });
@@ -55,7 +54,7 @@ describe("encode and decode", () => {
     expect(decode("?u=guide2017&d=-3").d).toBe(0);
   });
 
-  it("writes every key once, in the order u f unit c lb g r d t x nl", () => {
+  it("writes every key once, in the order u f unit c lb g r d t x", () => {
     const state: UrlState = {
       preset: null,
       funds: [{ id: "VTI", amount: 60.5 }, { id: "TSP-L2030", amount: null }, { id: "BRK.B", amount: 0 }],
@@ -67,11 +66,10 @@ describe("encode and decode", () => {
       d: 0.25,
       theme: "ks-dark",
       details: true,
-      noLimitsLine: false,
     };
-    expect(encode(state)).toBe("?f=VTI:60.5,TSP-L2030,BRK.B:0&unit=usd&c=VTI:5:40,BRK.B::&lb=10y&g=1y,ew&r=12.5&d=0.25&t=ks-dark&x=1&nl=0");
+    expect(encode(state)).toBe("?f=VTI:60.5,TSP-L2030,BRK.B:0&unit=usd&c=VTI:5:40,BRK.B::&lb=10y&g=1y,ew&r=12.5&d=0.25&t=ks-dark&x=1");
     expect(decode(encode(state))).toEqual(state);
-    expect(keysOf(encode({ ...state, preset: "tsp", funds: [] }))).toEqual(["u", "unit", "c", "lb", "g", "r", "d", "t", "x", "nl"]);
+    expect(keysOf(encode({ ...state, preset: "tsp", funds: [] }))).toEqual(["u", "unit", "c", "lb", "g", "r", "d", "t", "x"]);
     expect(keysOf(encode(state))).toEqual(KEYS.filter((key) => key !== "u"));
   });
 
@@ -107,20 +105,17 @@ describe("encode and decode", () => {
     expect(decode("?x=true").details).toBe(false);
   });
 
-  it("the no-limits line is shown by default and the address says nothing of it; nl=0 hides it and nothing else does", () => {
-    expect(decode("").noLimitsLine).toBe(true);
-    expect(encode(EMPTY)).not.toMatch(/nl/);
-    expect(encode(GUIDE)).not.toMatch(/nl/);
-    expect(decode("?u=guide2017&nl=0").noLimitsLine).toBe(false);
-    expect(encode({ ...GUIDE, noLimitsLine: false })).toBe("?u=guide2017&lb=5y&d=0&nl=0");
-    expect(encode(decode("?nl=0&u=guide2017"))).toBe("?u=guide2017&lb=5y&d=0&nl=0");
-    // anything but 0 reads as the default, and is not written back
-    for (const value of ["1", "", "off", "false", "00", "0.0", "no"]) {
-      expect(decode(`?u=guide2017&nl=${value}`).noLimitsLine, `nl=${value}`).toBe(true);
+  it("the No allocation limits choice is not in the address: encode never writes nl and decode ignores it, whatever its value (spec 8.1 has no such key)", () => {
+    for (const value of ["0", "1", "", "off"]) {
+      expect(decode(`?u=guide2017&nl=${value}`), `nl=${value}`).toEqual(decode("?u=guide2017"));
       expect(encode(decode(`?u=guide2017&nl=${value}`)), `nl=${value}`).toBe("?u=guide2017&lb=5y&d=0");
     }
-    // it travels with a preset and with a custom menu alike, after the details key
-    expect(encode({ ...EMPTY, funds: [{ id: "VTI", amount: 60 }], details: true, noLimitsLine: false })).toBe("?f=VTI:60&lb=5y&d=0&x=1&nl=0");
+    expect(decode("?nl=0")).toEqual(EMPTY);
+    expect(encode(decode("?nl=0&x=1&u=tsp"))).toBe("?u=tsp&lb=5y&d=0&x=1");
+    // a state that still carries a field for it writes nothing for it
+    const stale = { ...EMPTY, noLimitsLine: false } as UrlState;
+    expect(keysOf(encode(stale))).not.toContain("nl");
+    expect(keysOf(encode({ ...stale, details: true }))).toEqual(["lb", "d", "x"]);
   });
 
   it("keeps d inside [0, 1]", () => {
@@ -209,7 +204,6 @@ describe("encode and decode", () => {
         d: rnd() < 0.4 ? 0 : Math.round(rnd() * 1e6) / 1e6,
         theme: pick([null, "ks-dark", "light", "hud", "grid"] as const),
         details: rnd() < 0.5,
-        noLimitsLine: rnd() < 0.5,
       };
       const search = encode(state);
       expect(decode(search), search).toEqual(state);

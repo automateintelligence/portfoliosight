@@ -1,4 +1,4 @@
-// The view in the address (spec 8.1): twelve query keys, written in one canonical order.
+// The view in the address (spec 8.1): eleven query keys, written in one canonical order.
 // `decode` reads those keys and nothing else, and keeps a value only if it has the key's shape.
 // This file imports nothing and touches no browser object when loaded: the Worker and plain-node
 // tests import it too.
@@ -36,8 +36,6 @@ export type UrlState = {
   theme: (typeof THEMES)[number] | null;
   /** `x=1`. */
   details: boolean;
-  /** `nl=0` hides the No allocation limits line; it is shown otherwise, and the default is left out of the address. */
-  noLimitsLine: boolean;
 };
 
 type Domain = { s_safe: number; s_max: number };
@@ -97,12 +95,11 @@ export function decode(search: string, domain?: Domain): UrlState {
     d: d === null ? 0 : Math.min(Math.max(d, 0), 1),
     theme: oneOf(THEMES, params.get("t")),
     details: params.get("x") === "1",
-    noLimitsLine: params.get("nl") !== "0",
   };
   return domain ? clampR(state, domain) : state;
 }
 
-/** The query string of a state, with its leading `?`, in the order `u f p unit c lb g r d t x nl`. */
+/** The query string of a state, with its leading `?`, in the order `u f p unit c lb g r d t x`. */
 export function encode(state: UrlState): string {
   const id = encodeURIComponent;
   const pairs: string[] = [];
@@ -123,7 +120,6 @@ export function encode(state: UrlState): string {
   pairs.push(`d=${writeDecimal(state.d)}`);
   if (state.theme) pairs.push(`t=${state.theme}`);
   if (state.details) pairs.push("x=1");
-  if (!state.noLimitsLine) pairs.push("nl=0");
   return `?${pairs.join("&")}`;
 }
 

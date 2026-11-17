@@ -72,7 +72,7 @@ export type State = {
   t: number;
   theme: ThemeId;
   details: boolean;
-  /** Whether the No allocation limits line is drawn when the limits bind (a choice of the view, on by default). */
+  /** Whether the No allocation limits line is drawn when the limits bind: on by default, kept in this browser, never in the address. */
   noLimitsLine: boolean;
   presets: PresetsBody | null;
   previewOn: boolean;
@@ -138,6 +138,17 @@ function storedTheme(): ThemeId | null {
   }
 }
 
+const NO_LIMITS_LINE_KEY = "ps.noLimitsLine";
+
+/** The No allocation limits line is shown unless this browser was told to hide it (storage blocked or empty: shown). */
+function storedNoLimitsLine(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(NO_LIMITS_LINE_KEY) !== "hidden";
+  } catch {
+    return true;
+  }
+}
+
 const unitOfPreset = (preset: Preset): Unit | null =>
   preset.allocation_unit === "$" || preset.allocation_unit === "usd"
     ? "usd"
@@ -176,7 +187,6 @@ export function toUrlState(state: State, haveR: boolean): UrlState {
     d: state.t,
     theme: state.theme,
     details: state.details,
-    noLimitsLine: state.noLimitsLine,
   };
 }
 
@@ -248,7 +258,7 @@ export function createStore(init: { search: string }): Store {
     t: url.d,
     theme: url.theme ?? storedTheme() ?? "ks-dark",
     details: url.details,
-    noLimitsLine: url.noLimitsLine,
+    noLimitsLine: storedNoLimitsLine(),
     presets: null,
     previewOn: false,
     tier: PUBLIC_TIER,
@@ -716,6 +726,11 @@ export function createStore(init: { search: string }): Store {
         set({ details: action.details });
         return;
       case "setNoLimitsLine":
+        try {
+          globalThis.localStorage?.setItem(NO_LIMITS_LINE_KEY, action.show ? "shown" : "hidden");
+        } catch {
+          // storage unavailable: the choice holds for this page only
+        }
         set({ noLimitsLine: action.show });
         return;
       case "toggleGhost": {

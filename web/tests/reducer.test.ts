@@ -421,27 +421,62 @@ describe("store: transitions", () => {
     expect(shares.getState().preset).toBe("guide2017");
   });
 
-  it("the no-limits line is on by default and the address stays silent; turning it off writes nl=0, turning it on takes the key away, and a link with nl=0 opens with it off", async () => {
+  it("the no-limits line is on by default; the choice is kept in this browser and never in the address", async () => {
     const store = await boot("");
     expect(store.getState().noLimitsLine).toBe(true);
     store.dispatch({ type: "flushUrl" });
-    expect(replaced[replaced.length - 1]).not.toMatch(/nl=/);
+    expect(replaced[replaced.length - 1]).not.toMatch(/[?&]nl\b/);
     const fetches = tensorCalls().length;
     store.dispatch({ type: "setNoLimitsLine", show: false });
     expect(store.getState().noLimitsLine).toBe(false);
     store.dispatch({ type: "flushUrl" });
-    expect(new URLSearchParams(replaced[replaced.length - 1].split("?")[1]).get("nl")).toBe("0");
+    expect(replaced[replaced.length - 1], "hiding the line writes nothing to the address").not.toMatch(/[?&]nl\b/);
+    expect(new URLSearchParams(replaced[replaced.length - 1].split("?")[1]).has("nl")).toBe(false);
     expect(tensorCalls().length, "a drawing choice asks the service for nothing").toBe(fetches);
-    store.dispatch({ type: "setNoLimitsLine", show: true });
-    store.dispatch({ type: "flushUrl" });
-    expect(replaced[replaced.length - 1]).not.toMatch(/nl=/);
-    const again = await boot("?nl=0");
+    // the same browser, a plain address: the line is still off
+    const again = await boot("");
     expect(again.getState().noLimitsLine).toBe(false);
     // a choice made before a new menu is loaded survives it
     again.dispatch({ type: "selectPreset", id: "tsp" });
     await flush();
     await advance(500);
     expect(again.getState().noLimitsLine).toBe(false);
+    again.dispatch({ type: "flushUrl" });
+    expect(replaced[replaced.length - 1]).not.toMatch(/[?&]nl\b/);
+    // turned on again, the next visit shows it
+    again.dispatch({ type: "setNoLimitsLine", show: true });
+    expect((await boot("")).getState().noLimitsLine).toBe(true);
+  });
+
+  it("a link with nl=0 is not read: the line is shown, and the address is rewritten without the key", async () => {
+    const store = await boot("?u=guide2017&nl=0&x=1");
+    expect(store.getState().noLimitsLine).toBe(true);
+    expect(store.getState().details).toBe(true);
+    store.dispatch({ type: "flushUrl" });
+    const search = replaced[replaced.length - 1].split("?")[1];
+    expect(new URLSearchParams(search).has("nl")).toBe(false);
+    expect(new URLSearchParams(search).get("x")).toBe("1");
+    // the link does not override this browser's own choice either
+    store.dispatch({ type: "setNoLimitsLine", show: false });
+    expect((await boot("?nl=0")).getState().noLimitsLine).toBe(false);
+    expect((await boot("?nl=1")).getState().noLimitsLine).toBe(false);
+  });
+
+  it("the no-limits choice works when storage is blocked: shown by default, and a choice holds for the page", async () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("blocked");
+      },
+    });
+    const store = await boot("");
+    expect(store.getState().noLimitsLine).toBe(true);
+    store.dispatch({ type: "setNoLimitsLine", show: false });
+    expect(store.getState().noLimitsLine).toBe(false);
+    store.dispatch({ type: "flushUrl" });
+    expect(replaced[replaced.length - 1]).not.toMatch(/[?&]nl\b/);
   });
 
   it("theme and details are kept and stored", async () => {
