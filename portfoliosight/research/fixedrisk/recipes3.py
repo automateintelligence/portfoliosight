@@ -432,8 +432,13 @@ RECIPES = (E, D, D10)
 
 
 def _built(weights: Any) -> bool:
-    """A row carries weights (a mix that was built), not None or a missing value."""
-    return weights is not None and np.ndim(weights) == 1
+    """A row carries weights (a mix that was built): one non-empty vector of finite numbers."""
+    if weights is None or np.ndim(weights) != 1 or np.size(weights) == 0:
+        return False
+    try:
+        return bool(np.isfinite(np.asarray(weights, dtype=float)).all())
+    except (TypeError, ValueError):
+        return False
 
 
 def _best(values: np.ndarray, where: np.ndarray) -> float:
@@ -467,6 +472,8 @@ def month_pool_checks(mixes: pd.DataFrame, pool: pd.DataFrame, lower, upper) -> 
         for name in ("mu", "sigma"):
             if np.isnan(pool[name].to_numpy(dtype=float)).any():
                 raise ValueError(f"main-pool row(s) lack {name}")
+        if len(pool) and not np.isfinite(np.vstack(pool["weights"].to_list())).all():
+            raise ValueError("main-pool row(s) lack finite weights")
         allowed = allowed_mixes(pool, lower, upper)
     except ValueError as exc:
         raise ValueError(f"{month}: {exc}; the recipes check stops") from exc
@@ -508,6 +515,14 @@ def _ties(rows: list[dict[str, Any]]) -> None:
         pair = [
             r for r in rows if r["month"] == row["month"] and r["mix"] == COMPARATOR[row["mix"]]
         ]
+        on_line = (
+            len(pair) == 1
+            and pair[0]["status"] == KEPT
+            and _built(pair[0]["weights"])
+            and _num(pair[0]["risk_gap"]) <= TOL
+        )
+        if decided and bound <= mu + TOL and not on_line:
+            continue  # left as it is: the gates judge a comparator off its line or unbuilt
         if decided and bound <= mu + TOL:
             row["tie"] = True
             for comp in pair:
@@ -586,15 +601,12 @@ def _f_failed(row: Row) -> bool:
     return row["status"] != KEPT or not gaps_ok
 
 
-NOT_BUILT = "kept without weights"
-
-
 def _judge_rows(rows: list[Row]) -> list[Row]:
-    """`rows` (copies) with each kept cell's status re-derived from its own columns: an F row
-    fails when a rebuilt gap is above `TOL` or missing; a kept U fails when the F row of its
-    setting failed, it has no weights, or its risk gap is not within `U_TOL`; a kept E, D or D10
-    fails, with its comparator, when either has no weights or the comparator is missing, not kept,
-    or off the risk line by more than `TOL`."""
+    """`rows` (copies) with each kept cell's status re-derived from its tolerances: an F row
+    fails when a rebuilt gap is not within `TOL`; a kept U fails when the F row of its setting
+    failed or its risk gap is not within `U_TOL`; a kept E, D or D10 fails, with its comparator,
+    when the comparator's risk gap is not within `TOL`. A row missing what it must hold is the
+    structure gate's: it stops the run instead."""
     rows = [dict(r) for r in rows]
     for row in rows:
         if row["mix"] == F and row["status"] == KEPT and _f_failed(row):
@@ -609,24 +621,16 @@ def _judge_rows(rows: list[Row]) -> list[Row]:
         if mix == U:
             if (str(row["month"]), _rf(row)) in f_failed:
                 reason = "the F row of this setting failed"
-            elif not _built(row["weights"]):
-                reason = NOT_BUILT
             elif not _num(row["risk_gap"]) <= U_TOL:
                 reason = f"the risk gap is not within {U_TOL:.0e}"
             if reason:
                 row.update(status=FAILED, reason=reason)
             continue
         comp = comparators.get((str(row["month"]), COMPARATOR[mix]))
-        if not _built(row["weights"]):
-            reason = NOT_BUILT
-        elif comp is None or comp["status"] != KEPT or not _built(comp["weights"]):
-            reason = "the comparator is missing, not kept or without weights"
-        elif not _num(comp["risk_gap"]) <= TOL:
+        if comp is not None and not _num(comp["risk_gap"]) <= TOL:
             reason = f"the comparator's risk gap is not within {TOL:.0e}"
-        if reason:
             row.update(status=FAILED, reason=reason)
-            if comp is not None:
-                comp.update(status=FAILED, reason=reason)
+            comp.update(status=FAILED, reason=reason)
     return rows
 
 
@@ -639,11 +643,56 @@ def judge(cells: pd.DataFrame) -> pd.DataFrame:
 
 STATUSES = (KEPT, EXCLUDED, FAILED)
 ONE_PER_SETTING = (F, F_ARM1, U)
+# What a kept or excluded row must hold, by mix: finite numbers, and pool maxima that are not
+# missing (-inf, no pool row, is allowed). Every other row is never read by a gate.
+_KEPT_FINITE = {
+    F: ("mu", "sigma", "r", "rebuilt_mu_gap", "rebuilt_sigma_gap"),
+    F_ARM1: (),
+    U: ("r", "mu", "sigma", "risk_gap", "mu_gap", "l1"),
+    **dict.fromkeys(RECIPES, ("mu", "sigma", "a", "dr2", "mu_gap", "l1")),
+    **dict.fromkeys((COMPARATOR[m] for m in RECIPES), ("mu", "sigma", "risk_gap")),
+}
+_KEPT_POOL = {
+    U: ("pool_mu_bound",),
+    E: ("pool_mu_at_risk",),
+    **dict.fromkeys((D, D10), ("pool_mu_at_risk", "pool_dr2_max")),
+}
+_EXCLUDED_FINITE = dict.fromkeys(RECIPES, ("sigma", "a", "dr2"))
+_EXCLUDED_POOL = {D: ("pool_dr2_max",), D10: ("pool_dr2_max",)}
+
+
+def _row_problems(row: Row) -> list[str]:
+    """What a kept or excluded row lacks of what the gates read (the allow-list above)."""
+    mix, status = row["mix"], row["status"]
+    if status == KEPT:
+        finite, pool = _KEPT_FINITE.get(mix, ()), _KEPT_POOL.get(mix, ())
+    elif status == EXCLUDED and mix in RECIPES:
+        finite, pool = _EXCLUDED_FINITE[mix], _EXCLUDED_POOL.get(mix, ())
+    else:
+        return []
+    lacks = [] if _built(row["weights"]) else ["weights"]
+    lacks += [n for n in finite if not math.isfinite(_num(row[n]))]
+    lacks += [n for n in pool if math.isnan(_num(row[n]))]
+    if mix == U and status == KEPT and not isinstance(row["breaks_limit"], (bool, np.bool_)):
+        lacks.append("breaks_limit")
+    return lacks
+
+
+def _pairing(month: str, mix: str, here: list[Row]) -> str | None:
+    """A kept mix has one kept comparator; an excluded one has none; a failed one has none or a
+    failed one."""
+    (row,) = [r for r in here if r["mix"] == mix]
+    comps = sorted(str(r["status"]) for r in here if r["mix"] == COMPARATOR[mix])
+    allowed = {KEPT: [[KEPT]], EXCLUDED: [[]], FAILED: [[], [FAILED]]}.get(row["status"], [])
+    if comps not in allowed:
+        return f"{month}: {mix} {row['status']} with comparator rows {comps}"
+    return None
 
 
 def _structure(rows: list[Row]) -> tuple[list[str], str | None]:
-    """Every start month holds F, arm 1 and U once at each of the six settings, E, D and D10 once,
-    each comparator at most once, no other mix, and only known statuses."""
+    """Every start month holds F, arm 1 and U once at each of the six settings, E, D and D10 once
+    with their comparators paired (`_pairing`), no other mix, only known statuses, and every kept
+    or excluded row holds what the gates read (`_row_problems`)."""
     problems: list[str] = []
     settings = sorted(round(rf, 6) for rf in A.RFS)
     known = {*ONE_PER_SETTING, *RECIPES, *COMPARATOR.values()}
@@ -657,15 +706,17 @@ def _structure(rows: list[Row]) -> tuple[list[str], str | None]:
             count = sum(r["mix"] == mix for r in here)
             if count != 1:
                 problems.append(f"{month}: {count} rows of {mix}")
-            comp = sum(r["mix"] == COMPARATOR[mix] for r in here)
-            if comp > 1:
-                problems.append(f"{month}: {comp} rows of {COMPARATOR[mix]}")
+            elif paired := _pairing(month, mix, here):
+                problems.append(paired)
         unknown = sorted({str(r["mix"]) for r in here if r["mix"] not in known})
         if unknown:
             problems.append(f"{month}: unknown mixes {unknown}")
         statuses = sorted({str(r["status"]) for r in here if r["status"] not in STATUSES})
         if statuses:
             problems.append(f"{month}: unknown statuses {statuses}")
+        for row in here:
+            if lacks := _row_problems(row):
+                problems.append(f"{month}: {row['mix']} {_rf(row)} {row['status']} lacks {lacks}")
     return problems, "; ".join(problems[:10]) or None
 
 
@@ -1010,6 +1061,6 @@ def model_side(
         if progress is not None:
             progress(f"{month}: {len(pool)} main rows, {len(part)} model-side rows")
         del pool
-    cells = judge(pd.concat(parts, ignore_index=True)) if parts else pd.DataFrame()
+    cells = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
     checks = gates(cells, eligible, expected=expected, scope=list(months) if restricted else None)
-    return ModelSide(cells=cells, checks=checks)
+    return ModelSide(cells=judge(cells) if parts else cells, checks=checks)

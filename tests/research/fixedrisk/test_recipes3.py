@@ -610,9 +610,10 @@ def test_the_u_bound_is_left_empty_on_an_excluded_or_failed_u():
 
 
 def _pair(mu_gap: float = 0.0, **e: Any) -> list[Row]:
-    """E kept at model return 0.05 and risk 0.10, with its comparator `F@E`."""
-    return [_cell(RC.E, mu=0.05, sigma=0.10, mu_gap=mu_gap, **e),
-            _cell("F@E", mu=0.05 + mu_gap, sigma=0.10)]  # fmt: skip
+    """E kept at model return 0.05 and risk 0.10, with its comparator `F@E` on its risk line."""
+    return [_cell(RC.E, mu=0.05, sigma=0.10, mu_gap=mu_gap, weights=np.array(INSIDE), **e),
+            _cell("F@E", mu=0.05 + mu_gap, sigma=0.10, risk_gap=0.0,
+                  weights=np.array([0.3, 0.4, 0.3]))]  # fmt: skip
 
 
 def test_a_mix_on_the_frontier_is_a_kept_tie():
@@ -963,7 +964,7 @@ def test_a_kept_cell_off_its_risk_line_counts_as_failed():
     assert checks["failed_cells"][RC.E]["failed"] == 1
     assert checks["risk_gap"][RC.U]["above"] == 1
     cells = A._frame(cells.loc[~_at(cells, months[0], "F@D")])  # a kept D with no comparator
-    assert RC.gates(cells, months, expected=NO_LISTS)["failed_cells"][RC.D]["failed"] == 1
+    assert "structure" in _stops(RC.gates(cells, months, expected=NO_LISTS))
 
 
 def test_a_mix_with_no_cell_to_judge_stops():
@@ -1194,15 +1195,54 @@ def test_a_kept_or_excluded_d_without_weights_fails_check_b():
         assert [f["month"] for f in checks["check_b"][RC.D]["failed"]] == [months[1]]
 
 
-def test_a_kept_mix_or_comparator_without_weights_is_a_failed_cell():
+@pytest.mark.parametrize(
+    ("mix", "rf", "name", "value"),
+    [
+        ("F@E", None, "weights", None),
+        (RC.U, A.RFS[4], "weights", None),
+        (RC.D, None, "weights", np.zeros(0)),
+        (RC.E, None, "weights", np.array([0.5, math.nan])),
+        (RC.E, None, "weights", np.array(["x", "y"], dtype=object)),
+        (RC.U, A.RFS[1], "mu", math.nan),
+        (RC.U, A.RFS[1], "breaks_limit", None),
+        (RC.U, A.RFS[2], "pool_mu_bound", math.nan),
+        (RC.D10, None, "pool_dr2_max", math.nan),
+        (RC.E, None, "a", math.nan),
+        (RC.F, A.RFS[0], "mu", math.nan),
+        (RC.F_ARM1, A.RFS[0], "weights", None),
+        ("F@D", None, "risk_gap", math.nan),
+    ],
+)
+def test_a_kept_row_with_a_missing_or_malformed_value_stops(mix, rf, name, value):
     months = _months(1)
     cells = _model_cells(months)
-    cells.loc[_at(cells, months[0], "F@E"), "weights"] = None
-    cells.loc[_at(cells, months[0], RC.U, A.RFS[4]), "weights"] = None
-    judged = _records(RC.judge(cells))
-    assert _row(judged, RC.E)["status"] == _row(judged, "F@E")["status"] == RC.FAILED
-    u = [r for r in _rows(judged, RC.U) if r["rf"] == A.RFS[4]]
-    assert u[0]["status"] == RC.FAILED
+    cells[name] = cells[name].astype(object)
+    mask = _at(cells, months[0], mix, rf)
+    cells.loc[mask, name] = pd.Series([value], index=cells.index[mask], dtype=object)
+    assert "structure" in _stops(RC.gates(cells, months, expected=NO_LISTS))
+
+
+def test_an_excluded_d_without_its_ratio_stops():
+    months = _months(1)
+    cells = _exclude(_model_cells(months), months[0], RC.D)
+    assert "structure" not in _stops(RC.gates(cells, months, expected=NO_LISTS))
+    _set(cells, months[0], RC.D, dr2=math.nan)
+    assert "structure" in _stops(RC.gates(cells, months, expected=NO_LISTS))
+
+
+def test_a_mix_and_its_comparator_out_of_step_stop():
+    months = _months(1)
+    base = _model_cells(months)
+    for mix, comp_status in ((RC.D, RC.FAILED), (RC.E, RC.EXCLUDED)):
+        cells = base.copy()
+        _set(cells, months[0], RC.COMPARATOR[mix], status=comp_status)
+        assert "structure" in _stops(RC.gates(cells, months, expected=NO_LISTS))
+    cells = base.copy()
+    _set(cells, months[0], RC.E, status=RC.EXCLUDED)  # excluded, yet with a comparator row
+    assert "structure" in _stops(RC.gates(cells, months, expected=NO_LISTS))
+    cells = base.copy()
+    _set(cells, months[0], RC.D10, status=RC.FAILED)  # failed, with a kept comparator
+    assert "structure" in _stops(RC.gates(cells, months, expected=NO_LISTS))
 
 
 def test_judge_writes_the_gates_statuses_into_the_cells():
@@ -1227,7 +1267,7 @@ def test_model_side_returns_the_judged_cells(side_inputs, monkeypatch):
         out = original(mixes, pool, lower, upper)
         if out["month"].iloc[0] == SIDE_MONTHS[1]:
             out.loc[(out["mix"] == RC.U).to_numpy() & np.isclose(out["rf"], A.RFS[0]),
-                    "risk_gap"] = math.nan  # fmt: skip
+                    "risk_gap"] = 3e-6  # fmt: skip
         return out
 
     monkeypatch.setattr(RC, "month_pool_checks", off_line)
@@ -1236,3 +1276,36 @@ def test_model_side_returns_the_judged_cells(side_inputs, monkeypatch):
     u = [r for r in cells if r["mix"] == RC.U and r["month"] == SIDE_MONTHS[1]]
     assert u[0]["status"] == RC.FAILED
     assert side.checks["failed_cells"][RC.U]["failed"] == 1
+
+
+def test_the_gates_read_the_cells_before_they_are_judged(side_inputs, monkeypatch):
+    original = RC.month_pool_checks
+
+    def unbuilt(mixes, pool, lower, upper):
+        out = original(mixes, pool, lower, upper)
+        if out["month"].iloc[0] == SIDE_MONTHS[1]:
+            mask = (out["mix"] == RC.D).to_numpy()
+            out.loc[mask, "weights"] = pd.Series([None], index=out.index[mask], dtype=object)
+        return out
+
+    monkeypatch.setattr(RC, "month_pool_checks", unbuilt)
+    stops = _stops(_side(side_inputs, expected=NO_LISTS).checks)
+    assert {"structure", "check (b)"} <= set(stops)
+
+
+def test_a_tie_is_not_applied_to_a_comparator_off_its_line_or_unbuilt():
+    pool = [{"weights": INSIDE, "sigma": 0.09, "mu": 0.049}]
+    off_line = _pair()
+    off_line[1].update(weights=np.array([0.2, 0.5, 0.3]), risk_gap=2e-6)
+    e, comp = _checked(off_line, pool)
+    assert e["tie"] is False
+    assert np.array_equal(comp["weights"], [0.2, 0.5, 0.3]) and comp["risk_gap"] == 2e-6
+    unbuilt = _pair()
+    unbuilt[1].update(weights=None, risk_gap=0.0)
+    e, comp = _checked(unbuilt, pool)
+    assert e["tie"] is False and comp["weights"] is None
+
+
+def test_a_pool_row_with_missing_weights_stops_naming_the_month():
+    with pytest.raises(ValueError, match=MONTH):
+        _checked([_cell(RC.D, dr2=2.0)], [{"weights": [math.nan, 0.5, 0.5]}])
