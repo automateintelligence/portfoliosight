@@ -1136,3 +1136,103 @@ def test_model_side_is_deterministic(side3, side_inputs):
     again = _side(side_inputs, expected=NO_LISTS)
     pd.testing.assert_frame_equal(again.cells, side3.cells)
     assert json.dumps(again.checks, sort_keys=True) == json.dumps(side3.checks, sort_keys=True)
+
+
+# ------------------------------------------------------------- review round 1: fail closed
+
+
+def test_a_kept_tie_is_paired_with_the_mix_itself():
+    w = np.array(INSIDE)
+    cells = [_cell(RC.E, mu=0.05, sigma=0.10, mu_gap=5e-7, l1=0.3, dr2=1.4, a=0.4, weights=w),
+             _cell("F@E", mu=0.05 + 5e-7, sigma=0.10, dr2=1.1, a=0.4, risk_gap=3e-7,
+                   weights=np.array([0.2, 0.5, 0.3]))]  # fmt: skip
+    e, comp = _checked(cells, [{"weights": INSIDE, "sigma": 0.09, "mu": 0.049}])
+    assert e["tie"] is True and e["status"] == comp["status"] == RC.KEPT
+    assert np.array_equal(comp["weights"], w)  # differences 0 by construction
+    assert (comp["mu"], comp["sigma"], comp["dr2"], comp["risk_gap"]) == (0.05, 0.10, 1.4, 0.0)
+    assert e["l1"] == 0.3  # the distance to F(sigma(M)) stays reported
+
+
+def test_a_missing_risk_or_return_leaves_the_pool_checks_undecided():
+    (u,) = _checked([_cell(RC.U, rf=0.1, r=math.nan, mu=0.08, sigma=0.1)],
+                    [{"weights": INSIDE, "sigma": 0.05, "mu": 0.01}])  # fmt: skip
+    assert math.isnan(u["pool_mu_bound"])
+    for e_values in ({"sigma": math.nan}, {"mu": math.nan, "mu_gap": 0.01}):
+        cells = [_cell(RC.E, **{"mu": 0.05, "sigma": 0.10, "mu_gap": 0.0, **e_values}),
+                 _cell("F@E", mu=0.05, sigma=0.10)]  # fmt: skip
+        e, comp = _checked(cells, [])
+        assert e["status"] == comp["status"] == RC.FAILED
+        assert e["reason"] == RC.UNDECIDED
+
+
+def test_an_incomplete_repeated_or_unknown_row_stops():
+    months = _months(2)
+    base = _model_cells(months)
+    assert "structure" not in _stops(RC.gates(base, months, expected=NO_LISTS))
+    for mix, rf in ((RC.F, A.RFS[2]), (RC.E, None), (RC.U, A.RFS[0]), (RC.F_ARM1, A.RFS[5])):
+        dropped = A._frame(base.loc[~_at(base, months[1], mix, rf)])
+        assert "structure" in _stops(RC.gates(dropped, months, expected=NO_LISTS))
+    repeated = pd.concat([base, base.loc[_at(base, months[0], RC.U, A.RFS[1])]])
+    assert "structure" in _stops(RC.gates(repeated, months, expected=NO_LISTS))
+    repeated = pd.concat([base, base.loc[_at(base, months[0], "F@D")]])
+    assert "structure" in _stops(RC.gates(repeated, months, expected=NO_LISTS))
+    unknown = base.copy()
+    _set(unknown, months[0], RC.D, status="maybe")
+    assert "structure" in _stops(RC.gates(unknown, months, expected=NO_LISTS))
+    stranger = pd.concat([base, base.loc[_at(base, months[0], RC.E)].assign(mix="V")])
+    assert "structure" in _stops(RC.gates(stranger, months, expected=NO_LISTS))
+
+
+def test_a_kept_or_excluded_d_without_weights_fails_check_b():
+    months = _months(3)
+    for status in (RC.KEPT, RC.EXCLUDED):
+        cells = _model_cells(months)
+        _set(cells, months[1], RC.D, status=status, dr2=0.0, pool_dr2_max=99.0)
+        cells.loc[_at(cells, months[1], RC.D), "weights"] = None
+        checks = RC.gates(cells, months, expected=NO_LISTS)
+        assert "check (b)" in _stops(checks)
+        assert [f["month"] for f in checks["check_b"][RC.D]["failed"]] == [months[1]]
+
+
+def test_a_kept_mix_or_comparator_without_weights_is_a_failed_cell():
+    months = _months(1)
+    cells = _model_cells(months)
+    cells.loc[_at(cells, months[0], "F@E"), "weights"] = None
+    cells.loc[_at(cells, months[0], RC.U, A.RFS[4]), "weights"] = None
+    judged = _records(RC.judge(cells))
+    assert _row(judged, RC.E)["status"] == _row(judged, "F@E")["status"] == RC.FAILED
+    u = [r for r in _rows(judged, RC.U) if r["rf"] == A.RFS[4]]
+    assert u[0]["status"] == RC.FAILED
+
+
+def test_judge_writes_the_gates_statuses_into_the_cells():
+    months = _months(1)
+    cells = _model_cells(months)
+    _set(cells, months[0], RC.U, A.RFS[0], risk_gap=math.nan)
+    _set(cells, months[0], "F@D", risk_gap=2e-6)
+    _set(cells, months[0], RC.F, A.RFS[3], rebuilt_mu_gap=2e-6)
+    judged = _records(RC.judge(cells))
+    u = _rows(judged, RC.U)
+    assert [r["status"] for r in u] == [RC.FAILED, RC.KEPT, RC.KEPT, RC.FAILED, RC.KEPT, RC.KEPT]
+    assert _row(judged, RC.D)["status"] == _row(judged, "F@D")["status"] == RC.FAILED
+    assert _rows(judged, RC.F)[3]["status"] == RC.FAILED
+    assert _row(judged, RC.E)["status"] == RC.KEPT
+    assert len(judged) == len(cells)
+
+
+def test_model_side_returns_the_judged_cells(side_inputs, monkeypatch):
+    original = RC.month_pool_checks
+
+    def off_line(mixes, pool, lower, upper):
+        out = original(mixes, pool, lower, upper)
+        if out["month"].iloc[0] == SIDE_MONTHS[1]:
+            out.loc[(out["mix"] == RC.U).to_numpy() & np.isclose(out["rf"], A.RFS[0]),
+                    "risk_gap"] = math.nan  # fmt: skip
+        return out
+
+    monkeypatch.setattr(RC, "month_pool_checks", off_line)
+    side = _side(side_inputs, expected=NO_LISTS)
+    cells = _records(side.cells)
+    u = [r for r in cells if r["mix"] == RC.U and r["month"] == SIDE_MONTHS[1]]
+    assert u[0]["status"] == RC.FAILED
+    assert side.checks["failed_cells"][RC.U]["failed"] == 1
