@@ -6,7 +6,7 @@ environment (no jsdom); importing `web/src/state/url.ts` must not need a DOM.
 
 Pinned interface (`web/src/state/url.ts`)
 - `encode(state: UrlState) -> string`: the query string with its leading `?`, holding only the
-  spec §8.1 keys `u, f, unit, c, lb, g, r, d, t, x`, each at most once.
+  spec §8.1 keys `u, f, unit, c, lb, g, r, d, t, x, nl`, each at most once.
 - `decode(search: string, domain?: {s_safe: number, s_max: number}) -> UrlState`: reads only those
   keys, ignores every other key, and clamps `r` into `[s_safe, s_max]` when `domain` is given.
 - `UrlState` has exactly these fields:
@@ -18,10 +18,13 @@ Pinned interface (`web/src/state/url.ts`)
   `ghosts: string[]` (`g`; lookback ids), `r: number | null` (`null` = not in the URL),
   `d: number` in `[0, 1]` (default `0`, the best-return mix; a query with no `d`, and the old `d=auto`,
   decode to `0`; owner direction 2026-11-11), `theme: "ks-dark" | "light" | "hud" | null` (`t`; `null` =
-  not in the URL, so stored preference applies), `details: boolean` (`x=1`).
+  not in the URL, so stored preference applies), `details: boolean` (`x=1`),
+  `noLimitsLine: boolean` (`nl`; `true` = the No allocation limits line is shown, the default,
+  written as nothing; `false` = hidden, written as `nl=0`; owner decision 2026-11-17).
 - The spec example `?u=guide2017&lb=5y&r=19.25&d=0&t=hud` must re-encode to itself, which fixes
-  the key order `u, f, unit, c, lb, g, r, d, t, x`, that `lb` and `d` are written even at their
-  defaults, and that `unit=pct`, an empty `f`/`c`/`g` and `x` off are omitted.
+  the key order `u, f, unit, c, lb, g, r, d, t, x, nl`, that `lb` and `d` are written even at their
+  defaults, and that `unit=pct`, an empty `f`/`c`/`g`, `x` off and `nl` shown are omitted. `nl=0` is
+  written last, after `x`; any `nl` value other than `0` decodes as shown and is not written back.
 - `r` and `d` survive a round trip to within 1e-9 (values carry up to six decimals); every other
   field survives exactly.
 """
@@ -41,7 +44,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
-const ALLOWED = new Set(["u", "f", "unit", "c", "lb", "g", "r", "d", "t", "x"]);
+const ALLOWED = new Set(["u", "f", "unit", "c", "lb", "g", "r", "d", "t", "x", "nl"]);
 const LOOKBACKS = ["1y", "2y", "3y", "5y", "10y", "ew"];
 const UNITS = ["pct", "usd", "shares"];
 const THEMES = [null, "ks-dark", "light", "hud", "grid"];
@@ -107,6 +110,7 @@ function generate(rnd: () => number) {
   state.d = dk < 0.5 ? 0 : dk < 0.6 ? 1 : round(rnd(), 6);
   state.theme = pick(THEMES);
   state.details = rnd() < 0.5;
+  state.noLimitsLine = rnd() < 0.5;
   return state;
 }
 
@@ -144,7 +148,7 @@ describe("A-PS-36", () => {
     const rnd = mulberry32(8136);
     const bad: string[] = [];
     const seenKeys = new Set<string>();
-    const seen = { preset: 0, custom: 0, amounts: 0, shares: 0, caps: 0, ghosts: 0, dNumber: 0 };
+    const seen = { preset: 0, custom: 0, amounts: 0, shares: 0, caps: 0, ghosts: 0, dNumber: 0, lineHidden: 0 };
     let cases = 0;
     for (let i = 0; i < 600; i++) {
       const state = generate(rnd);
@@ -165,6 +169,7 @@ describe("A-PS-36", () => {
       if (state.caps.length) seen.caps += 1;
       if (state.ghosts.length) seen.ghosts += 1;
       if (state.d > 0) seen.dNumber += 1;
+      if (!state.noLimitsLine) seen.lineHidden += 1;
       cases += 1;
     }
     expect(bad.slice(0, 6).join("\n")).toBe("");
@@ -189,6 +194,7 @@ describe("A-PS-36", () => {
       d: 0,
       theme: "hud",
       details: false,
+      noLimitsLine: true,
     });
     expect(U.encode(state)).toBe(example);
     // the spec's custom-menu example
@@ -203,6 +209,26 @@ describe("A-PS-36", () => {
     expect(custom.d).toBe(0.5);
     expect(custom.theme).toBeNull();
     expect(custom.details).toBe(true);
+    expect(custom.noLimitsLine).toBe(true);
+  });
+
+  it("nl: absent means the line is shown and writes nothing, nl=0 hides it and is written last, any other value reads as absent", () => {
+    expect(U.decode("").noLimitsLine).toBe(true);
+    expect(U.decode("?u=guide2017&lb=5y&r=19.25&d=0&t=hud").noLimitsLine).toBe(true);
+    expect(keysOf(U.encode(U.decode("?u=guide2017")))).not.toContain("nl");
+    const hidden = U.decode("?u=guide2017&lb=5y&r=19.25&d=0&t=hud&x=1&nl=0");
+    expect(hidden.noLimitsLine).toBe(false);
+    expect(hidden.details).toBe(true);
+    expect(U.encode(hidden)).toBe("?u=guide2017&lb=5y&r=19.25&d=0&t=hud&x=1&nl=0");
+    // where nl sits in the query does not matter; the written order puts it last
+    expect(U.encode(U.decode("?nl=0&x=1&t=hud&d=0&r=19.25&lb=5y&u=guide2017"))).toBe("?u=guide2017&lb=5y&r=19.25&d=0&t=hud&x=1&nl=0");
+    // hidden with nothing else set: lb and d are still written, nl follows them
+    expect(U.encode(U.decode("?nl=0"))).toBe("?lb=5y&d=0&nl=0");
+    for (const value of ["1", "", "off", "false", "00", "0.0", "no"]) {
+      const state = U.decode(`?u=guide2017&nl=${value}`);
+      expect(state.noLimitsLine, `nl=${value}`).toBe(true);
+      expect(U.encode(state), `nl=${value}`).toBe("?u=guide2017&lb=5y&d=0");
+    }
   });
 
   it("a query with no d, and the old d=auto, open at position 0 and are written back as d=0", () => {
@@ -271,6 +297,7 @@ describe("A-PS-36", () => {
 EXPECTED_TITLES = {
     "600 generated states round-trip and encode emits only the 8.1 keys",
     "the spec example decodes to the obvious state and re-encodes to itself",
+    "nl: absent means the line is shown and writes nothing, nl=0 hides it and is written last, any other value reads as absent",
     "a query with no d, and the old d=auto, open at position 0 and are written back as d=0",
     "unknown keys zz and k are ignored and never re-encoded",
     "r is clamped into the domain on load",
