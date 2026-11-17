@@ -467,13 +467,13 @@ export function createStore(init: { search: string }): Store {
   function countDownThenRetry(seconds: number, lookback: LookbackId, previous: LookbackId | null) {
     const seq = loadSeq;
     set({ build: { status: "build-wait", error: null, position: null, waitS: seconds } }, false);
-    const tick = (left: number) => {
+    const tick = (remaining: number) => {
       waitTimer = setTimeout(() => {
         waitTimer = null;
         if (halted || seq !== loadSeq) return;
-        if (left > 1) {
-          set({ build: { status: "build-wait", error: null, position: null, waitS: left - 1 } }, false);
-          tick(left - 1);
+        if (remaining > 1) {
+          set({ build: { status: "build-wait", error: null, position: null, waitS: remaining - 1 } }, false);
+          tick(remaining - 1);
           return;
         }
         autoRetried = true;
