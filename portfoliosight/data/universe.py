@@ -134,6 +134,8 @@ def load_funds(path: Path = FUNDS_FILE) -> dict[str, FundMeta]:
     funds: dict[str, FundMeta] = {}
     for raw_symbol, row in document.items():
         symbol = str(raw_symbol).upper()
+        if symbol in funds:
+            raise ValueError(f"{path.name}: {symbol} is listed twice")
         if not isinstance(row, dict) or not isinstance(row.get("name"), str):
             raise ValueError(f"{path.name}: {symbol} needs an object with a name and a kind")
         name, kind = row["name"], row.get("kind")

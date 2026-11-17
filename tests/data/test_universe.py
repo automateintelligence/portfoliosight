@@ -474,6 +474,21 @@ def test_funds_file_refuses_a_bad_kind_and_a_missing_name(tmp_path):
         universe.load_funds(path)
 
 
+def test_funds_file_refuses_two_entries_for_one_symbol(tmp_path):
+    path = tmp_path / "funds.json"
+    path.write_text(
+        json.dumps(
+            {
+                "VTI": {"name": "Vanguard Total Stock Market ETF", "kind": "etf"},
+                "vti": {"name": "Another Fund", "kind": "stock"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="VTI.*twice"):
+        universe.load_funds(path)
+
+
 def test_a_requested_ticker_is_a_tier_3_stock():
     info = universe.load_tiers().info()
     assert info["NSRGY"].tier == 3
