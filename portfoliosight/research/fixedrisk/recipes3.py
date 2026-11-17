@@ -21,6 +21,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import cvxpy as cp
@@ -389,3 +390,24 @@ def month_mixes(month: str, mu_s, cov, lower, upper, rec: Recorded) -> pd.DataFr
     f_rows = built.f_rows()
     rows = [*f_rows, *built.arm_one_rows(), *built.u_rows(f_rows), *built.recipe_rows()]
     return pd.DataFrame(rows, columns=list(_BLANK))
+
+
+# ------------------------------------------------------------------- the pool, with dr2
+
+POOL_COLUMNS_DR2 = (*G.POOL_COLUMNS, "dr2")
+
+
+def read_month_pool_dr2(path: Path) -> pd.DataFrame:
+    """The rows `region3.read_month_pool` reads (the same path and the same `lookback`, `seed` and
+    `lam` filters) with the diversification ratio squared `dr2` as one more column, before any
+    domain filter."""
+    return G.read_month_pool(path, columns=POOL_COLUMNS_DR2)
+
+
+def allowed_mixes(pool: pd.DataFrame, lower, upper) -> pd.DataFrame:
+    """The pool's distinct mixes inside the weight limits: `region3.in_domain`, then
+    `region3.distinct_mixes` (which carries `dr2` through)."""
+    if pool.empty:
+        return G.distinct_mixes(pool)
+    inside = G.in_domain(np.vstack(pool["weights"].to_list()), lower, upper)
+    return G.distinct_mixes(A._frame(pool.loc[inside]).reset_index(drop=True))

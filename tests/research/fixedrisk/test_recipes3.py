@@ -10,6 +10,8 @@ from __future__ import annotations
 import dataclasses
 import math
 from collections import Counter
+from datetime import date
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -19,7 +21,11 @@ import pytest
 from portfoliosight.engine import optimize, torsion
 from portfoliosight.research.fixedrisk import analysis3 as A
 from portfoliosight.research.fixedrisk import anchors
+from portfoliosight.research.fixedrisk import contracts as C
 from portfoliosight.research.fixedrisk import recipes3 as RC
+from portfoliosight.research.fixedrisk import region3 as G
+from portfoliosight.research.fixedrisk.objectives3 import FIELDS
+from portfoliosight.research.fixedrisk.pool import PoolBuffer, write_pool
 from tests.research.fixedrisk.recipe_data import (
     M12,
     M12_OPEN,
@@ -447,3 +453,70 @@ def test_the_pre_registered_lists_are_the_protocols():
     assert max(months) < "2021-09"  # E keeps 161 of the 186 five-year start months
     assert [m for m in months if m.startswith("2009")] == [f"2009-{k:02d}" for k in range(1, 13)]
     assert RC.U_EXCLUDED == (("2008-09", 0.85), ("2010-08", 0.85))
+
+
+# ------------------------------------------------------------ the pool, with the ratio dr2
+
+POOL_N = 3
+POOL_LIMITS = (np.zeros(POOL_N), np.full(POOL_N, 0.5))
+
+
+def _values(**kw: float) -> np.ndarray:
+    v = np.zeros(len(FIELDS))
+    for name, value in kw.items():
+        v[FIELDS.index(name)] = value
+    return v
+
+
+def _pool_file(path: Path, rows: list[dict[str, Any]]) -> Path:
+    """A pool file as the run writes it (`PoolBuffer`, `write_pool`); each row gives `weights`
+    and its fields, with `lookback`, `r_fraction` and `lam` defaulting to a main row."""
+    buf = PoolBuffer()
+    for row in rows:
+        row = dict(row)
+        weights = np.asarray(row.pop("weights"), dtype=float)
+        key = {"lookback": row.pop("lookback", "3y"), "r_fraction": row.pop("r_fraction", 0.10),
+               "lam": row.pop("lam", None)}  # fmt: skip
+        buf.add(**key, r=0.1, arm="F", start=-1, call=-1, source="search", weights=weights,
+                values=_values(**row))  # fmt: skip
+    table = buf.table(menu="m", month=MONTH, origin=date(2010, 1, 29), engine="replay",
+                      seed=C.PRIMARY_SEED)  # fmt: skip
+    write_pool(path, table, {b"digest": b"x"})
+    return path
+
+
+INSIDE = [0.4, 0.35, 0.25]
+FIGURES = {"sigma": 0.1, "mu": 0.05, "tdd": 0.2, "enb": 1.5, "h": 0.3, "in_wide": 1.0}
+
+
+def test_the_extended_reader_reads_the_region_checks_rows_with_dr2(tmp_path):
+    path = _pool_file(
+        tmp_path / "pool.parquet",
+        [
+            {"weights": INSIDE, "dr2": 1.5, **FIGURES},
+            {"weights": INSIDE, "dr2": 1.5, **FIGURES, "r_fraction": 0.25},
+            {"weights": [0.8, 0.1, 0.1], "dr2": 9.0, **FIGURES},
+            {"weights": INSIDE, "dr2": 2.0, **FIGURES, "lookback": "5y"},
+            {"weights": INSIDE, "dr2": 3.0, **FIGURES, "lam": 0.05},
+        ],
+    )
+    pool = RC.read_month_pool_dr2(path)
+    assert len(pool) == 3
+    assert "dr2" in pool.columns
+    assert set(G.POOL_COLUMNS) <= set(pool.columns)
+    assert list(pool["record"]) == list(G.read_month_pool(path)["record"])
+    assert sorted(pool["dr2"]) == [1.5, 1.5, 9.0]
+
+
+def test_allowed_mixes_drops_rows_outside_the_limits_and_repeats(tmp_path):
+    path = _pool_file(
+        tmp_path / "pool.parquet",
+        [
+            {"weights": INSIDE, "dr2": 1.5, **FIGURES},
+            {"weights": INSIDE, "dr2": 1.5, **FIGURES, "r_fraction": 0.25},
+            {"weights": [0.8, 0.1, 0.1], "dr2": 9.0, **FIGURES},
+        ],
+    )
+    allowed = RC.allowed_mixes(RC.read_month_pool_dr2(path), *POOL_LIMITS)
+    assert len(allowed) == 1
+    assert allowed["dr2"].iloc[0] == 1.5
