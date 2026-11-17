@@ -3,6 +3,7 @@ import { useEffect, useId, useState } from "react";
 import type { Tensor } from "../api/tensor";
 import { adminLine, adminTag, capsRule, lookbackNames, plain, technical } from "../copy";
 import { pctPlain } from "../format";
+import { limitsBind } from "../math/view";
 import { LOOKBACKS, type Cap, type LookbackId } from "../state/store";
 
 type Props = {
@@ -12,6 +13,8 @@ type Props = {
   caps: Cap[];
   unavailable: Partial<Record<LookbackId, string>>;
   details: boolean;
+  /** Whether the No allocation limits line is drawn when the limits bind. */
+  showNoLimits: boolean;
   busy: boolean;
   problem: string | null;
   /** Set in admin mode (engines spec 6.2): the menu limit it allows. */
@@ -19,6 +22,7 @@ type Props = {
   onLookback: (lookback: LookbackId) => void;
   onGhost: (lookback: LookbackId) => void;
   onCaps: (caps: Cap[]) => void;
+  onNoLimitsLine: (show: boolean) => void;
   onShare: () => void;
 };
 
@@ -56,7 +60,7 @@ export function validateCaps(ids: string[], draft: Draft, defaultMaxPct: number)
   return errors;
 }
 
-export function Settings({ tensor, lookback, ghosts, caps, unavailable, details, busy, problem, adminMenuMax, onLookback, onGhost, onCaps, onShare }: Props) {
+export function Settings({ tensor, lookback, ghosts, caps, unavailable, details, showNoLimits, busy, problem, adminMenuMax, onLookback, onGhost, onCaps, onNoLimitsLine, onShare }: Props) {
   const uid = useId();
   const funds = tensor.universe.funds;
   const ids = funds.map((f) => f.id);
@@ -92,6 +96,8 @@ export function Settings({ tensor, lookback, ghosts, caps, unavailable, details,
   const noLimits = ids.length > 0 && ids.every((id) => caps.some((c) => c.id === id && (c.min ?? 0) === 0 && c.max === 100));
   const edit = (id: string, side: "min" | "max", value: string) => setDraft({ ...draft, [id]: { ...draft[id], [side]: value } });
   const excluded = tensor.universe.excluded ?? [];
+  // With limits that change nothing there is no line to draw: the box stays, disabled, with its note.
+  const lineToShow = limitsBind(tensor);
 
   return (
     <div className="set-grid">
@@ -221,6 +227,13 @@ export function Settings({ tensor, lookback, ghosts, caps, unavailable, details,
           <button type="button" className="btn" data-testid="caps-reset" disabled={busy} onClick={() => onCaps([])}>
             {plain.resetLimits}
           </button>
+        </div>
+        <div className="opts" style={{ marginTop: 12 }}>
+          <label className="opt">
+            <input type="checkbox" data-testid="nolimits-line-toggle" checked={showNoLimits} disabled={!lineToShow} onChange={(e) => onNoLimitsLine(e.target.checked)} />
+            <span>{plain.showNoLimitsLine}</span>
+            {!lineToShow && <small data-testid="nolimits-line-note">{plain.noLimitsLineNothing}</small>}
+          </label>
         </div>
       </div>
     </div>

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -20,7 +22,7 @@ def month_labels(n: int, start: str = "2010-01") -> list[str]:
 
 
 def origin_of(month: str) -> pd.Timestamp:
-    return pd.Period(month, freq="M").to_timestamp(how="end").normalize()
+    return cast(pd.Period, pd.Period(month, freq="M")).to_timestamp(how="end").normalize()
 
 
 def _weights(rng_seed: int) -> np.ndarray:
@@ -370,7 +372,7 @@ def fake_realized(
 
     months = month_labels(n_months)
     rows = []
-    for r in sel.itertuples():
+    for r in cast(Iterable[Any], sel.itertuples()):
         mi = months.index(r.month)
         if mi > complete_until:
             rows.append(dict(sel_id=r.sel_id, complete=False))
@@ -387,7 +389,7 @@ def fake_realized(
         if r.arm == "U1" and r.cell == "free" and r.kind in ("main", "sens_tau"):
             ret, dd = base + white_offset + eps, base_dd - 0.02
         elif r.arm == "U1" and r.cell in ("d25", "d50", "d75"):
-            d = C.CELL_D[r.cell]
+            d = cast(float, C.CELL_D[r.cell])
             ret, dd = base + 0.1 * d + eps, base_dd - 0.05 * d
         elif r.arm == "B":
             ret = base - 0.005 + eps

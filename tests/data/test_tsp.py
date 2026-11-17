@@ -6,6 +6,7 @@ import csv
 import io
 from datetime import date
 from pathlib import Path
+from typing import cast
 from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
@@ -46,8 +47,9 @@ def test_fetch_all_gives_16_provider_frames(served):
         assert isinstance(frame.index, pd.DatetimeIndex) and frame.index.name == "date"
         assert frame.index.tz is None and frame.index.is_monotonic_increasing
         assert len(frame) == 61 and frame.index.is_unique
-        assert (frame["adj_close"] == frame["close"]).all()
-        assert (frame["div_cash"] == 0).all() and (frame["split_factor"] == 1).all()
+        assert cast(pd.Series, frame["adj_close"] == frame["close"]).all()
+        assert cast(pd.Series, frame["div_cash"] == 0).all()
+        assert cast(pd.Series, frame["split_factor"] == 1).all()
     assert frames["TSP-C"].at[pd.Timestamp("2026-03-30"), "close"] == _cell("2026-03-30", "C Fund")
     assert frames["TSP-LINC"].at[pd.Timestamp("2026-01-02"), "close"] == 29.2952
 

@@ -10,6 +10,7 @@ straight from a seeded sample, without records or a ledger, for the search tests
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -17,6 +18,16 @@ import pandas as pd
 from portfoliosight.engine.ranges import sample_digest
 from portfoliosight.engine.stats import estimate_moments, menu_beta_blend
 from portfoliosight.research.evaluate import OriginModel
+
+
+def col(frame: pd.DataFrame, name: str) -> pd.Series:
+    """`frame[name]` as the Series it is (pandas types it as Series | DataFrame)."""
+    return cast(pd.Series, frame[name])
+
+
+def ts(value: Any) -> pd.Timestamp:
+    """`pd.Timestamp(value)` typed without the NaT arm of pandas' constructor signature."""
+    return cast(pd.Timestamp, pd.Timestamp(value))
 
 
 def record(index: pd.Series) -> pd.DataFrame:

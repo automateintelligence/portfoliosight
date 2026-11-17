@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 from scipy import stats
 
@@ -94,7 +95,12 @@ class CscvMasks:
         )
 
 
-def cscv_masks(origins: Sequence[Any], ends: Sequence[Any], *, blocks: int = BLOCKS) -> CscvMasks:
+def cscv_masks(
+    origins: Sequence[Any] | npt.ArrayLike,
+    ends: Sequence[Any] | npt.ArrayLike,
+    *,
+    blocks: int = BLOCKS,
+) -> CscvMasks:
     """All `C(blocks, blocks/2)` purged and embargoed train/test masks from ledger endpoints only.
 
     `origins`/`ends` are the eligible origins (complete realized year) and their horizon endpoints.

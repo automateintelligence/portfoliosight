@@ -36,7 +36,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -239,7 +239,7 @@ def cell_spearman(x: np.ndarray, y: np.ndarray, minimum: int = MIN_LINE_MIXES) -
     ok = np.isfinite(x) & np.isfinite(y)
     if ok.sum() < minimum or np.ptp(x[ok]) == 0.0 or np.ptp(y[ok]) == 0.0:
         return float("nan")
-    return float(stats.spearmanr(x[ok], y[ok]).statistic)
+    return float(cast(Any, stats.spearmanr(x[ok], y[ok])).statistic)
 
 
 # ---------------------------------------------------------------------------- one month

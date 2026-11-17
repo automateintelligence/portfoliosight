@@ -16,9 +16,9 @@ Everything takes arrays, Series and callables so the module does not import the 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -72,7 +72,7 @@ class Outcomes:
     volatility: np.ndarray | None = None
 
 
-def rebalance_positions(days: Sequence[Any]) -> np.ndarray:
+def rebalance_positions(days: Iterable[Any]) -> np.ndarray:
     """Indices t of the last session of each calendar month strictly inside the horizon.
 
     Session t qualifies when session t+1 lies in another calendar month; the horizon's own last
@@ -114,7 +114,7 @@ def daily_rebalanced(daily: np.ndarray, weights: Any) -> Outcomes:
 
 
 def monthly_rebalanced(
-    daily: np.ndarray, days: Sequence[Any], weights: Any, cost_bp: float = 0.0
+    daily: np.ndarray, days: Sequence[Any] | pd.Index, weights: Any, cost_bp: float = 0.0
 ) -> Outcomes:
     """Monthly rebalancing to target; `cost_bp` of one-way turnover charged (funding included)."""
     returns = np.asarray(daily, dtype=float)
@@ -142,14 +142,19 @@ def monthly_rebalanced(
     return Outcomes(wealth[-1] - 1.0, _drawdown(wealth), turnover, _volatility(wealth))
 
 
+def _stamp(value: Any) -> pd.Timestamp:
+    """`pd.Timestamp(value)` typed without the `NaT` arm of pandas' constructor signature."""
+    return cast(pd.Timestamp, pd.Timestamp(value))
+
+
 def cpi_factor(cpi: pd.Series, origin: Any, end: Any) -> float:
     """CPI(month of the horizon end) / CPI(month of the origin); NaN if missing."""
     index = pd.PeriodIndex(pd.to_datetime(cpi.index), freq="M")
     levels = pd.Series(np.asarray(cpi, dtype=float), index=index)
-    levels = levels[~levels.index.duplicated(keep="last")]
+    levels = cast(pd.Series, levels[~levels.index.duplicated(keep="last")])
     try:
-        num = float(levels.loc[pd.Timestamp(end).to_period("M")])
-        den = float(levels.loc[pd.Timestamp(origin).to_period("M")])
+        num = float(levels.loc[_stamp(end).to_period("M")])
+        den = float(levels.loc[_stamp(origin).to_period("M")])
     except KeyError:
         return math.nan
     return num / den if den > 0 and math.isfinite(num) else math.nan
@@ -162,7 +167,7 @@ def real_return(nominal: float, factor: float) -> float:
 
 def _asof(series: pd.Series, stamp: pd.Timestamp) -> float:
     clean = series.dropna()
-    clean = clean[clean.index <= stamp]
+    clean = cast(pd.Series, clean[clean.index <= stamp])
     return float(clean.iloc[-1]) if len(clean) else math.nan
 
 
@@ -178,12 +183,12 @@ def regime_label(
     """Priority: equity drawdown (>= 15% SPY total-return fall inside the horizon), else rate shock
     (DGS10 up >= 150 bp from the last value on or before the origin to that at the horizon end),
     else calm. `dgs10` is in percent."""
-    start, stop = pd.Timestamp(origin), pd.Timestamp(end)
+    start, stop = _stamp(origin), _stamp(end)
     tr = spy_tr.copy()
     tr.index = pd.to_datetime(tr.index)
     tr = tr.dropna().sort_index()
     base = _asof(tr, start)
-    inside = tr[(tr.index > start) & (tr.index <= stop)]
+    inside = cast(pd.Series, tr[(tr.index > start) & (tr.index <= stop)])
     path = np.concatenate([[base] if math.isfinite(base) else [], inside.to_numpy(dtype=float)])
     if len(path) >= 2:
         fall = float((1.0 - path / np.maximum.accumulate(path)).max())
@@ -226,14 +231,15 @@ def realized_table(
     """
     frame = _empty(pd.Index(selections["sel_id"].to_numpy(), name="sel_id"))
     has_mix = selections["weights"].map(lambda w: w is not None and len(w) > 0).astype(bool)
-    for (menu, month), group in selections[has_mix].groupby(["menu", "month"], sort=True):
+    for key, group in selections[has_mix].groupby(["menu", "month"], sort=True):
+        menu, month = cast(tuple[Any, Any], key)
         hz = horizon(str(menu), str(month))
         if hz is None or len(hz[0]) < horizon_days:
             continue
         days, values = list(hz[0])[:horizon_days], np.asarray(hz[1], dtype=float)[:horizon_days]
-        ids = group["sel_id"].to_numpy()
+        ids = cast(pd.Series, group["sel_id"]).to_numpy()
         mixes = np.vstack([np.asarray(w, dtype=float) for w in group["weights"]])
-        origin = pd.Timestamp(group["origin"].iloc[0])
+        origin = pd.Timestamp(cast(pd.Series, group["origin"]).iloc[0])
         end = pd.Timestamp(days[-1])
         daily = daily_rebalanced(values, mixes)
         gross = monthly_rebalanced(values, days, mixes)
@@ -276,4 +282,4 @@ def summary_by(frame: pd.DataFrame, by: str, columns: Mapping[str, str]) -> pd.D
     """Mean of `columns` (name -> source column) over the complete rows of each `by` bucket."""
     done = frame[frame["complete"]]
     out = done.groupby(by).agg(n=("sel_id", "size"), **{k: (v, "mean") for k, v in columns.items()})
-    return out
+    return cast(pd.DataFrame, out)

@@ -15,7 +15,7 @@ afterEach(cleanup);
 
 function show(excluded: { id: string; reason: string; last_close: number | null }[]) {
   const tensor = parseTensor({ ...fixture, universe: { ...fixture.universe, excluded } });
-  render(<Settings tensor={tensor} lookback="10y" ghosts={[]} caps={[]} unavailable={{}} details={false} busy={false} problem={null} adminMenuMax={null} onLookback={noop} onGhost={noop} onCaps={noop} onShare={noop} />);
+  render(<Settings tensor={tensor} lookback="10y" ghosts={[]} caps={[]} unavailable={{}} details={false} busy={false} problem={null} adminMenuMax={null} showNoLimits onLookback={noop} onGhost={noop} onCaps={noop} onNoLimitsLine={noop} onShare={noop} />);
 }
 
 it("lists each fund set aside in this view with its reason, one note per fund", () => {
@@ -37,7 +37,7 @@ it("shows no list and no note when every fund is in use", () => {
 it("shows a small Admin tag only in admin mode", () => {
   const tensor = parseTensor(fixture);
   const view = (adminMenuMax: number | null) =>
-    render(<Settings tensor={tensor} lookback="5y" ghosts={[]} caps={[]} unavailable={{}} details={false} busy={false} problem={null} adminMenuMax={adminMenuMax} onLookback={noop} onGhost={noop} onCaps={noop} onShare={noop} />);
+    render(<Settings tensor={tensor} lookback="5y" ghosts={[]} caps={[]} unavailable={{}} details={false} busy={false} problem={null} adminMenuMax={adminMenuMax} showNoLimits onLookback={noop} onGhost={noop} onCaps={noop} onNoLimitsLine={noop} onShare={noop} />);
   view(null);
   expect(screen.queryByTestId("admin-tag")).toBeNull();
   cleanup();
@@ -56,7 +56,7 @@ it("keeps the limit of a fund this view sets aside when the limit of another fun
     { id: "SGOV", min: null, max: 10 },
     { id: "VTI", min: null, max: 40 },
   ];
-  render(<Settings tensor={tensor} lookback="5y" ghosts={[]} caps={caps} unavailable={{}} details={false} busy={false} problem={null} adminMenuMax={null} onLookback={noop} onGhost={noop} onCaps={onCaps} onShare={noop} />);
+  render(<Settings tensor={tensor} lookback="5y" ghosts={[]} caps={caps} unavailable={{}} details={false} busy={false} problem={null} adminMenuMax={null} showNoLimits onLookback={noop} onGhost={noop} onCaps={onCaps} onNoLimitsLine={noop} onShare={noop} />);
   expect(screen.queryByTestId("cap-max-SGOV")).toBeNull();
   expect((screen.getByTestId("cap-max-VTI") as HTMLInputElement).value).toBe("40");
   const field = screen.getByTestId("cap-max-VTI");

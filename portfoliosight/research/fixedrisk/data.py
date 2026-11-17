@@ -20,7 +20,7 @@ import io
 import os
 import pickle
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -152,7 +152,7 @@ def read_market_caps(data: bytes) -> pd.DataFrame:
 
 def build_inputs(
     records: Mapping[str, pd.DataFrame],
-    sessions: Sequence[Any],
+    sessions: Iterable[Any],
     d_star: date,
     *,
     menus: Sequence[MenuSpec] = MENUS,

@@ -1,10 +1,12 @@
 import math
+from typing import cast
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from portfoliosight.research.fixedrisk import realized as R
+from tests.research.helpers import col
 
 from .synth import HOLDINGS, build_run, synth_horizon
 
@@ -127,15 +129,15 @@ def test_realized_table_complete_and_incomplete(tmp_path):
         tables.selections, synth_horizon(20, 10), span=span, cpi=cpi, spy_tr=spy, dgs10=dgs
     )
     assert len(out) == len(tables.selections)
-    done = out[out["complete"]]
-    assert set(pd.to_datetime(done["horizon_end"]).dt.year) <= {2010, 2011}
+    done = cast(pd.DataFrame, out[out["complete"]])
+    assert set(cast(pd.Series, pd.to_datetime(col(done, "horizon_end"))).dt.year) <= {2010, 2011}
     last = tables.selections.merge(out, on="sel_id").loc[lambda f: f["month"] == months[-1]]
     assert not last["complete"].any() and last["ret_m"].isna().all()
     ok = done.dropna(subset=["ret_3y"])
-    assert len(ok) > 0 and ok["real_3y"].notna().all()
-    assert (done["regime"] == "calm").all()
-    assert (done["ret_net"] < done["ret_m"] + 1e-9).all()
-    assert done["real_m"].notna().all()
+    assert len(ok) > 0 and col(ok, "real_3y").notna().all()
+    assert (col(done, "regime") == "calm").all()
+    assert (col(done, "ret_net") < col(done, "ret_m") + 1e-9).all()
+    assert col(done, "real_m").notna().all()
     assert HOLDINGS == ("A", "B", "C")
 
 

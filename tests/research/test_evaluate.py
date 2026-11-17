@@ -22,6 +22,7 @@ import hashlib
 import math
 from dataclasses import replace
 from datetime import date
+from typing import cast
 
 import exchange_calendars as xcals
 import numpy as np
@@ -63,7 +64,7 @@ from portfoliosight.research.harness import (
     Ledger,
     build_ledger,
 )
-from tests.research.helpers import random_indices, record
+from tests.research.helpers import random_indices, record, ts
 
 SESSIONS = pd.DatetimeIndex(
     xcals.get_calendar("XNYS", start="2022-06-01", end="2026-06-30").sessions
@@ -79,7 +80,7 @@ DRIFT_VOL = {
     "SGOV": (1.5e-4, 0.0),
 }
 GAP = pd.Timestamp("2024-05-15")  # D has no price on this session
-ORIGIN = pd.Timestamp("2024-01-31")  # the mature month 2024-01
+ORIGIN = ts("2024-01-31")  # the mature month 2024-01
 MIXES = np.array(
     [
         [1.0, 0.0, 0.0],
@@ -148,8 +149,8 @@ def _rows(days: pd.DatetimeIndex, funds: tuple[str, ...]) -> np.ndarray:
 
 def _window(origin: str, rows: int = 252) -> pd.DatetimeIndex:
     """The last ``rows`` sessions ending at ``origin`` (every session is on the union calendar)."""
-    days = _tr()["A"].index
-    end = days.get_loc(pd.Timestamp(origin))
+    days = cast(pd.DatetimeIndex, _tr()["A"].index)
+    end = days.get_loc(ts(origin))
     assert isinstance(end, int)
     return pd.DatetimeIndex(days[end - rows + 1 : end + 1])
 
@@ -185,7 +186,7 @@ def test_origin_model_rebuilds_the_training_window_with_production_estimators(
     ledger: Ledger, model: OriginModel
 ) -> None:
     window = _window("2024-01-31")
-    assert window[0] == pd.Timestamp("2023-01-31")
+    assert ts(window[0]) == pd.Timestamp("2023-01-31")
     oracle = _rows(window, ("A", "B", "C"))
     assert (model.menu, model.funds, model.month, model.lookback) == (
         "m",
@@ -511,7 +512,7 @@ def test_summarize_pools_independent_banks(model: OriginModel) -> None:
 
 def test_realized_horizon_is_the_ledgers_252_rows(ledger: Ledger) -> None:
     horizon = realized_horizon(_records(), ledger, "2024-01", "m")
-    days = _tr()["A"].index
+    days = cast(pd.DatetimeIndex, _tr()["A"].index)
     start = days.get_loc(ORIGIN)
     assert isinstance(start, int)
     dates = pd.DatetimeIndex(days[start + 1 : start + 253])

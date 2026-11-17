@@ -16,7 +16,7 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -145,8 +145,8 @@ def usable_rows(frame: pd.DataFrame) -> pd.Series:
     """Rows that carry a locked mix: a usable label and non-empty weights."""
     if frame.empty:
         return pd.Series(dtype=bool)
-    has_mix = frame["weights"].map(lambda w: w is not None and len(w) > 0)
-    return frame["status"].isin(C.USABLE) & has_mix
+    has_mix = _col(frame, "weights").map(lambda w: w is not None and len(w) > 0)
+    return _col(frame, "status").isin(C.USABLE) & has_mix
 
 
 def _norm(frame: pd.DataFrame) -> pd.DataFrame:
@@ -159,6 +159,21 @@ def _norm(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 # ------------------------------------------------------------------------------------ helpers
+
+
+def _col(frame: pd.DataFrame, name: Any) -> pd.Series:
+    """`frame[name]` as the Series it is (pandas types it as Series | DataFrame)."""
+    return cast(pd.Series, frame[name])
+
+
+def _cols(frame: pd.DataFrame, names: Sequence[str]) -> pd.DataFrame:
+    """`frame[[names]]` as the DataFrame it is."""
+    return cast(pd.DataFrame, frame[list(names)])
+
+
+def _rows(frame: pd.DataFrame, mask: Any) -> pd.DataFrame:
+    """`frame[mask]` (a boolean mask of the rows to keep) as the DataFrame it is."""
+    return cast(pd.DataFrame, frame[mask])
 
 
 def _num(value: Any) -> float | None:
@@ -309,12 +324,14 @@ class Study:
             seed = self.primary_seed
         if seed is not None:
             m &= s["seed"] == seed
-        return s[m].drop_duplicates(list(keys)).reset_index(drop=True)
+        return _rows(s, m).drop_duplicates(list(keys)).reset_index(drop=True)
 
     def ledger(self, menu: str) -> pd.DataFrame:
         """Month, origin and horizon end of the menu's complete realized years."""
-        s = self.sel[(self.sel["menu"] == menu) & self.sel["complete"]]
-        out = s.drop_duplicates("month")[["month", "origin", "horizon_end"]].sort_values("month")
+        s = _rows(self.sel, (self.sel["menu"] == menu) & self.sel["complete"])
+        out = _cols(s.drop_duplicates("month"), ["month", "origin", "horizon_end"]).sort_values(
+            "month"
+        )
         out["horizon_end"] = pd.to_datetime(out["horizon_end"])
         return out.reset_index(drop=True)
 
@@ -336,7 +353,7 @@ class Study:
         months = self.months(menu)
         k = len(months)
         m = a.merge(b, on=["month", "rf"], suffixes=("_a", "_b"))
-        out: dict[str, Any] = {"pairs": int(len(m)), "origins": int(m["month"].nunique())}
+        out: dict[str, Any] = {"pairs": int(len(m)), "origins": int(_col(m, "month").nunique())}
         if m.empty:
             return out
         for name in ("u1", "bad", "es_25"):
@@ -344,8 +361,9 @@ class Study:
                 continue
             cols = []
             for bank in self.test_seeds:
-                m[f"{name}_{bank}"] = m["sel_id_a"].map(self.evw[name][bank]) - m["sel_id_b"].map(
-                    self.evw[name][bank]
+                bank_u = _col(self.evw[name], bank)
+                m[f"{name}_{bank}"] = _col(m, "sel_id_a").map(bank_u) - _col(m, "sel_id_b").map(
+                    bank_u
                 )
                 cols.append(f"{name}_{bank}")
             m[f"d_{name}"] = m[cols].mean(axis=1)
@@ -469,7 +487,9 @@ class Study:
         sens = self._pooled_du(u, f, months)
         same = sorted(set(u["month"]) & set(f["month"]))
         main = self._pooled_du(
-            u_main[u_main["month"].isin(same)], f_main[f_main["month"].isin(same)], months
+            _rows(u_main, u_main["month"].isin(same)),
+            _rows(f_main, f_main["month"].isin(same)),
+            months,
         )
         if sens is None or main is None:
             return {"available": False}
@@ -486,7 +506,7 @@ class Study:
         if m.empty:
             return None
         u = self.evw["u1"]
-        m["d"] = m["sel_id_a"].map(u.mean(axis=1)) - m["sel_id_b"].map(u.mean(axis=1))
+        m["d"] = _col(m, "sel_id_a").map(u.mean(axis=1)) - _col(m, "sel_id_b").map(u.mean(axis=1))
         return _mean_point(_grid(m, "d", months))
 
     @staticmethod
@@ -557,8 +577,8 @@ class Study:
         anchors = self.anchors_for(menu)
         rows = []
         for rf in RFS:
-            s = u[u["rf"] == rf]
-            d = s["d"].astype(float)
+            s = _rows(u, u["rf"] == rf)
+            d = _col(s, "d").astype(float)
             ok = d.notna()
             n_ok = int(ok.sum())
             row: dict[str, Any] = {
@@ -574,17 +594,19 @@ class Study:
                     inside=float(((d[ok] >= 0) & (d[ok] <= 1)).mean()),
                     at_least_quarter=float((d[ok] >= D_STAR_BAND).mean()),
                 )
-            hi = s[ok & (d > 1)].merge(
-                anchors[["month", "rf", "M_MDP"]], on=["month", "rf"], how="left"
+            hi = _rows(s, ok & (d > 1)).merge(
+                _cols(anchors, ["month", "rf", "M_MDP"]), on=["month", "rf"], how="left"
             )
             if len(hi):
-                regret = hi["measure"] - hi["M_MDP"]
+                regret = _col(hi, "measure") - _col(hi, "M_MDP")
                 row["regret_mean"], row["regret_max"] = _num(regret.mean()), _num(regret.max())
-            n_s = native[native["rf"] == rf].merge(s, on=["month", "rf"], suffixes=("_n", "_p"))
+            n_s = _rows(native, native["rf"] == rf).merge(
+                s, on=["month", "rf"], suffixes=("_n", "_p")
+            )
             if len(n_s):
                 differs = [
                     _l1(a, b) > 1e-6
-                    for a, b in zip(n_s["weights_n"], n_s["weights_p"], strict=True)
+                    for a, b in zip(_col(n_s, "weights_n"), _col(n_s, "weights_p"), strict=True)
                 ]
                 row["pooled_beyond_native"] = float(np.mean(differs))
             rows.append(row)
@@ -594,34 +616,36 @@ class Study:
         a = self.anchors
         if a.empty:
             return pd.DataFrame(columns=["month", "rf", "M_MDP"])
-        a = a[(a["menu"] == menu) & np.isclose(a["tau_r"].astype(float), C.TAU_R)]
-        a = a[a["lookback"] == C.LOOKBACK]
+        a = _rows(a, (a["menu"] == menu) & np.isclose(a["tau_r"].astype(float), C.TAU_R))
+        a = _rows(a, a["lookback"] == C.LOOKBACK)
         return a.drop_duplicates(["month", "rf"])
 
     def collapsed(self, menu: str) -> dict[str, Any]:
         a = self.anchors_for(menu)
         if a.empty:
             return {"available": False}
-        main = a[a["rf"].isin(RFS)]
+        main = _rows(a, a["rf"].isin(RFS))
         show_months = set(
             self.sel.loc[(self.sel["menu"] == menu) & (self.sel["kind"] == "showcase"), "month"]
         )
-        show = a[a["month"].isin(show_months)]
+        show = _rows(a, a["month"].isin(list(show_months)))
         return {
             "available": True,
             "by_r": [
                 {
                     "rf": rf,
-                    "n": int((main["rf"] == rf).sum()),
+                    "n": int((_col(main, "rf") == rf).sum()),
                     "share": float(main.loc[main["rf"] == rf, "collapsed"].astype(bool).mean())
-                    if (main["rf"] == rf).any()
+                    if (_col(main, "rf") == rf).any()
                     else None,
                 }
                 for rf in RFS
             ],
-            "overall": float(main["collapsed"].astype(bool).mean()) if len(main) else None,
+            "overall": float(_col(main, "collapsed").astype(bool).mean()) if len(main) else None,
             "showcase_columns": int(len(show)),
-            "showcase_share": float(show["collapsed"].astype(bool).mean()) if len(show) else None,
+            "showcase_share": float(_col(show, "collapsed").astype(bool).mean())
+            if len(show)
+            else None,
         }
 
     # ------------------------------------------------------------------------- safest mix
@@ -678,9 +702,8 @@ class Study:
                 }
         for name in ("bad", "es_25"):
             if name in self.evw and not self.evw[name].empty:
-                dm = m["sel_id_b"].map(self.evw[name].mean(axis=1)) - m["sel_id_u"].map(
-                    self.evw[name].mean(axis=1)
-                )
+                mean_by_id = self.evw[name].mean(axis=1)
+                dm = _col(m, "sel_id_b").map(mean_by_id) - _col(m, "sel_id_u").map(mean_by_id)
                 m[f"d_{name}"] = dm
                 out[f"model_d_{name}"] = _mean_point(_grid(m, f"d_{name}", months))
         return out
@@ -700,8 +723,8 @@ class Study:
         boot = self.boot(k)
         rows = []
         for rf in RFS:
-            ys = [_grid(p[p["rf"] == rf], "ret_m", months, [rf])[0] for p in picks]
-            dds = [_grid(p[p["rf"] == rf], "dd_m", months, [rf])[0] for p in picks]
+            ys = [_grid(_rows(p, p["rf"] == rf), "ret_m", months, [rf])[0] for p in picks]
+            dds = [_grid(_rows(p, p["rf"] == rf), "dd_m", months, [rf])[0] for p in picks]
             common = np.all(
                 [np.isfinite(y) & np.isfinite(d) for y, d in zip(ys, dds, strict=True)], axis=0
             )
@@ -711,15 +734,18 @@ class Study:
             ys = [np.where(common, y, np.nan) for y in ys]
             dds = [np.where(common, d, np.nan) for d in dds]
             row: dict[str, Any] = {"rf": rf, "n": int(common.sum())}
-            specs = {
-                "bad": lambda i, S=ys: sum(
-                    c * evidence.quantile(s, BAD_Q, i) for c, s in zip(coef, S, strict=True)
+            specs: dict[str, evidence.Statistic] = {
+                "bad": lambda i, S=ys: cast(
+                    np.ndarray,
+                    sum(c * evidence.quantile(s, BAD_Q, i) for c, s in zip(coef, S, strict=True)),
                 ),
-                "drawdown": lambda i, S=dds: sum(
-                    c * evidence.cell_mean(s, i) for c, s in zip(coef, S, strict=True)
+                "drawdown": lambda i, S=dds: cast(
+                    np.ndarray,
+                    sum(c * evidence.cell_mean(s, i) for c, s in zip(coef, S, strict=True)),
                 ),
-                "return": lambda i, S=ys: sum(
-                    c * evidence.cell_mean(s, i) for c, s in zip(coef, S, strict=True)
+                "return": lambda i, S=ys: cast(
+                    np.ndarray,
+                    sum(c * evidence.cell_mean(s, i) for c, s in zip(coef, S, strict=True)),
                 ),
             }
             for name, fn in specs.items():
@@ -742,20 +768,20 @@ class Study:
             return {"available": False}
         m["l1"] = [_l1(x, y) for x, y in zip(m["weights_a"], m["weights_b"], strict=True)]
         m["within"] = m["l1"] <= ENGINE_L1
-        by_cell = m.groupby("cell")["within"].mean().to_dict()
-        by_arm = m.groupby("arm")["within"].mean().to_dict()
+        by_cell = cast(pd.Series, m.groupby("cell")["within"].mean()).to_dict()
+        by_arm = cast(pd.Series, m.groupby("arm")["within"].mean()).to_dict()
         out: dict[str, Any] = {
             "available": True,
             "engines": [e1, e2],
             "pairs": int(len(m)),
-            "share_within": float(m["within"].mean()),
+            "share_within": float(_col(m, "within").mean()),
             "by_cell": by_cell,
             "by_arm": by_arm,
-            "median_l1": float(m["l1"].median()),
+            "median_l1": float(_col(m, "l1").median()),
         }
         months = self.months(menu)
         k = len(months)
-        free = m[(m["arm"] == "U1") & (m["cell"] == "free")]
+        free = _rows(m, (m["arm"] == "U1") & (m["cell"] == "free"))
         if len(free):
             free = free.assign(
                 dr=free["ret_m_a"] - free["ret_m_b"], dd=free["dd_m_a"] - free["dd_m_b"]
@@ -788,13 +814,13 @@ class Study:
         base = (s["menu"] == menu) & (s["engine"] == engine) & (s["arm"] == "U1")
         base &= np.isclose(s["tau_r"].astype(float), C.TAU_R)
         base &= (s["kind"] == "stability") & ~s["pooled"].astype(bool)
-        rows = s[base & s["usable"].astype(bool)]
+        rows = _rows(s, base & s["usable"].astype(bool))
         rows = rows.drop_duplicates(["month", "rf", "cell", "seed"])
         seeds = {self.primary_seed, *C.STABILITY_SEEDS}
         out_rows = []
         for cell in C.CELLS:
             for rf in RFS:
-                sub = rows[(rows["cell"] == cell) & (rows["rf"] == rf)]
+                sub = _rows(rows, (rows["cell"] == cell) & (rows["rf"] == rf))
                 l1s, share_ok, used, short = [], [], 0, 0
                 for _, g in sub.groupby("month"):
                     if set(g["seed"]) != seeds or len(g) != len(seeds):
@@ -806,7 +832,7 @@ class Study:
                         for j in range(i + 1, len(w)):
                             l1s.append(float(np.abs(w[i] - w[j]).sum()))
                     sigma = float(g.loc[g["seed"] == self.primary_seed, "sigma"].iloc[0])
-                    sd = float(np.std(g["bad"].to_numpy(dtype=float), ddof=1))
+                    sd = float(np.std(_col(g, "bad").to_numpy(dtype=float), ddof=1))
                     share_ok.append(sd <= BAD_SD_FACTOR * sigma)
                 if not used:
                     continue
@@ -833,36 +859,36 @@ class Study:
         training-bank and the independent-bank forecasts, per arm."""
         out: dict[str, Any] = {}
         sel = self.pick(menu, engine, kind="main", pooled=True, keys=SELECTION_KEYS)
-        sel = sel[sel["complete"]]
+        sel = _rows(sel, sel["complete"])
         for arm in C.ARM_ORDER:
-            a = sel[sel["arm"] == arm]
+            a = _rows(sel, sel["arm"] == arm)
             if a.empty:
                 continue
             row = {}
             for source in ("training", "independent"):
                 for name, q in zip(("bad", "typical", "good"), C.QUANTILES, strict=True):
                     if source == "training":
-                        f = a[name].astype(float).to_numpy()
+                        f = _col(a, name).astype(float).to_numpy()
                     elif name in self.evw and not self.evw[name].empty:
-                        f = a["sel_id"].map(self.evw[name].mean(axis=1)).to_numpy(dtype=float)
+                        f = _col(a, "sel_id").map(self.evw[name].mean(axis=1)).to_numpy(dtype=float)
                     else:
                         continue
-                    y = a["ret_daily"].astype(float).to_numpy()
+                    y = _col(a, "ret_daily").astype(float).to_numpy()
                     ok = np.isfinite(y) & np.isfinite(f)
                     if not ok.any():
                         continue
                     frame = pd.DataFrame(
                         {
-                            "month": a["month"].to_numpy()[ok],
+                            "month": _col(a, "month").to_numpy()[ok],
                             "cover": evaluate.at_or_below(y[ok], f[ok]).astype(float),
                             "loss": evaluate.pinball(q, y[ok], f[ok]),
                         }
                     )
-                    per_origin = frame.groupby("month").mean()
+                    per_origin = cast(pd.DataFrame, frame.groupby("month").mean())
                     row[f"{source}_{name}"] = {
                         "nominal": q,
-                        "coverage": float(per_origin["cover"].mean()),
-                        "pinball": float(per_origin["loss"].mean()),
+                        "coverage": float(_col(per_origin, "cover").mean()),
+                        "pinball": float(_col(per_origin, "loss").mean()),
                         "n": int(ok.sum()),
                     }
             out[arm] = row
@@ -871,53 +897,55 @@ class Study:
     # ----------------------------------------------------------------------------------- cost
 
     def cost(self, menu: str, engine: str) -> dict[str, Any]:
-        s = self.sel[(self.sel["menu"] == menu) & (self.sel["engine"] == engine)]
-        out: dict[str, Any] = {"total_hours": float(s["seconds"].sum() / 3600.0)}
-        main = s[s["kind"] == "main"]
+        s = _rows(self.sel, (self.sel["menu"] == menu) & (self.sel["engine"] == engine))
+        out: dict[str, Any] = {"total_hours": float(_col(s, "seconds").sum() / 3600.0)}
+        main = _rows(s, s["kind"] == "main")
         rows = []
         for arm, g in main.groupby("arm"):
-            sec = g["seconds"].astype(float)
+            sec = _col(g, "seconds").astype(float)
             rows.append(
                 {
                     "arm": arm,
                     "n": int(len(g)),
                     "median": float(sec.median()),
                     "p95": float(np.percentile(sec, 95)),
-                    "iterations": float(g["iterations"].median()),
+                    "iterations": float(_col(g, "iterations").median()),
                 }
             )
         out["by_arm"] = rows
-        show = s[s["kind"] == "showcase"]
+        show = _rows(s, s["kind"] == "showcase")
         if len(show):
-            surfaces = max(show["month"].nunique(), 1)
-            out["showcase_seconds_per_surface"] = float(show["seconds"].sum() / surfaces)
-            out["showcase_surfaces"] = int(show["month"].nunique())
-        out["solvers"] = {str(k): int(v) for k, v in s["solver"].value_counts().items()}
+            surfaces = max(_col(show, "month").nunique(), 1)
+            out["showcase_seconds_per_surface"] = float(_col(show, "seconds").sum() / surfaces)
+            out["showcase_surfaces"] = int(_col(show, "month").nunique())
+        out["solvers"] = {str(k): int(v) for k, v in _col(s, "solver").value_counts().items()}
         return out
 
     def exclusions(self, menu: str, engine: str) -> list[dict[str, Any]]:
         """Rows without a locked mix, excluded from every statistic: count per kind and status."""
-        s = self.sel[
+        s = _rows(
+            self.sel,
             (self.sel["menu"] == menu)
             & (self.sel["engine"] == engine)
-            & ~self.sel["usable"].astype(bool)
-        ]
+            & ~self.sel["usable"].astype(bool),
+        )
         if s.empty:
             return []
-        g = s.groupby(["kind", "status"]).size().reset_index(name="count")
+        g = cast(pd.Series, s.groupby(["kind", "status"]).size()).reset_index(name="count")
         return g.sort_values(["kind", "status"]).to_dict("records")
 
     def labels(self, menu: str, engine: str) -> list[dict[str, Any]]:
         """Counts of non-ok statuses per cell and risk level (never called infeasible)."""
-        s = self.sel[
+        s = _rows(
+            self.sel,
             (self.sel["menu"] == menu)
             & (self.sel["engine"] == engine)
-            & (self.sel["kind"] == "main")
-        ]
-        bad = s[s["status"] != C.OK]
+            & (self.sel["kind"] == "main"),
+        )
+        bad = _rows(s, s["status"] != C.OK)
         if bad.empty:
             return []
-        g = bad.groupby(["status", "cell", "rf"]).size().reset_index(name="count")
+        g = cast(pd.Series, bad.groupby(["status", "cell", "rf"]).size()).reset_index(name="count")
         return g.to_dict("records")
 
     # ------------------------------------------------------------------------------ regimes
@@ -927,20 +955,21 @@ class Study:
         u = self.pick(menu, engine, kind="main", arm="U1", cell="free", pooled=True)
         f = self.pick(menu, engine, kind="comparator", arm="F", cell="free", pooled=None)
         m = u.merge(f, on=["month", "rf"], suffixes=("_a", "_b"))
-        m = m[m["complete_a"] & m["regime_a"].notna()]
+        m = _rows(m, _col(m, "complete_a") & _col(m, "regime_a").notna())
         rows = []
         for label, g in m.groupby("regime_a"):
             origins = g.groupby("month")
-            d = (g["ret_m_a"] - g["ret_m_b"]).groupby(g["month"]).mean()
-            dd = (g["dd_m_a"] - g["dd_m_b"]).groupby(g["month"]).mean()
+            by_month = _col(g, "month")
+            d = cast(pd.Series, (_col(g, "ret_m_a") - _col(g, "ret_m_b")).groupby(by_month).mean())
+            dd = cast(pd.Series, (_col(g, "dd_m_a") - _col(g, "dd_m_b")).groupby(by_month).mean())
             rows.append(
                 {
                     "regime": label,
                     "origins": int(origins.ngroups),
                     "mean_return_diff": float(d.mean()),
                     "mean_drawdown_diff": float(dd.mean()),
-                    "mean_return_u1": float(g["ret_m_a"].mean()),
-                    "mean_return_f": float(g["ret_m_b"].mean()),
+                    "mean_return_u1": float(_col(g, "ret_m_a").mean()),
+                    "mean_return_f": float(_col(g, "ret_m_b").mean()),
                 }
             )
         return rows
@@ -959,7 +988,7 @@ class Study:
             ("3y real", "real_3y"),
             ("5y real", "real_5y"),
         ):
-            a, b = m[f"{col}_a"], m[f"{col}_b"]
+            a, b = _col(m, f"{col}_a"), _col(m, f"{col}_b")
             ok = a.notna() & b.notna()
             if not ok.any():
                 continue
@@ -979,16 +1008,16 @@ class Study:
         u = self.pick(menu, engine, kind="main", arm="U1", cell="free", pooled=True)
         f = self.pick(menu, engine, kind="comparator", arm="F", cell="free", pooled=None)
         m = u.merge(f, on=["month", "rf"], suffixes=("_a", "_b"))
-        m = m[m["ret_m_a"].notna() & m["ret_m_b"].notna()]
+        m = _rows(m, _col(m, "ret_m_a").notna() & _col(m, "ret_m_b").notna())
         if m.empty:
             return {}
         return {
-            "gross_diff": float((m["ret_m_a"] - m["ret_m_b"]).mean()),
-            "net_diff": float((m["ret_net_a"] - m["ret_net_b"]).mean()),
-            "turnover_u1": float(m["turnover_a"].mean()),
-            "turnover_f": float(m["turnover_b"].mean()),
-            "net_u1": float(m["ret_net_a"].mean()),
-            "net_f": float(m["ret_net_b"].mean()),
+            "gross_diff": float((_col(m, "ret_m_a") - _col(m, "ret_m_b")).mean()),
+            "net_diff": float((_col(m, "ret_net_a") - _col(m, "ret_net_b")).mean()),
+            "turnover_u1": float(_col(m, "turnover_a").mean()),
+            "turnover_f": float(_col(m, "turnover_b").mean()),
+            "net_u1": float(_col(m, "ret_net_a").mean()),
+            "net_f": float(_col(m, "ret_net_b").mean()),
         }
 
     # ----------------------------------------------------------------------- CSCV and DSR
@@ -1042,8 +1071,9 @@ class Study:
             if month not in idx:
                 counts["excluded_incomplete"] += 1
                 continue
-            rows = [k.loc[key] if key in k.index else None for k in keyed]
-            if any(r is None for r in rows):
+            found = [k.loc[key] if key in k.index else None for k in keyed]
+            rows = [r for r in found if r is not None]
+            if len(rows) != len(found):
                 counts["excluded_incomplete"] += 1
                 continue
             if any((r["status"] != C.OK) or not np.isfinite(r["ret_m"]) for r in rows):
@@ -1115,7 +1145,7 @@ class Study:
                 s = self.pick(menu, engine, kind="main", arm=arm, cell=cell, pooled=True)
                 sm = s.groupby(["month", "rf"])["ret_m"].first()
                 diff = (sm - fm).dropna()
-                per_month = diff.groupby(level="month").mean()
+                per_month = cast(pd.Series, diff.groupby(level="month").mean())
                 names.append(f"{arm}/{cell}")
                 cols.append(per_month.reindex(months).to_numpy(dtype=float))
         return np.column_stack(cols), names, months

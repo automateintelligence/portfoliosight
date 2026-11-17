@@ -18,6 +18,7 @@ import os
 import time
 import zlib
 from datetime import date
+from typing import cast
 
 import exchange_calendars as xcals
 import numpy as np
@@ -50,8 +51,9 @@ DRIFT_VOL = {
 
 class FakeBank:
     growth_bound_ok = True
+    engine: C.Engine
 
-    def __init__(self, ctx: C.OriginContext, engine: str, seed: int) -> None:
+    def __init__(self, ctx: C.OriginContext, engine: C.Engine, seed: int) -> None:
         self.engine, self.seed, self.paths = engine, seed, PATHS
         rng = np.random.default_rng(seed + zlib.crc32(ctx.inputs_sha256.encode()) % 10_000)
         self._draws = ctx.mu_hat + ctx.sigma * rng.standard_normal((PATHS, len(ctx.mu_hat)))
@@ -75,7 +77,7 @@ class FakeBank:
         raise NotImplementedError
 
 
-def make_bank(ctx: C.OriginContext, engine: str, seed: int) -> FakeBank:
+def make_bank(ctx: C.OriginContext, engine: C.Engine, seed: int) -> FakeBank:
     fit_fail = FIT_FAIL_MONTH or os.environ.get("FAKE_FIT_FAIL_MONTH")
     if engine == "garch" and ctx.month == fit_fail and ctx.lookback == C.LOOKBACK:
         from portfoliosight.research.fixedrisk.garch_bank import GarchFitFailed
@@ -115,8 +117,11 @@ def search_origin(
     )
     if native_only:
         arms = ("U1",)
-    cells = [f"d{round(100 * d):02d}" for d in (d_grid or (0.25, 0.50, 0.75))]
-    cells += ["free"] if include_free else []
+    cells: list[C.Cell] = [
+        cast(C.Cell, f"d{round(100 * d):02d}") for d in (d_grid or (0.25, 0.50, 0.75))
+    ]
+    if include_free:
+        cells.append("free")
     given = {a.r_fraction: a for a in anchors or []}
     for a in risk_fractions:
         anchor = given.get(a) or C.Anchors(
@@ -197,12 +202,12 @@ def synthetic_records(
 ) -> dict[str, pd.DataFrame]:
     """Seeded records for both test menus and SGOV; the X..Z menu may start later than A..D."""
     sessions = xcals.get_calendar("XNYS", start="2018-01-01", end="2027-12-31").sessions
-    days = pd.DatetimeIndex(sessions[sessions <= pd.Timestamp(D_STAR)])
+    days = pd.DatetimeIndex(cast(pd.DatetimeIndex, sessions[sessions <= pd.Timestamp(D_STAR)]))
     series = random_indices(days, DRIFT_VOL, seed)
     out = {}
     for symbol, values in series.items():
         first = first_x if symbol in "XYZ" else first_a
-        cut = values[values.index >= pd.Timestamp(first)]
+        cut = cast(pd.Series, values[values.index >= pd.Timestamp(first)])
         out[symbol] = record(cut / cut.iloc[0])
     return out
 
