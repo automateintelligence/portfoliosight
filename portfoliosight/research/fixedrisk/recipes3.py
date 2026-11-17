@@ -13,7 +13,9 @@ realized outcome:
   risk (`F@E`, `F@D`, `F@D10`).
 
 This module so far holds the mixes (`most_diversified`, `frontier_exact`, `recorded_columns`,
-`month_mixes`) and the two pre-registered lists (`E_EXCLUDED`, `U_EXCLUDED`).
+`month_mixes`), the two pre-registered lists (`E_EXCLUDED`, `U_EXCLUDED`) and the model-side gates
+judged before any realized outcome is read (`read_month_pool_dr2`, `month_pool_checks`, `gates`,
+`model_side`).
 """
 
 from __future__ import annotations
