@@ -16,12 +16,12 @@ import pandas as pd
 import pytest
 import responses
 
-from portfoliosight.data import download
+from portfoliosight.data import download, limits
 from portfoliosight.data import store as store_mod
 from portfoliosight.data.providers import tiingo, tsp
 from portfoliosight.data.providers.base import ProviderError, RateLimited, SymbolMeta
 from portfoliosight.data.store import LocalStore
-from portfoliosight.data.universe import load_tiers
+from portfoliosight.data.universe import Tiers, load_tiers
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 SESSIONS = [
@@ -946,3 +946,64 @@ def test_failed_tsp_fetch_marks_due_funds_stale_until_a_fetch_succeeds(tmp_path)
     restored = _manifest(store)["TSP-G"]
     assert restored["status"] == "ok" and restored["reason"] is None
     assert restored["last_date"] == d_g.isoformat()
+
+
+def test_the_walk_never_fetches_a_requested_ticker_that_has_no_record(tmp_path, monkeypatch):
+    """Spec 4.1: a requested ticker is offered once the lake has checked it, so the provider walk
+    must not start one, also on the Power plan, which fetches every tier 3 symbol without a
+    record. A requested ticker that already has a record is refreshed as before."""
+    store = _seed_store(
+        tmp_path,
+        {"ZZZR": _entry("tiingo", "ok", FEB20, FEB20, name="ZZZR Corp", kind="stock", tier=3)},
+        {"ZZZR": (FEB20, FEB20)},
+    )
+    power = limits.ProviderLimits(
+        tier=limits.TIER_POWER,
+        req_per_hour=9_000,
+        req_per_day=90_000,
+        unique_symbols_per_month=100_000,
+        measured_on="2026-02-27",
+        method="documented",
+    )
+    store_mod.put_json(store, limits.LIMITS_KEY, power.model_dump())
+    assert limits.plan_tier(store) == "power"
+    # ZZZQ: requested, no record. ZZZR: requested, has one. ZZZS: an ordinary tier 3 stock.
+    universe = Tiers(
+        tier1=(),
+        tier2=(),
+        tier3=("ZZZQ", "ZZZR", "ZZZS"),
+        income=frozenset(),
+        starter_slice=130,
+        requested=("ZZZQ", "ZZZR"),
+    )
+    monkeypatch.setattr(download, "load_tiers", lambda: universe)
+
+    provider = FakeProvider(default_available=FEB27)
+    clock = Clock(FEB27, 13)
+    code = download.run(
+        "refresh",
+        store=store,
+        providers={"tiingo": provider},
+        clock=clock,
+        sleep=clock.sleep,
+        tiers=(3,),
+    )
+    assert code == 0
+    assert [call[1] for call in provider.calls if call[0] == "daily"] == ["ZZZR", "ZZZS"]
+    assert "ZZZQ" not in {call[1] for call in provider.calls}
+    now = _manifest(store)
+    assert "ZZZQ" not in now and "ZZZQ" not in _listed(store)
+    assert now["ZZZR"]["last_date"] == FEB27.isoformat()  # refreshed as before
+    assert now["ZZZS"]["status"] == "ok"  # the walk still starts a stock nobody requested
+
+    # Once more: still nothing for ZZZQ, which stays off the catalog until the lake takes it.
+    again = download.run(
+        "refresh",
+        store=store,
+        providers={"tiingo": provider},
+        clock=clock,
+        sleep=clock.sleep,
+        tiers=(3,),
+    )
+    assert again == 0 and "ZZZQ" not in {call[1] for call in provider.calls}
+    assert "ZZZQ" not in _manifest(store)
