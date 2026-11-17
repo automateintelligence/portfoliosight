@@ -58,6 +58,7 @@ class SymbolInfo:
     income: bool
     kind: str | None  # "tsp", "stock", or None when the provider's meta decides (etf/mutual fund)
     note: str | None = None  # why a fund has no recent data, e.g. "converted to an ETF"
+    requested: bool = False  # a requested ticker whose lowest tier is 3 (spec 4.1)
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ class Tiers:
     starter_slice: int
     notes: Mapping[str, str] = field(default_factory=dict)
     preset_funds: tuple[str, ...] = ()  # the funds tier 1 adds from the presets, in its order
+    requested: tuple[str, ...] = ()  # the tier 3 request list (spec 4.1), file order
 
     def tier3_only(self) -> tuple[str, ...]:
         """Tier 3 symbols that are not already in tier 2, in file order."""
@@ -83,6 +85,7 @@ class Tiers:
         """
         listed1 = set(self.tier1) - set(self.preset_funds)
         stocks = {s for s in self.tier3_only() if s not in listed1}
+        asked = set(self.requested)
         out: dict[str, SymbolInfo] = {}
         for tier, symbols in ((1, self.tier1), (2, self.tier2), (3, self.tier3)):
             for symbol in symbols:
@@ -95,7 +98,12 @@ class Tiers:
                 else:
                     kind = None
                 out[symbol] = SymbolInfo(
-                    symbol, tier, symbol in self.income, kind, self.notes.get(symbol)
+                    symbol,
+                    tier,
+                    symbol in self.income,
+                    kind,
+                    self.notes.get(symbol),
+                    requested=tier == 3 and symbol in asked,
                 )
         return out
 
@@ -181,12 +189,26 @@ def _universe_files(item: Mapping[str, Any], tier: int, tiers_file: Path) -> lis
     raise ValueError(f"{tiers_file.name}: tier {tier} needs either 'file' or a 'files' list")
 
 
+def _requested_file(item: Mapping[str, Any], files: list[str], tiers_file: Path) -> str | None:
+    """The tier 3 file the entry names as the request list; it must be one of the tier's files."""
+    named = item.get("requested")
+    if named is None:
+        return None
+    if str(named) not in files:
+        raise ValueError(
+            f"{tiers_file.name}: tier 3 'requested' must name one of its files, not {named!r}"
+        )
+    return str(named)
+
+
 def load_tiers(tiers_file: Path = TIERS_FILE) -> Tiers:
     root = tiers_file.resolve().parents[2]
     config = json.loads(tiers_file.read_text(encoding="utf-8"))
     by_tier = {int(item["tier"]): item for item in config["tiers"]}
     if sorted(by_tier) != [1, 2, 3]:
         raise ValueError(f"{tiers_file.name} must list tiers 1, 2 and 3, found {sorted(by_tier)}")
+    tier3_files = _universe_files(by_tier[3], 3, tiers_file)
+    requested_file = _requested_file(by_tier[3], tier3_files, tiers_file)
 
     holdings = root / by_tier[1]["holdings"]
     tier1 = _holdings_symbols(holdings)
@@ -197,14 +219,19 @@ def load_tiers(tiers_file: Path = TIERS_FILE) -> Tiers:
         for preset in load_presets(root / by_tier[1]["presets"]):
             added.update((fund, None) for fund in preset.funds if fund not in tier1)
     income: set[str] = set()
+    requested: tuple[str, ...] = ()
     files: dict[int, tuple[str, ...]] = {}
     for tier in (2, 3):
         joined: dict[str, None] = {}  # the files' symbols in order; a repeat keeps its first place
-        for name in _universe_files(by_tier[tier], tier, tiers_file):
+        names = tier3_files if tier == 3 else _universe_files(by_tier[tier], tier, tiers_file)
+        for name in names:
             path = root / name
             lines = parse_universe_lines(path.read_text(encoding="utf-8"))
-            joined.update(dict.fromkeys(_unique([symbol for symbol, _ in lines], path)))
+            symbols = _unique([symbol for symbol, _ in lines], path)
+            joined.update(dict.fromkeys(symbols))
             income.update(symbol for symbol, tagged in lines if tagged)
+            if tier == 3 and name == requested_file:
+                requested = symbols
         files[tier] = tuple(joined)
     return Tiers(
         tier1=_unique(tier1, holdings) + tuple(added),
@@ -214,6 +241,7 @@ def load_tiers(tiers_file: Path = TIERS_FILE) -> Tiers:
         starter_slice=int(by_tier[3].get("starter_slice", 130)),
         notes={str(k).upper(): str(v) for k, v in config.get("notes", {}).items()},
         preset_funds=tuple(added),
+        requested=requested,
     )
 
 

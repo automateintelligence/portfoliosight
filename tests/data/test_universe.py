@@ -79,12 +79,14 @@ def test_tier3_is_the_qse_core_list_then_the_qse_portfoliosight_list():
     core, added = _file_symbols(QSE_CORE), _file_symbols(QSE_PORTFOLIOSIGHT)
     assert len(core) == 1038 and len(added) == 356 == len(set(added))
     assert not set(core) & set(added)
-    assert list(tiers.tier3) == core + added
+    asked = [s for s in REQUESTED if s not in core]  # FCX, TSM and WMT are on the core list
+    assert len(asked) == 26
+    assert list(tiers.tier3) == core + added + asked
     overlap = set(tiers.tier3) & set(tiers.tier2)
-    assert len(tiers.tier3_only()) == 1038 + 356 - len(overlap)
+    assert len(tiers.tier3_only()) == 1038 + 356 + 26 - len(overlap)
     assert not set(tiers.tier3_only()) & set(tiers.tier2)
     assert {"VTI", "SGOV", "AGG", "IWB"} <= overlap  # IWB is in the added list and in tier 2
-    assert list(tiers.tier3_only()[-3:]) == ["XRAY", "YETI", "ZION"]
+    assert list(tiers.tier3_only()[-3:]) == ["TM", "UL", "UNCRY"]
 
 
 def test_the_starter_slice_stays_inside_the_qse_core_list():
@@ -93,12 +95,13 @@ def test_the_starter_slice_stays_inside_the_qse_core_list():
     tier2, tier1 = set(tiers.tier2), set(tiers.tier1)
     core_only = [s for s in core if s not in tier2]
     added_only = [s for s in added if s not in tier2]
+    asked_only = [s for s in REQUESTED if s not in core and s not in tier2]
     assert universe.priority_order("starter", tiers, only_tiers=(3,)) == core_only[:130]
-    assert not set(added_only) & set(universe.priority_order("starter", tiers))
+    assert not set(added_only + asked_only) & set(universe.priority_order("starter", tiers))
     # Power walks them last, but for the preset stocks tier 1 already holds; the walk itself
     # spends nothing on a symbol the lake keeps.
     power = universe.priority_order("power", tiers, only_tiers=(3,))
-    assert power == [s for s in core_only + added_only if s not in tier1]
+    assert power == [s for s in core_only + added_only + asked_only if s not in tier1]
 
 
 def test_priority_order_starter_and_power():
@@ -469,3 +472,41 @@ def test_funds_file_refuses_a_bad_kind_and_a_missing_name(tmp_path):
     write(["VTI"])
     with pytest.raises(ValueError, match="object"):
         universe.load_funds(path)
+
+
+def test_a_requested_ticker_is_a_tier_3_stock():
+    info = universe.load_tiers().info()
+    assert info["NSRGY"].tier == 3
+    assert info["NSRGY"].kind == "stock"
+    assert info["NSRGY"].requested is True
+    assert info["ZION"].requested is False and info["VTI"].requested is False
+
+
+def test_a_requested_ticker_already_listed_keeps_its_place():
+    tiers = universe.load_tiers()
+    info = tiers.info()
+    assert list(tiers.requested) == REQUESTED  # the file's order
+    assert info["WMT"].tier == 1 and info["WMT"].requested is False  # a preset stock
+    assert info["FCX"].tier == 3 and info["TSM"].tier == 3  # on QSE's core list already
+    for symbol in ("FCX", "TSM", "WMT"):
+        assert list(tiers.tier3).count(symbol) == 1
+        assert symbol in _file_symbols(QSE_CORE)
+    core_end = len(_file_symbols(QSE_CORE)) + len(_file_symbols(QSE_PORTFOLIOSIGHT))
+    assert list(tiers.tier3[core_end:]) == [s for s in REQUESTED if s not in {"FCX", "TSM", "WMT"}]
+    assert len(tiers.requested) == 29
+    assert len(tiers.tier3) == 1038 + 356 + 26
+
+
+def test_requested_file_is_the_third_tier_3_file_and_is_named_in_tiers_json(tmp_path):
+    config = json.loads((ROOT / "data" / "universes" / "tiers.json").read_text(encoding="utf-8"))
+    tier3 = next(item for item in config["tiers"] if item["tier"] == 3)
+    assert tier3["files"][-1] == tier3["requested"] == "data/universes/requested.txt"
+    assert len(tier3["files"]) == 3
+    # The key must name one of the tier's files, or the list is refused.
+    stray = json.loads(json.dumps(config))
+    stray["tiers"][2]["requested"] = "data/universes/elsewhere.txt"
+    (tmp_path / "data" / "universes").mkdir(parents=True)
+    path = tmp_path / "data" / "universes" / "tiers.json"
+    path.write_text(json.dumps(stray), encoding="utf-8")
+    with pytest.raises(ValueError, match="requested"):
+        universe.load_tiers(path)
