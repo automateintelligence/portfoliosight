@@ -462,6 +462,30 @@ describe("store: transitions", () => {
     expect((await boot("?nl=1")).getState().noLimitsLine).toBe(false);
   });
 
+  it("the no-limits choice is read from this browser's storage under ps.noLimitsLine: only the value hidden hides the line, and the choice is written back there", async () => {
+    for (const value of ["", "junk", "shown", "0", "false"]) {
+      localStorage.setItem("ps.noLimitsLine", value);
+      expect((await boot("")).getState().noLimitsLine, `stored "${value}"`).toBe(true);
+    }
+    localStorage.setItem("ps.noLimitsLine", "hidden");
+    const store = await boot("");
+    expect(store.getState().noLimitsLine).toBe(false);
+    // the stored choice is the browser's: the same address opens it hidden, and a link from another browser says nothing against it
+    expect((await boot("?u=guide2017&lb=5y&d=0")).getState().noLimitsLine).toBe(false);
+    store.dispatch({ type: "setNoLimitsLine", show: true });
+    expect(localStorage.getItem("ps.noLimitsLine")).toBe("shown");
+    store.dispatch({ type: "setNoLimitsLine", show: false });
+    expect(localStorage.getItem("ps.noLimitsLine")).toBe("hidden");
+  });
+
+  it("the no-limits choice works where the browser has no storage at all", async () => {
+    vi.stubGlobal("localStorage", undefined);
+    const store = await boot("");
+    expect(store.getState().noLimitsLine).toBe(true);
+    store.dispatch({ type: "setNoLimitsLine", show: false });
+    expect(store.getState().noLimitsLine).toBe(false);
+  });
+
   it("the no-limits choice works when storage is blocked: shown by default, and a choice holds for the page", async () => {
     vi.stubGlobal("localStorage", {
       getItem: () => {

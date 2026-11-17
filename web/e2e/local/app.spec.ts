@@ -460,6 +460,34 @@ test("a link with nl=0 is not read: the line is drawn, the box is checked, and t
   await expect(page.getByTestId("share-link")).not.toHaveValue(/[?&]nl=/);
 });
 
+test("the choice belongs to the browser, not the link: hidden, it stays hidden through a change of window and a reopened link, and a link copied from it opens with the line drawn in a browser that never hid it", async ({ page, browser }) => {
+  await open(page);
+  await section(page, "settings");
+  await noLimitsBox(page).uncheck();
+  await lineDrawn(page, false);
+  await page.getByTestId("lookback-10y").check({ force: true });
+  await expect(page.getByTestId("frontier-label-10y")).toHaveText("10 years (Efficient frontier)");
+  await lineDrawn(page, false);
+  await page.getByTestId("share-open").click();
+  const link = await page.getByTestId("share-link").inputValue();
+  expect(link).toContain("lb=10y");
+  expect(link, "the link says nothing of the line").not.toMatch(/[?&]nl=/);
+  // the sender's own browser still has it hidden when the link is opened again
+  await page.goto(link);
+  await expect(page.getByTestId("point-selected")).toBeVisible();
+  await lineDrawn(page, false);
+  // a browser with nothing stored shows the line, as every link does by default
+  const other = await browser.newContext({ viewport: page.viewportSize() });
+  try {
+    const recipient = await other.newPage();
+    await recipient.goto(link);
+    await expect(recipient.getByTestId("point-selected")).toBeVisible();
+    await lineDrawn(recipient, true);
+  } finally {
+    await other.close();
+  }
+});
+
 test("with limits that change nothing there is no line; the checkbox stays, disabled, keeps its choice and says why", async ({ page }) => {
   // the mock's custom two-fund menu has the same frontier with and without limits
   await open(page, "f=SGOV:50,VTIP:50&unit=pct");
