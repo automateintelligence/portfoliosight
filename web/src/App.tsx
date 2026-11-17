@@ -10,7 +10,7 @@ import { ResultStrip } from "./controls/ResultStrip";
 import { RiskSlider } from "./controls/RiskSlider";
 import { ShareDialog } from "./controls/ShareDialog";
 import { ThemeSwitch } from "./controls/ThemeSwitch";
-import { disclaimer, family, lookbackLine, lookbackNames, plain, primaryLineName } from "./copy";
+import { disclaimer, family, lookbackLine, lookbackNames, plain, primaryLineName, rateWaitLine } from "./copy";
 import { fundsWithPrices } from "./math/amounts";
 import { portfolioMath, type YearRange } from "./math/portfolio";
 import { stripScale, tensorBounds } from "./math/stripScale";
@@ -106,6 +106,19 @@ function Page({ interaction }: { interaction: Interaction }) {
   const state = useSyncExternalStore(store.subscribe, store.getState, store.getState);
   const dispatch = store.dispatch;
   useEffect(() => dispatch({ type: "start" }), [dispatch]);
+  // A countdown to a retry must not fire once the page is left: stop it on unmount and on pagehide,
+  // and say the page is live again on pageshow (start is idempotent).
+  useEffect(() => {
+    const leave = () => dispatch({ type: "leave" });
+    const back = () => dispatch({ type: "start" });
+    window.addEventListener("pagehide", leave);
+    window.addEventListener("pageshow", back);
+    return () => {
+      window.removeEventListener("pagehide", leave);
+      window.removeEventListener("pageshow", back);
+      leave();
+    };
+  }, [dispatch]);
 
   const phone = useMediaQuery("(max-width: 768px)");
   // From 1024 px up, Funds & amounts is a sidebar beside the chart; below that, a section under it.
@@ -292,6 +305,20 @@ function Page({ interaction }: { interaction: Interaction }) {
           <span className="ring" aria-hidden="true" />
           <p>{plain.building}</p>
           {state.build.position !== null && state.build.position > 0 && <p className="sub">{`Place in line: ${state.build.position}`}</p>}
+        </div>
+      </div>
+    );
+  } else if (state.build.status === "build-wait") {
+    notice = (
+      <div className={tensor ? "notice notice-late" : "notice"} data-testid="rate-wait-notice">
+        <div className="notice-card">
+          <span className="ring" aria-hidden="true" />
+          <p data-testid="rate-wait-line" aria-hidden="true">
+            {rateWaitLine(state.build.waitS ?? 0)}
+          </p>
+          <p className="sr-only" role="status" data-testid="rate-wait-live">
+            {plain.rateWaiting}
+          </p>
         </div>
       </div>
     );

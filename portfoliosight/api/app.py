@@ -87,8 +87,16 @@ def _no_generation() -> ApiError:
     return ApiError(503, "no_generation", "No generation has been published yet.")
 
 
-def _rate_limited() -> JSONResponse:
-    return error_response(429, "rate_limited", "Too many requests; try again in a minute.")
+def _wait_s(ip: str, *limiters: RateLimiter) -> int:
+    """The longest wait among the limiters a request answers to: when it would pass all of them."""
+    return max(limiter.retry_after(ip) for limiter in limiters)
+
+
+def _rate_limited(wait_s: int) -> JSONResponse:
+    """The 429 of both limiters; ``Retry-After`` is the seconds until the caller is admitted."""
+    response = error_response(429, "rate_limited", "Too many requests; try again in a minute.")
+    response.headers["Retry-After"] = str(max(1, wait_s))
+    return response
 
 
 def _client_ip(request: Request) -> str:
@@ -190,8 +198,11 @@ def create_app(
     ) -> Response:
         if not gate_open(request.headers.get(GATE_HEADER), settings.gate_secret):
             return forbidden()
-        if not requests_limiter.admit(_client_ip(request)):
-            return _rate_limited()
+        ip = _client_ip(request)
+        if not requests_limiter.admit(ip):
+            is_tensor_post = request.method == "POST" and request.url.path == "/v1/tensors"
+            limiters = (requests_limiter, posts_limiter) if is_tensor_post else (requests_limiter,)
+            return _rate_limited(_wait_s(ip, *limiters))
         try:
             return await call_next(request)
         except Exception as exc:
@@ -270,8 +281,9 @@ def create_app(
 
     @app.post("/v1/tensors")
     async def post_tensors(request: Request) -> JSONResponse:
-        if not posts_limiter.admit(_client_ip(request)):
-            return _rate_limited()
+        ip = _client_ip(request)
+        if not posts_limiter.admit(ip):
+            return _rate_limited(_wait_s(ip, posts_limiter, requests_limiter))
         parsed = parse_tensor_request(await _read_body(request), max_funds=_menu_max(request))
         return await run_in_threadpool(_submit, parsed)
 

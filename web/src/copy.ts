@@ -63,6 +63,10 @@ export const plain = {
   buildFailed: "We couldn't compute this portfolio",
   buildFailedFinal: "We couldn't compute this portfolio after three tries. The ready-made portfolios still work:",
   retry: "Retry",
+  /** The Retry button's line when the service refused the build for too many requests and no wait could be shown. */
+  rateLimited: "Too many charts in a minute. Try again in a moment.",
+  /** Read out once while the wait is counted down on screen (the per-second line itself is not read out). */
+  rateWaiting: "Too many charts in a minute. Trying again shortly.",
   shareCopy: "Copy link",
   shareEmail: "Send this view by email",
   shareSend: "Send",
@@ -204,6 +208,8 @@ export const menuFull = (n: number) => `A portfolio holds up to ${n} funds.`;
 export const menuNeedsMore = (n: number) => `A portfolio needs at least ${n} funds.`;
 /** A shared link with more funds than this browser's tier allows is refused whole, never cut. */
 export const linkTooManyFunds = (n: number) => `This portfolio has more funds than this site allows (${n}).`;
+/** The service refused the build for too many requests and said how long to wait; the page counts it down and tries once more by itself. */
+export const rateWaitLine = (seconds: number) => `Too many charts in a minute. Trying again in ${seconds} s.`;
 export const adminTag = "Admin";
 export const adminLine = (n: number) => `Admin mode: portfolios of up to ${n} funds.`;
 export const fundsTotal = (total: string, gap: string, over: boolean) => `Total: ${total}%, ${gap}% ${over ? "over" : "to go"}`;

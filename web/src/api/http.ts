@@ -62,7 +62,7 @@ export type TensorAnswer =
   | { kind: "ready"; url: string }
   | { kind: "pending"; pollUrl: string | null; position: number | null; etaS: number | null }
   | { kind: "failed"; error: string; retry: boolean; details: Record<string, unknown> | null }
-  | { kind: "refused"; status: number; code: string; message: string; details: Record<string, unknown> | null };
+  | { kind: "refused"; status: number; code: string; message: string; details: Record<string, unknown> | null; retryAfterS: number | null };
 
 async function call(path: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(path, { ...init, headers: { accept: "application/json", ...(init?.headers ?? {}) } });
@@ -119,6 +119,14 @@ export async function fetchHealth(): Promise<Health> {
   return healthSchema.parse(await res.json());
 }
 
+/** A `Retry-After` of whole seconds (1 or more); anything else, the date form included, is no wait. */
+function retryAfterSeconds(res: Response): number | null {
+  const raw = res.headers.get("retry-after")?.trim() ?? "";
+  if (!/^\d{1,9}$/.test(raw)) return null;
+  const seconds = Number(raw);
+  return seconds >= 1 ? seconds : null;
+}
+
 /** Reads the three answers of spec 6 (200, 202, 409) plus refusals, for both the POST and the GET. */
 async function tensorAnswer(res: Response, lookback: string): Promise<TensorAnswer> {
   const body = asRecord(await jsonOf(res));
@@ -147,6 +155,7 @@ async function tensorAnswer(res: Response, lookback: string): Promise<TensorAnsw
     code: typeof err.code === "string" ? err.code : `http_${res.status}`,
     message: typeof err.message === "string" ? err.message : "",
     details,
+    retryAfterS: retryAfterSeconds(res),
   };
 }
 

@@ -3,7 +3,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { portfolioMath } from "../src/math/portfolio";
 import { ceilingAt } from "../src/math/view";
-import { parseTensor } from "../src/api/client";
+import { parseTensor, postTensor } from "../src/api/client";
+import { plain } from "../src/copy";
 import { createStore, currentMix, type Store } from "../src/state/store";
 import { decode } from "../src/state/url";
 
@@ -21,8 +22,8 @@ type Call = { method: string; path: string; body: string | null };
 let calls: Call[] = [];
 let replaced: string[] = [];
 let health: () => Response;
-let tensorRoute: (call: Call) => Response;
-let tierRoute: () => Response;
+let tensorRoute: (call: Call) => Response | Promise<Response>;
+let tierRoute: () => Response | Promise<Response>;
 let tickerRoute: () => Response | Promise<Response>;
 let presetsAsof = RAW.asof as string;
 
@@ -848,5 +849,312 @@ describe("store: the file's prices in the address", () => {
     const store = await boot(`f=${A}:60,${B}:40&p=${A}:200,${B}:50`);
     expect(priceOf(store)).toEqual([[A, undefined], [B, undefined]]);
     expect(await lastUrl(store)).not.toContain("p=");
+  });
+});
+
+describe("store: a build refused for too many requests (429)", () => {
+  const MENU = "?f=" + IDS.slice(0, 2).join(",");
+  const refusal = (retryAfter?: string) =>
+    json(429, { error: { code: "rate_limited", message: "Too many requests; try again in a minute.", details: null } }, retryAfter === undefined ? {} : { "retry-after": retryAfter });
+  const posts = () => calls.filter((c) => c.method === "POST");
+  const waiting = (store: Store) => store.getState().build;
+  let ok: typeof tensorRoute; // the harness's own answers, for what is not refused
+  beforeEach(() => {
+    ok = tensorRoute;
+  });
+
+  it("reads Retry-After as whole seconds, and as nothing when it is missing or not a count of seconds", async () => {
+    const answerFor = async (header?: string) => {
+      tensorRoute = () => refusal(header);
+      const answer = await postTensor("{}", "5y");
+      return answer.kind === "refused" ? answer.retryAfterS : "not refused";
+    };
+    expect(await answerFor("12")).toBe(12);
+    expect(await answerFor(" 7 ")).toBe(7);
+    for (const odd of [undefined, "0", "-3", "1.5", "soon", "", "Wed, 21 Oct 2026 07:28:00 GMT"]) expect(await answerFor(odd), String(odd)).toBeNull();
+  });
+
+  it("counts the wait down, then sends the same build again by itself, once", async () => {
+    let refusedOnce = false;
+    tensorRoute = (call) => {
+      if (call.method === "POST" && !refusedOnce) {
+        refusedOnce = true;
+        return refusal("3");
+      }
+      return ok(call);
+    };
+    const store = await boot(MENU);
+    expect(waiting(store)).toEqual({ status: "build-wait", error: null, position: null, waitS: 3 });
+    expect(posts()).toHaveLength(1);
+    await advance(1000);
+    expect(waiting(store)).toMatchObject({ status: "build-wait", waitS: 2 });
+    await advance(1000);
+    expect(waiting(store)).toMatchObject({ status: "build-wait", waitS: 1 });
+    expect(posts(), "nothing is sent while the wait runs").toHaveLength(1);
+    await advance(1000);
+    expect(posts()).toHaveLength(2);
+    expect(posts()[1].body, "the identical body").toBe(posts()[0].body);
+    expect(waiting(store).status).toBe("ready");
+    expect(store.getState().tensor).not.toBeNull();
+    await advance(120_000);
+    expect(posts(), "a build that went through is not sent again").toHaveLength(2);
+  });
+
+  it("when the automatic retry is refused too, the Retry button comes and nothing more is sent by itself", async () => {
+    tensorRoute = () => refusal("2");
+    const store = await boot(MENU);
+    expect(waiting(store)).toMatchObject({ status: "build-wait", waitS: 2 });
+    await advance(2000);
+    expect(posts()).toHaveLength(2);
+    expect(waiting(store)).toMatchObject({ status: "build-retry", error: plain.rateLimited });
+    await advance(300_000);
+    expect(posts(), "no second automatic retry").toHaveLength(2);
+    expect(waiting(store).status).toBe("build-retry");
+  });
+
+  it("a click on Retry starts a build of its own: refused again, it is counted down and sent once more", async () => {
+    tensorRoute = () => refusal("1");
+    const store = await boot(MENU);
+    await advance(1000);
+    expect(posts()).toHaveLength(2);
+    expect(waiting(store).status).toBe("build-retry");
+    let refusedOnce = false;
+    tensorRoute = (call) => {
+      if (call.method === "POST" && !refusedOnce) {
+        refusedOnce = true;
+        return refusal("1");
+      }
+      return ok(call);
+    };
+    store.dispatch({ type: "retryBuild" });
+    await flush();
+    expect(waiting(store)).toMatchObject({ status: "build-wait", waitS: 1 });
+    await advance(1000);
+    expect(posts()).toHaveLength(4);
+    expect(waiting(store).status).toBe("ready");
+  });
+
+  it.each([undefined, "0", "soon", "Wed, 21 Oct 2026 07:28:00 GMT", "61", "86400"])("Retry-After %s: the Retry button at once, and nothing is sent by itself", async (header) => {
+    tensorRoute = () => refusal(header);
+    const store = await boot(MENU);
+    expect(waiting(store)).toEqual({ status: "build-retry", error: plain.rateLimited, position: null });
+    await advance(300_000);
+    expect(posts()).toHaveLength(1);
+    store.dispatch({ type: "retryBuild" });
+    await flush();
+    expect(posts(), "the button sends it again").toHaveLength(2);
+  });
+
+  it("a wait of the full minute is counted down", async () => {
+    tensorRoute = () => refusal("60");
+    const store = await boot(MENU);
+    expect(waiting(store)).toMatchObject({ status: "build-wait", waitS: 60 });
+    await advance(59_000);
+    expect(waiting(store)).toMatchObject({ status: "build-wait", waitS: 1 });
+    expect(posts()).toHaveLength(1);
+  });
+
+  const MENU_CHANGES: Array<[string, (store: Store) => void]> = [
+    ["another history window", (store) => store.dispatch({ type: "setLookback", lookback: "3y" })],
+    ["another set of funds", (store) => store.dispatch({ type: "useMenu", rows: IDS.slice(2, 5).map((id) => ({ id, name: id, amount: null })) })],
+    ["a ready-made portfolio", (store) => store.dispatch({ type: "selectPreset", id: "tsp" })],
+    ["a limit on a fund", (store) => store.dispatch({ type: "setCaps", caps: [{ id: IDS[0], min: null, max: 60 }] })],
+  ];
+  it.each(MENU_CHANGES)("%s cancels the countdown, and the old build is never sent again", async (_name, change) => {
+    let refusedOnce = false;
+    tensorRoute = (call) => {
+      if (call.method === "POST" && !refusedOnce) {
+        refusedOnce = true;
+        return refusal("5");
+      }
+      return ok(call);
+    };
+    const store = await boot(MENU);
+    const first = posts()[0].body;
+    expect(waiting(store)).toMatchObject({ status: "build-wait", waitS: 5 });
+    await advance(2000);
+    change(store);
+    await flush();
+    await advance(500);
+    expect(waiting(store).status, "the countdown is gone").not.toBe("build-wait");
+    const sent = posts().length;
+    await advance(120_000);
+    expect(posts(), "nothing more is sent").toHaveLength(sent);
+    expect(posts().slice(1).map((c) => c.body), "the old build is not among the later ones").not.toContain(first);
+  });
+
+  it("leaving the page cancels the countdown, and the Retry button is what is left", async () => {
+    tensorRoute = () => refusal("5");
+    const store = await boot(MENU);
+    await advance(2000);
+    store.dispatch({ type: "leave" });
+    expect(waiting(store)).toEqual({ status: "build-retry", error: plain.rateLimited, position: null });
+    await advance(120_000);
+    expect(posts()).toHaveLength(1);
+    // with nothing to cancel, leaving changes nothing
+    tensorRoute = ok;
+    const ready = await boot("");
+    ready.dispatch({ type: "leave" });
+    expect(ready.getState().build.status).toBe("ready");
+  });
+
+  it("a refusal never uses up the three-failure budget: the Retry button stays", async () => {
+    tensorRoute = () => refusal();
+    const store = await boot(MENU);
+    for (let n = 0; n < 4; n++) {
+      expect(waiting(store), `after refusal ${n + 1}`).toEqual({ status: "build-retry", error: plain.rateLimited, position: null });
+      store.dispatch({ type: "retryBuild" });
+      await flush();
+    }
+    expect(posts()).toHaveLength(5);
+    // and a refusal after two builds that really failed is not the third failure
+    const failed = () => json(409, { status: "failed", error: "build_failed", attempts: 1, retry: true });
+    let step = 0;
+    tensorRoute = () => (step++ < 2 ? failed() : refusal());
+    const again = await boot(MENU);
+    again.dispatch({ type: "retryBuild" });
+    await flush();
+    again.dispatch({ type: "retryBuild" });
+    await flush();
+    expect(again.getState().build).toEqual({ status: "build-retry", error: plain.rateLimited, position: null });
+  });
+
+  it("the automatic retry keeps the original request's forced POST: a refused limits reset is sent again, not answered from the cache", async () => {
+    const store = await boot("");
+    store.dispatch({ type: "setCaps", caps: [{ id: IDS[0], min: null, max: 60 }] });
+    await flush();
+    await advance(500);
+    expect(posts()).toHaveLength(1);
+    let refuseOnce = true;
+    tensorRoute = (call) => {
+      if (call.method === "POST" && refuseOnce) {
+        refuseOnce = false;
+        return refusal("1");
+      }
+      return ok(call);
+    };
+    store.dispatch({ type: "setCaps", caps: [] });
+    await flush();
+    expect(waiting(store)).toMatchObject({ status: "build-wait", waitS: 1 });
+    await advance(1000);
+    expect(posts(), "the reset was sent, refused, and sent again").toHaveLength(3);
+    expect(waiting(store).status).toBe("ready");
+  });
+
+  it("a click on Retry after a refused limits reset repeats the forced POST too, not the cached preset", async () => {
+    const store = await boot("");
+    store.dispatch({ type: "setCaps", caps: [{ id: IDS[0], min: null, max: 60 }] });
+    await flush();
+    await advance(500);
+    expect(posts()).toHaveLength(1);
+    tensorRoute = () => refusal("1");
+    store.dispatch({ type: "setCaps", caps: [] });
+    await flush();
+    await advance(1000);
+    expect(waiting(store).status).toBe("build-retry");
+    expect(posts(), "the reset and its automatic retry, both refused").toHaveLength(3);
+    tensorRoute = ok;
+    store.dispatch({ type: "retryBuild" });
+    await flush();
+    await advance(500);
+    expect(posts()).toHaveLength(4);
+    expect(posts()[3].body).toBe(posts()[1].body);
+    expect(waiting(store).status).toBe("ready");
+  });
+
+  it("the retry repeats the request that was refused, even when an amount edit has since made the preset a custom menu", async () => {
+    let refuseOnce = true;
+    tensorRoute = (call) => {
+      if (call.method === "GET" && refuseOnce) {
+        refuseOnce = false;
+        return refusal("2");
+      }
+      return ok(call);
+    };
+    const store = await boot("");
+    const preset = `GET /api/tensors/${G}/${H1}/5y`;
+    expect(waiting(store)).toMatchObject({ status: "build-wait", waitS: 2 });
+    expect(tensorCalls().map((c) => `${c.method} ${c.path}`)).toEqual([preset]);
+    store.dispatch({ type: "setAmount", id: IDS[0], amount: 500 });
+    expect(store.getState().preset, "the edit made it a custom menu").toBeNull();
+    await advance(2000);
+    expect(tensorCalls().map((c) => `${c.method} ${c.path}`)).toEqual([preset, preset]);
+    expect(waiting(store).status).toBe("ready");
+  });
+
+  it("start-up still waiting on the tier does not send a build the visitor's own action has already sent", async () => {
+    let releaseTier: (answer: Response) => void = () => undefined;
+    tierRoute = () => new Promise<Response>((resolve) => (releaseTier = resolve));
+    tensorRoute = () => refusal("1");
+    const store = await boot(MENU);
+    store.dispatch({ type: "useMenu", rows: IDS.slice(2, 5).map((id) => ({ id, name: id, amount: null })) });
+    await flush();
+    await advance(1000);
+    expect(posts(), "the recalculation and its one automatic retry").toHaveLength(2);
+    expect(waiting(store).status).toBe("build-retry");
+    releaseTier(json(404, {}));
+    await flush();
+    await advance(10_000);
+    expect(posts(), "start-up adds nothing").toHaveLength(2);
+    expect(waiting(store).status).toBe("build-retry");
+  });
+
+  describe("when the page is left while a request is out", () => {
+    let release: (answer: Response) => void = () => undefined;
+    const holdTheAnswer = () => {
+      tensorRoute = () => new Promise<Response>((resolve) => (release = resolve));
+    };
+
+    it("its late 429 starts no countdown and sends nothing more", async () => {
+      holdTheAnswer();
+      const store = await boot(MENU);
+      expect(waiting(store).status).toBe("building");
+      store.dispatch({ type: "leave" });
+      release(refusal("2"));
+      await flush();
+      expect(waiting(store)).toEqual({ status: "build-retry", error: plain.rateLimited, position: null });
+      await advance(120_000);
+      expect(posts()).toHaveLength(1);
+    });
+
+    it("start-up that was still waiting on the tier when the page was left sends no countdown afterwards", async () => {
+      let releaseTier: (answer: Response) => void = () => undefined;
+      tierRoute = () => new Promise<Response>((resolve) => (releaseTier = resolve));
+      tensorRoute = () => refusal("2");
+      const store = await boot(MENU);
+      expect(posts()).toHaveLength(0);
+      store.dispatch({ type: "leave" });
+      releaseTier(json(404, {}));
+      await flush();
+      await advance(500);
+      expect(posts()).toHaveLength(1);
+      expect(waiting(store)).toEqual({ status: "build-retry", error: plain.rateLimited, position: null });
+      await advance(120_000);
+      expect(posts()).toHaveLength(1);
+    });
+
+    it("a remount that follows at once (React strict mode) is the same page, and the countdown works", async () => {
+      holdTheAnswer();
+      const store = await boot(MENU);
+      store.dispatch({ type: "leave" });
+      store.dispatch({ type: "start" });
+      release(refusal("2"));
+      await flush();
+      expect(waiting(store)).toMatchObject({ status: "build-wait", waitS: 2 });
+    });
+  });
+
+  it("a refusal while polling a build that is in the queue waits the same way, then asks again", async () => {
+    let polled = 0;
+    tensorRoute = (call) => {
+      if (call.method === "POST") return json(202, { status: "queued", generation: G, hash: H2, position: 1, eta_s: 5 });
+      if (polled++ === 0) return refusal("2");
+      return ok({ ...call, path: `/api/tensors/${G}/${H1}/5y` });
+    };
+    const store = await boot(MENU);
+    await advance(1500); // boot has run 500 ms; the first poll is two seconds after the POST
+    expect(waiting(store)).toMatchObject({ status: "build-wait", waitS: 2 });
+    await advance(2000);
+    expect(posts(), "the same POST, which the service answers from its job table").toHaveLength(2);
   });
 });
