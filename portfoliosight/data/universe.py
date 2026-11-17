@@ -10,10 +10,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from portfoliosight.data.manifest import unnamed
 from portfoliosight.engine.caps import CapsError, resolve_bounds
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TIERS_FILE = REPO_ROOT / "data" / "universes" / "tiers.json"
+FUNDS_FILE = REPO_ROOT / "data" / "universes" / "funds.json"
+FUND_KINDS = ("etf", "mutual_fund", "stock")
 PRESETS_FILE = REPO_ROOT / "data" / "presets.json"
 
 PlanTier = Literal["starter", "power"]
@@ -36,6 +39,14 @@ TSP_FUNDS: dict[str, str] = {
     "TSP-L2070": "L 2070",
     "TSP-L2075": "L 2075",
 }
+
+
+@dataclass(frozen=True)
+class FundMeta:
+    """What ``funds.json`` says about one wanted symbol: its display name and its kind."""
+
+    name: str
+    kind: str
 
 
 @dataclass(frozen=True)
@@ -101,6 +112,29 @@ class Preset:
     allocation: dict[str, float] | None
     allocation_unit: str | None
     caps: dict[str, dict[str, float | None]] = field(default_factory=dict)
+
+
+def load_funds(path: Path = FUNDS_FILE) -> dict[str, FundMeta]:
+    """Symbol to ``FundMeta`` from ``funds.json`` (spec 2026-11-16 section 8).
+
+    Refuses a kind outside ``etf``, ``mutual_fund`` and ``stock``, and a name that is empty or
+    only the ticker, as the catalog counts an entry unnamed (``manifest.unnamed``).
+    """
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError(f"{path.name} must be an object of symbol to {{name, kind}}")
+    funds: dict[str, FundMeta] = {}
+    for raw_symbol, row in document.items():
+        symbol = str(raw_symbol).upper()
+        if not isinstance(row, dict) or not isinstance(row.get("name"), str):
+            raise ValueError(f"{path.name}: {symbol} needs an object with a name and a kind")
+        name, kind = row["name"], row.get("kind")
+        if unnamed(symbol, name):
+            raise ValueError(f"{path.name}: {symbol} has no name of its own: {name!r}")
+        if kind not in FUND_KINDS:
+            raise ValueError(f"{path.name}: {symbol} kind {kind!r} not in {list(FUND_KINDS)}")
+        funds[symbol] = FundMeta(name.strip(), kind)
+    return funds
 
 
 def is_tsp(symbol: str) -> bool:

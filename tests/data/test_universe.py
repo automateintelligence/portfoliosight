@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,12 @@ QSE_PORTFOLIOSIGHT = ROOT / "data" / "universes" / "qse_portfoliosight.txt"
 TSP_IDS = (
     "TSP-G TSP-F TSP-C TSP-S TSP-I TSP-LINC TSP-L2030 TSP-L2035 TSP-L2040 TSP-L2045 TSP-L2050 "
     "TSP-L2055 TSP-L2060 TSP-L2065 TSP-L2070 TSP-L2075"
+).split()
+# The 29 tickers the site's request log holds (spec 2026-11-16 Appendix A); FCX, TSM and WMT are
+# already on QSE's core list, WMT also a tier 1 preset stock.
+REQUESTED = (
+    "ASML ATLKY AZN BHP BUD CMWAY DB EADSY FCX FRCOY HSBC ISNPY LRLCY LVMUY LYG MTSUY MUFG NSRGY "
+    "NVS RIO RY SAP SIEGY SPOT TM TSM UL UNCRY WMT"
 ).split()
 INCOME_MUTUAL_FUNDS = (
     "VBTLX VBMFX VBILX VBIRX VBLAX VSIGX VSCSX VTAPX VIPSX VWEHX VWINX FXNAX FTBFX FUAMX FIPDX "
@@ -413,3 +420,52 @@ def test_preset_fund_missing_from_holdings_is_refused(tmp_path):
     )
     with pytest.raises(ValueError, match="BND"):
         universe.load_presets(presets)
+
+
+def test_every_wanted_fund_has_a_real_name_and_a_kind():
+    tiers = universe.load_tiers()
+    funds = universe.load_funds()
+    assert len(REQUESTED) == len(set(REQUESTED)) == 29
+    listed = {s for s in (*tiers.tier1, *tiers.tier2) if not universe.is_tsp(s)}
+    assert len(listed) == 325 and "FIENX" in listed
+    wanted = listed | set(REQUESTED)
+    assert set(funds) == wanted and len(funds) == 353  # WMT is in both groups
+    for symbol, meta in funds.items():
+        assert meta.name.strip() and meta.name.strip() != symbol, symbol
+    assert Counter(meta.kind for meta in funds.values()) == {
+        "etf": 192,
+        "mutual_fund": 125,
+        "stock": 36,
+    }
+    for symbol in tiers.tier2:  # spec Appendix A: all 125 mutual funds, and no ETF, end in X
+        five_letters_ending_in_x = re.fullmatch(r"[A-Z]{4}X", symbol) is not None
+        assert (funds[symbol].kind == "mutual_fund") is five_letters_ending_in_x, symbol
+    outside_tier2 = [s for s in funds if s not in tiers.tier2]
+    assert len(outside_tier2) == 36 and {funds[s].kind for s in outside_tier2} == {"stock"}
+    assert {"AIG", "C", "GE", "INTC", "MSFT", "PFE", "WMT", "XOM"} <= set(outside_tier2)
+
+
+def test_funds_file_refuses_a_bad_kind_and_a_missing_name(tmp_path):
+    path = tmp_path / "funds.json"
+
+    def write(document) -> None:
+        path.write_text(json.dumps(document), encoding="utf-8")
+
+    write({"VTI": {"name": "Vanguard Total Stock Market ETF", "kind": "etf"}})
+    assert universe.load_funds(path) == {
+        "VTI": universe.FundMeta("Vanguard Total Stock Market ETF", "etf")
+    }
+    for kind in ("fund", "tsp", ""):
+        write({"VTI": {"name": "Vanguard Total Stock Market ETF", "kind": kind}})
+        with pytest.raises(ValueError, match="VTI.*kind"):
+            universe.load_funds(path)
+    for name in ("VTI", "  VTI ", "", "   "):
+        write({"VTI": {"name": name, "kind": "etf"}})
+        with pytest.raises(ValueError, match="VTI.*name"):
+            universe.load_funds(path)
+    write({"VTI": {"kind": "etf"}})
+    with pytest.raises(ValueError, match="VTI"):
+        universe.load_funds(path)
+    write(["VTI"])
+    with pytest.raises(ValueError, match="object"):
+        universe.load_funds(path)
