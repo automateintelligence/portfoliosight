@@ -558,9 +558,20 @@ def _checked(cells: list[Row], pool: list[Row], limits=POOL_LIMITS) -> list[Row]
     return _records(RC.month_pool_checks(pd.DataFrame(cells), _pool(pool), *limits))
 
 
+BUILT = {"weights": np.array(INSIDE), "mu": 0.05, "sigma": 0.1, "dr2": 1.4}  # a built mix's figures
+
+
+def _u_cell(rf: float = 0.1, r: float = 0.1, **u: Any) -> list[Row]:
+    """A kept U at setting `rf` with the kept F row of its setting, both at risk `r`."""
+    f = _cell(RC.F, rf=rf, r=r, **{**BUILT, "sigma": r}, rebuilt_mu_gap=0.0,
+              rebuilt_sigma_gap=0.0)  # fmt: skip
+    u = {**BUILT, "rf": rf, "r": r, "sigma": r, "risk_gap": 0.0, "mu_gap": 0.001, "l1": 0.1,
+         "breaks_limit": False, **u}  # fmt: skip
+    return [f, _cell(RC.U, **u)]
+
+
 def test_month_pool_checks_adds_four_columns_and_keeps_every_row():
-    cells = [_cell(RC.F, rf=0.1, r=0.1), _cell(RC.E, mu=0.05, sigma=0.1, mu_gap=0.01),
-             _cell("F@E", mu=0.06, sigma=0.1)]  # fmt: skip
+    cells = [_u_cell()[0], *_pair(mu_gap=0.01)]
     out = RC.month_pool_checks(pd.DataFrame(cells), _pool([]), *POOL_LIMITS)
     assert list(out.columns) == [*pd.DataFrame(cells).columns, *POOL_CHECKS]
     assert list(out["mix"]) == [RC.F, RC.E, "F@E"]
@@ -574,31 +585,35 @@ def test_check_b_reads_the_largest_recorded_ratio_in_the_mixes_domain():
         {"weights": [0.3, *np.full(n - 1, 0.7 / (n - 1))], "dr2": 1.4},  # one weight 30%
         {"weights": [0.5, *np.full(n - 1, 0.5 / (n - 1))], "dr2": 9.0},  # above the 40% limit
     ]
-    built = {"weights": np.full(n, 1 / n), "dr2": 2.0}
-    cells = [_cell(RC.D, **built), _cell(RC.D10, **built), _cell(RC.D10, status=RC.FAILED)]
-    d, d10, unbuilt = _checked(cells, pool, limits)
+    built = {"weights": np.full(n, 1 / n), "dr2": 2.0, "mu": 0.04, "sigma": 0.08, "a": 0.3,
+             "mu_gap": 0.01, "l1": 0.2}  # fmt: skip
+    comp = {"weights": np.full(n, 1 / n), "mu": 0.05, "sigma": 0.08, "dr2": 1.0, "risk_gap": 0.0}
+    cells = [_cell(RC.D, **built), _cell("F@D", **comp), _cell(RC.D10, **built),
+             _cell("F@D10", **comp)]  # fmt: skip
+    d, _, d10, _ = _checked(cells, pool, limits)
     assert d["pool_dr2_max"] == 1.4
     assert d10["pool_dr2_max"] == 1.2
+    (unbuilt,) = _checked([_cell(RC.D10, status=RC.FAILED)], pool, limits)
     assert math.isnan(unbuilt["pool_dr2_max"])  # a mix not built is the failed-cell rule's
 
 
 def test_check_b_reads_the_ratio_for_an_excluded_d_too():
-    cells = [_cell(RC.D, status=RC.EXCLUDED, weights=np.array(INSIDE), dr2=2.0)]
+    cells = [_cell(RC.D, status=RC.EXCLUDED, **{**BUILT, "dr2": 2.0}, a=1.1)]
     (d,) = _checked(cells, [{"weights": INSIDE, "dr2": 1.7}])
     assert d["pool_dr2_max"] == 1.7
 
 
 def test_the_u_bound_uses_rows_at_or_below_the_risk_with_no_tolerance():
     r = 0.1
-    cells = [_cell(RC.U, rf=0.1, r=r, mu=0.08, sigma=r)]
+    cells = _u_cell(r=r, mu=0.08)
     pool = [
         {"weights": INSIDE, "sigma": r, "mu": 0.05},
         {"weights": INSIDE, "sigma": r + 1e-9, "mu": 0.09},
     ]
-    (u,) = _checked(cells, pool)
+    _, u = _checked(cells, pool)
     assert u["pool_mu_bound"] == 0.05
     breaking = [*pool, {"weights": [0.8, 0.1, 0.1], "sigma": r, "mu": 0.07}]
-    (u,) = _checked(cells, breaking)
+    _, u = _checked(cells, breaking)
     assert u["pool_mu_bound"] == 0.07
 
 
@@ -611,8 +626,18 @@ def test_the_u_bound_is_left_empty_on_an_excluded_or_failed_u():
 
 def _pair(mu_gap: float = 0.0, **e: Any) -> list[Row]:
     """E kept at model return 0.05 and risk 0.10, with its comparator `F@E` on its risk line."""
-    return [_cell(RC.E, mu=0.05, sigma=0.10, mu_gap=mu_gap, weights=np.array(INSIDE), **e),
-            _cell("F@E", mu=0.05 + mu_gap, sigma=0.10, risk_gap=0.0,
+    e = {
+        "mu": 0.05,
+        "sigma": 0.10,
+        "mu_gap": mu_gap,
+        "weights": np.array(INSIDE),
+        "a": 0.4,
+        "dr2": 1.4,
+        "l1": 0.2,
+        **e,
+    }
+    return [_cell(RC.E, **e),
+            _cell("F@E", mu=0.05 + mu_gap, sigma=0.10, risk_gap=0.0, dr2=1.1,
                   weights=np.array([0.3, 0.4, 0.3]))]  # fmt: skip
 
 
@@ -652,24 +677,23 @@ def test_a_gap_at_the_tolerance_is_a_tie_decided_by_the_pool():
     assert e["status"] == RC.FAILED
 
 
-def test_a_kept_mix_without_a_return_gap_fails_its_cell():
-    e, comp = _checked(_pair(mu_gap=math.nan), [])
-    assert e["tie"] is False
-    assert e["status"] == comp["status"] == RC.FAILED
+def test_a_kept_mix_without_a_return_gap_stops():
+    with pytest.raises(ValueError, match=MONTH):
+        _checked(_pair(mu_gap=math.nan), [])
 
 
 def test_a_cell_with_no_pool_row_at_its_risk_passes():
-    cells = [_cell(RC.U, rf=0.1, r=0.1, mu=0.08, sigma=0.1), *_pair()]
-    u, e, _ = _checked(cells, [{"weights": INSIDE, "sigma": 0.2, "mu": 0.5}])
+    cells = [*_u_cell(mu=0.08), *_pair()]
+    _, u, e, _ = _checked(cells, [{"weights": INSIDE, "sigma": 0.2, "mu": 0.5}])
     assert u["pool_mu_bound"] == -math.inf
     assert e["pool_mu_at_risk"] == -math.inf
     assert e["tie"] is True and e["status"] == RC.KEPT
-    u, e, _ = _checked(cells, [])
+    _, u, e, _ = _checked(cells, [])
     assert u["pool_mu_bound"] == -math.inf
 
 
 def test_a_pool_row_without_a_model_measure_stops_naming_the_month():
-    cells = [_cell(RC.D, dr2=2.0)]
+    cells = [_cell(RC.D, status=RC.FAILED)]
     for missing in ("mu", "sigma", "dr2"):
         with pytest.raises(ValueError, match=MONTH):
             _checked(cells, [{"weights": INSIDE, missing: math.nan}])
@@ -694,8 +718,8 @@ def _model_cells(months: list[str]) -> pd.DataFrame:
     rows: list[Row] = []
 
     def add(month: str, mix: str, **values: Any) -> None:
-        row = _cell(mix, month=month, weights=w, pool_dr2_max=math.nan, pool_mu_bound=math.nan,
-                    pool_mu_at_risk=math.nan, tie=False)  # fmt: skip
+        row = _cell(mix, month=month, weights=w, dr2=1.0, pool_dr2_max=math.nan,
+                    pool_mu_bound=math.nan, pool_mu_at_risk=math.nan, tie=False)  # fmt: skip
         row.update(values)
         rows.append(row)
 
@@ -998,10 +1022,8 @@ def test_strict_gap_report():
     _set(cells, months[0], RC.D, mu_gap=0.0, tie=True, l1=5e-5)
     _fail(cells, months[1], RC.D, reason=RC.REFUTED)
     checks = RC.gates(cells, months, expected=NO_LISTS)
-    assert checks["strict_gap"][RC.D] == {"ties_kept": 1, "ties_refuted": 1, "undecided": 0,
-                                          "l1_below": 1}  # fmt: skip
-    assert checks["strict_gap"][RC.E] == {"ties_kept": 0, "ties_refuted": 0, "undecided": 0,
-                                          "l1_below": 0}  # fmt: skip
+    assert checks["strict_gap"][RC.D] == {"ties_kept": 1, "ties_refuted": 1, "l1_below": 1}
+    assert checks["strict_gap"][RC.E] == {"ties_kept": 0, "ties_refuted": 0, "l1_below": 0}
 
 
 def test_risk_position_counts_months_at_or_above_the_top():
@@ -1154,16 +1176,12 @@ def test_a_kept_tie_is_paired_with_the_mix_itself():
     assert e["l1"] == 0.3  # the distance to F(sigma(M)) stays reported
 
 
-def test_a_missing_risk_or_return_leaves_the_pool_checks_undecided():
-    (u,) = _checked([_cell(RC.U, rf=0.1, r=math.nan, mu=0.08, sigma=0.1)],
-                    [{"weights": INSIDE, "sigma": 0.05, "mu": 0.01}])  # fmt: skip
-    assert math.isnan(u["pool_mu_bound"])
+def test_a_missing_risk_or_return_stops_before_the_pool_checks():
+    with pytest.raises(ValueError, match=MONTH):
+        _checked(_u_cell(r=math.nan), [{"weights": INSIDE, "sigma": 0.05, "mu": 0.01}])
     for e_values in ({"sigma": math.nan}, {"mu": math.nan, "mu_gap": 0.01}):
-        cells = [_cell(RC.E, **{"mu": 0.05, "sigma": 0.10, "mu_gap": 0.0, **e_values}),
-                 _cell("F@E", mu=0.05, sigma=0.10)]  # fmt: skip
-        e, comp = _checked(cells, [])
-        assert e["status"] == comp["status"] == RC.FAILED
-        assert e["reason"] == RC.UNDECIDED
+        with pytest.raises(ValueError, match=MONTH):
+            _checked(_pair(**e_values), [])
 
 
 def test_an_incomplete_repeated_or_unknown_row_stops():
@@ -1293,22 +1311,21 @@ def test_the_gates_read_the_cells_before_they_are_judged(side_inputs, monkeypatc
     assert {"structure", "check (b)"} <= set(stops)
 
 
-def test_a_tie_is_not_applied_to_a_comparator_off_its_line_or_unbuilt():
+def test_a_kept_mix_with_its_comparator_off_its_line_or_unbuilt_stops():
     pool = [{"weights": INSIDE, "sigma": 0.09, "mu": 0.049}]
     off_line = _pair()
     off_line[1].update(weights=np.array([0.2, 0.5, 0.3]), risk_gap=2e-6)
-    e, comp = _checked(off_line, pool)
-    assert e["tie"] is False
-    assert np.array_equal(comp["weights"], [0.2, 0.5, 0.3]) and comp["risk_gap"] == 2e-6
+    with pytest.raises(ValueError, match=MONTH):
+        _checked(off_line, pool)
     unbuilt = _pair()
     unbuilt[1].update(weights=None, risk_gap=0.0)
-    e, comp = _checked(unbuilt, pool)
-    assert e["tie"] is False and comp["weights"] is None
+    with pytest.raises(ValueError, match=MONTH):
+        _checked(unbuilt, pool)
 
 
 def test_a_pool_row_with_missing_weights_stops_naming_the_month():
     with pytest.raises(ValueError, match=MONTH):
-        _checked([_cell(RC.D, dr2=2.0)], [{"weights": [math.nan, 0.5, 0.5]}])
+        _checked([_cell(RC.D, status=RC.FAILED)], [{"weights": [math.nan, 0.5, 0.5]}])
 
 
 # ------------------------------------------------- review round 4: one allow-list, up front
@@ -1327,3 +1344,102 @@ def test_a_pool_row_with_an_infinite_measure_stops_naming_the_month(name, value)
 def test_a_pool_row_with_infinite_or_short_weights_stops_naming_the_month(weights):
     with pytest.raises(ValueError, match=MONTH):
         _checked([_cell(RC.D, status=RC.FAILED)], [{"weights": weights}])
+
+
+def test_pool_rows_with_weights_of_different_lengths_or_not_numbers_stop():
+    cells = [_cell(RC.D, status=RC.FAILED)]
+    pool = _pool([{"weights": INSIDE}, {"weights": INSIDE}])
+    pool.at[1, "weights"] = np.array([0.5, 0.5])
+    with pytest.raises(ValueError, match=MONTH):
+        RC.month_pool_checks(pd.DataFrame(cells), pool, *POOL_LIMITS)
+    pool.at[1, "weights"] = np.array(["x", "y", "z"], dtype=object)
+    with pytest.raises(ValueError, match=MONTH):
+        RC.month_pool_checks(pd.DataFrame(cells), pool, *POOL_LIMITS)
+
+
+def test_allowed_mixes_refuses_an_allowed_row_without_dr2():
+    with pytest.raises(ValueError, match="dr2"):
+        RC.allowed_mixes(_pool([{"weights": INSIDE, "dr2": math.nan}]), *POOL_LIMITS)
+
+
+def test_broken_relationships_stop_the_pool_checks_and_the_gates():
+    u_without_f = _u_cell()[1:]
+    u_off_line = _u_cell(risk_gap=3e-6)
+    orphan = _pair()[1:]
+    unknown = [_cell(RC.D, status="maybe")]
+    negative = _failed_d()
+    negative[1].update(risk_gap=-1e-7)
+    repeated = [*_pair(), _pair()[0]]
+    for cells in (u_without_f, u_off_line, orphan, unknown, negative, repeated):
+        with pytest.raises(ValueError, match=MONTH):
+            _checked(cells, [])
+    months = _months(1)
+    cells = _model_cells(months)
+    _set(cells, months[0], RC.U, A.RFS[0], risk_gap=3e-6)  # kept, off its line
+    assert "structure" in _stops(RC.gates(cells, months, expected=NO_LISTS))
+    cells = _model_cells(months)
+    mask = _at(cells, months[0], RC.F_ARM1, A.RFS[0])
+    cells.loc[mask, "weights"] = pd.Series([np.array(INSIDE)], index=cells.index[mask])
+    checks = RC.gates(cells, months, expected=NO_LISTS)  # one row of three holdings, others two
+    assert "structure" in _stops(checks)
+    assert any("lengths" in p for p in checks["structure"]["problems"])
+
+
+MALFORMED_WEIGHTS = [
+    np.array([0.5, math.nan, 0.5]),
+    np.array([0.5, math.inf, -math.inf]),
+    np.array([0.5, 0.5]),  # one holding short
+    np.array([0.6, 0.6, 0.6]),  # not summing to one
+    np.array(["x", "y", "z"], dtype=object),
+    np.float64(1.0),
+]
+
+
+def _failed_d(**values: Any) -> list[Row]:
+    """A D that was built and then failed with its comparator (its comparator off the line)."""
+    built = {"weights": np.array(INSIDE), "mu": 0.05, "sigma": 0.1, "dr2": 1.4}
+    return [_cell(RC.D, status=RC.FAILED, **{**built, **values}),
+            _cell("F@D", status=RC.FAILED, weights=np.array([0.3, 0.4, 0.3]), mu=0.06,
+                  sigma=0.1 + 2e-6, dr2=1.1, risk_gap=2e-6)]  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "values",
+    [*({"weights": w} for w in MALFORMED_WEIGHTS), {"dr2": math.inf}, {"dr2": -math.inf},
+     {"dr2": math.nan}, {"mu": math.inf}, {"sigma": math.nan}],
+)  # fmt: skip
+def test_a_failed_d_with_malformed_weights_or_measures_stops_before_any_check(values):
+    pool = [{"weights": INSIDE, "dr2": 1.2}]
+    assert _checked(_failed_d(), pool)[0]["pool_dr2_max"] == 1.2  # a valid failed D is judged
+    with pytest.raises(ValueError, match=MONTH):
+        _checked(_failed_d(**values), pool)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [*({"weights": np.asarray(w, dtype=object)} for w in ([0.5, math.nan], [0.5, 0.5, 0.5])),
+     {"weights": np.float64(1.0)}, {"dr2": math.inf}, {"dr2": -math.inf}],
+)  # fmt: skip
+def test_the_gates_stop_on_a_failed_d_with_malformed_weights_or_ratio(values):
+    months = _months(2)
+    cells = _model_cells(months)
+    _fail(cells, months[0], RC.D)
+    for name, value in values.items():
+        cells[name] = cells[name].astype(object)
+        mask = _at(cells, months[0], RC.D)
+        cells.loc[mask, name] = pd.Series([value], index=cells.index[mask], dtype=object)
+    stops = _stops(RC.gates(cells, months, expected=NO_LISTS))
+    assert {"structure", "check (b)"} <= set(stops)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [{"risk_gap": -math.inf}, {"risk_gap": math.nan}, {"risk_gap": -1.0}, {"mu": math.nan},
+     {"sigma": math.nan}, {"mu": math.inf}, {"dr2": math.nan},
+     {"weights": np.array([0.3, 0.4])}],
+)  # fmt: skip
+def test_a_tie_never_overwrites_a_malformed_or_off_line_comparator(values):
+    cells = _pair()
+    cells[1].update(values)
+    with pytest.raises(ValueError, match=MONTH):
+        _checked(cells, [{"weights": INSIDE, "sigma": 0.09, "mu": 0.049}])
