@@ -338,7 +338,7 @@ async function advanceTheme(page: Page): Promise<string> {
 // ---------------------------------------------------------------------------------------------
 test.use({ permissions: ["clipboard-read", "clipboard-write"] });
 
-const URL_KEYS = ["u", "f", "unit", "c", "lb", "g", "r", "d", "t", "x"]; // spec 8.1, the whole set
+const URL_KEYS = ["u", "f", "unit", "c", "lb", "g", "r", "d", "t", "x", "nl"]; // spec 8.1, the whole set
 const DECIMAL = /^\d+(\.\d+)?$/;
 
 // The focusable handle of a slider test id: the element itself or its inner ARIA slider / range input.

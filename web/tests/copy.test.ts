@@ -14,6 +14,7 @@ describe("copy (spec 3.6, 3.7)", () => {
     copy.stressLine("−31%"),
     copy.stressGap(2, 18, "11"),
     copy.staleLine("2026-10-09"),
+    copy.rateWaitLine(12),
     copy.uploadNoTicker,
     copy.uploadNoFunds,
     copy.uploadUnreadable,

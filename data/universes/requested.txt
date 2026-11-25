@@ -1,0 +1,32 @@
+# 2026-11-11, site request log (one CSV upload), read 2026-11-16
+# Tickers visitors asked for, worth serving. Tier 3 stocks, offered once the lake has checked them.
+# Added by hand: leave out test entries and typing mistakes (spec 2026-11-16 section 4.1).
+ASML
+ATLKY
+AZN
+BHP
+BUD
+CMWAY
+DB
+EADSY
+FCX
+FRCOY
+HSBC
+ISNPY
+LRLCY
+LVMUY
+LYG
+MTSUY
+MUFG
+NSRGY
+NVS
+RIO
+RY
+SAP
+SIEGY
+SPOT
+TM
+TSM
+UL
+UNCRY
+WMT
