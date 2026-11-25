@@ -30,3 +30,10 @@ TSM
 UL
 UNCRY
 WMT
+# 2026-11-25, tickers the owner holds, checked on yfinance the same day
+# BNY replaces BK (BK returns no data); B was GOLD and GOLD is now Gold.com, so both are listed.
+B
+BNY
+GOLD
+IXN
+TW

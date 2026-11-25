@@ -34,14 +34,14 @@ def committed():
 def test_export_on_the_committed_lists(committed):
     tiers, current, core = committed
     out = export.fetch_list(current, tiers, core)
-    assert len(out) == 629
+    assert len(out) == 633
     assert out == sorted(set(out))
     assert set(current) <= set(out)
     assert not [s for s in out if s.startswith("TSP-")]
     assert "FIENX" not in out
     assert not set(out) & set(core)
-    assert {"VTSAX", "VTV", "NSRGY"} <= set(out)
-    assert not {"WMT", "FCX", "TSM"} & set(out)  # on the core list already
+    assert {"VTSAX", "VTV", "NSRGY", "BNY", "GOLD", "IXN", "TW"} <= set(out)
+    assert not {"WMT", "FCX", "TSM", "B"} & set(out)  # on the core list already
 
 
 def _write_universe(base: Path) -> Path:
@@ -123,7 +123,7 @@ def test_adding_a_line_to_requested_txt_reaches_the_export(tmp_path, capsys):
     ]
     assert export.main(args) == 0
     before = capsys.readouterr().out.splitlines()
-    assert len(before) == 629 and "ZZNEW" not in before
+    assert len(before) == 633 and "ZZNEW" not in before
 
     with (base / "requested.txt").open("a", encoding="utf-8") as handle:
         handle.write("ZZNEW\n")
@@ -134,11 +134,11 @@ def test_adding_a_line_to_requested_txt_reaches_the_export(tmp_path, capsys):
     assert "ZZNEW" in capsys.readouterr().out.splitlines()
 
 
-def test_the_committed_export_is_629_symbols_and_273_new(capsys):
+def test_the_committed_export_is_633_symbols_and_277_new(capsys):
     assert export.main([]) == 0
-    assert len(capsys.readouterr().out.splitlines()) == 629
+    assert len(capsys.readouterr().out.splitlines()) == 633
     assert export.main(["--new-only"]) == 0
-    assert len(capsys.readouterr().out.splitlines()) == 273
+    assert len(capsys.readouterr().out.splitlines()) == 277
 
 
 def test_help_states_the_four_steps_for_adding_a_ticker(capsys):
