@@ -1513,3 +1513,14 @@ def test_an_infinite_result_from_finite_inputs_stops():
     assert checks["check_b"][RC.D]["smallest_margin"] == math.inf
     assert "output" in _stops(checks)
     assert "output" not in _stops(RC.gates(_model_cells(months), months, expected=NO_LISTS))
+
+
+def test_a_u_left_out_with_its_failed_f_row_is_not_judged_by_the_u_gates():
+    months = _months(100)  # 600 U cells: one failed is within the 1% allowance
+    cells = _model_cells(months)
+    _set(cells, months[0], RC.F, A.RFS[0], rebuilt_mu_gap=2e-6)  # F fails the reconstruction
+    _set(cells, months[0], RC.U, A.RFS[0], mu_gap=-2e-6, pool_mu_bound=0.06)  # below F, the pool
+    checks = RC.gates(cells, months, expected=NO_LISTS)
+    assert checks["failed_cells"][RC.U]["failed"] == 1
+    assert not {"U return", "U pool bound", "failed cells"} & set(_stops(checks))
+    assert checks["u_return"]["cells"] == checks["u_pool_bound"]["cells"] == 599

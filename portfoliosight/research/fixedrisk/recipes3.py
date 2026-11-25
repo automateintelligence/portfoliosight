@@ -1134,8 +1134,8 @@ def gates(
 
     Every gate fails closed: a row outside `allow_list`, a month whose rows are incomplete, a pool
     maximum out of step with its count, a gate with no cell to judge, or an infinite number in
-    the result (finite inputs can overflow, `_infinite`), stops. Failed cells are counted on the
-    statuses `judge` derives.
+    the result (finite inputs can overflow, `_infinite`), stops. Failed cells and U's two gates
+    read the statuses `judge` derives: a U left out with its failed F row is not judged again.
     `stops` lists each gate that stops the run, as `{"gate": name, "detail": text}`."""
     rows: list[Row] = [{str(k): v for k, v in r.items()} for r in cells.to_dict("records")]
     chosen = set(eligible) if scope is None else set(eligible) & set(scope)
@@ -1161,7 +1161,7 @@ def gates(
     check_b, details = _check_b(rows)
     for detail in details:
         stop(GATE_CHECK_B, detail)
-    u_return, u_bound, detail_return, detail_bound = _u_gates(rows)
+    u_return, u_bound, detail_return, detail_bound = _u_gates(all_judged)
     stop(GATE_U_RETURN, detail_return)
     stop(GATE_U_BOUND, detail_bound)
     failed_cells, details = _failed_cells(judged, eligible_set)
