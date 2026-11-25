@@ -54,3 +54,24 @@ Merge order when approved: #212, then #211, then #208 (portfoliosight); #184 bef
 ## Not this session's
 
 `.worktrees/v3-review-fixes` (branch `fix/v3-review-fixes`) has 23 uncommitted files from an earlier session, including locked-check edits. Untouched; owner to decide.
+
+## Update 2026-11-25: owner merged, delegated open decisions to Codex
+
+Merged by the owner's word: #212, #211, #208 (main `57afcef`). Not deployed. The owner said "Ask /codex any other open questions"; Codex's picks (consult, read-only) are now the decisions:
+
+| Decision | Codex pick |
+|---|---|
+| D3, locked checks A-PS-02, 03, 04, 06, 07, 10, 14, 30, 59 | y, narrow amendments only: retire Tiingo/seed/splice/ledger requirements, keep each check's core protection (arithmetic, publication integrity, redaction, catalog). The spec must state the two real weakenings: freshness 3 to 10 sessions (A-PS-07, 59) and no immediate TSP exclusion on a failed fetch (A-PS-30). |
+| 4, #210 fourth round | y, with validation of every input row before mutation and output checks |
+| 5, #182 | strip automatic conclusions; no yfinance comparison in the probe |
+| 6, #210 empty comparison | pass and list, counts reported separately; malformed pool data stops |
+| 9, #183 scope | new paths only; daily-path weaknesses to a separate QSE issue |
+| 10, splits | b, a second split source (price agreement cannot prove a split list complete); loader refuses to vouch without one |
+| 11, #184 readers | y, separate PR, keep CSV support and core-only dataset membership |
+| 12, #184 overlap | allow, fetch once |
+| 13, `p` key | y, own PR, priced states in A-PS-36 and A-PS-51 |
+| 15, suite time | A-PS-25 selects tests by demonstrated engine coverage (100%, no omissions); A-PS-65 timeout raised (Codex suggested 1800 s) |
+
+Codex also found the plan's gate wording backwards: "the run ended after the close" is not stricter than "started after the close" (a run can start before the close and end after it). The gate must check the run started after the close. Fix in the P4 task.
+
+New tickers from the owner: TW, IXN, BNY (BK now trades as BNY), B (Barrick, formerly GOLD) and GOLD (now Gold.com) go on the requested list; owner to say which of B and GOLD he holds.
