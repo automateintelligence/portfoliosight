@@ -351,5 +351,10 @@
   "TM": {"name": "Toyota Motor Corporation", "kind": "stock"},
   "TSM": {"name": "Taiwan Semiconductor Manufacturing", "kind": "stock"},
   "UL": {"name": "Unilever PLC", "kind": "stock"},
-  "UNCRY": {"name": "UniCredit S.p.A.", "kind": "stock"}
+  "UNCRY": {"name": "UniCredit S.p.A.", "kind": "stock"},
+  "B": {"name": "Barrick Mining Corporation", "kind": "stock"},
+  "BNY": {"name": "The Bank of New York Mellon", "kind": "stock"},
+  "GOLD": {"name": "Gold.com, Inc.", "kind": "stock"},
+  "IXN": {"name": "iShares Global Tech ETF", "kind": "etf"},
+  "TW": {"name": "Tradeweb Markets", "kind": "stock"}
 }
