@@ -701,6 +701,13 @@ TESTED = (U, E, D, D10)  # the mixes with a comparator, whose failed cells are c
 GATE_RECONSTRUCTION, GATE_LIST, GATE_CHECK_B = "reconstruction", "list gate", "check (b)"
 GATE_U_RETURN, GATE_U_BOUND = "U return", "U pool bound"
 GATE_FAILED, GATE_COVERAGE, GATE_STRUCTURE = "failed cells", "coverage", "structure"
+GATE_OUTPUT = "output"
+CHECK_B_READING = (
+    "DR(M)^2 is compared with the largest DR^2 recorded for the month's allowed main-pool mixes "
+    "(protocol line 176): a lower bound from the recorded mixes, not an independent proof that "
+    "the optimizer is right. A month without an allowed row passes without a comparison (plan "
+    "line 572) and is counted apart."
+)
 Row = dict[str, Any]
 
 
@@ -948,9 +955,12 @@ def _check_b(rows: list[Row]) -> tuple[Row, list[str]]:
         passed = {id(r) for r in without}
         passed |= {id(r) for r in compared if r["dr2"] >= r["pool_dr2_max"] - TOL}
         failed = [r for r in checked if id(r) not in passed]
-        margins = _finite(_num(r["dr2"]) - _num(r["pool_dr2_max"]) for r in compared)
+        margins = np.array([r["dr2"] - r["pool_dr2_max"] for r in compared], dtype=float)
         out[mix] = {
             "months": len(checked),
+            "compared": len(compared),
+            "without_rows_count": len(without),
+            "reading": CHECK_B_READING,
             "failed": [
                 {
                     "month": str(r["month"]),
@@ -1098,6 +1108,16 @@ def _flagged(rows: list[Row]) -> list[Row]:
     return out
 
 
+def _infinite(value: Any, path: str = "") -> list[str]:
+    """The paths of the infinite numbers in a gates result."""
+    if isinstance(value, dict):
+        return [p for k, v in value.items() for p in _infinite(v, f"{path}.{k}".lstrip("."))]
+    if isinstance(value, (list, tuple)):
+        return [p for i, v in enumerate(value) for p in _infinite(v, f"{path}[{i}]")]
+    infinite = isinstance(value, (float, np.floating)) and math.isinf(value)
+    return [path] if infinite else []
+
+
 def gates(
     cells: pd.DataFrame,
     eligible: Sequence[str],
@@ -1112,8 +1132,9 @@ def gates(
     pre-registered `E_EXCLUDED` and `U_EXCLUDED`; `scope` restricts the expected lists and the
     coverage to the months chosen in a restricted run.
 
-    Every gate fails closed: a value that is missing, a month whose rows are incomplete, repeated
-    or of unknown status, or a gate with no cell to judge, stops. Failed cells are counted on the
+    Every gate fails closed: a row outside `allow_list`, a month whose rows are incomplete, a pool
+    maximum out of step with its count, a gate with no cell to judge, or an infinite number in
+    the result (finite inputs can overflow, `_infinite`), stops. Failed cells are counted on the
     statuses `judge` derives.
     `stops` lists each gate that stops the run, as `{"gate": name, "detail": text}`."""
     rows: list[Row] = [{str(k): v for k, v in r.items()} for r in cells.to_dict("records")]
@@ -1146,7 +1167,7 @@ def gates(
     failed_cells, details = _failed_cells(judged, eligible_set)
     for detail in details:
         stop(GATE_FAILED, detail)
-    return {
+    result: dict[str, Any] = {
         "coverage": {"missing": missing},
         "structure": {"problems": structure},
         "reconstruction": reconstruction,
@@ -1164,8 +1185,10 @@ def gates(
             "largest_ends_gap": _largest(_num(r["ends_gap"]) for r in rows if r["mix"] == F)
         },
         "flagged_months": _flagged(rows),
-        "stops": stops,
     }
+    infinite = _infinite(result)
+    stop(GATE_OUTPUT, f"infinite results: {infinite[:10]}" if infinite else None)
+    return {**result, "stops": stops}
 
 
 # -------------------------------------------------------------- the model side of a job

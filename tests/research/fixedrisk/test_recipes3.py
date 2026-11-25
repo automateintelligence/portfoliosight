@@ -1490,3 +1490,26 @@ def test_cells_without_the_count_columns_stop():
     cells = _model_cells(months).drop(columns=list(POOL_ROWS.values()))
     stops = _stops(RC.gates(cells, months, expected=NO_LISTS))
     assert {"structure", "check (b)", "U pool bound"} <= set(stops)
+
+
+def test_check_b_reports_the_months_compared_and_the_months_without_rows_apart():
+    months = _months(3)
+    cells = _model_cells(months)
+    _set(cells, months[0], RC.D10, pool_dr2_rows=0, pool_dr2_max=math.nan)
+    checks = RC.gates(cells, months, expected=NO_LISTS)
+    assert "check (b)" not in _stops(checks)
+    d10, d = checks["check_b"][RC.D10], checks["check_b"][RC.D]
+    assert (d10["months"], d10["compared"], d10["without_rows_count"]) == (3, 2, 1)
+    assert d10["without_rows"] == [months[0]]
+    assert (d["months"], d["compared"], d["without_rows_count"]) == (3, 3, 0)
+    assert "not an independent" in d10["reading"]  # a lower bound from the pool, not a proof
+
+
+def test_an_infinite_result_from_finite_inputs_stops():
+    months = _months(1)
+    cells = _model_cells(months)
+    _set(cells, months[0], RC.D, dr2=1.7e308, pool_dr2_max=-1.7e308)  # the margin overflows
+    checks = RC.gates(cells, months, expected=NO_LISTS)
+    assert checks["check_b"][RC.D]["smallest_margin"] == math.inf
+    assert "output" in _stops(checks)
+    assert "output" not in _stops(RC.gates(_model_cells(months), months, expected=NO_LISTS))
