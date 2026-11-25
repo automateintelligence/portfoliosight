@@ -20,6 +20,7 @@ judged before any realized outcome is read (`read_month_pool_dr2`, `month_pool_c
 
 from __future__ import annotations
 
+import itertools
 import math
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -425,7 +426,14 @@ def allowed_mixes(pool: pd.DataFrame, lower, upper) -> pd.DataFrame:
 
 # ------------------------------------------------------- the pool checks of one start month
 
-POOL_CHECKS = ("pool_dr2_max", "pool_mu_bound", "pool_mu_at_risk", "tie")
+# Each pool maximum with the count of the pool rows behind it: a count of 0 (no row qualifies)
+# has the maximum NaN, a positive count a finite maximum.
+POOL_ROWS = {
+    "pool_dr2_max": "pool_dr2_rows",
+    "pool_mu_bound": "pool_mu_bound_rows",
+    "pool_mu_at_risk": "pool_mu_at_risk_rows",
+}
+POOL_CHECKS = (*itertools.chain.from_iterable(POOL_ROWS.items()), "tie")
 REFUTED = "the comparator missed a better recorded mix"
 RECIPES = (E, D, D10)
 
@@ -604,9 +612,11 @@ def allow_list(rows: list[Row], n: int | None = None) -> list[str]:
     return problems
 
 
-def _best(values: np.ndarray, where: np.ndarray) -> float:
-    """The largest of `values` where `where` holds; `-inf` when it holds nowhere."""
-    return float(values[where].max()) if where.any() else -math.inf
+def _best(values: np.ndarray, where: np.ndarray) -> tuple[float, int]:
+    """The largest of `values` where `where` holds and the count of those values; NaN and 0 when
+    it holds nowhere."""
+    count = int(where.sum())
+    return (float(values[where].max()) if count else math.nan), count
 
 
 def month_pool_checks(mixes: pd.DataFrame, pool: pd.DataFrame, lower, upper) -> pd.DataFrame:
@@ -614,8 +624,9 @@ def month_pool_checks(mixes: pd.DataFrame, pool: pd.DataFrame, lower, upper) -> 
     applied (protocol, check (b) on D and "Model-side gates"). `pool` is the month's
     `read_month_pool_dr2`, before any domain filter.
 
-    - `pool_dr2_max`: every D row with weights, the largest `dr2` of the allowed mixes; every D10
-      row with weights, the same over the allowed mixes within `D10_CAP` on every holding.
+    - `pool_dr2_max`: every D row that carries weights (any status), the largest `dr2` of the
+      allowed mixes; every D10 row with weights, the same over the allowed mixes within
+      `D10_CAP` on every holding.
     - `pool_mu_bound`: kept U rows, the largest `mu` of every pool row with `sigma <= r`, no
       tolerance, rows that break a limit included.
     - `pool_mu_at_risk`: kept E, D and D10 rows, the largest `mu` of the allowed mixes with
@@ -626,9 +637,12 @@ def month_pool_checks(mixes: pd.DataFrame, pool: pd.DataFrame, lower, upper) -> 
 
     Before any computation or change, the rows pass `allow_list` and the pool `_pool_problems`;
     `ValueError` naming the month otherwise, and when an allowed row lacks a model measure. Each
-    maximum is `-inf` when no row qualifies. A kept tie is paired with the mix itself: its
-    comparator row takes M's weights and model figures, so its differences are 0 by construction
-    (protocol line 269); the mix row keeps `l1`, its distance to `F(sigma(M))`."""
+    maximum comes with its count column (`POOL_ROWS`): the count of the pool rows it is taken
+    over, 0 with the maximum NaN when no row qualifies (plan line 572: a month without pool rows
+    is allowed). Both are NaN on a row the maximum does not apply to. A kept tie is paired with
+    the mix itself: its comparator row takes M's weights and model figures, so its differences
+    are 0 by construction (protocol line 269); the mix row keeps `l1`, its distance to
+    `F(sigma(M))`."""
     out = A._frame(mixes.copy()).reset_index(drop=True)
     month = str(out["month"].iloc[0]) if len(out) else "?"
     rows: list[Row] = [{str(k): v for k, v in r.items()} for r in out.to_dict("records")]
@@ -647,14 +661,16 @@ def month_pool_checks(mixes: pd.DataFrame, pool: pd.DataFrame, lower, upper) -> 
     dr2_max = {D: _best(dr2_ok, np.ones(len(allowed), dtype=bool)), D10: _best(dr2_ok, within_d10)}
     for row in rows:
         mix, kept = row["mix"], row["status"] == KEPT
-        row.update(pool_dr2_max=math.nan, pool_mu_bound=math.nan, pool_mu_at_risk=math.nan,
-                   tie=False)  # fmt: skip
+        row.update(dict.fromkeys(POOL_CHECKS, math.nan), tie=False)
+        found: dict[str, tuple[float, int]] = {}
         if mix in dr2_max and _carries(row["weights"]):
-            row["pool_dr2_max"] = dr2_max[mix]
+            found["pool_dr2_max"] = dr2_max[mix]
         if mix == U and kept:
-            row["pool_mu_bound"] = _best(mu_all, sigma_all <= row["r"])
+            found["pool_mu_bound"] = _best(mu_all, sigma_all <= row["r"])
         if mix in RECIPES and kept:
-            row["pool_mu_at_risk"] = _best(mu_ok, sigma_ok <= row["sigma"])
+            found["pool_mu_at_risk"] = _best(mu_ok, sigma_ok <= row["sigma"])
+        for name, (value, count) in found.items():
+            row.update({name: value, POOL_ROWS[name]: count})
     _ties(rows)
     return pd.DataFrame(rows, columns=[*out.columns, *POOL_CHECKS])
 
@@ -670,7 +686,7 @@ def _ties(rows: list[Row]) -> None:
         if row["mix"] not in RECIPES or row["status"] != KEPT or row["mu_gap"] > TOL:
             continue
         (comp,) = [r for r in rows if r["mix"] == COMPARATOR[row["mix"]]]
-        if row["pool_mu_at_risk"] > row["mu"] + TOL:
+        if row["pool_mu_at_risk_rows"] > 0 and row["pool_mu_at_risk"] > row["mu"] + TOL:
             for other in (row, comp):
                 other.update(status=FAILED, reason=REFUTED)
             continue
@@ -689,8 +705,17 @@ Row = dict[str, Any]
 
 
 def _num(value: Any) -> float:
-    """A cell value as a float; NaN when it is missing."""
-    return math.nan if value is None else float(value)
+    """A cell value as a float; NaN when it is missing or not a real number."""
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (int, float, np.integer, np.floating)
+    ):
+        return math.nan
+    return float(value)
+
+
+def _rows_of(reading: tuple[float, int] | None) -> int:
+    """The count of a pool reading; -1 when the reading is missing or malformed."""
+    return -1 if reading is None else reading[1]
 
 
 def _flag(value: Any) -> bool:
@@ -795,15 +820,24 @@ def _pool_columns(row: Row) -> tuple[str, ...]:
     return names + (("pool_mu_at_risk",) if mix in RECIPES and kept else ())
 
 
+def _pool_reading(row: Row, name: str) -> tuple[float, int] | None:
+    """The pool maximum `name` of `row` and its count, when they agree: the count a whole number
+    of at least 0, the maximum finite when it is positive and NaN when it is 0. None otherwise:
+    missing or malformed pool data, never an empty comparison."""
+    count, raw = _num(row.get(POOL_ROWS[name])), row.get(name)
+    if not math.isfinite(count) or count < 0 or count != int(count):
+        return None
+    if count > 0:
+        return (_num(raw), int(count)) if math.isfinite(_num(raw)) else None
+    empty = isinstance(raw, (float, np.floating)) and math.isnan(raw)
+    return (math.nan, 0) if empty else None
+
+
 def _pool_column_problems(rows: list[Row]) -> list[str]:
-    """Every pool maximum a row holds is a number, finite or `-inf` (no pool row)."""
+    """Every pool maximum a row holds agrees with its count (`_pool_reading`)."""
     problems = []
     for row in rows:
-        bad = [
-            name
-            for name in _pool_columns(row)
-            if not (_real_finite(row[name]) or row[name] == -math.inf)
-        ]
+        bad = [name for name in _pool_columns(row) if _pool_reading(row, name) is None]
         if bad:
             problems.append(f"{row['month']}: {row['mix']} {_rf(row)} lacks {bad}")
     return problems
@@ -901,16 +935,20 @@ def _check_b(rows: list[Row]) -> tuple[Row, list[str]]:
         here = [r for r in rows if r["mix"] == mix]
         checked = [r for r in here if _carries(r["weights"]) or r["status"] in (KEPT, EXCLUDED)]
         judged_ids = {id(r) for r in checked}
-        failed = [
+        readings = {id(r): _pool_reading(r, "pool_dr2_max") for r in checked}
+        valid = [
             r
             for r in checked
-            if not (
-                _weights_ok(r["weights"], None)
-                and _real_finite(r["dr2"])
-                and _num(r["dr2"]) >= _num(r["pool_dr2_max"]) - TOL
-            )
+            if _weights_ok(r["weights"], None)
+            and _real_finite(r["dr2"])
+            and readings[id(r)] is not None
         ]
-        margins = _finite(_num(r["dr2"]) - _num(r["pool_dr2_max"]) for r in checked)
+        compared = [r for r in valid if _rows_of(readings[id(r)]) > 0]
+        without = [r for r in valid if _rows_of(readings[id(r)]) == 0]
+        passed = {id(r) for r in without}
+        passed |= {id(r) for r in compared if r["dr2"] >= r["pool_dr2_max"] - TOL}
+        failed = [r for r in checked if id(r) not in passed]
+        margins = _finite(_num(r["dr2"]) - _num(r["pool_dr2_max"]) for r in compared)
         out[mix] = {
             "months": len(checked),
             "failed": [
@@ -922,9 +960,7 @@ def _check_b(rows: list[Row]) -> tuple[Row, list[str]]:
                 for r in _order(failed)
             ],  # fmt: skip
             "smallest_margin": float(margins.min()) if len(margins) else math.nan,
-            "without_rows": sorted(
-                str(r["month"]) for r in checked if _num(r["pool_dr2_max"]) == -math.inf
-            ),
+            "without_rows": sorted(str(r["month"]) for r in without),
             "not_built": sorted(
                 str(r["month"])
                 for r in here
@@ -941,7 +977,14 @@ def _check_b(rows: list[Row]) -> tuple[Row, list[str]]:
 def _u_gates(rows: list[Row]) -> tuple[Row, Row, str | None, str | None]:
     kept = [r for r in rows if r["mix"] == U and r["status"] == KEPT]
     low = [r for r in kept if not _num(r["mu_gap"]) >= -TOL]
-    below = [r for r in kept if not _num(r["mu"]) >= _num(r["pool_mu_bound"]) - TOL]
+    readings = {id(r): _pool_reading(r, "pool_mu_bound") for r in kept}
+    without = [r for r in kept if _rows_of(readings[id(r)]) == 0]
+    below = [
+        r
+        for r in kept
+        if _rows_of(readings[id(r)]) < 0
+        or (_rows_of(readings[id(r)]) > 0 and not _num(r["mu"]) >= r["pool_mu_bound"] - TOL)
+    ]
     u_return = {
         "cells": len(kept),
         "failed": [{**_key(r), "mu_gap": _num(r["mu_gap"])} for r in _order(low)],
@@ -952,7 +995,7 @@ def _u_gates(rows: list[Row]) -> tuple[Row, Row, str | None, str | None]:
             {**_key(r), "mu": _num(r["mu"]), "pool_mu_bound": _num(r["pool_mu_bound"])}
             for r in _order(below)
         ],
-        "without_rows": [_key(r) for r in _order(kept) if _num(r["pool_mu_bound"]) == -math.inf],
+        "without_rows": [_key(r) for r in _order(without)],
     }
     none = "no kept U cell to judge"
     stop_return = none if not kept else (f"{len(low)} kept U cell(s) below F" if low else None)

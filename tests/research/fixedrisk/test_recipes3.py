@@ -528,7 +528,10 @@ def test_allowed_mixes_drops_rows_outside_the_limits_and_repeats(tmp_path):
 
 # --------------------------------------------------------- the pool checks of one start month
 
-POOL_CHECKS = ("pool_dr2_max", "pool_mu_bound", "pool_mu_at_risk", "tie")
+POOL_CHECKS = ("pool_dr2_max", "pool_dr2_rows", "pool_mu_bound", "pool_mu_bound_rows",
+               "pool_mu_at_risk", "pool_mu_at_risk_rows", "tie")  # fmt: skip
+POOL_ROWS = {"pool_dr2_max": "pool_dr2_rows", "pool_mu_bound": "pool_mu_bound_rows",
+             "pool_mu_at_risk": "pool_mu_at_risk_rows"}  # fmt: skip
 
 
 def _cell(mix: str, **values: Any) -> Row:
@@ -570,7 +573,7 @@ def _u_cell(rf: float = 0.1, r: float = 0.1, **u: Any) -> list[Row]:
     return [f, _cell(RC.U, **u)]
 
 
-def test_month_pool_checks_adds_four_columns_and_keeps_every_row():
+def test_month_pool_checks_adds_its_columns_and_keeps_every_row():
     cells = [_u_cell()[0], *_pair(mu_gap=0.01)]
     out = RC.month_pool_checks(pd.DataFrame(cells), _pool([]), *POOL_LIMITS)
     assert list(out.columns) == [*pd.DataFrame(cells).columns, *POOL_CHECKS]
@@ -685,11 +688,11 @@ def test_a_kept_mix_without_a_return_gap_stops():
 def test_a_cell_with_no_pool_row_at_its_risk_passes():
     cells = [*_u_cell(mu=0.08), *_pair()]
     _, u, e, _ = _checked(cells, [{"weights": INSIDE, "sigma": 0.2, "mu": 0.5}])
-    assert u["pool_mu_bound"] == -math.inf
-    assert e["pool_mu_at_risk"] == -math.inf
+    assert (u["pool_mu_bound_rows"], e["pool_mu_at_risk_rows"]) == (0, 0)
+    assert math.isnan(u["pool_mu_bound"]) and math.isnan(e["pool_mu_at_risk"])
     assert e["tie"] is True and e["status"] == RC.KEPT
     _, u, e, _ = _checked(cells, [])
-    assert u["pool_mu_bound"] == -math.inf
+    assert u["pool_mu_bound_rows"] == 0 and math.isnan(u["pool_mu_bound"])
 
 
 def test_a_pool_row_without_a_model_measure_stops_naming_the_month():
@@ -732,10 +735,11 @@ def _model_cells(months: list[str]) -> pd.DataFrame:
         for j, rf in enumerate(A.RFS):
             r = 0.05 + 0.01 * j
             add(m, RC.U, rf=rf, r=r, mu=0.051, sigma=r, risk_gap=0.0, mu_gap=0.001, l1=0.1,
-                breaks_limit=False, pool_mu_bound=0.04)  # fmt: skip
+                breaks_limit=False, pool_mu_bound=0.04, pool_mu_bound_rows=1)  # fmt: skip
         for mix, dr2, a in ((RC.E, 1.2, 0.5), (RC.D, 1.5, 0.2), (RC.D10, 1.3, 0.3)):
             add(m, mix, mu=0.04, sigma=0.08, a=a, mu_gap=0.01, l1=0.2, dr2=dr2,
-                pool_dr2_max=dr2 - 0.1, pool_mu_at_risk=0.03)  # fmt: skip
+                pool_dr2_max=dr2 - 0.1, pool_dr2_rows=1, pool_mu_at_risk=0.03,
+                pool_mu_at_risk_rows=1)  # fmt: skip
             add(m, RC.COMPARATOR[mix], mu=0.05, sigma=0.08, risk_gap=0.0)
     return pd.DataFrame(rows)
 
@@ -890,7 +894,7 @@ def test_check_b_fails_closed(mix):
 def test_check_b_passes_a_month_without_an_allowed_row_and_lists_it():
     months = _months(2)
     cells = _model_cells(months)
-    _set(cells, months[0], RC.D10, pool_dr2_max=-math.inf)
+    _set(cells, months[0], RC.D10, pool_dr2_rows=0, pool_dr2_max=math.nan)
     checks = RC.gates(cells, months, expected=NO_LISTS)
     assert "check (b)" not in _stops(checks)
     assert checks["check_b"][RC.D10]["without_rows"] == [months[0]]
@@ -939,7 +943,7 @@ def test_u_gates_fail_closed():
 def test_a_u_cell_without_a_pool_row_at_its_risk_passes_and_is_listed():
     months = _months(2)
     cells = _model_cells(months)
-    _set(cells, months[0], RC.U, A.RFS[0], pool_mu_bound=-math.inf)
+    _set(cells, months[0], RC.U, A.RFS[0], pool_mu_bound_rows=0, pool_mu_bound=math.nan)
     checks = RC.gates(cells, months, expected=NO_LISTS)
     assert checks["stops"] == []
     assert checks["u_pool_bound"]["without_rows"] == [{"month": months[0], "rf": A.RFS[0]}]
@@ -1443,3 +1447,46 @@ def test_a_tie_never_overwrites_a_malformed_or_off_line_comparator(values):
     cells[1].update(values)
     with pytest.raises(ValueError, match=MONTH):
         _checked(cells, [{"weights": INSIDE, "sigma": 0.09, "mu": 0.049}])
+
+
+def test_the_pool_checks_count_the_rows_behind_each_maximum():
+    pool = [
+        {"weights": INSIDE, "sigma": 0.09, "mu": 0.049, "dr2": 1.2},
+        {"weights": [0.35, 0.4, 0.25], "sigma": 0.1, "mu": 0.048, "dr2": 1.3},
+        {"weights": [0.8, 0.1, 0.1], "sigma": 0.05, "mu": 0.07, "dr2": 9.0},  # outside the limits
+    ]
+    excluded = {**BUILT, "status": RC.EXCLUDED, "a": 1.1}
+    cells = [*_u_cell(), *_pair(mu_gap=0.01), _cell(RC.D, **excluded), _cell(RC.D10, **excluded)]
+    _, u, e, _, d, d10 = _checked(cells, pool)
+    assert (u["pool_mu_bound_rows"], u["pool_mu_bound"]) == (3, 0.07)  # every row, no limits
+    assert (e["pool_mu_at_risk_rows"], e["pool_mu_at_risk"]) == (2, 0.049)
+    assert (d["pool_dr2_rows"], d["pool_dr2_max"]) == (2, 1.3)
+    assert d10["pool_dr2_rows"] == 0 and math.isnan(d10["pool_dr2_max"])  # none within 10%
+
+
+@pytest.mark.parametrize(
+    ("count", "value"),
+    [(0, -math.inf), (0, 1.2), (1, math.nan), (1, math.inf), (math.nan, math.nan),
+     (-1, math.nan), (0.5, 1.2), (None, math.nan)],
+)  # fmt: skip
+def test_a_pool_count_out_of_step_with_its_maximum_stops(count, value):
+    months = _months(2)
+    for mix, rf, name, gate in ((RC.D10, None, "pool_dr2_max", "check (b)"),
+                                (RC.U, A.RFS[0], "pool_mu_bound", "U pool bound"),
+                                (RC.E, None, "pool_mu_at_risk", None)):  # fmt: skip
+        cells = _model_cells(months)
+        cells[POOL_ROWS[name]] = cells[POOL_ROWS[name]].astype(object)
+        mask = _at(cells, months[0], mix, rf)
+        cells.loc[mask, POOL_ROWS[name]] = pd.Series([count], index=cells.index[mask], dtype=object)
+        cells.loc[mask, name] = value
+        checks = RC.gates(cells, months, expected=NO_LISTS)
+        assert "structure" in _stops(checks)
+        if gate:  # missing or malformed pool data never counts as an empty comparison
+            assert gate in _stops(checks)
+
+
+def test_cells_without_the_count_columns_stop():
+    months = _months(1)
+    cells = _model_cells(months).drop(columns=list(POOL_ROWS.values()))
+    stops = _stops(RC.gates(cells, months, expected=NO_LISTS))
+    assert {"structure", "check (b)", "U pool bound"} <= set(stops)
