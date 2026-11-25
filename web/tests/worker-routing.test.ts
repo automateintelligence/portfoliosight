@@ -303,6 +303,23 @@ describe("worker routing", () => {
     expect((await call(worker, e.env, `${SITE}/api/health`)).headers.get("cache-control")).toBe("no-store");
   });
 
+  it("a refused POST /api/tensors reaches the browser with the origin's Retry-After, unchanged", async () => {
+    const worker = await loadWorker();
+    const e = makeEnv();
+    const refusal = '{"error":{"code":"rate_limited","message":"Too many requests; try again in a minute.","details":null}}';
+    for (const wait of ["1", "12", "60"]) {
+      originResponse = () => new Response(refusal, { status: 429, headers: { "content-type": "application/json", "cache-control": "no-store", "retry-after": wait } });
+      const res = await call(worker, e.env, `${SITE}/api/tensors`, { method: "POST", headers: { "content-type": "application/json" }, body: '{"funds":[],"lookback":"5y"}' });
+      expect(res.status).toBe(429);
+      expect(res.headers.get("retry-after")).toBe(wait);
+      expect(await res.text()).toBe(refusal);
+    }
+    // an upstream answer that is not a refusal carries none
+    originResponse = () => new Response("{}", { status: 202, headers: { "content-type": "application/json" } });
+    const accepted = await call(worker, e.env, `${SITE}/api/tensors`, { method: "POST", headers: { "content-type": "application/json" }, body: '{"funds":[],"lookback":"5y"}' });
+    expect(accepted.headers.get("retry-after")).toBeNull();
+  });
+
   it("an unreachable origin is a 502 and an unset gate secret never reaches the origin", async () => {
     const worker = await loadWorker();
     const e = makeEnv();

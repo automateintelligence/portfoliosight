@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 from collections import deque
 from collections.abc import Callable
@@ -38,6 +39,24 @@ class RateLimiter:
             if self._since_sweep >= _SWEEP_EVERY:
                 self._sweep(floor)
             return True
+
+    def retry_after(self, key: str) -> int:
+        """Whole seconds until a request from ``key`` would be admitted; 0 when it would be now.
+
+        When the window is full that is when its oldest admission leaves it, rounded up and at
+        least 1. Asking counts nothing.
+        """
+        now = self._clock()
+        floor = now - self.window
+        with self._lock:
+            times = self._admitted.get(key)
+            if times is None:
+                return 0
+            while times and times[0] <= floor:
+                times.popleft()
+            if len(times) < self.limit:
+                return 0
+            return max(1, math.ceil(times[0] + self.window - now))
 
     def _sweep(self, floor: float) -> None:
         self._since_sweep = 0
