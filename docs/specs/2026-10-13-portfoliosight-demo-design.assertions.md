@@ -1002,12 +1002,16 @@ Phase 3 · unit (vitest)
 Phase 3 · unit (vitest)
 - **Claim.** `decode(encode(state)) == state` for every reachable state of `web/src/state/url.ts`
   (preset or custom funds with optional amounts, `unit` including `shares`, cap overrides,
-  lookback, ghosts, `r` decimal, `d` decimal, theme, details), unknown keys are ignored,
+  lookback, ghosts, `r` decimal, `d` decimal, theme, details, the No allocation limits line shown
+  or hidden), unknown keys are ignored,
   `r` is clamped into the domain on load, and `encode` emits only the §8.1 keys.
 - **Setup.** A generator over the state space (≥ 500 cases) with fund ids drawn from the fixture
   universe; a URL with an unknown key `zz=1` and a `k=` key; an `r` outside `[s_safe, NX−1]`.
 - **Observation.** Round-trip equality for all cases; the key set of every encoded URL ⊆
-  `{u, f, unit, c, lb, g, r, d, t, x}`; `?u=guide2017&lb=5y&r=19.25&d=0&t=hud` decodes to the
+  `{u, f, unit, c, lb, g, r, d, t, x, nl}`; `nl` absent decodes to the line shown and is never
+  written, `nl=0` decodes to the line hidden and is written last, after `x`, and any other `nl`
+  value decodes as absent and is not written back (owner decision 2026-11-17); the generator
+  includes states with the line hidden; `?u=guide2017&lb=5y&r=19.25&d=0&t=hud` decodes to the
   obvious state and re-encodes to the same string; a query with no `d`, and one with the old
   `d=auto`, decode to `d = 0` (position 0, the best-return mix) and re-encode with `d=0` (owner
   direction 2026-11-11); `zz` and `k` are dropped and do not appear
