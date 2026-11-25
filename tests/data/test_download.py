@@ -16,12 +16,12 @@ import pandas as pd
 import pytest
 import responses
 
-from portfoliosight.data import download
+from portfoliosight.data import download, limits
 from portfoliosight.data import store as store_mod
 from portfoliosight.data.providers import tiingo, tsp
 from portfoliosight.data.providers.base import ProviderError, RateLimited, SymbolMeta
 from portfoliosight.data.store import LocalStore
-from portfoliosight.data.universe import load_tiers
+from portfoliosight.data.universe import Tiers, load_tiers
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 SESSIONS = [
@@ -98,8 +98,10 @@ class FakeProvider:
         return SymbolMeta(f"{symbol} Fund", RECORD_START, self._through(symbol), self.kind)
 
 
-def _put_record(store, symbol: str, prices_through: date, adjusted_through: date) -> None:
-    days = [d for d in SESSIONS if RECORD_START <= d <= prices_through]
+def _put_record(
+    store, symbol: str, prices_through: date, adjusted_through: date, start: date = RECORD_START
+) -> None:
+    days = [d for d in SESSIONS if start <= d <= prices_through]
     closes = np.array([_close(symbol, d) for d in days])
     tr = closes / closes[0]
     tr[np.array([d > adjusted_through for d in days])] = np.nan
@@ -165,6 +167,7 @@ def _go(mode, store, provider, clock, symbols, **kwargs) -> tuple[int, list]:
 
 
 FEB20, FEB23, FEB26, FEB27 = (date(2026, 2, d) for d in (20, 23, 26, 27))
+SHORT_START = date(2026, 2, 17)  # a short history: 2026-02-17 to 2026-02-27 is nine sessions
 
 
 def test_catch_up_end_to_end_with_the_recorded_fixtures(tmp_path, monkeypatch):
@@ -946,3 +949,83 @@ def test_failed_tsp_fetch_marks_due_funds_stale_until_a_fetch_succeeds(tmp_path)
     restored = _manifest(store)["TSP-G"]
     assert restored["status"] == "ok" and restored["reason"] is None
     assert restored["last_date"] == d_g.isoformat()
+
+
+class ShortHistoryProvider(FakeProvider):
+    """A ``FakeProvider`` whose history starts on ``SHORT_START``: nine rows a frame at most."""
+
+    def fetch_daily(self, symbol, start, end=None):
+        return super().fetch_daily(symbol, max(start, SHORT_START), end)
+
+
+def test_the_walk_never_fetches_a_requested_ticker_that_has_no_record(tmp_path, monkeypatch):
+    """Spec 4.1: a requested ticker is offered once the lake has checked it, so the provider walk
+    must not start one, also on the Power plan, which fetches every tier 3 symbol without a
+    record. A requested ticker that already has a record is refreshed as before."""
+    store = _seed_store(
+        tmp_path,
+        {
+            "ZZZR": _entry(
+                "tiingo",
+                "ok",
+                FEB20,
+                FEB20,
+                name="ZZZR Corp",
+                kind="stock",
+                tier=3,
+                first_date=SHORT_START.isoformat(),
+            )
+        },
+        {},
+    )
+    _put_record(store, "ZZZR", FEB20, FEB20, start=SHORT_START)  # four rows
+    power = limits.ProviderLimits(
+        tier=limits.TIER_POWER,
+        req_per_hour=9_000,
+        req_per_day=90_000,
+        unique_symbols_per_month=100_000,
+        measured_on="2026-02-27",
+        method="documented",
+    )
+    store_mod.put_json(store, limits.LIMITS_KEY, power.model_dump())
+    assert limits.plan_tier(store) == "power"
+    # ZZZQ: requested, no record. ZZZR: requested, has one. ZZZS: an ordinary tier 3 stock.
+    universe = Tiers(
+        tier1=(),
+        tier2=(),
+        tier3=("ZZZQ", "ZZZR", "ZZZS"),
+        income=frozenset(),
+        starter_slice=130,
+        requested=("ZZZQ", "ZZZR"),
+    )
+    monkeypatch.setattr(download, "load_tiers", lambda: universe)
+
+    provider = ShortHistoryProvider(default_available=FEB27)
+    clock = Clock(FEB27, 13)
+    code = download.run(
+        "refresh",
+        store=store,
+        providers={"tiingo": provider},
+        clock=clock,
+        sleep=clock.sleep,
+        tiers=(3,),
+    )
+    assert code == 0
+    assert [call[1] for call in provider.calls if call[0] == "daily"] == ["ZZZR", "ZZZS"]
+    assert "ZZZQ" not in {call[1] for call in provider.calls}
+    now = _manifest(store)
+    assert "ZZZQ" not in now and "ZZZQ" not in _listed(store)
+    assert now["ZZZR"]["last_date"] == FEB27.isoformat()  # refreshed as before
+    assert now["ZZZS"]["status"] == "ok"  # the walk still starts a stock nobody requested
+
+    # Once more: still nothing for ZZZQ, which stays off the catalog until the lake takes it.
+    again = download.run(
+        "refresh",
+        store=store,
+        providers={"tiingo": provider},
+        clock=clock,
+        sleep=clock.sleep,
+        tiers=(3,),
+    )
+    assert again == 0 and "ZZZQ" not in {call[1] for call in provider.calls}
+    assert "ZZZQ" not in _manifest(store)
