@@ -441,6 +441,42 @@ def _built(weights: Any) -> bool:
         return False
 
 
+POOL_MEASURES = ("mu", "sigma", "dr2")  # what the pool checks read of every pool row
+
+
+def _all_finite(values: Iterable[Any]) -> bool:
+    """Every value is a finite real number (not a bool, a string or None)."""
+    return all(_real_finite(v) for v in values)
+
+
+def _real_finite(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float, np.integer, np.floating))
+        and not isinstance(value, (bool, np.bool_))
+        and math.isfinite(value)
+    )
+
+
+def _pool_problems(pool: pd.DataFrame, n: int) -> list[str]:
+    """The pool's allow-list, before any domain filter: every row has finite `mu`, `sigma` and
+    `dr2` and one vector of `n` finite weights. An empty pool has no problem (plan line 572)."""
+    if pool.empty:
+        return []
+    problems = [
+        f"main-pool row(s) lack a finite {name}"
+        for name in POOL_MEASURES
+        if not _all_finite(pool[name].to_list())
+    ]
+    try:
+        stacked = np.vstack(pool["weights"].to_list()).astype(float)
+        weights_ok = stacked.shape == (len(pool), n) and bool(np.isfinite(stacked).all())
+    except (TypeError, ValueError):
+        weights_ok = False
+    if not weights_ok:
+        problems.append(f"main-pool row(s) lack {n} finite weights")
+    return problems
+
+
 def _best(values: np.ndarray, where: np.ndarray) -> float:
     """The largest of `values` where `where` holds; `-inf` when it holds nowhere."""
     return float(values[where].max()) if where.any() else -math.inf
@@ -469,11 +505,8 @@ def month_pool_checks(mixes: pd.DataFrame, pool: pd.DataFrame, lower, upper) -> 
     out = A._frame(mixes.copy()).reset_index(drop=True)
     month = str(out["month"].iloc[0]) if len(out) else "?"
     try:
-        for name in ("mu", "sigma"):
-            if np.isnan(pool[name].to_numpy(dtype=float)).any():
-                raise ValueError(f"main-pool row(s) lack {name}")
-        if len(pool) and not np.isfinite(np.vstack(pool["weights"].to_list())).all():
-            raise ValueError("main-pool row(s) lack finite weights")
+        if problems := _pool_problems(pool, len(lower)):
+            raise ValueError("; ".join(problems))
         allowed = allowed_mixes(pool, lower, upper)
     except ValueError as exc:
         raise ValueError(f"{month}: {exc}; the recipes check stops") from exc

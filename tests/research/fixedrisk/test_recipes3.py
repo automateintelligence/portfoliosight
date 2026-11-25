@@ -1309,3 +1309,21 @@ def test_a_tie_is_not_applied_to_a_comparator_off_its_line_or_unbuilt():
 def test_a_pool_row_with_missing_weights_stops_naming_the_month():
     with pytest.raises(ValueError, match=MONTH):
         _checked([_cell(RC.D, dr2=2.0)], [{"weights": [math.nan, 0.5, 0.5]}])
+
+
+# ------------------------------------------------- review round 4: one allow-list, up front
+
+
+@pytest.mark.parametrize("value", [math.inf, -math.inf])
+@pytest.mark.parametrize("name", ["mu", "sigma", "dr2"])
+def test_a_pool_row_with_an_infinite_measure_stops_naming_the_month(name, value):
+    cells = [_cell(RC.D, status=RC.FAILED)]  # a valid row: a D that could not be solved
+    for weights in (INSIDE, [0.8, 0.1, 0.1]):  # inside the limits, and outside them
+        with pytest.raises(ValueError, match=MONTH):
+            _checked(cells, [{"weights": weights, name: value}])
+
+
+@pytest.mark.parametrize("weights", [[math.inf, 0.5, 0.5], [0.5, 0.5]])
+def test_a_pool_row_with_infinite_or_short_weights_stops_naming_the_month(weights):
+    with pytest.raises(ValueError, match=MONTH):
+        _checked([_cell(RC.D, status=RC.FAILED)], [{"weights": weights}])
