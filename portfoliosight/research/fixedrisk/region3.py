@@ -134,11 +134,12 @@ def left_tip(w_f: np.ndarray, w_lower: np.ndarray, t: float) -> np.ndarray:
 # ------------------------------------------------------------------------------ the pool
 
 
-def read_month_pool(path: Path) -> pd.DataFrame:
+def read_month_pool(path: Path, columns: Sequence[str] = POOL_COLUMNS) -> pd.DataFrame:
     """A start month's main-pool rows (3-year lookback, the main seed, no penalty weight or the
-    main one) in every band, with their weights (one array per row)."""
+    main one) in every band, with their weights (one array per row). `columns` must hold
+    `lookback`, `seed`, `lam` and `weights`."""
     table = pq.read_table(
-        path, columns=list(POOL_COLUMNS),
+        path, columns=list(columns),
         filters=[("lookback", "==", C.LOOKBACK), ("seed", "==", C.PRIMARY_SEED)],
     )  # fmt: skip
     lam = np.asarray(table.column("lam").to_numpy(zero_copy_only=False), dtype=float)
