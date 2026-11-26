@@ -390,6 +390,9 @@ class _Ingest:
         """A symbol without a record: the full history, then its meta (two requests)."""
         provider_name, _ = self._provider(symbol)
         frame = self._fetch_daily(symbol, FULL_HISTORY_START)
+        if self._taken_by_lake(symbol):
+            logger.info("%s: taken by the lake sync during the fetch; not written", symbol)
+            return
         # Rows are converted before anything is recorded: a frame that is refused (an unusable
         # price or action) leaves the catalog as it was, so the next run asks again.
         record = None if frame.empty else provider_rows_to_record(frame)

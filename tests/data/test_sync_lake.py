@@ -685,3 +685,48 @@ def test_a_withheld_symbol_stays_held_while_the_sync_stores_other_records(lake, 
     code, lines = _sync(lake, watching, now=now, withheld={"AAPL": HELD})
     assert code == 0, lines
     assert len(seen) == 1 and seen[0] is not None and seen[0].withheld is not None
+
+
+def test_a_cutoff_at_the_last_session_is_not_served_by_a_writer_that_ignores_the_mark(lake, store):
+    assert _sync(lake, store)[0] == 0  # AAPL is served through the latest session
+    recent = {**HELD, "good_through": LATEST.isoformat()}
+    assert _sync(lake, store, withheld={"AAPL": recent})[0] == 0
+    overlay = store_mod.get_json(store, lake_mod.LAKE_KEY)
+    overlay["symbols"]["AAPL"].pop("withheld")
+    older = manifest_mod.load_manifest(store)
+    lake_mod.apply_lake(older, lake_mod.LakeOverlay.model_validate(overlay), LATEST)
+    assert older.symbols["AAPL"].status != "ok"
+
+
+def test_a_withheld_symbol_another_writer_served_again_is_held_again_by_the_next_poll(lake, store):
+    assert _sync(lake, store, withheld={"AAPL": HELD})[0] == 0
+    # An older nightly put AAPL back to ok in the catalog and its view.
+    entries = _manifest(store)
+    entries["AAPL"] = {**entries["AAPL"], "status": "ok", "reason": None}
+    store_mod.put_json(store, manifest_mod.MANIFEST_KEY, {"symbols": entries})
+    view = store_mod.get_json(store, manifest_mod.SYMBOLS_KEY)
+    view["symbols"].append({"id": "AAPL", "name": "AAPL", "kind": "stock", "tier": 3})
+    store_mod.put_json(store, manifest_mod.SYMBOLS_KEY, view)
+    code, lines = _sync(lake, store)  # the same lake run, the same list
+    assert code == 0, lines
+    assert _manifest(store)["AAPL"]["status"] == "unavailable"
+    assert "AAPL" not in _listed(store)
+
+
+def test_a_view_write_that_failed_is_redone_by_the_next_poll(lake, store):
+    assert _sync(lake, store)[0] == 0
+    assert "AAPL" in _listed(store)
+
+    class ViewFails(Recording):
+        def put(self, key, data):
+            if key == manifest_mod.SYMBOLS_KEY:
+                raise OSError("R2 kept answering 500")
+            super().put(key, data)
+
+    with pytest.raises(OSError):
+        _sync(lake, ViewFails(store), withheld={"AAPL": HELD})
+    assert _manifest(store)["AAPL"]["status"] == "unavailable"
+    assert "AAPL" in _listed(store)  # the view still lists it
+    code, lines = _sync(lake, store)
+    assert code == 0, lines
+    assert "AAPL" not in _listed(store)

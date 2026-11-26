@@ -283,9 +283,10 @@ class _Sync:
         return Outcome(symbol, "written", entry=entry, record=data)
 
     def hold(self, symbol: str, held: Withheld) -> LakeEntry:
-        """The entry of a withheld symbol: ``unavailable`` with the withheld reason, its dates
-        ended at the last trustworthy day. Its record is not read or written; the empty digest
-        makes the sync take it afresh once it is off the list."""
+        """The entry of a withheld symbol: ``unavailable`` with the withheld reason, its
+        ``last_date`` ended at the last trustworthy day and no ``adjusted_through``, so a writer
+        that does not know the withheld mark still finds it unavailable. Its record is not read
+        or written; the empty digest makes the sync take it afresh once it is off the list."""
         known = self.info[symbol]
         prior = self.previous.symbols.get(symbol) or self.base.symbols.get(symbol)
 
@@ -300,7 +301,7 @@ class _Sync:
             source=lake_mod.LAKE_SOURCE,
             first_date=prior.first_date if prior is not None else None,
             last_date=ended(prior.last_date if prior is not None else None),
-            adjusted_through=ended(prior.adjusted_through if prior is not None else None),
+            adjusted_through=None,
             status="unavailable",
             reason=held.reason(),
             fetched_at=prior.fetched_at if prior is not None else None,
@@ -394,6 +395,25 @@ def _report(
     return counts
 
 
+def _unheld(store: store_mod.Store, base: Manifest, withheld: Mapping[str, Withheld]) -> set[str]:
+    """The withheld symbols the stored catalog does not show as withheld: an entry that is not
+    ``unavailable`` with the withheld reason, or a listing in ``meta/symbols.json``."""
+    try:
+        view = store_mod.get_json(store, manifest_mod.SYMBOLS_KEY)
+    except KeyError:
+        view = {}
+    rows = view.get("symbols") if isinstance(view, dict) else None
+    listed = {row.get("id") for row in rows or [] if isinstance(row, dict)}
+    return {
+        symbol
+        for symbol, held in withheld.items()
+        if (entry := base.symbols.get(symbol)) is None
+        or entry.status != "unavailable"
+        or entry.reason != held.reason()
+        or symbol in listed
+    }
+
+
 def sync(
     *,
     lake: Path,
@@ -429,13 +449,16 @@ def sync(
     )
     held_before = {s: e.withheld for s, e in previous.symbols.items() if e.withheld is not None}
     relisted = held_before != withheld
-    if synced and not force and not recheck and not strays and not relisted:
+    unheld = _unheld(store, base, withheld)
+    if synced and not force and not recheck and not strays and not relisted and not unheld:
         emit(f"the lake run generated at {run.generated_at.isoformat()} is already synced")
         return 0
     if recheck:
         emit(f"{len(recheck)} lake entries were replaced in the manifest; rewriting them")
     if relisted:
         emit(f"the withheld list changed; withheld now: {', '.join(sorted(withheld)) or 'none'}")
+    if unheld:
+        emit(f"withheld but served or not catalogued as withheld: {', '.join(sorted(unheld))}")
 
     names = lake_mod.LakeNames(lake)
     job = _Sync(lake, store, now, dry_run, run, info, base, previous, recheck, names, withheld)

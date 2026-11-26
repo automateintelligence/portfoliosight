@@ -462,17 +462,19 @@ HELD_THROUGH = date(2026, 2, 20)
 HELD_REASON = "price error under repair; no data since 2026-02-20"
 
 
-def _held_entry(symbol: str = "CTVA") -> lake_mod.LakeEntry:
+def _held_entry(symbol: str = "CTVA", good_through: date = HELD_THROUGH) -> lake_mod.LakeEntry:
     """An overlay entry the sync wrote for a symbol on the owner's withheld list."""
+    held = withheld_mod.Withheld(
+        note="price error under repair", good_through=good_through, since=D
+    )
     return _lake_entry(
         symbol,
-        HELD_THROUGH,
+        good_through,
+        adjusted_through=None,
         status="unavailable",
-        reason=HELD_REASON,
+        reason=held.reason(),
         digest="",
-        withheld=withheld_mod.Withheld(
-            note="price error under repair", good_through=HELD_THROUGH, since=D
-        ),
+        withheld=held,
     )
 
 
@@ -518,13 +520,16 @@ def test_a_withheld_symbol_the_overlay_drops_is_released_unserved():
     assert lake_mod.apply_lake(manifest, lake_mod.LakeOverlay(), D) == ["CTVA"]
     ctva = manifest.symbols["CTVA"]
     assert (ctva.source, ctva.status) == ("seed", "pending")
-    assert ctva.reason == f"corporate actions not yet verified after {HELD_THROUGH.isoformat()}"
+    view = manifest_mod.symbols_view(manifest, datetime.combine(D, time(15), tzinfo=UTC))
+    assert view["symbols"] == []
 
 
-def test_a_writer_that_ignores_the_withheld_mark_still_does_not_serve_it():
-    """A writer deployed before the withheld list (it drops the unknown field) recomputes the
-    status from the entry's dates, which end at the last trustworthy day."""
-    overlay = lake_mod.LakeOverlay(symbols={"CTVA": _held_entry()}).to_json()
+@pytest.mark.parametrize("good_through", [HELD_THROUGH, D], ids=["long-ago", "last-session"])
+def test_a_writer_that_ignores_the_withheld_mark_still_does_not_serve_it(good_through):
+    """A writer deployed before the withheld list drops the field it does not know and
+    recomputes the status from the entry's dates: not served, however recent the cutoff."""
+    overlay = lake_mod.LakeOverlay(symbols={"CTVA": _held_entry(good_through=good_through)})
+    overlay = overlay.to_json()
     for entry in overlay["symbols"].values():
         entry.pop("withheld")
     manifest = manifest_mod.Manifest(symbols={"CTVA": _served_ctva()})
@@ -566,3 +571,32 @@ def test_the_nightly_neither_fetches_nor_serves_a_withheld_symbol(tmp_path):
     assert (ctva["source"], ctva["status"], ctva["reason"]) == ("lake", "unavailable", HELD_REASON)
     listed = {row["id"] for row in store_mod.get_json(store, manifest_mod.SYMBOLS_KEY)["symbols"]}
     assert "CTVA" not in listed
+
+
+def test_a_full_fetch_does_not_store_over_a_record_the_sync_held_during_the_fetch(tmp_path):
+    """The walk starts a full fetch of a symbol with no catalog dates; the sync holds it (the
+    owner withheld it) before the fetch returns: the fetched history is not stored."""
+    store = LocalStore(tmp_path / "store")
+    store_mod.put_json(store, manifest_mod.MANIFEST_KEY, {"symbols": {}})
+    held_record = b"the record the owner withheld"
+    store.put(store_mod.record_key("CTVA"), held_record)
+
+    class Provider(FakeProvider):
+        def fetch_daily(self, symbol, start, end=None):
+            overlay = lake_mod.LakeOverlay(symbols={"CTVA": _held_entry()})
+            store_mod.put_json(store, lake_mod.LAKE_KEY, overlay.to_json())
+            return super().fetch_daily(symbol, start, end)
+
+    provider = Provider(default_available=FEB27)
+    clock = Clock(FEB27, 13)
+    download.run(
+        "catch-up",
+        store=store,
+        providers={"tiingo": provider},
+        clock=clock,
+        sleep=clock.sleep,
+        symbols=["CTVA"],
+    )
+    assert store.get(store_mod.record_key("CTVA")) == held_record
+    ctva = store_mod.get_json(store, manifest_mod.MANIFEST_KEY)["symbols"]["CTVA"]
+    assert (ctva["source"], ctva["status"], ctva["reason"]) == ("lake", "unavailable", HELD_REASON)
