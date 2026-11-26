@@ -24,8 +24,11 @@ name-only change rewrites the entry, not the record. Entries other writers keep 
 name get the lake's name when it has one. The entries go to ``meta/lake.json`` (written by
 this job only), then into ``meta/manifest.json`` by a conditional read-modify-write (never over
 a write it did not read), then ``meta/symbols.json``. A symbol that was taken and no longer
-qualifies is released to ``seed``/``pending``. The R2 keys come from
-``~/.secrets/portfoliosight.env`` and are never printed.
+qualifies is released to ``seed``/``pending``. A symbol on the owner's withheld list
+(``data/universes/withheld.json``, checked whole first; a malformed list stops the sync before
+anything is written) is not taken: its entry is held ``unavailable`` with the reason
+``{note}; no data since {good_through}``, and its stored record is left as it is. The R2 keys
+come from ``~/.secrets/portfoliosight.env`` and are never printed.
 """
 
 from __future__ import annotations
@@ -38,7 +41,7 @@ import json
 import logging
 import sys
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
@@ -66,6 +69,12 @@ from portfoliosight.data.secrets import (  # noqa: E402
     redacted_traceback,
 )
 from portfoliosight.data.universe import SymbolInfo, Tiers, is_tsp, load_tiers  # noqa: E402
+from portfoliosight.data.withheld import (  # noqa: E402
+    WITHHELD_FILE,
+    Withheld,
+    WithheldError,
+    load_withheld,
+)
 
 DEFAULT_LAKE = lake_mod.DEFAULT_LAKE
 DEFAULT_LOCK = "~/.local/state/portfoliosight/sync_lake.lock"
@@ -88,6 +97,7 @@ SKIP_NOT_VOUCHED = "not vouched by the lake"
 SKIP_BEHIND = "more than 3 sessions behind the lake's latest session"
 SKIP_TAIL = "vouched date is after the last price row"
 SKIP_UNUSABLE = "unusable prices"
+SKIP_WITHHELD = "withheld by the owner until its prices are repaired"
 
 logger = logging.getLogger("sync_lake")
 install_redaction([logger.name])
@@ -215,6 +225,7 @@ class _Sync:
     previous: LakeOverlay
     recheck: set[str]
     names: lake_mod.LakeNames
+    withheld: Mapping[str, Withheld]
 
     def __post_init__(self) -> None:
         self.d_g = generation_date(self.now)
@@ -222,6 +233,9 @@ class _Sync:
         self.floor = session_back(latest, manifest_mod.SERVED_WITHIN_SESSIONS)
 
     def take(self, symbol: str) -> Outcome:
+        held = self.withheld.get(symbol)
+        if held is not None:
+            return Outcome(symbol, "skipped", SKIP_WITHHELD, entry=self.hold(symbol, held))
         eod = self.lake / "eod_history" / f"{symbol}.parquet"
         if not eod.is_file():
             return Outcome(symbol, "skipped", SKIP_NOT_IN_LAKE)
@@ -267,6 +281,34 @@ class _Sync:
         self._settle(entry)
         data = None if self.dry_run else store_mod.record_to_bytes(record)
         return Outcome(symbol, "written", entry=entry, record=data)
+
+    def hold(self, symbol: str, held: Withheld) -> LakeEntry:
+        """The entry of a withheld symbol: ``unavailable`` with the withheld reason, its
+        ``last_date`` ended at the last trustworthy day and no ``adjusted_through``, so a writer
+        that does not know the withheld mark still finds it unavailable. Its record is not read
+        or written; the empty digest makes the sync take it afresh once it is off the list."""
+        known = self.info[symbol]
+        prior = self.previous.symbols.get(symbol) or self.base.symbols.get(symbol)
+
+        def ended(day: date | None) -> date | None:
+            return None if day is None else min(day, held.good_through)
+
+        return LakeEntry(
+            name=self.names.name(symbol) or (prior.name if prior is not None else None) or symbol,
+            kind=known.kind or (prior.kind if prior is not None else "etf"),
+            tier=known.tier,
+            income=known.income,
+            source=lake_mod.LAKE_SOURCE,
+            first_date=prior.first_date if prior is not None else None,
+            last_date=ended(prior.last_date if prior is not None else None),
+            adjusted_through=None,
+            status="unavailable",
+            reason=held.reason(),
+            fetched_at=prior.fetched_at if prior is not None else None,
+            relies_on_yfinance=prior.relies_on_yfinance if prior is not None else False,
+            digest="",
+            withheld=held,
+        )
 
     def claim(self, symbol: str) -> LakeEntry | None:
         """The entry that marks ``symbol`` as the lake's while its new record is stored.
@@ -316,12 +358,14 @@ def _single_run(lock: Path) -> Iterator[bool]:
 def _report(
     outcomes: list[Outcome], released: list[str], named: list[str], emit: Emit
 ) -> dict[str, Any]:
-    taken = [o.entry for o in outcomes if o.entry is not None]
+    taken = [o.entry for o in outcomes if o.entry is not None and o.action != "skipped"]
     counts = {
         "unnamed": sum(
             1
             for o in outcomes
-            if o.entry is not None and manifest_mod.unnamed(o.symbol, o.entry.name)
+            if o.entry is not None
+            and o.action != "skipped"
+            and manifest_mod.unnamed(o.symbol, o.entry.name)
         ),
         "named_others": len(named),
         "written": sum(1 for o in outcomes if o.action == "written"),
@@ -351,6 +395,26 @@ def _report(
     return counts
 
 
+def _unheld(store: store_mod.Store, base: Manifest, withheld: Mapping[str, Withheld]) -> set[str]:
+    """The withheld symbols the stored catalog does not show as withheld: an entry that is not
+    ``unavailable`` with the withheld reason, or a listing in ``meta/symbols.json`` (all of
+    them while that view is missing)."""
+    try:
+        view = store_mod.get_json(store, manifest_mod.SYMBOLS_KEY)
+    except KeyError:
+        return set(withheld)
+    rows = view.get("symbols") if isinstance(view, dict) else None
+    listed = {row.get("id") for row in rows or [] if isinstance(row, dict)}
+    return {
+        symbol
+        for symbol, held in withheld.items()
+        if (entry := base.symbols.get(symbol)) is None
+        or entry.status != "unavailable"
+        or entry.reason != held.reason()
+        or symbol in listed
+    }
+
+
 def sync(
     *,
     lake: Path,
@@ -359,6 +423,7 @@ def sync(
     force: bool = False,
     dry_run: bool = False,
     tiers: Tiers | None = None,
+    withheld_file: Path = WITHHELD_FILE,
     emit: Emit = logger.info,
 ) -> int:
     """One sync; returns the exit code (0 also for waiting, weekend and already synced)."""
@@ -367,6 +432,13 @@ def sync(
     emit(message)
     if not go:
         return code
+    universe = tiers or load_tiers()
+    info = {s: known for s, known in universe.info().items() if not is_tsp(s)}
+    try:
+        withheld = load_withheld(withheld_file, info)
+    except WithheldError as exc:
+        emit(f"ALERT sync_lake: the withheld list is refused, nothing uploaded: {exc}")
+        return 1
     previous = lake_mod.load_lake(store)
     base = manifest_mod.load_manifest(store)
     recheck = {s for s, e in previous.symbols.items() if mismatched(base.symbols.get(s), e)}
@@ -376,16 +448,21 @@ def sync(
     synced = previous.generated_at is not None and (
         datetime.fromisoformat(previous.generated_at) == run.generated_at
     )
-    if synced and not force and not recheck and not strays:
+    held_before = {s: e.withheld for s, e in previous.symbols.items() if e.withheld is not None}
+    relisted = held_before != withheld
+    unheld = _unheld(store, base, withheld)
+    if synced and not force and not recheck and not strays and not relisted and not unheld:
         emit(f"the lake run generated at {run.generated_at.isoformat()} is already synced")
         return 0
     if recheck:
         emit(f"{len(recheck)} lake entries were replaced in the manifest; rewriting them")
+    if relisted:
+        emit(f"the withheld list changed; withheld now: {', '.join(sorted(withheld)) or 'none'}")
+    if unheld:
+        emit(f"withheld but served or not catalogued as withheld: {', '.join(sorted(unheld))}")
 
-    universe = tiers or load_tiers()
-    info = {s: known for s, known in universe.info().items() if not is_tsp(s)}
     names = lake_mod.LakeNames(lake)
-    job = _Sync(lake, store, now, dry_run, run, info, base, previous, recheck, names)
+    job = _Sync(lake, store, now, dry_run, run, info, base, previous, recheck, names, withheld)
     emit(
         f"lake {lake}: {len(run.vouched)} symbols vouched, latest session "
         f"{max(run.vouched.values())}, taken from {job.floor}; D_G {job.d_g}"
@@ -423,7 +500,7 @@ def sync(
     claims = {o.symbol: job.claim(o.symbol) for o in writes}
     if writes:
         claimed = {s: e for s, e in claims.items() if e is not None}
-        kept = {o.symbol: o.entry for o in outcomes if o.action == "unchanged" and o.entry}
+        kept = {o.symbol: o.entry for o in outcomes if o.action != "written" and o.entry}
         publish_overlay({**kept, **claimed}, previous.generated_at)
     # 2. Store the records; one that cannot be stored keeps its claim (its old record).
     with ThreadPoolExecutor(THREADS) as pool:
