@@ -21,12 +21,12 @@ TSP_IDS = (
     "TSP-G TSP-F TSP-C TSP-S TSP-I TSP-LINC TSP-L2030 TSP-L2035 TSP-L2040 TSP-L2045 TSP-L2050 "
     "TSP-L2055 TSP-L2060 TSP-L2065 TSP-L2070 TSP-L2075"
 ).split()
-# The 34 requested tickers: the 29 the site's request log holds (spec 2026-11-16 Appendix A), then
-# the 5 the owner holds (2026-11-25). FCX, TSM, WMT and B are already on QSE's core list, WMT also
+# The 33 requested tickers: the 29 the site's request log holds (spec 2026-11-16 Appendix A), then
+# the 4 the owner holds (2026-11-25). FCX, TSM, WMT and B are already on QSE's core list, WMT also
 # a tier 1 preset stock.
 REQUESTED = (
     "ASML ATLKY AZN BHP BUD CMWAY DB EADSY FCX FRCOY HSBC ISNPY LRLCY LVMUY LYG MTSUY MUFG NSRGY "
-    "NVS RIO RY SAP SIEGY SPOT TM TSM UL UNCRY WMT B BNY GOLD IXN TW"
+    "NVS RIO RY SAP SIEGY SPOT TM TSM UL UNCRY WMT B BNY IXN TW"
 ).split()
 INCOME_MUTUAL_FUNDS = (
     "VBTLX VBMFX VBILX VBIRX VBLAX VSIGX VSCSX VTAPX VIPSX VWEHX VWINX FXNAX FTBFX FUAMX FIPDX "
@@ -81,13 +81,13 @@ def test_tier3_is_the_qse_core_list_then_the_qse_portfoliosight_list():
     assert len(core) == 1038 and len(added) == 356 == len(set(added))
     assert not set(core) & set(added)
     asked = [s for s in REQUESTED if s not in core]  # FCX, TSM, WMT and B are on the core list
-    assert len(asked) == 30
+    assert len(asked) == 29
     assert list(tiers.tier3) == core + added + asked
     overlap = set(tiers.tier3) & set(tiers.tier2)
-    assert len(tiers.tier3_only()) == 1038 + 356 + 30 - len(overlap)
+    assert len(tiers.tier3_only()) == 1038 + 356 + 29 - len(overlap)
     assert not set(tiers.tier3_only()) & set(tiers.tier2)
     assert {"VTI", "SGOV", "AGG", "IWB"} <= overlap  # IWB is in the added list and in tier 2
-    assert list(tiers.tier3_only()[-3:]) == ["GOLD", "IXN", "TW"]
+    assert list(tiers.tier3_only()[-2:]) == ["IXN", "TW"]
 
 
 def test_the_starter_slice_stays_inside_the_qse_core_list():
@@ -429,24 +429,24 @@ def test_preset_fund_missing_from_holdings_is_refused(tmp_path):
 def test_every_wanted_fund_has_a_real_name_and_a_kind():
     tiers = universe.load_tiers()
     funds = universe.load_funds()
-    assert len(REQUESTED) == len(set(REQUESTED)) == 34
+    assert len(REQUESTED) == len(set(REQUESTED)) == 33
     listed = {s for s in (*tiers.tier1, *tiers.tier2) if not universe.is_tsp(s)}
     assert len(listed) == 325 and "FIENX" in listed
     wanted = listed | set(REQUESTED)
-    assert set(funds) == wanted and len(funds) == 358  # WMT is in both groups
+    assert set(funds) == wanted and len(funds) == 357  # WMT is in both groups
     for symbol, meta in funds.items():
         assert meta.name.strip() and meta.name.strip() != symbol, symbol
     assert Counter(meta.kind for meta in funds.values()) == {
         "etf": 193,
         "mutual_fund": 125,
-        "stock": 40,
+        "stock": 39,
     }
     for symbol in tiers.tier2:  # spec Appendix A: all 125 mutual funds, and no ETF, end in X
         five_letters_ending_in_x = re.fullmatch(r"[A-Z]{4}X", symbol) is not None
         assert (funds[symbol].kind == "mutual_fund") is five_letters_ending_in_x, symbol
     outside_tier2 = [s for s in funds if s not in tiers.tier2]
-    assert len(outside_tier2) == 41  # 8 preset stocks and 33 requested tickers, IXN among them
-    assert Counter(funds[s].kind for s in outside_tier2) == {"stock": 40, "etf": 1}
+    assert len(outside_tier2) == 40  # 8 preset stocks and 32 requested tickers, IXN among them
+    assert Counter(funds[s].kind for s in outside_tier2) == {"stock": 39, "etf": 1}
     assert funds["IXN"].kind == "etf"
     assert {"AIG", "C", "GE", "INTC", "MSFT", "PFE", "WMT", "XOM"} <= set(outside_tier2)
 
@@ -512,8 +512,8 @@ def test_a_requested_ticker_already_listed_keeps_its_place():
     core_end = len(_file_symbols(QSE_CORE)) + len(_file_symbols(QSE_PORTFOLIOSIGHT))
     on_core = {"FCX", "TSM", "WMT", "B"}
     assert list(tiers.tier3[core_end:]) == [s for s in REQUESTED if s not in on_core]
-    assert len(tiers.requested) == 34
-    assert len(tiers.tier3) == 1038 + 356 + 30
+    assert len(tiers.requested) == 33
+    assert len(tiers.tier3) == 1038 + 356 + 29
 
 
 def test_requested_file_is_the_third_tier_3_file_and_is_named_in_tiers_json(tmp_path):
