@@ -397,11 +397,12 @@ def _report(
 
 def _unheld(store: store_mod.Store, base: Manifest, withheld: Mapping[str, Withheld]) -> set[str]:
     """The withheld symbols the stored catalog does not show as withheld: an entry that is not
-    ``unavailable`` with the withheld reason, or a listing in ``meta/symbols.json``."""
+    ``unavailable`` with the withheld reason, or a listing in ``meta/symbols.json`` (all of
+    them while that view is missing)."""
     try:
         view = store_mod.get_json(store, manifest_mod.SYMBOLS_KEY)
     except KeyError:
-        view = {}
+        return set(withheld)
     rows = view.get("symbols") if isinstance(view, dict) else None
     listed = {row.get("id") for row in rows or [] if isinstance(row, dict)}
     return {

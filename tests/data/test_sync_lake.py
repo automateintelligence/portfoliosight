@@ -730,3 +730,18 @@ def test_a_view_write_that_failed_is_redone_by_the_next_poll(lake, store):
     code, lines = _sync(lake, store)
     assert code == 0, lines
     assert "AAPL" not in _listed(store)
+
+
+def test_a_first_view_write_that_failed_is_redone_by_the_next_poll(lake, store):
+    class ViewFails(Recording):
+        def put(self, key, data):
+            if key == manifest_mod.SYMBOLS_KEY:
+                raise OSError("R2 kept answering 500")
+            super().put(key, data)
+
+    with pytest.raises(OSError):
+        _sync(lake, ViewFails(store), withheld={"AAPL": HELD})
+    assert not store.exists(manifest_mod.SYMBOLS_KEY)
+    code, lines = _sync(lake, store)
+    assert code == 0, lines
+    assert "MSFT" in _listed(store) and "AAPL" not in _listed(store)
