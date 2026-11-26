@@ -572,6 +572,13 @@ def test_a_withheld_symbol_is_not_taken_served_or_rewritten(lake, store):
     text = "\n".join(lines)
     assert "taken 3 (0 written, 3 unchanged); status {'ok': 3}" in text
     assert f"skipped 1: {sync_lake.SKIP_WITHHELD}" in lines
+    # A nightly deployed before the withheld list drops the mark it does not know and
+    # recomputes the status from the entry's dates: still not served.
+    overlay = store_mod.get_json(store, lake_mod.LAKE_KEY)
+    overlay["symbols"]["AAPL"].pop("withheld")
+    older = manifest_mod.load_manifest(store)
+    lake_mod.apply_lake(older, lake_mod.LakeOverlay.model_validate(overlay), LATEST)
+    assert older.symbols["AAPL"].status != "ok"
 
     # A later run of the lake that changed AAPL's files still does not take it.
     vouched = json.loads((lake / "_adjusted_through.json").read_text())["symbols"]
@@ -654,3 +661,27 @@ def test_the_nightly_and_a_restatus_after_the_sync_keep_a_withheld_symbol_unserv
     manifest_mod.restatus(manifest, date(2026, 11, 2))
     assert manifest.symbols["AAPL"].status == "unavailable"
     assert manifest.symbols["AAPL"].reason == HELD_REASON
+
+
+def test_a_withheld_symbol_stays_held_while_the_sync_stores_other_records(lake, store):
+    """A provider walk that reads the overlay while the sync stores records must not find the
+    withheld symbol missing from it (it would release it to the provider)."""
+    assert _sync(lake, store)[0] == 0
+    seen: list[lake_mod.LakeEntry | None] = []
+
+    class Watching(Recording):
+        def put(self, key, data):
+            if key.startswith("prices/"):
+                seen.append(lake_mod.load_lake(self.inner).symbols.get("AAPL"))
+            super().put(key, data)
+
+    vouched = json.loads((lake / "_adjusted_through.json").read_text())["symbols"]
+    _write_lake(lake, vouched, generated="2026-10-15T13:52:00+00:00")
+    frame = pd.read_parquet(lake / "eod_history" / "MSFT.parquet")
+    frame.loc[frame.index[-1], "volume"] = 2000
+    frame.to_parquet(lake / "eod_history" / "MSFT.parquet", index=False)
+    watching = Watching(store)
+    now = datetime(2026, 10, 15, 14, 30, tzinfo=UTC)
+    code, lines = _sync(lake, watching, now=now, withheld={"AAPL": HELD})
+    assert code == 0, lines
+    assert len(seen) == 1 and seen[0] is not None and seen[0].withheld is not None

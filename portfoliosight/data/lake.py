@@ -25,6 +25,7 @@ from portfoliosight.data import manifest as manifest_mod
 from portfoliosight.data import store as store_mod
 from portfoliosight.data.manifest import Manifest, ManifestEntry
 from portfoliosight.data.refresh import LAKE_SOURCE
+from portfoliosight.data.withheld import Withheld
 
 LAKE_KEY = "meta/lake.json"
 DEFAULT_LAKE = "~/tft-quantile-forecaster/data/tft/raw/eodhd/datalake_us_core"
@@ -131,9 +132,14 @@ class LakeNames:
 
 
 class LakeEntry(ManifestEntry):
-    """A catalog entry the sync took from the lake, with the digest of the files it came from."""
+    """A catalog entry the sync took from the lake, with the digest of the files it came from.
+
+    ``withheld`` is set on the entry of a symbol on the owner's withheld list: it is held by the
+    sync, never served, and its dates end at the last trustworthy day.
+    """
 
     digest: str
+    withheld: Withheld | None = None
 
 
 class LakeOverlay(BaseModel):
@@ -159,21 +165,26 @@ def load_lake(store: store_mod.Store) -> LakeOverlay:
 
 def catalog_entry(entry: LakeEntry) -> ManifestEntry:
     """The manifest entry of an overlay entry (the digest stays in ``meta/lake.json``)."""
-    return ManifestEntry.model_validate(entry.model_dump(exclude={"digest"}))
+    return ManifestEntry.model_validate(entry.model_dump(exclude={"digest", "withheld"}))
 
 
 def apply_lake(manifest: Manifest, overlay: LakeOverlay, d_g: date) -> list[str]:
     """Make ``manifest`` carry ``overlay``; returns the symbols released from the lake.
 
-    Every overlay entry replaces the manifest's, with its status and reason against ``d_g``. An
-    entry still marked ``lake`` that the overlay no longer holds is released: it becomes a seed
+    Every overlay entry replaces the manifest's, with its status and reason against ``d_g``; a
+    withheld entry is ``unavailable`` with its withheld reason, whatever its dates. An entry
+    still marked ``lake`` that the overlay no longer holds is released: it becomes a seed
     (``pending``) whose record is verified through its ``adjusted_through``, so a provider's tail
     refresh can take it over from there.
     """
     for symbol, lake_entry in overlay.symbols.items():
         entry = catalog_entry(lake_entry)
-        entry.status = manifest_mod.status_for(entry, d_g)
-        entry.reason = manifest_mod.reason_for(entry, entry.status, d_g)
+        if lake_entry.withheld is not None:
+            entry.status = "unavailable"
+            entry.reason = lake_entry.withheld.reason()
+        else:
+            entry.status = manifest_mod.status_for(entry, d_g)
+            entry.reason = manifest_mod.reason_for(entry, entry.status, d_g)
         manifest.symbols[symbol] = entry
     released: list[str] = []
     for symbol, entry in manifest.symbols.items():

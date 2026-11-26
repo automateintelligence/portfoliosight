@@ -116,6 +116,12 @@ def status_for(entry: Any, d_g: date) -> str:
     return "ok" if last >= floor and adjusted >= floor else "stale"
 
 
+def no_data_since(day: date, note: str | None = None) -> str:
+    """The "no data since {date}" reason of spec 5.6, after ``note`` when there is one."""
+    since = REASON_NO_DATA_SINCE.format(date=day.isoformat())
+    return f"{note}; {since}" if note else since
+
+
 def reason_for(entry: ManifestEntry, status: str, d_g: date, note: str | None = None) -> str | None:
     """The fixed reason string that goes with a status, ``None`` for a served symbol.
 
@@ -128,11 +134,10 @@ def reason_for(entry: ManifestEntry, status: str, d_g: date, note: str | None = 
         return REASON_NO_DATA
     floor = session_back(d_g, SERVED_WITHIN_SESSIONS)
     if status == "unavailable" or (status == "stale" and entry.last_date < floor):
-        since = REASON_NO_DATA_SINCE.format(date=entry.last_date.isoformat())
         if note is None:
             kept = _NOTED_RE.match(entry.reason or "")
             note = kept.group(1) if kept else None
-        return f"{note}; {since}" if note else since
+        return no_data_since(entry.last_date, note)
     return REASON_UNVERIFIED.format(date=entry.adjusted_through.isoformat())
 
 
