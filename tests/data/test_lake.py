@@ -14,6 +14,7 @@ from portfoliosight.data import download, refresh
 from portfoliosight.data import lake as lake_mod
 from portfoliosight.data import manifest as manifest_mod
 from portfoliosight.data import store as store_mod
+from portfoliosight.data import withheld as withheld_mod
 from portfoliosight.data.calendar import session_back
 from portfoliosight.data.store import LocalStore, R2Store
 from portfoliosight.data.universe import Tiers, parse_universe_lines
@@ -455,3 +456,113 @@ def test_the_default_walk_spends_nothing_on_the_added_stocks_the_lake_keeps(tmp_
     assert [call[1] for call in provider.calls] == [unvouched]
     now = store_mod.get_json(store, manifest_mod.MANIFEST_KEY)["symbols"]
     assert {s: now[s]["source"] for s in kept} == dict.fromkeys(kept, "lake")
+
+
+HELD_THROUGH = date(2026, 2, 20)
+HELD_REASON = "price error under repair; no data since 2026-02-20"
+
+
+def _held_entry(symbol: str = "CTVA") -> lake_mod.LakeEntry:
+    """An overlay entry the sync wrote for a symbol on the owner's withheld list."""
+    return _lake_entry(
+        symbol,
+        HELD_THROUGH,
+        status="unavailable",
+        reason=HELD_REASON,
+        digest="",
+        withheld=withheld_mod.Withheld(
+            note="price error under repair", good_through=HELD_THROUGH, since=D
+        ),
+    )
+
+
+def _served_ctva() -> manifest_mod.ManifestEntry:
+    return manifest_mod.ManifestEntry(
+        name="Corteva",
+        kind="stock",
+        tier=3,
+        source="lake",
+        last_date=D,
+        adjusted_through=D,
+        status="ok",
+    )
+
+
+def test_apply_lake_keeps_a_withheld_entry_unavailable_and_does_not_release_it():
+    # The catalog still serves CTVA (the overlay was older, or a hand edit was undone).
+    manifest = manifest_mod.Manifest(symbols={"CTVA": _served_ctva()})
+    overlay = lake_mod.LakeOverlay(symbols={"CTVA": _held_entry()})
+    assert lake_mod.apply_lake(manifest, overlay, D) == []
+    ctva = manifest.symbols["CTVA"]
+    assert (ctva.source, ctva.status, ctva.reason) == ("lake", "unavailable", HELD_REASON)
+    assert "withheld" not in manifest.to_json()["symbols"]["CTVA"]
+    # Applied again on a later day, as every catalog write does: still not served.
+    lake_mod.apply_lake(manifest, overlay, date(2026, 3, 16))
+    assert manifest.symbols["CTVA"].status == "unavailable"
+    view = manifest_mod.symbols_view(manifest, datetime.combine(D, time(15), tzinfo=UTC))
+    assert view["symbols"] == []
+
+
+def test_restatus_keeps_a_withheld_entry_unavailable_with_its_reason():
+    manifest = manifest_mod.Manifest(symbols={"CTVA": _served_ctva()})
+    lake_mod.apply_lake(manifest, lake_mod.LakeOverlay(symbols={"CTVA": _held_entry()}), D)
+    manifest_mod.restatus(manifest, D)
+    ctva = manifest.symbols["CTVA"]
+    assert (ctva.status, ctva.reason) == ("unavailable", HELD_REASON)
+
+
+def test_a_withheld_symbol_the_overlay_drops_is_released_unserved():
+    """Off the list while the lake no longer vouches it: released to the provider, not served."""
+    manifest = manifest_mod.Manifest(symbols={"CTVA": _served_ctva()})
+    lake_mod.apply_lake(manifest, lake_mod.LakeOverlay(symbols={"CTVA": _held_entry()}), D)
+    assert lake_mod.apply_lake(manifest, lake_mod.LakeOverlay(), D) == ["CTVA"]
+    ctva = manifest.symbols["CTVA"]
+    assert (ctva.source, ctva.status) == ("seed", "pending")
+    assert ctva.reason == f"corporate actions not yet verified after {HELD_THROUGH.isoformat()}"
+
+
+def test_a_writer_that_ignores_the_withheld_mark_still_does_not_serve_it():
+    """A writer deployed before the withheld list (it drops the unknown field) recomputes the
+    status from the entry's dates, which end at the last trustworthy day."""
+    overlay = lake_mod.LakeOverlay(symbols={"CTVA": _held_entry()}).to_json()
+    for entry in overlay["symbols"].values():
+        entry.pop("withheld")
+    manifest = manifest_mod.Manifest(symbols={"CTVA": _served_ctva()})
+    lake_mod.apply_lake(manifest, lake_mod.LakeOverlay.model_validate(overlay), D)
+    assert manifest.symbols["CTVA"].status != "ok"
+
+
+def test_the_nightly_neither_fetches_nor_serves_a_withheld_symbol(tmp_path):
+    store = LocalStore(tmp_path / "store")
+    april1 = date(2026, 4, 1)  # the first run of a month retries unavailable symbols
+    behind = date(2026, 3, 20)
+    for symbol in ("CTVA", "TIIN"):
+        _put_record(store, symbol, behind, behind)
+    stored = store.get("prices/CTVA.parquet")
+    entries = _stale_entries(["TIIN"], behind)
+    entries["CTVA"] = {
+        **_served_ctva().model_dump(mode="json"),
+        "status": "unavailable",
+        "reason": HELD_REASON,
+    }
+    store_mod.put_json(store, manifest_mod.MANIFEST_KEY, {"symbols": entries})
+    overlay = lake_mod.LakeOverlay(symbols={"CTVA": _held_entry()})
+    store_mod.put_json(store, lake_mod.LAKE_KEY, overlay.to_json())
+
+    provider = FakeProvider(default_available=date(2026, 3, 31))
+    clock = Clock(april1, 10)
+    code = download.run(
+        "refresh",
+        store=store,
+        providers={"tiingo": provider},
+        clock=clock,
+        sleep=clock.sleep,
+        symbols=["CTVA", "TIIN"],
+    )
+    assert code == 0
+    assert {call[1] for call in provider.calls} == {"TIIN"}
+    assert store.get("prices/CTVA.parquet") == stored
+    ctva = store_mod.get_json(store, manifest_mod.MANIFEST_KEY)["symbols"]["CTVA"]
+    assert (ctva["source"], ctva["status"], ctva["reason"]) == ("lake", "unavailable", HELD_REASON)
+    listed = {row["id"] for row in store_mod.get_json(store, manifest_mod.SYMBOLS_KEY)["symbols"]}
+    assert "CTVA" not in listed

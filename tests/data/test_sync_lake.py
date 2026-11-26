@@ -14,11 +14,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from portfoliosight.data import download
 from portfoliosight.data import lake as lake_mod
 from portfoliosight.data import manifest as manifest_mod
 from portfoliosight.data import store as store_mod
 from portfoliosight.data.store import LocalStore
 from portfoliosight.data.universe import Tiers
+from tests.data.test_download import Clock, FakeProvider
 
 ROOT = Path(__file__).resolve().parents[2]
 LATEST = date(2026, 10, 13)
@@ -189,9 +191,24 @@ class Recording:
         self.inner.delete(key)
 
 
-def _sync(lake: Path, store, now: datetime = NOW, **kwargs) -> tuple[int, list[str]]:
+def _sync(
+    lake: Path, store, now: datetime = NOW, withheld: dict | None = None, **kwargs
+) -> tuple[int, list[str]]:
+    """One sync; ``withheld``, when given, is written as the owner's list first (else it stays
+    as the last call left it, empty at the start)."""
+    path = lake.parent / "withheld.json"
+    if withheld is not None or not path.exists():
+        path.write_text(json.dumps(withheld or {}))
     lines: list[str] = []
-    code = sync_lake.sync(lake=lake, store=store, now=now, tiers=TIERS, emit=lines.append, **kwargs)
+    code = sync_lake.sync(
+        lake=lake,
+        store=store,
+        now=now,
+        tiers=TIERS,
+        withheld_file=path,
+        emit=lines.append,
+        **kwargs,
+    )
     return code, lines
 
 
@@ -528,3 +545,112 @@ def test_a_name_only_change_rewrites_the_entry_not_the_record(lake, store):
         r["id"]: r["name"] for r in store_mod.get_json(store, manifest_mod.SYMBOLS_KEY)["symbols"]
     }
     assert listed["MSFT"] == "Microsoft Corporation"
+
+
+HELD = {"note": "price error under repair", "good_through": "2026-03-20", "since": "2026-10-14"}
+HELD_REASON = "price error under repair; no data since 2026-03-20"
+
+
+def _listed(store) -> set[str]:
+    return {row["id"] for row in store_mod.get_json(store, manifest_mod.SYMBOLS_KEY)["symbols"]}
+
+
+def test_a_withheld_symbol_is_not_taken_served_or_rewritten(lake, store):
+    assert _sync(lake, store)[0] == 0
+    stored = store.get("prices/AAPL.parquet")
+    assert _manifest(store)["AAPL"]["status"] == "ok"
+
+    # The owner lists AAPL; the lake run is the one already synced.
+    recording = Recording(store)
+    code, lines = _sync(lake, recording, withheld={"AAPL": HELD})
+    assert code == 0, lines
+    assert [key for key in recording.puts if key.startswith("prices/")] == []
+    assert store.get("prices/AAPL.parquet") == stored  # the record is kept as it is
+    aapl = _manifest(store)["AAPL"]
+    assert (aapl["source"], aapl["status"], aapl["reason"]) == ("lake", "unavailable", HELD_REASON)
+    assert "AAPL" not in _listed(store) and "MSFT" in _listed(store)
+    text = "\n".join(lines)
+    assert "taken 3 (0 written, 3 unchanged); status {'ok': 3}" in text
+    assert f"skipped 1: {sync_lake.SKIP_WITHHELD}" in lines
+
+    # A later run of the lake that changed AAPL's files still does not take it.
+    vouched = json.loads((lake / "_adjusted_through.json").read_text())["symbols"]
+    _write_lake(lake, vouched, generated="2026-10-15T13:52:00+00:00")
+    frame = pd.read_parquet(lake / "eod_history" / "AAPL.parquet")
+    frame.loc[frame.index[-1], "volume"] = 2000
+    frame.to_parquet(lake / "eod_history" / "AAPL.parquet", index=False)
+    code, lines = _sync(lake, recording, now=datetime(2026, 10, 15, 14, 30, tzinfo=UTC))
+    assert code == 0, lines
+    assert [key for key in recording.puts if key.startswith("prices/")] == []
+    assert store.get("prices/AAPL.parquet") == stored
+    assert _manifest(store)["AAPL"]["status"] == "unavailable"
+    assert "AAPL" not in _listed(store)
+
+
+def test_a_symbol_withheld_before_it_was_ever_taken_is_catalogued_unavailable(lake, store):
+    recording = Recording(store)
+    code, lines = _sync(lake, recording, withheld={"AAPL": HELD})
+    assert code == 0, lines
+    assert "prices/AAPL.parquet" not in recording.puts
+    aapl = _manifest(store)["AAPL"]
+    assert (aapl["source"], aapl["status"], aapl["reason"]) == ("lake", "unavailable", HELD_REASON)
+    assert "AAPL" not in _listed(store)
+    assert f"skipped 1: {sync_lake.SKIP_WITHHELD}" in lines
+
+
+def test_the_dry_run_counts_a_withheld_symbol_as_skipped(lake, store):
+    recording = Recording(store)
+    code, lines = _sync(lake, recording, withheld={"AAPL": HELD}, dry_run=True)
+    assert code == 0 and recording.puts == []
+    assert "taken 3 (3 written, 0 unchanged); status {'ok': 3}" in "\n".join(lines)
+    assert f"skipped 1: {sync_lake.SKIP_WITHHELD}" in lines
+
+
+def test_a_symbol_taken_off_the_list_is_taken_again_by_the_next_sync(lake, store):
+    assert _sync(lake, store, withheld={"AAPL": HELD})[0] == 0
+    assert _manifest(store)["AAPL"]["status"] == "unavailable"
+    recording = Recording(store)
+    code, lines = _sync(lake, recording, withheld={})
+    assert code == 0, lines
+    assert [key for key in recording.puts if key.startswith("prices/")] == ["prices/AAPL.parquet"]
+    aapl = _manifest(store)["AAPL"]
+    assert (aapl["source"], aapl["status"], aapl["reason"]) == ("lake", "ok", None)
+    assert aapl["last_date"] == aapl["adjusted_through"] == LATEST.isoformat()
+    assert "AAPL" in _listed(store)
+
+
+def test_a_malformed_list_stops_the_sync_before_anything_is_written(lake, store):
+    recording = Recording(store)
+    bad = {"AAPL": HELD, "MSFT": {**HELD, "note": ""}}
+    code, lines = _sync(lake, recording, withheld=bad)
+    assert code == 1 and recording.puts == []
+    alert = [line for line in lines if line.startswith("ALERT sync_lake")]
+    assert len(alert) == 1 and "withheld.json" in alert[0] and "MSFT" in alert[0]
+
+
+def test_the_nightly_and_a_restatus_after_the_sync_keep_a_withheld_symbol_unserved(lake, store):
+    assert _sync(lake, store)[0] == 0
+    assert _sync(lake, store, withheld={"AAPL": HELD})[0] == 0
+    stored = store.get("prices/AAPL.parquet")
+
+    # The first run of a month retries every unavailable symbol; AAPL is the lake's, not asked.
+    provider = FakeProvider(default_available=date(2026, 10, 30))
+    clock = Clock(date(2026, 11, 1), 10)
+    download.run(
+        "refresh",
+        store=store,
+        providers={"tiingo": provider},
+        clock=clock,
+        sleep=clock.sleep,
+        symbols=["AAPL", "MSFT"],
+    )
+    assert "AAPL" not in {call[1] for call in provider.calls}
+    assert store.get("prices/AAPL.parquet") == stored
+    aapl = _manifest(store)["AAPL"]
+    assert (aapl["source"], aapl["status"], aapl["reason"]) == ("lake", "unavailable", HELD_REASON)
+    assert "AAPL" not in _listed(store)
+
+    manifest = manifest_mod.load_manifest(store)
+    manifest_mod.restatus(manifest, date(2026, 11, 2))
+    assert manifest.symbols["AAPL"].status == "unavailable"
+    assert manifest.symbols["AAPL"].reason == HELD_REASON
