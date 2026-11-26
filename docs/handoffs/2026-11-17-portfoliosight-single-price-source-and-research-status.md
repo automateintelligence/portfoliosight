@@ -75,3 +75,10 @@ Merged by the owner's word: #212, #211, #208 (main `57afcef`). Not deployed. The
 Codex also found the plan's gate wording backwards: "the run ended after the close" is not stricter than "started after the close" (a run can start before the close and end after it). The gate must check the run started after the close. Fix in the P4 task.
 
 New tickers from the owner: TW, IXN, BNY (BK now trades as BNY), B (Barrick, formerly GOLD) and GOLD (now Gold.com) go on the requested list; owner to say which of B and GOLD he holds.
+
+## Update 2026-11-26
+
+Owner's word: #214 merged (GOLD off the requested list; main `779d541`); CTVA hidden; lake repair to the QSE Step 2 session (that session is confirming with the owner before it writes); spin-offs tracked in quant-scenario-engine #187; capital gains go into the lake's dividend records (separate QSE PR after the repair, as the QSE session recommends).
+
+- CTVA: live R2 catalog changed by hand (manifest status `unavailable`, reason "price error under repair; no data since 2026-03-20"; symbols.json rewritten, 1548 served). Prices untouched; backups of manifest, symbols and lake overlay kept in the session scratchpad. The next laptop lake sync would serve it again; a PR adds a withheld-symbols list that the sync honours.
+- New-fund loader (QSE #186): the held-out dry run passed 5 of 276 under the strict rule. Delegated to Codex: it chose to store Schwab's prices and report yfinance disagreements, with three gaps: a bad Schwab bar on a disputed day (now: refuse when Schwab's bar is the outlier), a missing dividend no price check can see (stated limit), spin-off value not counted (#187). Steady offsets still refuse (10-session median ratio, 0.5% shift, calibrated on the A-L half and confirmed on M-Z). Being built on #186; then a laptop dry run.
